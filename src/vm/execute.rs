@@ -1086,6 +1086,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe { write_val(result_ptr, Value::bool(is_instance)) };
             }
 
+            OpCode::FetchConst => {
+                if opline.extended_value == 1 {
+                    // Define mode: const FOO = value;
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let value_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let name = name_val.as_str().unwrap_or("").to_string();
+                    let value = value_val.clone();
+                    eg.define_constant(&name, value).map_err(|e| VmError::Fatal(e))?;
+                } else {
+                    // Read mode: fetch constant value
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let name = name_val.as_str().unwrap_or("");
+                    let value = eg.find_constant(name).ok_or_else(|| {
+                        VmError::Fatal(format!("Undefined constant \"{}\"", name))
+                    })?;
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    unsafe { write_val(result_ptr, value) };
+                }
+            }
+
+            OpCode::BindDefaultParam => {
+                // If CV slot is NOT undef (arg was passed), skip default init
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let is_undef = unsafe { (*cv_ptr).is_undef() };
+                if !is_undef {
+                    // Jump past the default expr computation + AssignCv
+                    let target = opline.op2 as usize;
+                    unsafe {
+                        (*frame).opline = op_array.instructions.as_ptr().add(target);
+                    }
+                    continue;
+                }
+                // Otherwise fall through — next instructions compute and assign default
+            }
+
             OpCode::Return => {
                 // Check if we're inside a try region with a finally block
                 let current_ip = unsafe {

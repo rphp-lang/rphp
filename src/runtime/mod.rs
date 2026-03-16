@@ -19,6 +19,9 @@ pub struct ExecutorGlobals {
     pub function_table: HashMap<String, *const FunctionCommon>,
     /// Class table — name → ClassDef (Boxed for stable pointer addresses)
     pub class_table: HashMap<String, Box<ClassDef>>,
+    /// Constant table — name → Value (case-sensitive, like PHP)
+    /// Uses RefCell to allow define() from internal functions (which receive &self).
+    pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
     /// Exception being thrown — None = no exception
     pub exception: Option<crate::value::Value>,
     /// Output buffer — collected output for testing, or stdout
@@ -34,6 +37,7 @@ impl ExecutorGlobals {
             timed_out: AtomicBool::new(false),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
+            constant_table: std::cell::RefCell::new(HashMap::new()),
             exception: None,
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
@@ -49,6 +53,7 @@ impl ExecutorGlobals {
             timed_out: AtomicBool::new(false),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
+            constant_table: std::cell::RefCell::new(HashMap::new()),
             exception: None,
 
             output: std::cell::RefCell::new(output),
@@ -138,6 +143,21 @@ impl ExecutorGlobals {
     /// Look up a function by name
     pub fn find_function(&self, name: &str) -> Option<*const FunctionCommon> {
         self.function_table.get(&name.to_lowercase()).copied()
+    }
+
+    /// Define a constant. Returns error if already defined.
+    pub fn define_constant(&self, name: &str, value: crate::value::Value) -> Result<(), String> {
+        let mut table = self.constant_table.borrow_mut();
+        if table.contains_key(name) {
+            return Err(format!("Constant {} already defined", name));
+        }
+        table.insert(name.to_string(), value);
+        Ok(())
+    }
+
+    /// Look up a constant by name (case-sensitive).
+    pub fn find_constant(&self, name: &str) -> Option<crate::value::Value> {
+        self.constant_table.borrow().get(name).cloned()
     }
 
     pub fn write_output(&self, data: &[u8]) {

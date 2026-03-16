@@ -73,4 +73,6 @@ pub enum OpCode {
     InitStaticCall = 105, // Init static method call: op1=class_const, op2=method_const
     InitDynamicCall = 106, // Dynamic call: op1=CV holding function name, op2=num_args
     Instanceof = 107,      // result = op1 instanceof op2 (op2=class_name_const)
+    FetchConst = 108,      // result = constant by name (op1=CONST name string)
+    BindDefaultParam = 109, // If CV op1 is NOT undef (arg was passed), jump to op2 (skip default init)
 }

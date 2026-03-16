@@ -50,7 +50,7 @@ pub enum Expr {
         arms: Vec<MatchArm>,
     },
     Closure {          // function($x) use($y) { ... }
-        params: Vec<String>,
+        params: Vec<Param>,
         use_vars: Vec<String>,
         body: Vec<Stmt>,
     },
@@ -89,6 +89,7 @@ pub enum Expr {
         expr: Box<Expr>,
         class_name: String,
     },
+    Constant(String),  // FOO, PHP_INT_MAX — named constant reference
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -126,6 +127,13 @@ pub enum BinOp {
     Or,     // ||
 }
 
+/// Function parameter with optional default value.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub default: Option<Expr>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
     Echo(Expr),
@@ -150,7 +158,7 @@ pub enum Stmt {
     },
     Function {
         name: String,
-        params: Vec<String>,
+        params: Vec<Param>,
         body: Vec<Stmt>,
     },
     DoWhile {
@@ -198,6 +206,10 @@ pub enum Stmt {
         property: String,
         expr: Expr,
     },
+    Const {            // const FOO = expr;
+        name: String,
+        value: Expr,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -226,7 +238,7 @@ pub struct ClassProperty {
 pub struct ClassMethod {
     pub visibility: Visibility,
     pub name: String,
-    pub params: Vec<String>,
+    pub params: Vec<Param>,
     pub body: Vec<Stmt>,
     pub is_static: bool,
 }
@@ -268,6 +280,17 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek() {
+            Token::Const => {
+                self.advance(); // consume 'const'
+                let name = match self.advance() {
+                    Token::Identifier(n) => n,
+                    other => return Err(format!("Expected constant name after 'const', got {:?}", other)),
+                };
+                self.expect(&Token::Assign)?;
+                let value = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::Const { name, value })
+            }
             Token::Echo => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -496,22 +519,7 @@ impl Parser {
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
                 self.expect(&Token::LParen)?;
-                let mut params = Vec::new();
-                if let Token::Variable(_) = self.peek() {
-                    let p = match self.advance() {
-                        Token::Variable(n) => n,
-                        _ => unreachable!(),
-                    };
-                    params.push(p);
-                    while self.peek() == Token::Comma {
-                        self.advance();
-                        let p = match self.advance() {
-                            Token::Variable(n) => n,
-                            other => return Err(format!("Expected parameter, got {:?}", other)),
-                        };
-                        params.push(p);
-                    }
-                }
+                let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
@@ -1050,8 +1058,8 @@ impl Parser {
                     self.expect(&Token::RParen)?;
                     Ok(Expr::FunctionCall { name, args })
                 } else {
-                    // Bare identifier — for now treat as error
-                    Err(format!("Unexpected identifier '{}' (not a function call)", name))
+                    // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
+                    Ok(Expr::Constant(name))
                 }
             }
             Token::Match => {
@@ -1297,22 +1305,7 @@ impl Parser {
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
                 self.expect(&Token::LParen)?;
-                let mut params = Vec::new();
-                if let Token::Variable(_) = self.peek() {
-                    let p = match self.advance() {
-                        Token::Variable(n) => n,
-                        _ => unreachable!(),
-                    };
-                    params.push(p);
-                    while self.peek() == Token::Comma {
-                        self.advance();
-                        let p = match self.advance() {
-                            Token::Variable(n) => n,
-                            other => return Err(format!("Expected parameter, got {:?}", other)),
-                        };
-                        params.push(p);
-                    }
-                }
+                let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
@@ -1405,19 +1398,7 @@ impl Parser {
     fn parse_closure(&mut self) -> Result<Expr, String> {
         self.advance(); // consume 'function'
         self.expect(&Token::LParen)?;
-        let mut params = Vec::new();
-        if let Token::Variable(_) = self.peek() {
-            let p = match self.advance() { Token::Variable(n) => n, _ => unreachable!() };
-            params.push(p);
-            while self.peek() == Token::Comma {
-                self.advance();
-                let p = match self.advance() {
-                    Token::Variable(n) => n,
-                    other => return Err(format!("Expected parameter, got {:?}", other)),
-                };
-                params.push(p);
-            }
-        }
+        let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
 
         let mut use_vars = Vec::new();
@@ -1471,6 +1452,34 @@ impl Parser {
 
     fn at_eof(&self) -> bool {
         self.peek() == Token::Eof
+    }
+
+    /// Parse a comma-separated list of function parameters with optional defaults.
+    /// Expects the opening '(' to already be consumed; stops before ')'.
+    fn parse_param_list(&mut self) -> Result<Vec<Param>, String> {
+        let mut params = Vec::new();
+        if let Token::Variable(_) = self.peek() {
+            params.push(self.parse_one_param()?);
+            while self.peek() == Token::Comma {
+                self.advance();
+                params.push(self.parse_one_param()?);
+            }
+        }
+        Ok(params)
+    }
+
+    fn parse_one_param(&mut self) -> Result<Param, String> {
+        let name = match self.advance() {
+            Token::Variable(n) => n,
+            other => return Err(format!("Expected parameter variable, got {:?}", other)),
+        };
+        let default = if self.peek() == Token::Assign {
+            self.advance(); // consume '='
+            Some(self.parse_expr()?)
+        } else {
+            None
+        };
+        Ok(Param { name, default })
     }
 
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).

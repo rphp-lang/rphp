@@ -35,11 +35,16 @@ pub fn make_user_function(op_array: OpArray) -> UserFunction {
 
 /// Create a UserFunction with the given number of parameters.
 pub fn make_user_function_with_args(op_array: OpArray, num_args: u32) -> UserFunction {
+    make_user_function_with_defaults(op_array, num_args, num_args)
+}
+
+/// Create a UserFunction with separate total and required arg counts (for default params).
+pub fn make_user_function_with_defaults(op_array: OpArray, num_args: u32, required_num_args: u32) -> UserFunction {
     UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,
             num_args,
-            required_num_args: num_args,
+            required_num_args,
         },
         op_array,
     }

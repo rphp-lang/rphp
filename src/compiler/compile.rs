@@ -4,12 +4,12 @@
 use std::collections::HashMap;
 
 use crate::value::Value;
-use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility};
+use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{Instruction, OpType};
 use super::OpArray;
 
-use super::make_user_function_with_args;
+use super::{make_user_function_with_args, make_user_function_with_defaults};
 use crate::vm::function::UserFunction;
 
 /// Result of compiling a script — main OpArray + declared functions + class defs.
@@ -195,8 +195,22 @@ impl Compiler {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
                 // Parameters become CV slots (in order)
-                for param in params {
-                    func_compiler.resolve_cv(param);
+                let mut required_num_args = 0u32;
+                let mut seen_default = false;
+                for (i, param) in params.iter().enumerate() {
+                    let cv_idx = func_compiler.resolve_cv(&param.name);
+                    if let Some(default_expr) = &param.default {
+                        seen_default = true;
+                        Self::emit_default_param(&mut func_compiler, cv_idx, default_expr);
+                    } else {
+                        if seen_default {
+                            return Err(format!(
+                                "Required parameter ${} follows optional parameter in function {}",
+                                param.name, name
+                            ));
+                        }
+                        required_num_args = (i as u32) + 1;
+                    }
                 }
                 for s in body {
                     func_compiler.compile_stmt(s)?;
@@ -216,7 +230,7 @@ impl Compiler {
                     try_entries: func_compiler.try_entries,
                 };
                 let num_args = params.len() as u32;
-                let user_func = make_user_function_with_args(op_array, num_args);
+                let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -767,6 +781,20 @@ impl Compiler {
                 assign.result_type = val_type;
                 self.instructions.push(assign);
             }
+            Stmt::Const { name, value } => {
+                // Compile the value expression and emit FetchConst to define it
+                // For const, we evaluate at compile time if possible, otherwise at runtime
+                let (val_op, val_type) = self.compile_expr(value);
+                let name_idx = self.add_literal(Value::string(name.clone()));
+                let mut instr = Instruction::new(OpCode::FetchConst);
+                instr.op1 = name_idx;
+                instr.op1_type = OpType::Const;
+                instr.op2 = val_op;
+                instr.op2_type = val_type;
+                // extended_value = 1 means "define mode" (store constant)
+                instr.extended_value = 1;
+                self.instructions.push(instr);
+            }
             Stmt::Class { name, parent, properties, methods } => {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
@@ -775,8 +803,22 @@ impl Compiler {
                     let mut func_compiler = Compiler::new();
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
-                    for param in &method.params {
-                        func_compiler.resolve_cv(param);
+                    let mut required_num_args = 0u32;
+                    let mut seen_default = false;
+                    for (i, param) in method.params.iter().enumerate() {
+                        let cv_idx = func_compiler.resolve_cv(&param.name);
+                        if let Some(default_expr) = &param.default {
+                            seen_default = true;
+                            Self::emit_default_param(&mut func_compiler, cv_idx, default_expr);
+                        } else {
+                            if seen_default {
+                                return Err(format!(
+                                    "Required parameter ${} follows optional parameter in method {}::{}",
+                                    param.name, name, method.name
+                                ));
+                            }
+                            required_num_args = (i as u32) + 1;
+                        }
                     }
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
@@ -794,18 +836,23 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                     };
-                    // +1 for $this which is implicit
                     let num_args = method.params.len() as u32;
-                    let user_func = make_user_function_with_args(op_array, num_args);
+                    let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
                 }
 
                 // Evaluate property defaults (constant expressions only)
-                let compiled_props: Vec<(String, Option<Value>)> = properties.iter().map(|prop| {
-                    let default = prop.default.as_ref().map(|expr| Self::eval_const_expr(expr));
-                    (prop.name.clone(), default)
-                }).collect();
+                let mut compiled_props: Vec<(String, Option<Value>)> = Vec::new();
+                for prop in properties {
+                    let default = match &prop.default {
+                        Some(expr) => Some(Self::eval_const_expr(expr).map_err(|e| {
+                            format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
+                        })?),
+                        None => None,
+                    };
+                    compiled_props.push((prop.name.clone(), default));
+                }
 
                 // Store class definition for runtime
                 self.class_defs.push(ClassDef {
@@ -820,23 +867,67 @@ impl Compiler {
     }
 
     /// Evaluate a constant expression at compile time (for property defaults).
-    fn eval_const_expr(expr: &Expr) -> Value {
+    /// Returns Err for expressions that cannot be resolved at compile time.
+    fn eval_const_expr(expr: &Expr) -> Result<Value, String> {
         match expr {
-            Expr::Integer(n) => Value::long(*n),
-            Expr::Float(f) => Value::double(*f),
-            Expr::StringLiteral(s) => Value::string(s.clone()),
-            Expr::Bool(b) => Value::bool(*b),
-            Expr::Null => Value::null(),
+            Expr::Integer(n) => Ok(Value::long(*n)),
+            Expr::Float(f) => Ok(Value::double(*f)),
+            Expr::StringLiteral(s) => Ok(Value::string(s.clone())),
+            Expr::Bool(b) => Ok(Value::bool(*b)),
+            Expr::Null => Ok(Value::null()),
             Expr::UnaryMinus(inner) => {
                 match inner.as_ref() {
-                    Expr::Integer(n) => Value::long(-n),
-                    Expr::Float(f) => Value::double(-f),
-                    _ => Value::null(), // non-constant
+                    Expr::Integer(n) => Ok(Value::long(-n)),
+                    Expr::Float(f) => Ok(Value::double(-f)),
+                    _ => Err("unsupported unary expression".to_string()),
                 }
             }
-            Expr::ArrayLiteral(_) => Value::array(crate::value::PhpArray::new()), // TODO: eval array elements
-            _ => Value::null(), // non-constant expression — fall back to null
+            Expr::ArrayLiteral(elements) => {
+                let mut arr = crate::value::PhpArray::new();
+                for elem in elements {
+                    let val = Self::eval_const_expr(&elem.value)?;
+                    if let Some(key_expr) = &elem.key {
+                        let key = Self::eval_const_expr(key_expr)?;
+                        match key {
+                            Value { .. } if key.is_long() => arr.set_int(key.as_long().unwrap(), val),
+                            Value { .. } if key.as_str().is_some() => arr.set_str(key.as_str().unwrap(), val),
+                            _ => return Err("unsupported array key type in constant expression".to_string()),
+                        }
+                    } else {
+                        arr.push(val);
+                    }
+                }
+                Ok(Value::array(arr))
+            }
+            _ => Err(format!("expression {:?} is not a compile-time constant", expr)),
         }
+    }
+
+    /// Emit default parameter initialization for a single param.
+    /// Pattern: BindDefaultParam (skip if arg passed) → compute default → AssignCv → label
+    fn emit_default_param(compiler: &mut Compiler, cv_idx: u32, default_expr: &Expr) {
+        // BindDefaultParam: if CV is NOT undef, jump to skip_label (op2 = target, patched later)
+        let bind_idx = compiler.instructions.len();
+        let mut bind = Instruction::new(OpCode::BindDefaultParam);
+        bind.op1_type = OpType::Cv;
+        bind.op1 = cv_idx;
+        bind.op2 = 0; // placeholder — will be patched to skip_label
+        compiler.instructions.push(bind);
+
+        // Compute default expression (only reached if arg was NOT passed)
+        let (val_op, val_type) = compiler.compile_expr(default_expr);
+
+        // Assign computed default to CV
+        let mut assign = Instruction::new(OpCode::AssignCv);
+        assign.op1_type = OpType::Cv;
+        assign.op1 = cv_idx;
+        assign.op2_type = val_type;
+        assign.op2 = val_op;
+        compiler.instructions.push(assign);
+
+        // Patch BindDefaultParam to skip past the assign
+        let skip_label = compiler.instructions.len() as u32;
+        compiler.instructions[bind_idx].op2 = skip_label;
     }
 
     /// Compile expression. Returns (operand_index, OpType).
@@ -1430,8 +1521,23 @@ impl Compiler {
                 // Compile closure body into a separate function
                 let mut func_compiler = Compiler::new();
                 // params come first as CVs (args), then use_vars
-                for p in params {
-                    func_compiler.resolve_cv(p);
+                let mut required_num_args = 0u32;
+                let mut seen_default = false;
+                for (i, p) in params.iter().enumerate() {
+                    let cv_idx = func_compiler.resolve_cv(&p.name);
+                    if let Some(default_expr) = &p.default {
+                        seen_default = true;
+                        Self::emit_default_param(&mut func_compiler, cv_idx, default_expr);
+                    } else {
+                        if seen_default {
+                            self.deferred_error = Some(format!(
+                                "Required parameter ${} follows optional parameter in closure",
+                                p.name
+                            ));
+                            break;
+                        }
+                        required_num_args = (i as u32) + 1;
+                    }
                 }
                 for v in use_vars {
                     func_compiler.resolve_cv(v);
@@ -1456,7 +1562,7 @@ impl Compiler {
                     try_entries: func_compiler.try_entries,
                 };
                 let num_args = params.len() as u32;
-                let user_func = make_user_function_with_args(op_array, num_args);
+                let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
 
                 // Register closure as anonymous function with unique name
                 let closure_name = format!("__closure_{}", self.functions.len());
@@ -1684,6 +1790,20 @@ impl Compiler {
                 let tmp = self.alloc_tmp();
                 assign.result = tmp;
                 self.instructions.push(assign);
+                (tmp, OpType::Tmp)
+            }
+            Expr::Constant(name) => {
+                // Fetch a named constant at runtime
+                let name_idx = self.add_literal(Value::string(name.clone()));
+                let tmp = self.alloc_tmp();
+                let mut instr = Instruction::new(OpCode::FetchConst);
+                instr.op1 = name_idx;
+                instr.op1_type = OpType::Const;
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
+                // extended_value = 0 means "read mode" (fetch constant)
+                instr.extended_value = 0;
+                self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
         }

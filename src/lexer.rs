@@ -41,6 +41,7 @@ pub enum Token {
     Extends,        // extends
     Static,         // static
     Instanceof,     // instanceof
+    Const,          // const
     // Literals
     Integer(i64),   // 42, -1
     Float(f64),     // 3.14, 1.5e10
@@ -426,6 +427,7 @@ impl<'a> Lexer<'a> {
                         "extends" => tokens.push(Token::Extends),
                         "static" => tokens.push(Token::Static),
                         "instanceof" => tokens.push(Token::Instanceof),
+                        "const" => tokens.push(Token::Const),
                         "fn" => tokens.push(Token::Fn),
                         "use" => tokens.push(Token::Use),
                         _ => tokens.push(Token::Identifier(ident)),

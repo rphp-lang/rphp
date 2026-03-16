@@ -74,6 +74,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("var_dump", fn_var_dump, 1, 1);
     reg!("print_r", fn_print_r, 1, 1);
 
+    // --- Constants ---
+    reg!("define", fn_define, 2, 2);
+    reg!("defined", fn_defined, 1, 1);
+    reg!("constant", fn_constant, 1, 1);
+
     funcs
 }
 
@@ -733,6 +738,54 @@ fn values_equal(a: &Value, b: &Value) -> bool {
             }
         }
         _ => false,
+    }
+}
+
+// ============================================================================
+// Constant functions
+// ============================================================================
+
+fn fn_define(execute_data: *mut ExecuteData, return_value: *mut Value, eg: &ExecutorGlobals) {
+    let name_arg = unsafe { (*execute_data).cv(0) };
+    let value_arg = unsafe { (*execute_data).cv(1) };
+    // PHP requires name to be a string; coerce via string conversion
+    let name = match name_arg.as_str() {
+        Some(s) => s.to_string(),
+        None => name_arg.echo_to_string(),
+    };
+    if name.is_empty() {
+        if !return_value.is_null() {
+            unsafe { return_value.write(Value::bool(false)) };
+        }
+        return;
+    }
+    let result = eg.define_constant(&name, value_arg.clone());
+    if !return_value.is_null() {
+        unsafe { return_value.write(Value::bool(result.is_ok())) };
+    }
+}
+
+fn fn_defined(execute_data: *mut ExecuteData, return_value: *mut Value, eg: &ExecutorGlobals) {
+    let name_arg = unsafe { (*execute_data).cv(0) };
+    let name = match name_arg.as_str() {
+        Some(s) => s.to_string(),
+        None => name_arg.echo_to_string(),
+    };
+    let exists = eg.find_constant(&name).is_some();
+    if !return_value.is_null() {
+        unsafe { return_value.write(Value::bool(exists)) };
+    }
+}
+
+fn fn_constant(execute_data: *mut ExecuteData, return_value: *mut Value, eg: &ExecutorGlobals) {
+    let name_arg = unsafe { (*execute_data).cv(0) };
+    let name = match name_arg.as_str() {
+        Some(s) => s.to_string(),
+        None => name_arg.echo_to_string(),
+    };
+    let value = eg.find_constant(&name).unwrap_or(Value::null());
+    if !return_value.is_null() {
+        unsafe { return_value.write(value) };
     }
 }
 
