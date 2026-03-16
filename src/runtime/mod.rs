@@ -140,9 +140,22 @@ impl ExecutorGlobals {
         Ok(())
     }
 
-    /// Look up a function by name
+    /// Look up a function by name.
+    /// Fast path: try exact match first (names are stored lowercase),
+    /// fall back to case-insensitive search only if needed.
+    #[inline]
     pub fn find_function(&self, name: &str) -> Option<*const FunctionCommon> {
-        self.function_table.get(&name.to_lowercase()).copied()
+        // Fast path: direct lookup (works when name is already lowercase)
+        if let Some(&ptr) = self.function_table.get(name) {
+            return Some(ptr);
+        }
+        // Slow path: allocate lowercase string
+        let lower = name.to_lowercase();
+        if lower != name {
+            self.function_table.get(&lower).copied()
+        } else {
+            None
+        }
     }
 
     /// Define a constant. Returns error if already defined.

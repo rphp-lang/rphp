@@ -24,6 +24,9 @@ pub struct FunctionCommon {
     pub is_variadic: bool,
     /// CV index where variadic args array is stored (only valid when is_variadic=true)
     pub variadic_cv_index: u32,
+    /// Bitmask: bit N = 1 means parameter N is pass-by-reference.
+    /// Supports up to 64 parameters.
+    pub ref_args: u64,
 }
 
 /// User-defined PHP function — contains compiled OpArray.
@@ -35,11 +38,13 @@ pub struct UserFunction {
 
 /// Handler signature for internal (built-in) functions.
 /// Raw pointers because ExecuteData lives on VM stack.
+/// eg is &mut to allow VM re-entry (e.g. array_map calling callbacks).
+/// Returns Result to propagate fatal errors through DoFcall.
 pub type InternalFunctionHandler = fn(
     execute_data: *mut ExecuteData,
     return_value: *mut Value,
-    eg: &ExecutorGlobals,
-);
+    eg: &mut ExecutorGlobals,
+) -> Result<(), crate::vm::execute::VmError>;
 
 /// Internal (built-in) function — strlen, array_map, etc.
 #[repr(C)]

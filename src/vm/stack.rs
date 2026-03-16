@@ -1,9 +1,8 @@
 use std::mem::size_of;
 
 use crate::value::Value;
-use crate::runtime::ExecutorGlobals;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{Function, FunctionCommon, FunctionType};
+use super::function::{FunctionCommon, FunctionType};
 
 const DEFAULT_STACK_PAGE_SIZE: usize = 256 * 1024; // 256 KB
 
@@ -39,22 +38,25 @@ impl VmStack {
     }
 
     /// Allocate a call frame on the stack.
-    /// Note: eg parameter reserved for future runtime cache allocation.
+    #[inline]
     pub fn push_call_frame(
         &mut self,
         func: *const FunctionCommon,
         num_args: u32,
     ) -> *mut ExecuteData {
-        let func_ref = unsafe { Function::from_common_ptr(func) };
-        let (num_cvs, num_temps) = func_ref.dispatch(
-            |user| (user.op_array.num_cvs as usize, user.op_array.num_temps as usize),
-            |internal| {
-                // For variadic functions, add +1 for the packed variadic array slot
-                let base = internal.common.num_args as usize;
-                let extra = if internal.common.is_variadic { 1 } else { 0 };
+        let common = unsafe { &*func };
+        let (num_cvs, num_temps) = match common.fn_type {
+            FunctionType::User => {
+                // Direct cast — avoids Function wrapper + dispatch overhead
+                let user = unsafe { &*(func as *const super::function::UserFunction) };
+                (user.op_array.num_cvs as usize, user.op_array.num_temps as usize)
+            }
+            _ => {
+                let base = common.num_args as usize;
+                let extra = if common.is_variadic { 1 } else { 0 };
                 (base + extra, 0usize)
-            },
-        );
+            }
+        };
         // Allocate max(num_args, num_cvs) so that extra arguments
         // don't write past the frame before DoFcall validates the count.
         let effective_cvs = std::cmp::max(num_args as usize, num_cvs);
@@ -69,7 +71,7 @@ impl VmStack {
         let frame = self.top as *mut ExecuteData;
         self.top = unsafe { self.top.add(total_slots) };
 
-        // Initialize frame
+        // Initialize frame header
         unsafe {
             (*frame).func = func;
             (*frame).opline = std::ptr::null();
@@ -82,13 +84,12 @@ impl VmStack {
             (*frame).pending_return_after_finally = false;
         }
 
-        // Initialize all slots (effective CVs + temps) to UNDEF
-        // IMPORTANT: Use ptr::write, not assignment, because the memory may contain
-        // garbage from a previously popped frame. Assignment would Drop the old
-        // "value" which could be stale String/Array pointers.
-        let cv_base = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS) };
-        for i in 0..(effective_cvs + num_temps) {
-            unsafe { cv_base.add(i).write(Value::undef()); }
+        // Zero-init all CV+TMP slots to UNDEF — Value::undef() is all-zero bytes.
+        // Using write_bytes is faster than per-slot loop for frames with many slots.
+        let slot_count = effective_cvs + num_temps;
+        if slot_count > 0 {
+            let cv_base = unsafe { (frame as *mut u8).add(CALL_FRAME_SLOTS * size_of::<Value>()) };
+            unsafe { std::ptr::write_bytes(cv_base, 0, slot_count * size_of::<Value>()) };
         }
 
         frame

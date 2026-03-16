@@ -62,6 +62,7 @@ impl ExecuteData {
     /// Resolve operand to Value reference based on operand type.
     /// Returns a raw pointer to avoid lifetime entanglement between
     /// frame (self) and op_array.
+    /// For CV operands: follows references (returns pointer to target).
     #[inline]
     pub unsafe fn get_op_ptr(
         &self,
@@ -71,17 +72,24 @@ impl ExecuteData {
     ) -> *const Value {
         match op_type {
             OpType::Const => &op_array.literals()[operand as usize] as *const Value,
-            OpType::Cv => self.cv(operand) as *const Value,
+            OpType::Cv => {
+                let ptr = self.cv(operand) as *const Value;
+                if (*ptr).is_reference() { (*ptr).as_ref_ptr() as *const Value } else { ptr }
+            }
             OpType::Tmp | OpType::Var => self.tmp(operand) as *const Value,
             OpType::Unused => panic!("get_op on unused operand"),
         }
     }
 
-    /// Resolve operand to mutable Value pointer
+    /// Resolve operand to mutable Value pointer.
+    /// For CV operands: follows references (returns pointer to target).
     #[inline]
     pub unsafe fn get_op_mut(&mut self, operand: u32, op_type: OpType) -> *mut Value {
         match op_type {
-            OpType::Cv => self.cv_mut(operand) as *mut Value,
+            OpType::Cv => {
+                let ptr = self.cv_mut(operand) as *mut Value;
+                if (*ptr).is_reference() { (*ptr).as_ref_ptr() } else { ptr }
+            }
             OpType::Tmp | OpType::Var => self.tmp_mut(operand) as *mut Value,
             _ => panic!("get_op_mut on const/unused operand"),
         }

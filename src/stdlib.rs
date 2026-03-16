@@ -16,27 +16,30 @@ use crate::value::{Value, ValueType, PhpArray, ArrayKey};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
 use crate::runtime::ExecutorGlobals;
-use crate::compiler::{make_internal_function, make_internal_function_variadic};
+use crate::compiler::{make_internal_function, make_internal_function_ref, make_internal_function_variadic};
 use crate::vm::function::InternalFunction;
+use crate::vm::execute::{call_function, VmError};
 
 // ============================================================================
 // Helper macros — zero-cost abstractions for stdlib handlers
 // ============================================================================
 
-/// Read CV(n) as &Value
+/// Read CV(n) as &Value — follows references transparently
 #[allow(unused_unsafe)]
 macro_rules! arg {
-    ($ed:expr, $n:expr) => {
-        unsafe { (*$ed).cv($n) }
-    };
+    ($ed:expr, $n:expr) => {{
+        let v = unsafe { (*$ed).cv($n) };
+        if v.is_reference() { unsafe { &*v.as_ref_ptr() } } else { v }
+    }};
 }
 
-/// Read CV(n) as *mut Value (for mutating array/object args in-place)
+/// Read CV(n) as *mut Value — follows references (returns pointer to original)
 #[allow(unused_unsafe)]
 macro_rules! arg_mut {
-    ($ed:expr, $n:expr) => {
-        unsafe { (*$ed).cv_mut($n) as *mut Value }
-    };
+    ($ed:expr, $n:expr) => {{
+        let ptr = unsafe { (*$ed).cv_mut($n) as *mut Value };
+        if unsafe { (*ptr).is_reference() } { unsafe { (*ptr).as_ref_ptr() } } else { ptr }
+    }};
 }
 
 /// Read CV(n) as Cow<str> — zero-copy for String values, coerced otherwise
@@ -72,14 +75,15 @@ macro_rules! arg_opt {
     }};
 }
 
-/// Write value to return_value pointer (with null guard).
+/// Write value to return_value pointer (with null guard) and return Ok(()).
 /// SAFETY: rv must be a valid pointer or null.
 macro_rules! ret {
-    ($rv:expr, $val:expr) => {
+    ($rv:expr, $val:expr) => {{
         if !$rv.is_null() {
             unsafe { $rv.write($val) };
         }
-    };
+        return Ok(());
+    }};
 }
 
 // ============================================================================
@@ -100,6 +104,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
+    macro_rules! reg_ref {
+        ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $ref_args:expr) => {{
+            let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+    }
+
     macro_rules! reg_var {
         ($name:expr, $handler:expr, $min_args:expr) => {{
             let f = Box::new(make_internal_function_variadic($handler, $min_args));
@@ -109,13 +122,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
-    // --- Array functions ---
+    // --- Array functions (by-ref: arg 0) ---
     reg!("count", fn_count, 1, 1);
     reg!("sizeof", fn_count, 1, 1);
-    reg!("array_push", fn_array_push, 2, 2);
-    reg!("array_pop", fn_array_pop, 1, 1);
-    reg!("array_shift", fn_array_shift, 1, 1);
-    reg!("array_unshift", fn_array_unshift, 2, 2);
+    reg_ref!("array_push", fn_array_push, 2, 2, 0b1);
+    reg_ref!("array_pop", fn_array_pop, 1, 1, 0b1);
+    reg_ref!("array_shift", fn_array_shift, 1, 1, 0b1);
+    reg_ref!("array_unshift", fn_array_unshift, 2, 2, 0b1);
     reg!("array_key_exists", fn_array_key_exists, 2, 2);
     reg!("in_array", fn_in_array, 2, 2);
     reg!("array_reverse", fn_array_reverse, 1, 1);
@@ -133,13 +146,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_pad", fn_array_pad, 3, 3);
     reg!("array_chunk", fn_array_chunk, 2, 2);
     reg!("array_column", fn_array_column, 2, 2);
-    reg!("sort", fn_sort, 1, 1);
-    reg!("rsort", fn_rsort, 1, 1);
+    reg_ref!("sort", fn_sort, 1, 1, 0b1);
+    reg_ref!("rsort", fn_rsort, 1, 1, 0b1);
     reg!("array_search", fn_array_search, 2, 2);
     reg!("range", fn_range, 2, 2);
-    reg!("array_splice", fn_array_splice, 4, 2);
+    reg_ref!("array_splice", fn_array_splice, 4, 2, 0b1);
     reg!("array_rand", fn_array_rand, 1, 1);
-    reg!("shuffle", fn_shuffle, 1, 1);
+    reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1);
+    reg!("array_map", fn_array_map, 2, 2);
+    reg!("array_filter", fn_array_filter, 2, 1);
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
     // --- String functions ---
@@ -179,7 +194,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("strval", fn_strval, 1, 1);
     reg!("floatval", fn_floatval, 1, 1);
     reg!("boolval", fn_boolval, 1, 1);
-    reg!("settype", fn_settype, 2, 2);
+    reg_ref!("settype", fn_settype, 2, 2, 0b1);
     reg!("is_array", fn_is_array, 1, 1);
     reg!("is_string", fn_is_string, 1, 1);
     reg!("is_int", fn_is_int, 1, 1);
@@ -237,7 +252,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 // Array functions
 // ============================================================================
 
-fn fn_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let n = match v.as_array() {
         Some(arr) => arr.len() as i64,
@@ -246,7 +261,7 @@ fn fn_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::long(n));
 }
 
-fn fn_array_push(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_push(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let val = arg!(ed, 1).clone();
     let arr = unsafe { &mut *ptr };
@@ -258,7 +273,7 @@ fn fn_array_push(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_pop(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_pop(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         ret!(rv, a.pop().unwrap_or(Value::null()));
@@ -267,7 +282,7 @@ fn fn_array_pop(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_shift(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_shift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         ret!(rv, a.shift().unwrap_or(Value::null()));
@@ -276,7 +291,7 @@ fn fn_array_shift(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_unshift(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_unshift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let val = arg!(ed, 1).clone();
     let arr = unsafe { &mut *ptr };
@@ -297,7 +312,7 @@ fn fn_array_unshift(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals)
     }
 }
 
-fn fn_array_key_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_key_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let key = arg!(ed, 0);
     let arr = arg!(ed, 1);
     let exists = if let Some(a) = arr.as_array() {
@@ -312,7 +327,7 @@ fn fn_array_key_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGloba
     ret!(rv, Value::bool(exists));
 }
 
-fn fn_in_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_in_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
     let found = haystack.as_array()
@@ -321,7 +336,7 @@ fn fn_in_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::bool(found));
 }
 
-fn fn_array_reverse(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_reverse(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut new = PhpArray::new();
@@ -337,7 +352,7 @@ fn fn_array_reverse(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals)
     }
 }
 
-fn fn_array_merge(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_merge(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a1 = arg!(ed, 0);
     let a2 = arg!(ed, 1);
     if let (Some(a1), Some(a2)) = (a1.as_array(), a2.as_array()) {
@@ -360,7 +375,7 @@ fn fn_array_merge(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_keys(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_keys(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -376,7 +391,7 @@ fn fn_array_keys(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -389,7 +404,7 @@ fn fn_array_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) 
     }
 }
 
-fn fn_array_slice(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_slice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     if let Some(arr) = arr_arg.as_array() {
         let len = arr.len() as i64;
@@ -412,7 +427,7 @@ fn fn_array_slice(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_unique(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_unique(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -430,7 +445,7 @@ fn fn_array_unique(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) 
     }
 }
 
-fn fn_array_flip(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_flip(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -452,7 +467,7 @@ fn fn_array_flip(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_combine(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_combine(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let keys_arg = arg!(ed, 0);
     let vals_arg = arg!(ed, 1);
     if let (Some(keys), Some(vals)) = (keys_arg.as_array(), vals_arg.as_array()) {
@@ -470,7 +485,7 @@ fn fn_array_combine(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals)
     }
 }
 
-fn fn_array_sum(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_sum(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut has_float = false;
@@ -489,7 +504,7 @@ fn fn_array_sum(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_product(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_product(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut has_float = false;
@@ -508,7 +523,7 @@ fn fn_array_product(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals)
     }
 }
 
-fn fn_array_count_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_count_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut counts: Vec<(String, i64)> = Vec::new();
@@ -530,7 +545,7 @@ fn fn_array_count_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlo
     }
 }
 
-fn fn_array_fill(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_fill(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let start = arg_long!(ed, 0) as i64;
     let count = arg_long!(ed, 1).max(0) as usize;
     let value = arg!(ed, 2);
@@ -541,7 +556,7 @@ fn fn_array_fill(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::array(result));
 }
 
-fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     let size = arg_long!(ed, 1);
     let value = arg!(ed, 2);
@@ -562,7 +577,7 @@ fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_chunk(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_chunk(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     let size = arg_long!(ed, 1).max(1) as usize;
     if let Some(arr) = arr_arg.as_array() {
@@ -587,7 +602,7 @@ fn fn_array_chunk(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     let col_key = arg!(ed, 1);
     if let Some(arr) = arr_arg.as_array() {
@@ -609,7 +624,7 @@ fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) 
     }
 }
 
-fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.entries().iter().map(|(_, v)| v.clone()).collect();
@@ -623,7 +638,7 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.entries().iter().map(|(_, v)| v.clone()).collect();
@@ -637,7 +652,7 @@ fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_array_search(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_search(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
     if let Some(arr) = haystack.as_array() {
@@ -648,14 +663,13 @@ fn fn_array_search(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) 
                     ArrayKey::String(k) => Value::string(k.clone()),
                 };
                 ret!(rv, result);
-                return;
             }
         }
     }
     ret!(rv, Value::bool(false));
 }
 
-fn fn_range(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_range(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let start = arg_long!(ed, 0);
     let end = arg_long!(ed, 1);
     let mut arr = PhpArray::new();
@@ -667,7 +681,7 @@ fn fn_range(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::array(arr));
 }
 
-fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let offset = arg_long!(ed, 1);
     let arr = unsafe { &mut *ptr };
@@ -703,7 +717,7 @@ fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) 
     }
 }
 
-fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         if arr.is_empty() {
@@ -726,7 +740,7 @@ fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.entries().iter().map(|(_, v)| v.clone()).collect();
@@ -749,18 +763,86 @@ fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
+/// array_map($callback, $array) — apply callback to each element, return new array
+fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let callback_name = arg_str!(ed, 0);
+    let arr_val = arg!(ed, 1);
+    let func_ptr = match eg.find_function(&callback_name) {
+        Some(ptr) => ptr,
+        None => {
+            return Err(VmError::Fatal(format!(
+                "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found", callback_name
+            )));
+        }
+    };
+    if let Some(arr) = arr_val.as_array() {
+        let mut result = PhpArray::new();
+        for (key, val) in arr.entries().iter() {
+            let mapped = call_function(eg, func_ptr, &[val.clone()])?;
+            if eg.exception.is_some() { return Ok(()); }
+            result.set(key.clone(), mapped);
+        }
+        ret!(rv, Value::array(result));
+    } else {
+        ret!(rv, Value::null());
+    }
+}
+
+/// array_filter($array [, $callback]) — filter elements by callback (or truthiness)
+fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr_val = arg!(ed, 0);
+    let callback = arg_opt!(ed, 1);
+    if let Some(arr) = arr_val.as_array() {
+        let mut result = PhpArray::new();
+        match callback {
+            Some(cb_val) => {
+                let cb_name = match cb_val.as_str() {
+                    Some(s) => s.to_string(),
+                    None => cb_val.echo_to_string(),
+                };
+                let func_ptr = match eg.find_function(&cb_name) {
+                    Some(ptr) => ptr,
+                    None => {
+                        return Err(VmError::Fatal(format!(
+                            "array_filter(): Argument #2 ($callback) must be a valid callback, function \"{}\" not found", cb_name
+                        )));
+                    }
+                };
+                for (key, val) in arr.entries().iter() {
+                    let ret_val = call_function(eg, func_ptr, &[val.clone()])?;
+                    if eg.exception.is_some() { return Ok(()); }
+                    if ret_val.is_truthy() {
+                        result.set(key.clone(), val.clone());
+                    }
+                }
+            }
+            None => {
+                // No callback — filter by truthiness
+                for (key, val) in arr.entries().iter() {
+                    if val.is_truthy() {
+                        result.set(key.clone(), val.clone());
+                    }
+                }
+            }
+        }
+        ret!(rv, Value::array(result));
+    } else {
+        ret!(rv, Value::null());
+    }
+}
+
 // compact() intentionally removed — requires caller scope access (not yet implemented)
 
 // ============================================================================
 // String functions
 // ============================================================================
 
-fn fn_strlen(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_strlen(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::long(s.len() as i64));
 }
 
-fn fn_substr(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_substr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let bytes = s.as_bytes();
     let len = bytes.len() as i64;
@@ -780,7 +862,7 @@ fn fn_substr(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_strpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_strpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, match h.find(n.as_ref()) {
@@ -789,7 +871,7 @@ fn fn_strpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     });
 }
 
-fn fn_strrpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_strrpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, match h.rfind(n.as_ref()) {
@@ -798,14 +880,14 @@ fn fn_strrpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     });
 }
 
-fn fn_str_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let search = arg_str!(ed, 0);
     let replace = arg_str!(ed, 1);
     let subject = arg_str!(ed, 2);
     ret!(rv, Value::string(subject.replace(search.as_ref(), replace.as_ref())));
 }
 
-fn fn_strtolower(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_strtolower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     // PHP strtolower is ASCII-only — use make_ascii_lowercase for performance
     let mut bytes = s.as_bytes().to_vec();
@@ -813,29 +895,29 @@ fn fn_strtolower(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::string(unsafe { String::from_utf8_unchecked(bytes) }));
 }
 
-fn fn_strtoupper(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_strtoupper(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let mut bytes = s.as_bytes().to_vec();
     bytes.make_ascii_uppercase();
     ret!(rv, Value::string(unsafe { String::from_utf8_unchecked(bytes) }));
 }
 
-fn fn_trim(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_trim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.trim()));
 }
 
-fn fn_rtrim(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_rtrim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.trim_end()));
 }
 
-fn fn_ltrim(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_ltrim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.trim_start()));
 }
 
-fn fn_explode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_explode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let d = arg_str!(ed, 0);
     let s = arg_str!(ed, 1);
     let mut arr = PhpArray::new();
@@ -845,7 +927,7 @@ fn fn_explode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::array(arr));
 }
 
-fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let glue = arg_str!(ed, 0);
     let pieces = arg!(ed, 1);
     if let Some(arr) = pieces.as_array() {
@@ -856,38 +938,38 @@ fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_str_repeat(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_repeat(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let times = arg_long!(ed, 1).max(0) as usize;
     ret!(rv, Value::string(s.repeat(times)));
 }
 
-fn fn_substr_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_substr_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     let count = if n.is_empty() { 0 } else { h.matches(n.as_ref()).count() as i64 };
     ret!(rv, Value::long(count));
 }
 
-fn fn_str_contains(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_contains(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, Value::bool(h.contains(n.as_ref())));
 }
 
-fn fn_str_starts_with(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_starts_with(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, Value::bool(h.starts_with(n.as_ref())));
 }
 
-fn fn_str_ends_with(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_ends_with(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, Value::bool(h.ends_with(n.as_ref())));
 }
 
-fn fn_str_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let input = arg_str!(ed, 0);
     let length = arg_long!(ed, 1) as usize;
     let pad = match arg_opt!(ed, 2) {
@@ -903,7 +985,7 @@ fn fn_str_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_str_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let chunk = match arg_opt!(ed, 1) {
         Some(v) => v.to_long_val().max(1) as usize,
@@ -921,7 +1003,7 @@ fn fn_str_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::array(arr));
 }
 
-fn fn_ucfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_ucfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     if s.is_empty() {
         ret!(rv, Value::string(""));
@@ -933,7 +1015,7 @@ fn fn_ucfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_lcfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_lcfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     if s.is_empty() {
         ret!(rv, Value::string(""));
@@ -944,12 +1026,12 @@ fn fn_lcfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_str_word_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_word_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::long(s.split_whitespace().count() as i64));
 }
 
-fn fn_wordwrap(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_wordwrap(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let width = match arg_opt!(ed, 1) {
         Some(v) => v.to_long_val().max(1) as usize,
@@ -990,19 +1072,19 @@ fn fn_wordwrap(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::string(result));
 }
 
-fn fn_nl2br(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_nl2br(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.replace('\n', "<br />\n")));
 }
 
-fn fn_str_rev(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_str_rev(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     // PHP strrev reverses bytes, not Unicode codepoints
     let reversed: String = s.chars().rev().collect();
     ret!(rv, Value::string(reversed));
 }
 
-fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let num = arg_float!(ed, 0);
     let decimals = match arg_opt!(ed, 1) { Some(v) => v.to_long_val().max(0) as usize, None => 0 };
     let dec_point = match arg_opt!(ed, 2) { Some(v) => v.as_str().unwrap_or(".").to_string(), None => ".".to_string() };
@@ -1033,17 +1115,17 @@ fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals)
     ret!(rv, Value::string(result));
 }
 
-fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::long(s.as_bytes().first().copied().unwrap_or(0) as i64));
 }
 
-fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let code = (arg_long!(ed, 0) & 0xFF) as u8;
     ret!(rv, Value::string(String::from(code as char)));
 }
 
-fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     // Variadic: VM packs extra args into an array at CV(1)
     // Read individual values from that array
@@ -1099,23 +1181,23 @@ fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
 // Type functions
 // ============================================================================
 
-fn fn_intval(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_intval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::long(arg!(ed, 0).to_long_val()));
 }
 
-fn fn_strval(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_strval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::string(arg!(ed, 0).echo_to_string()));
 }
 
-fn fn_floatval(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_floatval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg!(ed, 0).to_float_val()));
 }
 
-fn fn_boolval(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_boolval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).is_truthy()));
 }
 
-fn fn_settype(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_settype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let type_name = arg_str!(ed, 1);
     let val = unsafe { &*ptr };
@@ -1129,38 +1211,38 @@ fn fn_settype(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
             else { let mut a = PhpArray::new(); a.push(val.clone()); Value::array(a) }
         }
         "null" => Value::null(),
-        _ => { ret!(rv, Value::bool(false)); return; }
+        _ => { ret!(rv, Value::bool(false)); }
     };
     unsafe { std::ptr::drop_in_place(ptr); ptr.write(new_val); }
     ret!(rv, Value::bool(true));
 }
 
-fn fn_is_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Array));
 }
 
-fn fn_is_string(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_string(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::String));
 }
 
-fn fn_is_int(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_int(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Long));
 }
 
-fn fn_is_float(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_float(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Double));
 }
 
-fn fn_is_null(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_null(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Null));
 }
 
-fn fn_is_bool(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_bool(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let t = arg!(ed, 0).value_type();
     ret!(rv, Value::bool(t == ValueType::True || t == ValueType::False));
 }
 
-fn fn_is_numeric(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_numeric(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let result = match v.value_type() {
         ValueType::Long | ValueType::Double => true,
@@ -1173,11 +1255,11 @@ fn fn_is_numeric(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     ret!(rv, Value::bool(result));
 }
 
-fn fn_is_object(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_is_object(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Object));
 }
 
-fn fn_gettype(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_gettype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let name = match arg!(ed, 0).value_type() {
         ValueType::Null => "NULL",
         ValueType::True | ValueType::False => "boolean",
@@ -1196,7 +1278,7 @@ fn fn_gettype(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
 // Math functions
 // ============================================================================
 
-fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     ret!(rv, match v.value_type() {
         ValueType::Long => Value::long(v.as_long().unwrap().abs()),
@@ -1205,27 +1287,27 @@ fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     });
 }
 
-fn fn_max(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_max(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a = arg!(ed, 0);
     let b = arg!(ed, 1);
     ret!(rv, if compare_values(a, b) >= 0 { a.clone() } else { b.clone() });
 }
 
-fn fn_min(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_min(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a = arg!(ed, 0);
     let b = arg!(ed, 1);
     ret!(rv, if compare_values(a, b) <= 0 { a.clone() } else { b.clone() });
 }
 
-fn fn_floor(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_floor(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).floor()));
 }
 
-fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).ceil()));
 }
 
-fn fn_round(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_round(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let d = arg_float!(ed, 0);
     let precision = match arg_opt!(ed, 1) { Some(v) => v.to_long_val(), None => 0 };
     if precision == 0 {
@@ -1236,23 +1318,22 @@ fn fn_round(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let base = arg!(ed, 0);
     let exp = arg!(ed, 1);
     if let (Some(b), Some(e)) = (base.as_long(), exp.as_long()) {
         if e >= 0 {
             ret!(rv, Value::long(b.wrapping_pow(e as u32)));
-            return;
         }
     }
     ret!(rv, Value::double(base.to_float_val().powf(exp.to_float_val())));
 }
 
-fn fn_sqrt(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_sqrt(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).sqrt()));
 }
 
-fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a = arg_long!(ed, 0);
     let b = arg_long!(ed, 1);
     if b == 0 {
@@ -1262,29 +1343,29 @@ fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
     }
 }
 
-fn fn_fmod(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_fmod(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a = arg_float!(ed, 0);
     let b = arg_float!(ed, 1);
     ret!(rv, Value::double(a % b));
 }
 
-fn fn_log(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_log(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).ln()));
 }
 
-fn fn_log10(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_log10(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).log10()));
 }
 
-fn fn_log2(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_log2(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).log2()));
 }
 
-fn fn_pi(_ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_pi(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(std::f64::consts::PI));
 }
 
-fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     // Simple pseudo-random
     let seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -1303,20 +1384,21 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
 // Output functions
 // ============================================================================
 
-fn fn_var_dump(ed: *mut ExecuteData, _rv: *mut Value, eg: &ExecutorGlobals) {
+fn fn_var_dump(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = var_dump_value(v, 0);
     eg.write_output(output.as_bytes());
+    Ok(())
 }
 
-fn fn_print_r(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
+fn fn_print_r(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = print_r_value(v, 0);
     eg.write_output(output.as_bytes());
     ret!(rv, Value::bool(true));
 }
 
-fn fn_var_export(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
+fn fn_var_export(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let return_str = match arg_opt!(ed, 1) { Some(v) => v.is_truthy(), None => false };
     let output = var_export_value(v);
@@ -1332,23 +1414,22 @@ fn fn_var_export(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
 // Constant functions
 // ============================================================================
 
-fn fn_define(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
+fn fn_define(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     if name.is_empty() {
         ret!(rv, Value::bool(false));
-        return;
     }
     let val = arg!(ed, 1).clone();
     let result = eg.define_constant(&name, val);
     ret!(rv, Value::bool(result.is_ok()));
 }
 
-fn fn_defined(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
+fn fn_defined(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     ret!(rv, Value::bool(eg.find_constant(&name).is_some()));
 }
 
-fn fn_constant(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
+fn fn_constant(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     ret!(rv, eg.find_constant(&name).unwrap_or(Value::null()));
 }
@@ -1357,12 +1438,12 @@ fn fn_constant(ed: *mut ExecuteData, rv: *mut Value, eg: &ExecutorGlobals) {
 // JSON functions
 // ============================================================================
 
-fn fn_json_encode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_json_encode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     ret!(rv, Value::string(json_encode_value(v)));
 }
 
-fn fn_json_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_json_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let assoc = match arg_opt!(ed, 1) { Some(v) => v.is_truthy(), None => false };
     ret!(rv, json_decode_string(&s, assoc));
@@ -1372,16 +1453,16 @@ fn fn_json_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
 // Misc functions
 // ============================================================================
 
-fn fn_isset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_isset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     ret!(rv, Value::bool(v.value_type() != ValueType::Null && v.value_type() != ValueType::Undef));
 }
 
-fn fn_empty_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_empty_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::bool(!arg!(ed, 0).is_truthy()));
 }
 
-fn fn_unset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &ExecutorGlobals) {
+fn fn_unset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     unsafe { std::ptr::drop_in_place(ptr); ptr.write(Value::null()); }
     ret!(rv, Value::null());

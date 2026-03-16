@@ -21,6 +21,8 @@ pub enum OpCode {
     InitFcall = 61,
     DoFcall = 60,
     SendVal = 63,
+    SendRef = 64,
+    SendVarEx = 65,  // Runtime check: send by-ref if callee expects it, else by-val
 
     // Comparison
     IsEqual = 15,

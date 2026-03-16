@@ -279,13 +279,14 @@ fn test_internal_function_call() {
     fn my_double_handler(
         execute_data: *mut ExecuteData,
         return_value: *mut Value,
-        _eg: &ExecutorGlobals,
-    ) {
+        _eg: &mut ExecutorGlobals,
+    ) -> Result<(), rphp::vm::execute::VmError> {
         let arg = unsafe { (*execute_data).cv(0) };
         let val = arg.as_long().unwrap();
         if !return_value.is_null() {
             unsafe { return_value.write(Value::long(val * 2)) };
         }
+        Ok(())
     }
 
     let my_double_func = make_internal_function(my_double_handler, 1, 1);
@@ -453,13 +454,14 @@ fn test_nested_calls() {
     fn my_double_handler(
         execute_data: *mut ExecuteData,
         return_value: *mut Value,
-        _eg: &ExecutorGlobals,
-    ) {
+        _eg: &mut ExecutorGlobals,
+    ) -> Result<(), rphp::vm::execute::VmError> {
         let arg = unsafe { (*execute_data).cv(0) };
         let val = arg.as_long().unwrap();
         if !return_value.is_null() {
             unsafe { return_value.write(Value::long(val * 2)) };
         }
+        Ok(())
     }
     let my_double_func = make_internal_function(my_double_handler, 1, 1);
 

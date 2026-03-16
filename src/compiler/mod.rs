@@ -33,16 +33,16 @@ pub fn make_user_function(op_array: OpArray) -> UserFunction {
 
 /// Create a UserFunction with the given number of parameters.
 pub fn make_user_function_with_args(op_array: OpArray, num_args: u32) -> UserFunction {
-    make_user_function_full(op_array, num_args, num_args, false, 0)
+    make_user_function_full(op_array, num_args, num_args, false, 0, 0)
 }
 
 /// Create a UserFunction with separate total and required arg counts (for default params).
 pub fn make_user_function_with_defaults(op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool) -> UserFunction {
-    make_user_function_full(op_array, num_args, required_num_args, is_variadic, 0)
+    make_user_function_full(op_array, num_args, required_num_args, is_variadic, 0, 0)
 }
 
 /// Full constructor with all options.
-pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool, variadic_cv_index: u32) -> UserFunction {
+pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool, variadic_cv_index: u32, ref_args: u64) -> UserFunction {
     UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,
@@ -50,6 +50,7 @@ pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_ar
             required_num_args,
             is_variadic,
             variadic_cv_index,
+            ref_args,
         },
         op_array,
     }
@@ -68,6 +69,27 @@ pub fn make_internal_function(
             required_num_args,
             is_variadic: false,
             variadic_cv_index: 0,
+            ref_args: 0,
+        },
+        handler,
+    }
+}
+
+/// Create an InternalFunction with by-ref parameter bitmask.
+pub fn make_internal_function_ref(
+    handler: InternalFunctionHandler,
+    num_args: u32,
+    required_num_args: u32,
+    ref_args: u64,
+) -> InternalFunction {
+    InternalFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::Internal,
+            num_args,
+            required_num_args,
+            is_variadic: false,
+            variadic_cv_index: 0,
+            ref_args,
         },
         handler,
     }
@@ -85,6 +107,7 @@ pub fn make_internal_function_variadic(
             required_num_args,
             is_variadic: true,
             variadic_cv_index: required_num_args,
+            ref_args: 0,
         },
         handler,
     }

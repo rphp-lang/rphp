@@ -45,16 +45,100 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
 }
 
 /// Drop all CV and TMP slot values in a frame before popping it.
+/// Only drops heap-allocated types (String, Array, Object).
+/// Reference/Undef/Null/Bool/Long/Double are no-op drops — skip them entirely.
 /// SAFETY: frame must be a valid ExecuteData pointer with initialized slots.
+#[inline]
 unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     let num_slots = (*frame).num_cvs as usize + (*frame).num_temps as usize;
     let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     for i in 0..num_slots {
-        std::ptr::drop_in_place(base.add(i));
+        let ptr = base.add(i);
+        match (*ptr).value_type() {
+            ValueType::String | ValueType::Array | ValueType::Object => {
+                std::ptr::drop_in_place(ptr);
+            }
+            _ => {} // Undef, Null, Bool, Long, Double, Reference — no-op
+        }
     }
 }
 
 /// Execute a top-level script.
+/// Result of throw_in_frame: either the exception was handled (new frame + op_array)
+/// or it was not and should propagate via eg.exception.
+enum ThrowResult<'a> {
+    Handled(*mut ExecuteData, &'a crate::compiler::OpArray),
+    Unhandled(Value),
+}
+
+/// Walk frames starting from `frame` looking for a try/catch handler for `thrown`.
+/// On success: unwinds frames and returns the handler frame + op_array.
+/// On failure: returns Unhandled with the original exception value.
+fn throw_in_frame<'a>(
+    eg: &mut ExecutorGlobals,
+    mut frame: *mut ExecuteData,
+    thrown: Value,
+) -> ThrowResult<'a> {
+    let mut search_frame = frame;
+    loop {
+        let sf_op_array = unsafe { (*search_frame).op_array() };
+        let current_ip = unsafe {
+            (*search_frame).opline.offset_from(sf_op_array.instructions.as_ptr()) as u32
+        };
+
+        let mut matched_entry: Option<&crate::compiler::compile::TryEntry> = None;
+        for entry in &sf_op_array.try_entries {
+            if current_ip >= entry.try_start && current_ip < entry.try_end {
+                matched_entry = Some(entry);
+                break;
+            }
+        }
+
+        if let Some(entry) = matched_entry {
+            let matched_catch = entry.catches.iter().find(|c| {
+                exception_matches_catch(&thrown, &c.types, eg)
+            });
+
+            if let Some(catch) = matched_catch {
+                while frame != search_frame {
+                    let prev = unsafe { (*frame).prev_execute_data };
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    frame = prev;
+                }
+                let base_ptr = sf_op_array.instructions.as_ptr();
+                let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
+                unsafe { write_val(catch_cv_ptr, thrown.clone()) };
+                unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
+                let new_op_array = unsafe { (*frame).op_array() };
+                return ThrowResult::Handled(frame, new_op_array);
+            } else if entry.finally_start != 0xFFFFFFFF {
+                while frame != search_frame {
+                    let prev = unsafe { (*frame).prev_execute_data };
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    frame = prev;
+                }
+                let base_ptr = sf_op_array.instructions.as_ptr();
+                eg.exception = Some(thrown.clone());
+                unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
+                let new_op_array = unsafe { (*frame).op_array() };
+                return ThrowResult::Handled(frame, new_op_array);
+            }
+        }
+
+        let prev = unsafe { (*search_frame).prev_execute_data };
+        if prev.is_null() {
+            break;
+        }
+        search_frame = prev;
+    }
+
+    ThrowResult::Unhandled(thrown)
+}
+
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
     let func_ptr = &main_func.common as *const FunctionCommon;
     let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
@@ -70,6 +154,83 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     execute_ex(eg, frame)?;
 
     eg.current_execute_data.set(unsafe { (*frame).prev_execute_data });
+    unsafe { cleanup_frame_slots(frame) };
+    eg.vm_stack.pop_call_frame(frame);
+
+    // Check for uncaught exception that propagated through execute_ex
+    if let Some(exc) = eg.exception.take() {
+        let msg = exc.echo_to_string();
+        return Err(VmError::Fatal(format!("Uncaught Exception: {}", msg)));
+    }
+
+    Ok(return_value)
+}
+
+/// Call a PHP function by FunctionCommon pointer with given arguments.
+/// Used by stdlib functions like array_map/array_filter for callback invocation.
+pub fn call_function(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    args: &[Value],
+) -> Result<Value, VmError> {
+    let saved_execute_data = eg.current_execute_data.get();
+    let frame = eg.vm_stack.push_call_frame(func_ptr, args.len() as u32);
+    let mut return_value = Value::null();
+
+    unsafe {
+        (*frame).return_value = &mut return_value;
+        // prev=null so Return exits execute_ex instead of continuing in caller
+        (*frame).prev_execute_data = std::ptr::null_mut();
+        (*frame).num_args = args.len() as u32;
+    }
+
+    // Write args into CV slots
+    for (i, arg) in args.iter().enumerate() {
+        let slot = unsafe { (*frame).cv_mut(i as u32) };
+        unsafe { std::ptr::drop_in_place(slot as *mut Value) };
+        unsafe { (slot as *mut Value).write(arg.clone()) };
+    }
+
+    let func = unsafe { Function::from_common_ptr(func_ptr) };
+    match func.fn_type() {
+        FunctionType::User => {
+            let user = unsafe { func.as_user() };
+            unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
+            eg.current_execute_data.set(frame);
+            execute_ex(eg, frame)?;
+            // Exception from callback stays in eg.exception for DoFcall to handle.
+            // Bail early so caller stops iterating, but don't convert to Err.
+            if eg.exception.is_some() {
+                eg.current_execute_data.set(saved_execute_data);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                return Ok(Value::null());
+            }
+        }
+        FunctionType::Internal => {
+            let internal = unsafe { func.as_internal() };
+            unsafe { std::ptr::drop_in_place(&mut return_value as *mut Value) };
+            if let Err(e) = (internal.handler)(frame, &mut return_value, eg) {
+                eg.current_execute_data.set(saved_execute_data);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                return Err(e);
+            }
+            // Exception from callback stays in eg.exception for DoFcall to handle.
+            if eg.exception.is_some() {
+                eg.current_execute_data.set(saved_execute_data);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                return Ok(Value::null());
+            }
+        }
+        FunctionType::Undef => {
+            eg.current_execute_data.set(saved_execute_data);
+            return Err(VmError::Fatal("Call to undefined function".into()));
+        }
+    }
+
+    eg.current_execute_data.set(saved_execute_data);
     unsafe { cleanup_frame_slots(frame) };
     eg.vm_stack.pop_call_frame(frame);
 
@@ -158,8 +319,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         op_array = unsafe { (*frame).op_array() };
                         continue;
                     }
-                    let msg = pending.echo_to_string();
-                    return Err(VmError::Fatal(format!("Uncaught Exception: {}", msg)));
+                    // Propagate via eg.exception for re-entry boundary crossing
+                    eg.exception = Some(pending);
+                    return Ok(());
                 }
             }
         }
@@ -446,6 +608,61 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 *arg_slot = cloned;
             }
 
+            OpCode::SendRef => {
+                // Send reference to caller's CV into callee frame
+                // op1 = CV index in caller, op1_type must be CV
+                // op2 = argument number in callee (0-based)
+                debug_assert!(opline.op1_type == OpType::Cv);
+                let caller_cv_ptr = unsafe {
+                    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                    let raw_ptr = base.add(opline.op1 as usize);
+                    // If caller's CV is itself a reference, forward the target
+                    if (*raw_ptr).is_reference() {
+                        (*raw_ptr).as_ref_ptr()
+                    } else {
+                        raw_ptr
+                    }
+                };
+                let call = unsafe { (*frame).call };
+                debug_assert!(!call.is_null());
+                let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                // Drop old undef in the slot, then write Reference
+                unsafe { std::ptr::drop_in_place(arg_slot as *mut Value) };
+                unsafe { (arg_slot as *mut Value).write(Value::reference(caller_cv_ptr)) };
+            }
+
+            OpCode::SendVarEx => {
+                // Runtime-checked send: by-ref if callee expects it AND op1 is CV, else by-val
+                // op2 = CV slot in callee, extended_value = parameter index for ref_args check
+                let call = unsafe { (*frame).call };
+                debug_assert!(!call.is_null());
+                let param_idx = opline.extended_value;
+                let ref_args = unsafe { (*(*call).func).ref_args };
+                let is_ref = param_idx < 64 && (ref_args & (1u64 << param_idx)) != 0;
+
+                if is_ref && opline.op1_type == OpType::Cv {
+                    // Same logic as SendRef
+                    let caller_cv_ptr = unsafe {
+                        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                        let raw_ptr = base.add(opline.op1 as usize);
+                        if (*raw_ptr).is_reference() {
+                            (*raw_ptr).as_ref_ptr()
+                        } else {
+                            raw_ptr
+                        }
+                    };
+                    let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                    unsafe { std::ptr::drop_in_place(arg_slot as *mut Value) };
+                    unsafe { (arg_slot as *mut Value).write(Value::reference(caller_cv_ptr)) };
+                } else {
+                    // Same logic as SendVal
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let cloned = val.clone();
+                    let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                    *arg_slot = cloned;
+                }
+            }
+
             OpCode::DoFcall => {
                 // Execute the pending call
                 let call = unsafe { (*frame).call };
@@ -491,28 +708,47 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     *variadic_slot = crate::value::Value::array(variadic_arr);
                 }
 
-                let func = unsafe { Function::from_common_ptr((*call).func) };
-                match func.fn_type() {
-                    FunctionType::Internal => {
-                        let internal = unsafe { func.as_internal() };
-                        // Drop old value in return slot before handler writes into it
-                        if !return_value_ptr.is_null() {
-                            unsafe { std::ptr::drop_in_place(return_value_ptr) };
-                        }
-                        (internal.handler)(call, return_value_ptr, eg);
-                        unsafe { cleanup_frame_slots(call) };
-                        eg.vm_stack.pop_call_frame(call);
-                    }
+                // Direct fn_type check — avoids Function wrapper overhead
+                let call_fn_type = unsafe { (*(*call).func).fn_type };
+                match call_fn_type {
                     FunctionType::User => {
-                        let user = unsafe { func.as_user() };
+                        let user = unsafe { &*((*call).func as *const UserFunction) };
                         unsafe {
                             (*call).opline = user.op_array.instructions.as_ptr();
-                            // Advance caller past DO_FCALL before entering callee
                             (*frame).opline = (*frame).opline.add(1);
                         }
                         eg.current_execute_data.set(call);
                         frame = call;
-                        continue; // enter the callee's first instruction
+                        continue;
+                    }
+                    FunctionType::Internal => {
+                        let internal = unsafe {
+                            &*((*call).func as *const super::function::InternalFunction)
+                        };
+                        if !return_value_ptr.is_null() {
+                            unsafe { std::ptr::drop_in_place(return_value_ptr) };
+                        }
+                        let handler_result = (internal.handler)(call, return_value_ptr, eg);
+                        unsafe { cleanup_frame_slots(call) };
+                        eg.vm_stack.pop_call_frame(call);
+                        // 1) eg.exception set (real PHP throw from callback) → catchable
+                        if let Some(exc) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exc) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    eg.exception = Some(thrown);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        // 2) Handler returned Err (hard fatal) → not catchable
+                        if let Err(e) = handler_result {
+                            return Err(e);
+                        }
                     }
                     FunctionType::Undef => {
                         return Err(VmError::Fatal("Call to undefined function".into()));
@@ -829,79 +1065,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let thrown = val.clone();
 
-                // Walk up the frame stack looking for a try/catch handler
-                let mut search_frame = frame;
-                let mut found = false;
-                loop {
-                    let sf_op_array = unsafe { (*search_frame).op_array() };
-                    let current_ip = unsafe {
-                        (*search_frame).opline.offset_from(sf_op_array.instructions.as_ptr()) as u32
-                    };
-
-                    // Check try_entries for this frame
-                    let mut matched_entry: Option<&crate::compiler::compile::TryEntry> = None;
-                    for entry in &sf_op_array.try_entries {
-                        if current_ip >= entry.try_start && current_ip < entry.try_end {
-                            matched_entry = Some(entry);
-                            break;
-                        }
+                match throw_in_frame(eg, frame, thrown) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
                     }
-
-                    if let Some(entry) = matched_entry {
-                        // Find matching catch clause by type
-                        let matched_catch = entry.catches.iter().find(|c| {
-                            exception_matches_catch(&thrown, &c.types, eg)
-                        });
-
-                        if let Some(catch) = matched_catch {
-                            // Unwind frames between current and search_frame
-                            while frame != search_frame {
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                eg.current_execute_data.set(prev);
-                                unsafe { cleanup_frame_slots(frame) };
-                                eg.vm_stack.pop_call_frame(frame);
-                                frame = prev;
-                            }
-                            let base_ptr = sf_op_array.instructions.as_ptr();
-                            let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
-                            unsafe { write_val(catch_cv_ptr, thrown.clone()) };
-                            unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
-                            found = true;
-                            break;
-                        } else if entry.finally_start != 0xFFFFFFFF {
-                            // No matching catch, but has finally — run finally then re-throw
-                            while frame != search_frame {
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                eg.current_execute_data.set(prev);
-                                unsafe { cleanup_frame_slots(frame) };
-                                eg.vm_stack.pop_call_frame(frame);
-                                frame = prev;
-                            }
-                            let base_ptr = sf_op_array.instructions.as_ptr();
-                            eg.exception = Some(thrown.clone());
-                            unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
-                            found = true;
-                            break;
-                        }
-                        // No matching catch and no finally — continue to outer frame
+                    ThrowResult::Unhandled(exc) => {
+                        // Propagate via eg.exception through re-entry boundaries
+                        eg.exception = Some(exc);
+                        return Ok(());
                     }
-
-                    // No handler in this frame — check parent
-                    let prev = unsafe { (*search_frame).prev_execute_data };
-                    if prev.is_null() {
-                        break;
-                    }
-                    search_frame = prev;
                 }
-
-                if !found {
-                    let msg = thrown.echo_to_string();
-                    return Err(VmError::Fatal(format!("Uncaught Exception: {}", msg)));
-                }
-
-                // Update op_array reference since frame may have changed
-                op_array = unsafe { (*frame).op_array() };
-                continue;
             }
 
             OpCode::NewObj => {

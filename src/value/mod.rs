@@ -448,6 +448,30 @@ impl Value {
             _not_send: PhantomData,
         }
     }
+
+    /// Create a reference value — points to another Value slot (e.g. caller's CV).
+    /// SAFETY: `ptr` must remain valid for the lifetime of this Value.
+    #[inline]
+    pub fn reference(ptr: *mut Value) -> Self {
+        Self {
+            data: ValueData { ptr: ptr as *mut u8 },
+            type_info: ValueType::Reference as u32,
+            _not_send: PhantomData,
+        }
+    }
+
+    /// Check if this value is a reference.
+    #[inline]
+    pub fn is_reference(&self) -> bool {
+        self.value_type() == ValueType::Reference
+    }
+
+    /// Get the target pointer of a reference value.
+    /// SAFETY: only valid when is_reference() is true.
+    #[inline]
+    pub unsafe fn as_ref_ptr(&self) -> *mut Value {
+        self.data.ptr as *mut Value
+    }
 }
 
 impl Clone for Value {
@@ -472,6 +496,11 @@ impl Clone for Value {
                     _not_send: PhantomData,
                 }
             }
+            ValueType::Reference => {
+                // Clone a reference: clone the TARGET value (dereference + deep clone)
+                let target = unsafe { &*(self.data.ptr as *const Value) };
+                target.clone()
+            }
             _ => Self {
                 data: ValueData {
                     long: unsafe { self.data.long },
@@ -495,6 +524,7 @@ impl Drop for Value {
             ValueType::Object => {
                 unsafe { drop(Box::from_raw(self.data.ptr as *mut Rc<RefCell<PhpObject>>)) };
             }
+            // Reference doesn't own the target — no-op
             _ => {}
         }
     }
@@ -516,6 +546,7 @@ impl std::fmt::Debug for Value {
                 let obj = rc.borrow();
                 write!(f, "Value(object({}))", obj.class_name)
             }
+            ValueType::Reference => write!(f, "Value(ref={:p})", unsafe { self.data.ptr }),
             _ => write!(f, "Value({:?})", self.value_type()),
         }
     }

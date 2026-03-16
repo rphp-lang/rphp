@@ -137,6 +137,7 @@ pub struct Param {
     pub name: String,
     pub default: Option<Expr>,
     pub is_variadic: bool,
+    pub is_ref: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1606,7 +1607,7 @@ impl Parser {
     /// Expects the opening '(' to already be consumed; stops before ')'.
     fn parse_param_list(&mut self) -> Result<Vec<Param>, String> {
         let mut params = Vec::new();
-        if matches!(self.peek(), Token::Variable(_) | Token::DotDotDot) {
+        if matches!(self.peek(), Token::Variable(_) | Token::DotDotDot | Token::Ampersand) {
             params.push(self.parse_one_param()?);
             while self.peek() == Token::Comma {
                 self.advance();
@@ -1617,6 +1618,13 @@ impl Parser {
     }
 
     fn parse_one_param(&mut self) -> Result<Param, String> {
+        // Optional & prefix for pass-by-reference
+        let is_ref = if self.peek() == Token::Ampersand {
+            self.advance(); // consume '&'
+            true
+        } else {
+            false
+        };
         let is_variadic = if self.peek() == Token::DotDotDot {
             self.advance(); // consume '...'
             true
@@ -1636,7 +1644,7 @@ impl Parser {
         } else {
             None
         };
-        Ok(Param { name, default, is_variadic })
+        Ok(Param { name, default, is_variadic, is_ref })
     }
 
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).

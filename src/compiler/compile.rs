@@ -79,6 +79,21 @@ pub struct Compiler {
     class_defs: Vec<ClassDef>,
     /// Deferred error from compile_expr (which can't return Result)
     deferred_error: Option<String>,
+    /// ref_args for functions known from parent scope (inherited by child compilers)
+    known_ref_args: HashMap<String, u64>,
+}
+
+/// Get ref_args bitmask for built-in stdlib functions.
+/// Returns 0 for unknown/non-ref functions.
+fn builtin_ref_args(name: &str) -> u64 {
+    match name {
+        "sort" | "rsort" | "shuffle" => 0b1,           // arg 0
+        "array_push" | "array_unshift" => 0b1,          // arg 0
+        "array_pop" | "array_shift" => 0b1,             // arg 0
+        "array_splice" => 0b1,                           // arg 0
+        "settype" => 0b1,                                // arg 0
+        _ => 0,
+    }
 }
 
 impl Compiler {
@@ -94,7 +109,34 @@ impl Compiler {
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             deferred_error: None,
+            known_ref_args: HashMap::new(),
         }
+    }
+
+    /// Look up ref_args for a function: check user functions, known_ref_args, then builtins.
+    fn lookup_ref_args(&self, name: &str) -> u64 {
+        // Check user-defined functions in the same compilation unit
+        for (fname, uf) in &self.functions {
+            if fname == name {
+                return uf.common.ref_args;
+            }
+        }
+        // Check inherited known functions (from parent scope)
+        if let Some(&ra) = self.known_ref_args.get(name) {
+            return ra;
+        }
+        // Fall back to builtin table
+        builtin_ref_args(name)
+    }
+
+    /// Build a snapshot of all currently known function ref_args
+    /// (own functions + inherited known_ref_args) to pass to child compilers.
+    fn build_known_ref_args(&self) -> HashMap<String, u64> {
+        let mut map = self.known_ref_args.clone();
+        for (fname, uf) in &self.functions {
+            map.insert(fname.clone(), uf.common.ref_args);
+        }
+        map
     }
 
     pub fn compile(mut self, stmts: &[Stmt]) -> Result<CompileResult, String> {
@@ -198,7 +240,8 @@ impl Compiler {
             Stmt::Function { name, params, body } => {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
-                let (num_args, required_num_args, is_variadic, variadic_cv) =
+                func_compiler.known_ref_args = self.build_known_ref_args();
+                let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) =
                     Self::compile_params(&mut func_compiler, params, name)?;
                 for s in body {
                     func_compiler.compile_stmt(s)?;
@@ -216,7 +259,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                 };
-                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv);
+                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -787,10 +830,11 @@ impl Compiler {
                 let mut compiled_methods = Vec::new();
                 for method in methods {
                     let mut func_compiler = Compiler::new();
+                    func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
                     let context = format!("method {}::{}", name, method.name);
-                    let (num_args, required_num_args, is_variadic, variadic_cv) =
+                    let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) =
                         Self::compile_params(&mut func_compiler, &method.params, &context)?;
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
@@ -808,7 +852,7 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                     };
-                    let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv);
+                    let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
                 }
@@ -876,14 +920,18 @@ impl Compiler {
         }
     }
 
-    /// Compile parameter list into CV slots. Returns (num_args, required_num_args, is_variadic, variadic_cv_index).
+    /// Compile parameter list into CV slots. Returns (num_args, required_num_args, is_variadic, variadic_cv_index, ref_args).
     /// num_args counts only non-variadic params. The variadic param gets its own CV.
-    fn compile_params(func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<(u32, u32, bool, u32), String> {
+    fn compile_params(func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<(u32, u32, bool, u32, u64), String> {
         let mut required_num_args = 0u32;
         let mut seen_default = false;
         let mut is_variadic = false;
         let mut variadic_cv_index = 0u32;
+        let mut ref_args = 0u64;
         for (i, param) in params.iter().enumerate() {
+            if param.is_ref && i < 64 {
+                ref_args |= 1u64 << i;
+            }
             if param.is_variadic {
                 if i != params.len() - 1 {
                     return Err(format!("Variadic parameter ${} must be last in {}", param.name, context));
@@ -909,7 +957,7 @@ impl Compiler {
         }
         // num_args = non-variadic params count
         let num_args = if is_variadic { (params.len() - 1) as u32 } else { params.len() as u32 };
-        Ok((num_args, required_num_args, is_variadic, variadic_cv_index))
+        Ok((num_args, required_num_args, is_variadic, variadic_cv_index, ref_args))
     }
 
     /// Emit default parameter initialization for a single param.
@@ -1255,6 +1303,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::FunctionCall { name, args } => {
+                let ref_args = self.lookup_ref_args(name);
                 let name_idx = self.add_literal(Value::string(name.clone()));
 
                 let mut init = Instruction::new(OpCode::InitFcall);
@@ -1264,8 +1313,15 @@ impl Compiler {
                 self.instructions.push(init);
 
                 for (i, arg) in args.iter().enumerate() {
+                    let is_ref_param = i < 64 && (ref_args & (1u64 << i)) != 0;
                     let (operand, op_type) = self.compile_expr(arg);
-                    let mut send = Instruction::new(OpCode::SendVal);
+                    // Use SendRef only when param is by-ref AND arg is a CV (variable)
+                    let opcode = if is_ref_param && op_type == OpType::Cv {
+                        OpCode::SendRef
+                    } else {
+                        OpCode::SendVal
+                    };
+                    let mut send = Instruction::new(opcode);
                     send.op1 = operand;
                     send.op1_type = op_type;
                     send.op2 = i as u32;
@@ -1562,13 +1618,14 @@ impl Compiler {
             Expr::Closure { params, use_vars, body } => {
                 // Compile closure body into a separate function
                 let mut func_compiler = Compiler::new();
+                func_compiler.known_ref_args = self.build_known_ref_args();
                 // params come first as CVs (args), then use_vars
                 let compile_result = Self::compile_params(&mut func_compiler, params, "closure");
-                let (num_args, required_num_args, is_variadic, variadic_cv) = match compile_result {
+                let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) = match compile_result {
                     Ok(r) => r,
                     Err(e) => {
                         self.deferred_error = Some(e);
-                        (params.len() as u32, params.len() as u32, false, 0)
+                        (params.len() as u32, params.len() as u32, false, 0, 0)
                     }
                 };
                 for v in use_vars {
@@ -1593,7 +1650,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                 };
-                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv);
+                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
 
                 // Register closure as anonymous function with unique name
                 let closure_name = format!("__closure_{}", CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed));
@@ -1697,10 +1754,13 @@ impl Compiler {
 
                 for (i, arg) in args.iter().enumerate() {
                     let (op, op_type) = self.compile_expr(arg);
-                    let mut send = Instruction::new(OpCode::SendVal);
+                    // Use SendVarEx for runtime ref_args check (method not known at compile time)
+                    let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
+                    let mut send = Instruction::new(opcode);
                     send.op1 = op;
                     send.op1_type = op_type;
                     send.op2 = (i + 1) as u32; // +1 to skip CV 0 ($this)
+                    send.extended_value = i as u32; // param index for ref_args check
                     self.instructions.push(send);
                 }
 
@@ -1726,10 +1786,12 @@ impl Compiler {
 
                 for (i, arg) in args.iter().enumerate() {
                     let (op, op_type) = self.compile_expr(arg);
-                    let mut send = Instruction::new(OpCode::SendVal);
+                    let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
+                    let mut send = Instruction::new(opcode);
                     send.op1 = op;
                     send.op1_type = op_type;
-                    send.op2 = i as u32;
+                    send.op2 = (i + 1) as u32; // +1: CV 0 is $this even for static methods
+                    send.extended_value = i as u32; // param index for ref_args check
                     self.instructions.push(send);
                 }
 
@@ -1779,10 +1841,12 @@ impl Compiler {
                 // Send arguments
                 for (i, arg) in args.iter().enumerate() {
                     let (op, op_type) = self.compile_expr(arg);
-                    let mut send = Instruction::new(OpCode::SendVal);
+                    let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
+                    let mut send = Instruction::new(opcode);
                     send.op1 = op;
                     send.op1_type = op_type;
                     send.op2 = i as u32;
+                    send.extended_value = i as u32; // param index for ref_args check
                     self.instructions.push(send);
                 }
 
