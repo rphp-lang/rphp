@@ -94,6 +94,7 @@ pub enum Token {
     Use,            // use (closure use)
     Pipe,           // | (bitwise or, multi-catch separator)
     Ampersand,      // & (bitwise and, reference)
+    DotDotDot,      // ... (variadic / spread)
     Eof,
 }
 
@@ -229,7 +230,10 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b'.' => {
-                    if self.peek_next() == Some(b'=') {
+                    if self.peek_next() == Some(b'.') && self.src.get(self.pos + 2) == Some(&b'.') {
+                        tokens.push(Token::DotDotDot);
+                        self.pos += 3;
+                    } else if self.peek_next() == Some(b'=') {
                         tokens.push(Token::DotAssign);
                         self.pos += 2;
                     } else {

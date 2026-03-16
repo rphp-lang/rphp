@@ -470,11 +470,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         num_args, func_common.required_num_args
                     )));
                 }
-                if num_args > func_common.num_args {
+                if !func_common.is_variadic && num_args > func_common.num_args {
                     return Err(VmError::Fatal(format!(
                         "Too many arguments, {} passed and at most {} expected",
                         num_args, func_common.num_args
                     )));
+                }
+
+                // Pack extra arguments into variadic parameter array
+                if func_common.is_variadic {
+                    let extra_count = num_args.saturating_sub(func_common.num_args);
+                    let mut variadic_arr = crate::value::PhpArray::new();
+                    let cv_start = func_common.variadic_cv_index;
+                    for i in 0..extra_count {
+                        let arg = unsafe { (*call).cv(cv_start + i) }.clone();
+                        variadic_arr.push(arg);
+                    }
+                    // Overwrite the variadic CV slot with the packed array
+                    let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
+                    *variadic_slot = crate::value::Value::array(variadic_arr);
                 }
 
                 let func = unsafe { Function::from_common_ptr((*call).func) };

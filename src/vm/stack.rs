@@ -48,7 +48,12 @@ impl VmStack {
         let func_ref = unsafe { Function::from_common_ptr(func) };
         let (num_cvs, num_temps) = func_ref.dispatch(
             |user| (user.op_array.num_cvs as usize, user.op_array.num_temps as usize),
-            |internal| (internal.common.num_args as usize, 0usize),
+            |internal| {
+                // For variadic functions, add +1 for the packed variadic array slot
+                let base = internal.common.num_args as usize;
+                let extra = if internal.common.is_variadic { 1 } else { 0 };
+                (base + extra, 0usize)
+            },
         );
         // Allocate max(num_args, num_cvs) so that extra arguments
         // don't write past the frame before DoFcall validates the count.

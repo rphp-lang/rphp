@@ -21,6 +21,9 @@ pub struct FunctionCommon {
     pub fn_type: FunctionType,
     pub num_args: u32,
     pub required_num_args: u32,
+    pub is_variadic: bool,
+    /// CV index where variadic args array is stored (only valid when is_variadic=true)
+    pub variadic_cv_index: u32,
 }
 
 /// User-defined PHP function — contains compiled OpArray.

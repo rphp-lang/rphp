@@ -13,7 +13,7 @@ use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{Instruction, OpType};
 use super::OpArray;
 
-use super::{make_user_function_with_args, make_user_function_with_defaults};
+use super::{make_user_function_with_args, make_user_function_full};
 use crate::vm::function::UserFunction;
 
 /// Result of compiling a script — main OpArray + declared functions + class defs.
@@ -198,28 +198,11 @@ impl Compiler {
             Stmt::Function { name, params, body } => {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
-                // Parameters become CV slots (in order)
-                let mut required_num_args = 0u32;
-                let mut seen_default = false;
-                for (i, param) in params.iter().enumerate() {
-                    let cv_idx = func_compiler.resolve_cv(&param.name);
-                    if let Some(default_expr) = &param.default {
-                        seen_default = true;
-                        Self::emit_default_param(&mut func_compiler, cv_idx, default_expr);
-                    } else {
-                        if seen_default {
-                            return Err(format!(
-                                "Required parameter ${} follows optional parameter in function {}",
-                                param.name, name
-                            ));
-                        }
-                        required_num_args = (i as u32) + 1;
-                    }
-                }
+                let (num_args, required_num_args, is_variadic, variadic_cv) =
+                    Self::compile_params(&mut func_compiler, params, name)?;
                 for s in body {
                     func_compiler.compile_stmt(s)?;
                 }
-                // Implicit return null at end of function
                 let null_idx = func_compiler.add_literal(Value::null());
                 let mut ret = Instruction::new(OpCode::Return);
                 ret.op1_type = OpType::Const;
@@ -233,8 +216,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                 };
-                let num_args = params.len() as u32;
-                let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
+                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv);
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -807,23 +789,9 @@ impl Compiler {
                     let mut func_compiler = Compiler::new();
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
-                    let mut required_num_args = 0u32;
-                    let mut seen_default = false;
-                    for (i, param) in method.params.iter().enumerate() {
-                        let cv_idx = func_compiler.resolve_cv(&param.name);
-                        if let Some(default_expr) = &param.default {
-                            seen_default = true;
-                            Self::emit_default_param(&mut func_compiler, cv_idx, default_expr);
-                        } else {
-                            if seen_default {
-                                return Err(format!(
-                                    "Required parameter ${} follows optional parameter in method {}::{}",
-                                    param.name, name, method.name
-                                ));
-                            }
-                            required_num_args = (i as u32) + 1;
-                        }
-                    }
+                    let context = format!("method {}::{}", name, method.name);
+                    let (num_args, required_num_args, is_variadic, variadic_cv) =
+                        Self::compile_params(&mut func_compiler, &method.params, &context)?;
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
@@ -840,8 +808,7 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                     };
-                    let num_args = method.params.len() as u32;
-                    let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
+                    let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv);
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
                 }
@@ -907,6 +874,42 @@ impl Compiler {
             }
             _ => Err(format!("expression {:?} is not a compile-time constant", expr)),
         }
+    }
+
+    /// Compile parameter list into CV slots. Returns (num_args, required_num_args, is_variadic, variadic_cv_index).
+    /// num_args counts only non-variadic params. The variadic param gets its own CV.
+    fn compile_params(func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<(u32, u32, bool, u32), String> {
+        let mut required_num_args = 0u32;
+        let mut seen_default = false;
+        let mut is_variadic = false;
+        let mut variadic_cv_index = 0u32;
+        for (i, param) in params.iter().enumerate() {
+            if param.is_variadic {
+                if i != params.len() - 1 {
+                    return Err(format!("Variadic parameter ${} must be last in {}", param.name, context));
+                }
+                is_variadic = true;
+                variadic_cv_index = func_compiler.resolve_cv(&param.name);
+                // No default emit for variadic — VM packs extra args into array
+            } else {
+                let cv_idx = func_compiler.resolve_cv(&param.name);
+                if let Some(default_expr) = &param.default {
+                    seen_default = true;
+                    Self::emit_default_param(func_compiler, cv_idx, default_expr);
+                } else {
+                    if seen_default {
+                        return Err(format!(
+                            "Required parameter ${} follows optional parameter in {}",
+                            param.name, context
+                        ));
+                    }
+                    required_num_args = (i as u32) + 1;
+                }
+            }
+        }
+        // num_args = non-variadic params count
+        let num_args = if is_variadic { (params.len() - 1) as u32 } else { params.len() as u32 };
+        Ok((num_args, required_num_args, is_variadic, variadic_cv_index))
     }
 
     /// Emit default parameter initialization for a single param.
@@ -1560,24 +1563,14 @@ impl Compiler {
                 // Compile closure body into a separate function
                 let mut func_compiler = Compiler::new();
                 // params come first as CVs (args), then use_vars
-                let mut required_num_args = 0u32;
-                let mut seen_default = false;
-                for (i, p) in params.iter().enumerate() {
-                    let cv_idx = func_compiler.resolve_cv(&p.name);
-                    if let Some(default_expr) = &p.default {
-                        seen_default = true;
-                        Self::emit_default_param(&mut func_compiler, cv_idx, default_expr);
-                    } else {
-                        if seen_default {
-                            self.deferred_error = Some(format!(
-                                "Required parameter ${} follows optional parameter in closure",
-                                p.name
-                            ));
-                            break;
-                        }
-                        required_num_args = (i as u32) + 1;
+                let compile_result = Self::compile_params(&mut func_compiler, params, "closure");
+                let (num_args, required_num_args, is_variadic, variadic_cv) = match compile_result {
+                    Ok(r) => r,
+                    Err(e) => {
+                        self.deferred_error = Some(e);
+                        (params.len() as u32, params.len() as u32, false, 0)
                     }
-                }
+                };
                 for v in use_vars {
                     func_compiler.resolve_cv(v);
                 }
@@ -1600,8 +1593,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                 };
-                let num_args = params.len() as u32;
-                let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
+                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv);
 
                 // Register closure as anonymous function with unique name
                 let closure_name = format!("__closure_{}", CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed));

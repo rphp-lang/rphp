@@ -7,4 +7,5 @@ pub mod compiler;
 pub mod runtime;
 pub mod lexer;
 pub mod parser;
+#[allow(unused_unsafe)]
 pub mod stdlib;

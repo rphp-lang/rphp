@@ -8,8 +8,6 @@ use crate::vm::function::{
 };
 
 /// Compiled function body — equivalent to zend_op_array.
-/// For now uses Vec (not raw pointers) since we don't have C extension
-/// compatibility yet. Will migrate to raw pointers when needed.
 pub struct OpArray {
     pub num_cvs: u32,
     pub num_temps: u32,
@@ -35,16 +33,23 @@ pub fn make_user_function(op_array: OpArray) -> UserFunction {
 
 /// Create a UserFunction with the given number of parameters.
 pub fn make_user_function_with_args(op_array: OpArray, num_args: u32) -> UserFunction {
-    make_user_function_with_defaults(op_array, num_args, num_args)
+    make_user_function_full(op_array, num_args, num_args, false, 0)
 }
 
 /// Create a UserFunction with separate total and required arg counts (for default params).
-pub fn make_user_function_with_defaults(op_array: OpArray, num_args: u32, required_num_args: u32) -> UserFunction {
+pub fn make_user_function_with_defaults(op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool) -> UserFunction {
+    make_user_function_full(op_array, num_args, required_num_args, is_variadic, 0)
+}
+
+/// Full constructor with all options.
+pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool, variadic_cv_index: u32) -> UserFunction {
     UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,
             num_args,
             required_num_args,
+            is_variadic,
+            variadic_cv_index,
         },
         op_array,
     }
@@ -61,6 +66,25 @@ pub fn make_internal_function(
             fn_type: FunctionType::Internal,
             num_args,
             required_num_args,
+            is_variadic: false,
+            variadic_cv_index: 0,
+        },
+        handler,
+    }
+}
+
+/// Create a variadic InternalFunction.
+pub fn make_internal_function_variadic(
+    handler: InternalFunctionHandler,
+    required_num_args: u32,
+) -> InternalFunction {
+    InternalFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::Internal,
+            num_args: required_num_args,
+            required_num_args,
+            is_variadic: true,
+            variadic_cv_index: required_num_args,
         },
         handler,
     }
