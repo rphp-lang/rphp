@@ -888,10 +888,12 @@ impl Compiler {
                     let val = Self::eval_const_expr(&elem.value)?;
                     if let Some(key_expr) = &elem.key {
                         let key = Self::eval_const_expr(key_expr)?;
-                        match key {
-                            Value { .. } if key.is_long() => arr.set_int(key.as_long().unwrap(), val),
-                            Value { .. } if key.as_str().is_some() => arr.set_str(key.as_str().unwrap(), val),
-                            _ => return Err("unsupported array key type in constant expression".to_string()),
+                        if let Some(n) = key.as_long() {
+                            arr.set_int(n, val);
+                        } else if let Some(s) = key.as_str() {
+                            arr.set_str(s, val);
+                        } else {
+                            return Err("unsupported array key type in constant expression".to_string());
                         }
                     } else {
                         arr.push(val);
