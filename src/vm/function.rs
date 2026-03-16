@@ -73,6 +73,26 @@ pub struct FunctionCommon {
     pub param_names: Vec<std::string::String>,
 }
 
+impl FunctionCommon {
+    /// Number of public (user-visible) parameters, excluding hidden $this.
+    #[inline]
+    pub fn public_arity(&self) -> u32 {
+        self.num_args - self.this_offset
+    }
+
+    /// Whether public parameter at 0-based index `idx` is pass-by-reference.
+    #[inline]
+    pub fn is_param_by_ref(&self, idx: u32) -> bool {
+        idx < 64 && (self.ref_args & (1u64 << idx)) != 0
+    }
+
+    /// CV index for a public parameter at 0-based index `idx`.
+    #[inline]
+    pub fn param_cv_index(&self, idx: u32) -> u32 {
+        idx + self.this_offset
+    }
+}
+
 /// User-defined PHP function — contains compiled OpArray.
 #[repr(C)]
 pub struct UserFunction {

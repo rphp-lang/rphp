@@ -109,6 +109,26 @@ unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     }
 }
 
+/// Clean up a pending call frame and throw a catchable exception.
+/// Removes pending_named_variadic entries, unlinks the call from the call chain,
+/// cleans up CV/TMP slots, pops the call frame, and delegates to throw_in_frame.
+///
+/// SAFETY: `frame` and `call` must be valid ExecuteData pointers.
+///         `call` must be the current pending call on `frame` (i.e. `(*frame).call == call`).
+unsafe fn cleanup_call_and_throw<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    call: *mut ExecuteData,
+    err: Value,
+) -> ThrowResult<'a> {
+    let call_key = call as usize;
+    eg.pending_named_variadic.remove(&call_key);
+    (*frame).call = (*call).call;
+    cleanup_frame_slots(call);
+    eg.vm_stack.pop_call_frame(call);
+    throw_in_frame(eg, frame, err)
+}
+
 /// Execute a top-level script.
 /// Result of throw_in_frame: either the exception was handled (new frame + op_array)
 /// or it was not and should propagate via eg.exception.
@@ -706,8 +726,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let param_idx = opline.extended_value;
-                let ref_args = unsafe { (*(*call).func).ref_args };
-                let is_ref = param_idx < 64 && (ref_args & (1u64 << param_idx)) != 0;
+                let func_common = unsafe { &*(*call).func };
+                let is_ref = func_common.is_param_by_ref(param_idx);
 
                 if is_ref && opline.op1_type == OpType::Cv {
                     // Same logic as SendRef
@@ -741,8 +761,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let func_common = unsafe { &*(*call).func };
-                let this_offset = func_common.this_offset;
-                let ref_args = func_common.ref_args;
 
                 // Find the parameter position by name
                 let mut resolved_idx: Option<u32> = None;
@@ -755,7 +773,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Determine if the resolved index targets the variadic parameter itself.
                 // In that case, route to the variadic buffer, not the CV slot.
-                let public_max = func_common.num_args - this_offset;
+                let public_max = func_common.public_arity();
                 let is_variadic_target = func_common.is_variadic && match resolved_idx {
                     Some(idx) => idx >= public_max,
                     None => true,
@@ -773,15 +791,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let err = make_error_value("Error", &format!(
                             "Unknown named parameter ${}", name
                         ));
-                        // Clean up the pending call frame before throwing
-                        let call_key = call as usize;
-                        eg.pending_named_variadic.remove(&call_key);
-                        unsafe {
-                            (*frame).call = (*call).call;
-                            cleanup_frame_slots(call);
-                        }
-                        eg.vm_stack.pop_call_frame(call);
-                        match throw_in_frame(eg, frame, err) {
+                        match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
                             ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                             ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                         }
@@ -794,13 +804,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let err = make_error_value("Error", &format!(
                                 "Named parameter ${} overwrites previous argument", name
                             ));
-                            eg.pending_named_variadic.remove(&call_key);
-                            unsafe {
-                                (*frame).call = (*call).call;
-                                cleanup_frame_slots(call);
-                            }
-                            eg.vm_stack.pop_call_frame(call);
-                            match throw_in_frame(eg, frame, err) {
+                            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
                                 ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                 ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                             }
@@ -823,7 +827,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else {
                     match resolved_idx {
                         Some(idx) => {
-                            let cv_idx = idx + this_offset;
+                            let cv_idx = func_common.param_cv_index(idx);
 
                             // Check for duplicate: if CV slot already has a non-undef value,
                             // the parameter was already passed (positionally or by a prior named arg).
@@ -832,20 +836,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let err = make_error_value("Error", &format!(
                                     "Named parameter ${} overwrites previous argument", name
                                 ));
-                                let call_key = call as usize;
-                                eg.pending_named_variadic.remove(&call_key);
-                                unsafe {
-                                    (*frame).call = (*call).call;
-                                    cleanup_frame_slots(call);
-                                }
-                                eg.vm_stack.pop_call_frame(call);
-                                match throw_in_frame(eg, frame, err) {
+                                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
                                     ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                     ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                 }
                             }
 
-                            let is_ref = (idx < 64) && (ref_args & (1u64 << idx)) != 0;
+                            let is_ref = func_common.is_param_by_ref(idx);
 
                             if is_ref && opline.op1_type == OpType::Cv {
                                 // By-reference: same logic as SendRef
@@ -881,14 +878,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let err = make_error_value("Error", &format!(
                                 "Unknown named parameter ${}", name
                             ));
-                            let call_key = call as usize;
-                            eg.pending_named_variadic.remove(&call_key);
-                            unsafe {
-                                (*frame).call = (*call).call;
-                                cleanup_frame_slots(call);
-                            }
-                            eg.vm_stack.pop_call_frame(call);
-                            match throw_in_frame(eg, frame, err) {
+                            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
                                 ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
                                 ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                             }
@@ -919,12 +909,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Validate argument count
                 // `num_args` is the explicit (public) arg count from the call site.
-                // `func_common.num_args` includes hidden $this for methods.
-                // `this_offset` separates storage width from public arity:
-                //   public_max = num_args - this_offset
+                // `public_arity()` = declared param count excluding hidden $this.
                 let func_common = unsafe { &*(*call).func };
                 let num_args = unsafe { (*call).num_args };
-                let public_max = func_common.num_args - func_common.this_offset;
+                let public_max = func_common.public_arity();
                 if num_args < func_common.required_num_args {
                     return Err(VmError::Fatal(format!(
                         "Too few arguments, {} passed and exactly {} expected",
@@ -941,9 +929,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Named args can skip required positional params; verify no holes
                 // in the required range. A required param is one at index < required_num_args.
                 if func_common.required_num_args > 0 {
-                    let this_off = func_common.this_offset;
                     for i in 0..func_common.required_num_args {
-                        let cv_idx = i + this_off;
+                        let cv_idx = func_common.param_cv_index(i);
                         let val = unsafe { &*(*call).cv(cv_idx) };
                         if val.is_undef() {
                             return Err(VmError::Fatal(format!(
@@ -959,7 +946,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let mut type_error: Option<Value> = None;
                     for (i, hint) in func_common.param_type_hints.iter().enumerate() {
                         if matches!(hint, crate::vm::function::ParamTypeHint::None) { continue; }
-                        let cv_idx = i as u32 + func_common.this_offset;
+                        let cv_idx = func_common.param_cv_index(i as u32);
                         if (i as u32) >= num_args { break; }
                         let val = unsafe { &*(*call).cv(cv_idx) };
                         if val.is_undef() { continue; }

@@ -1400,35 +1400,7 @@ impl Compiler {
                 init.op2 = name_idx;
                 self.instructions.push(init);
 
-                for (i, arg) in args.iter().enumerate() {
-                    match arg {
-                        CallArg::Positional(expr) => {
-                            let is_ref_param = i < 64 && (ref_args & (1u64 << i)) != 0;
-                            let (operand, op_type) = self.compile_expr(expr);
-                            // Use SendRef only when param is by-ref AND arg is a CV (variable)
-                            let opcode = if is_ref_param && op_type == OpType::Cv {
-                                OpCode::SendRef
-                            } else {
-                                OpCode::SendVal
-                            };
-                            let mut send = Instruction::new(opcode);
-                            send.op1 = operand;
-                            send.op1_type = op_type;
-                            send.op2 = i as u32;
-                            self.instructions.push(send);
-                        }
-                        CallArg::Named { name, value } => {
-                            let (operand, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            let mut send = Instruction::new(OpCode::SendNamed);
-                            send.op1 = operand;
-                            send.op1_type = op_type;
-                            send.op2 = name_idx;
-                            send.op2_type = OpType::Const;
-                            self.instructions.push(send);
-                        }
-                    }
-                }
+                self.emit_call_args(args, 0, ref_args, false, false);
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -1822,22 +1794,7 @@ impl Compiler {
                 self.instructions.push(new_obj);
 
                 // Send constructor args — offset by 1 because CV 0 is $this
-                for (i, (op, op_type, named_idx)) in compiled_args.iter().enumerate() {
-                    if let Some(name_const) = named_idx {
-                        let mut send = Instruction::new(OpCode::SendNamed);
-                        send.op1 = *op;
-                        send.op1_type = *op_type;
-                        send.op2 = *name_const;
-                        send.op2_type = OpType::Const;
-                        self.instructions.push(send);
-                    } else {
-                        let mut send = Instruction::new(OpCode::SendVal);
-                        send.op1 = *op;
-                        send.op1_type = *op_type;
-                        send.op2 = (i + 1) as u32; // +1 to skip $this at CV 0
-                        self.instructions.push(send);
-                    }
-                }
+                self.emit_precompiled_call_args(&compiled_args, 1);
 
                 // DoFcall to run __construct (VM skips if no constructor exists)
                 let discard = self.alloc_tmp();
@@ -1874,30 +1831,7 @@ impl Compiler {
                 init.extended_value = args.len() as u32;
                 self.instructions.push(init);
 
-                for (i, arg) in args.iter().enumerate() {
-                    match arg {
-                        CallArg::Positional(expr) => {
-                            let (op, op_type) = self.compile_expr(expr);
-                            let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
-                            let mut send = Instruction::new(opcode);
-                            send.op1 = op;
-                            send.op1_type = op_type;
-                            send.op2 = (i + 1) as u32; // +1 to skip CV 0 ($this)
-                            send.extended_value = i as u32; // param index for ref_args check
-                            self.instructions.push(send);
-                        }
-                        CallArg::Named { name, value } => {
-                            let (op, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            let mut send = Instruction::new(OpCode::SendNamed);
-                            send.op1 = op;
-                            send.op1_type = op_type;
-                            send.op2 = name_idx;
-                            send.op2_type = OpType::Const;
-                            self.instructions.push(send);
-                        }
-                    }
-                }
+                self.emit_call_args(args, 1, 0, true, true);
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -1919,30 +1853,7 @@ impl Compiler {
                 init.extended_value = args.len() as u32;
                 self.instructions.push(init);
 
-                for (i, arg) in args.iter().enumerate() {
-                    match arg {
-                        CallArg::Positional(expr) => {
-                            let (op, op_type) = self.compile_expr(expr);
-                            let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
-                            let mut send = Instruction::new(opcode);
-                            send.op1 = op;
-                            send.op1_type = op_type;
-                            send.op2 = (i + 1) as u32; // +1: CV 0 is $this even for static methods
-                            send.extended_value = i as u32; // param index for ref_args check
-                            self.instructions.push(send);
-                        }
-                        CallArg::Named { name, value } => {
-                            let (op, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            let mut send = Instruction::new(OpCode::SendNamed);
-                            send.op1 = op;
-                            send.op1_type = op_type;
-                            send.op2 = name_idx;
-                            send.op2_type = OpType::Const;
-                            self.instructions.push(send);
-                        }
-                    }
-                }
+                self.emit_call_args(args, 1, 0, true, true);
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -1988,30 +1899,7 @@ impl Compiler {
                 self.instructions.push(init);
 
                 // Send arguments
-                for (i, arg) in args.iter().enumerate() {
-                    match arg {
-                        CallArg::Positional(expr) => {
-                            let (op, op_type) = self.compile_expr(expr);
-                            let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
-                            let mut send = Instruction::new(opcode);
-                            send.op1 = op;
-                            send.op1_type = op_type;
-                            send.op2 = i as u32;
-                            send.extended_value = i as u32; // param index for ref_args check
-                            self.instructions.push(send);
-                        }
-                        CallArg::Named { name, value } => {
-                            let (op, op_type) = self.compile_expr(value);
-                            let name_idx = self.add_literal(Value::string(name.clone()));
-                            let mut send = Instruction::new(OpCode::SendNamed);
-                            send.op1 = op;
-                            send.op1_type = op_type;
-                            send.op2 = name_idx;
-                            send.op2_type = OpType::Const;
-                            self.instructions.push(send);
-                        }
-                    }
-                }
+                self.emit_call_args(args, 0, 0, true, true);
 
                 // DoFcall
                 let tmp = self.alloc_tmp();
@@ -2081,6 +1969,91 @@ impl Compiler {
             self.next_cv += 1;
             self.cv_table.insert(name.to_string(), idx);
             idx
+        }
+    }
+
+    /// Controls how a positional argument's Send opcode is chosen.
+    /// - `RefAware`: compile-time ref check (FunctionCall with known ref_args)
+    /// - `ValOnly`: always SendVal (New — constructor ref_args unknown at compile time)
+    /// - `VarEx`: runtime ref check via SendVarEx (MethodCall, StaticCall, DynamicCall)
+    fn positional_opcode(ref_args: u64, index: usize, op_type: OpType, use_var_ex: bool) -> OpCode {
+        if ref_args != 0 && !use_var_ex {
+            // RefAware mode (FunctionCall)
+            let is_ref = index < 64 && (ref_args & (1u64 << index)) != 0;
+            if is_ref && op_type == OpType::Cv { OpCode::SendRef } else { OpCode::SendVal }
+        } else if use_var_ex && op_type == OpType::Cv {
+            OpCode::SendVarEx
+        } else {
+            OpCode::SendVal
+        }
+    }
+
+    /// Emit Send instructions for a call's argument list.
+    ///
+    /// `args` — the CallArg slice from the AST.
+    /// `cv_offset` — added to each positional index for op2 (0 for functions, 1 for methods/$this).
+    /// `ref_args` — compile-time by-ref bitmask (0 when unknown).
+    /// `use_var_ex` — true to emit SendVarEx for CV operands (method/static/dynamic calls).
+    /// `set_extended_value` — true to set extended_value = param index on positional sends.
+    fn emit_call_args(
+        &mut self,
+        args: &[CallArg],
+        cv_offset: u32,
+        ref_args: u64,
+        use_var_ex: bool,
+        set_extended_value: bool,
+    ) {
+        for (i, arg) in args.iter().enumerate() {
+            match arg {
+                CallArg::Positional(expr) => {
+                    let (op, op_type) = self.compile_expr(expr);
+                    let opcode = Self::positional_opcode(ref_args, i, op_type, use_var_ex);
+                    let mut send = Instruction::new(opcode);
+                    send.op1 = op;
+                    send.op1_type = op_type;
+                    send.op2 = i as u32 + cv_offset;
+                    if set_extended_value {
+                        send.extended_value = i as u32;
+                    }
+                    self.instructions.push(send);
+                }
+                CallArg::Named { name, value } => {
+                    let (op, op_type) = self.compile_expr(value);
+                    let name_idx = self.add_literal(Value::string(name.clone()));
+                    let mut send = Instruction::new(OpCode::SendNamed);
+                    send.op1 = op;
+                    send.op1_type = op_type;
+                    send.op2 = name_idx;
+                    send.op2_type = OpType::Const;
+                    self.instructions.push(send);
+                }
+            }
+        }
+    }
+
+    /// Emit Send instructions from pre-compiled argument tuples.
+    /// Used by `Expr::New` where side effects must execute before NewObj.
+    /// Each tuple: (operand, op_type, Option<name_literal_idx>).
+    fn emit_precompiled_call_args(
+        &mut self,
+        compiled_args: &[(u32, OpType, Option<u32>)],
+        cv_offset: u32,
+    ) {
+        for (i, (op, op_type, named_idx)) in compiled_args.iter().enumerate() {
+            if let Some(name_const) = named_idx {
+                let mut send = Instruction::new(OpCode::SendNamed);
+                send.op1 = *op;
+                send.op1_type = *op_type;
+                send.op2 = *name_const;
+                send.op2_type = OpType::Const;
+                self.instructions.push(send);
+            } else {
+                let mut send = Instruction::new(OpCode::SendVal);
+                send.op1 = *op;
+                send.op1_type = *op_type;
+                send.op2 = i as u32 + cv_offset;
+                self.instructions.push(send);
+            }
         }
     }
 
