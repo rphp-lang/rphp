@@ -7,23 +7,50 @@ use rphp::vm::function::FunctionCommon;
 use rphp::runtime::ExecutorGlobals;
 use rphp::stdlib;
 
+fn parse_cli_args(args: &[String]) -> String {
+    let i = 1;
+    while i < args.len() {
+        match args[i].as_str() {
+            "-r" => {
+                // php -r 'code' — inline code (no <?php tag required)
+                if i + 1 >= args.len() {
+                    eprintln!("No code specified for -r");
+                    std::process::exit(1);
+                }
+                let code = &args[i + 1];
+                // Wrap in <?php if not already present
+                return if code.starts_with("<?php") || code.starts_with("<?") {
+                    code.clone()
+                } else {
+                    format!("<?php {}", code)
+                };
+            }
+            arg if arg.starts_with('-') => {
+                eprintln!("Unknown option: {}", arg);
+                std::process::exit(1);
+            }
+            _ => {
+                // Positional arg — treat as filename
+                return std::fs::read_to_string(&args[i]).unwrap_or_else(|e| {
+                    eprintln!("Could not read file '{}': {}", args[i], e);
+                    std::process::exit(1);
+                });
+            }
+        }
+    }
+    // No args — read from stdin
+    use std::io::Read;
+    let mut buf = String::new();
+    std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
+        eprintln!("Could not read stdin: {}", e);
+        std::process::exit(1);
+    });
+    buf
+}
+
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let source = if args.len() > 1 {
-        std::fs::read_to_string(&args[1]).unwrap_or_else(|e| {
-            eprintln!("Could not read file '{}': {}", args[1], e);
-            std::process::exit(1);
-        })
-    } else {
-        // Read from stdin
-        use std::io::Read;
-        let mut buf = String::new();
-        std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
-            eprintln!("Could not read stdin: {}", e);
-            std::process::exit(1);
-        });
-        buf
-    };
+    let source = parse_cli_args(&args);
 
     let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
         eprintln!("Parse error: {}", e);
