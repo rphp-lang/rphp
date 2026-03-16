@@ -413,6 +413,115 @@ echo $result ? "true" : "false";
 }
 
 // ============================================================================
+// Class property defaults — eval_const_expr coverage
+// ============================================================================
+
+#[test]
+fn test_class_property_default_array_indexed() {
+    let out = run_php(r#"<?php
+class Config {
+    public $items = [1, 2, 3];
+}
+$c = new Config();
+echo count($c->items);
+echo " ";
+echo $c->items[1];
+"#);
+    assert_eq!(out, "3 2");
+}
+
+#[test]
+fn test_class_property_default_array_keyed() {
+    let out = run_php(r#"<?php
+class Config {
+    public $opts = ["host" => "localhost", "port" => 3306];
+}
+$c = new Config();
+echo $c->opts["host"];
+echo ":";
+echo $c->opts["port"];
+"#);
+    assert_eq!(out, "localhost:3306");
+}
+
+#[test]
+fn test_class_property_default_nested_array() {
+    let out = run_php(r#"<?php
+class C {
+    public $data = [1, [2, 3]];
+}
+$c = new C();
+echo count($c->data);
+echo " ";
+echo $c->data[0];
+"#);
+    assert_eq!(out, "2 1");
+}
+
+#[test]
+fn test_class_property_default_empty_array() {
+    let out = run_php(r#"<?php
+class C {
+    public $items = [];
+}
+$c = new C();
+echo count($c->items);
+"#);
+    assert_eq!(out, "0");
+}
+
+#[test]
+fn test_class_property_default_negative_int() {
+    let out = run_php(r#"<?php
+class C {
+    public $x = -42;
+}
+$c = new C();
+echo $c->x;
+"#);
+    assert_eq!(out, "-42");
+}
+
+#[test]
+fn test_class_property_default_negative_float() {
+    let out = run_php(r#"<?php
+class C {
+    public $x = -3.14;
+}
+$c = new C();
+echo $c->x;
+"#);
+    assert_eq!(out, "-3.14");
+}
+
+#[test]
+fn test_class_property_default_all_scalar_types() {
+    let out = run_php(r#"<?php
+class C {
+    public $a = 42;
+    public $b = 3.14;
+    public $c = "hello";
+    public $d = true;
+    public $e = false;
+    public $f = null;
+}
+$c = new C();
+echo $c->a . " " . $c->b . " " . $c->c . " " . $c->d;
+"#);
+    assert_eq!(out, "42 3.14 hello 1");
+}
+
+#[test]
+fn test_class_property_default_function_call_is_compile_error() {
+    let tokens = rphp::lexer::Lexer::new(r#"<?php
+class C { public $x = strlen("hi"); }
+"#).tokenize().unwrap();
+    let stmts = rphp::parser::Parser::new(tokens).parse().unwrap();
+    let result = rphp::compiler::compile::Compiler::new().compile(&stmts);
+    assert!(result.is_err(), "Function call in property default should be a compile error");
+}
+
+// ============================================================================
 // Regression: P2 — constant in class property default must error, not silently null
 // ============================================================================
 

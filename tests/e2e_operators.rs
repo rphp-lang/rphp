@@ -418,3 +418,98 @@ fn test_identical_with_concat_rhs() {
 fn test_equal_with_concat_rhs() {
     assert_eq!(run_php("<?php echo 'ab' == 'a' . 'b' ? 'yes' : 'no';"), "yes");
 }
+
+// ========== Elvis operator (?:) ==========
+
+#[test]
+fn test_elvis_truthy_string() {
+    assert_eq!(run_php(r#"<?php
+$name = "PHP";
+echo $name ?: "default";
+"#), "PHP");
+}
+
+#[test]
+fn test_elvis_falsy_empty_string() {
+    assert_eq!(run_php(r#"<?php
+$name = "";
+echo $name ?: "default";
+"#), "default");
+}
+
+#[test]
+fn test_elvis_falsy_zero() {
+    assert_eq!(run_php(r#"<?php
+$x = 0;
+echo $x ?: 42;
+"#), "42");
+}
+
+#[test]
+fn test_elvis_falsy_null() {
+    assert_eq!(run_php(r#"<?php
+$x = null;
+echo $x ?: "fallback";
+"#), "fallback");
+}
+
+#[test]
+fn test_elvis_truthy_number() {
+    assert_eq!(run_php(r#"<?php
+$x = 5;
+echo $x ?: 99;
+"#), "5");
+}
+
+#[test]
+fn test_elvis_with_function_call() {
+    assert_eq!(run_php(r#"<?php
+function getName() { return ""; }
+echo getName() ?: "anonymous";
+"#), "anonymous");
+}
+
+#[test]
+fn test_elvis_chained_with_parens() {
+    assert_eq!(run_php(r#"<?php
+$a = "";
+$b = "";
+$c = "found";
+echo ($a ?: $b) ?: $c;
+"#), "found");
+}
+
+#[test]
+fn test_elvis_truthy_array() {
+    assert_eq!(run_php(r#"<?php
+$x = "yes";
+$y = $x ?: "no";
+echo $y;
+"#), "yes");
+}
+
+#[test]
+fn test_elvis_in_assignment() {
+    assert_eq!(run_php(r#"<?php
+$config = "";
+$value = $config ?: "default_value";
+echo $value;
+"#), "default_value");
+}
+
+#[test]
+fn test_elvis_side_effect_truthy_evaluates_once() {
+    // P1 regression: LHS with side effects must be evaluated exactly once
+    assert_eq!(run_php(r#"<?php
+function foo() { echo "x"; return 123; }
+echo foo() ?: 0;
+"#), "x123");
+}
+
+#[test]
+fn test_elvis_side_effect_falsy_evaluates_once() {
+    assert_eq!(run_php(r#"<?php
+function bar() { echo "y"; return 0; }
+echo bar() ?: 99;
+"#), "y99");
+}

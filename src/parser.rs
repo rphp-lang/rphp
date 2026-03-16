@@ -45,6 +45,10 @@ pub enum Expr {
         left: Box<Expr>,
         right: Box<Expr>,
     },
+    Elvis {            // $a ?: $b (evaluates lhs once)
+        left: Box<Expr>,
+        right: Box<Expr>,
+    },
     Match {            // match($x) { ... }
         expr: Box<Expr>,
         arms: Vec<MatchArm>,
@@ -699,6 +703,17 @@ impl Parser {
 
         if self.peek() == Token::Question {
             self.advance(); // consume ?
+
+            // Elvis operator: $x ?: $y  (evaluates lhs once)
+            if self.peek() == Token::Colon {
+                self.advance(); // consume :
+                let right = self.parse_null_coalesce()?;
+                return Ok(Expr::Elvis {
+                    left: Box::new(expr),
+                    right: Box::new(right),
+                });
+            }
+
             let then_expr = self.parse_ternary()?;
             self.expect(&Token::Colon)?;
             let else_expr = self.parse_null_coalesce()?;
@@ -1069,6 +1084,10 @@ impl Parser {
                 // Closure (anonymous function)
                 return self.parse_closure();
             }
+            Token::Fn => {
+                // Arrow function: fn($x) => expr
+                return self.parse_arrow_function();
+            }
             Token::New => {
                 self.advance(); // consume 'new'
                 let class_name = match self.advance() {
@@ -1392,6 +1411,134 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
         Ok(Expr::Match { expr: Box::new(expr), arms })
+    }
+
+    /// Parse arrow function: fn($x, $y) => expr
+    /// Desugars to Closure with auto-captured use vars and body = [Return(expr)]
+    fn parse_arrow_function(&mut self) -> Result<Expr, String> {
+        self.advance(); // consume 'fn'
+        self.expect(&Token::LParen)?;
+        let params = self.parse_param_list()?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::DoubleArrow)?;
+        let expr = self.parse_expr()?;
+
+        // Auto-capture: collect free variables from expr that aren't params
+        let param_names: std::collections::HashSet<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        let mut free_vars = Vec::new();
+        Self::collect_free_vars(&expr, &param_names, &mut free_vars);
+
+        let body = vec![Stmt::Return(Some(expr))];
+        Ok(Expr::Closure { params, use_vars: free_vars, body })
+    }
+
+    /// Collect variable names referenced in an expression that are not in `bound`.
+    fn collect_free_vars(expr: &Expr, bound: &std::collections::HashSet<&str>, out: &mut Vec<String>) {
+        match expr {
+            Expr::Variable(name) => {
+                if !bound.contains(name.as_str()) && !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            Expr::BinaryOp { left, right, .. } => {
+                Self::collect_free_vars(left, bound, out);
+                Self::collect_free_vars(right, bound, out);
+            }
+            Expr::UnaryMinus(inner) | Expr::Not(inner) | Expr::Throw(inner) | Expr::Empty(inner) => {
+                Self::collect_free_vars(inner, bound, out);
+            }
+            Expr::Assign { var, expr: inner } => {
+                if !bound.contains(var.as_str()) && !out.contains(var) {
+                    out.push(var.clone());
+                }
+                Self::collect_free_vars(inner, bound, out);
+            }
+            Expr::FunctionCall { args, .. } | Expr::StaticCall { args, .. } => {
+                for arg in args {
+                    Self::collect_free_vars(arg, bound, out);
+                }
+            }
+            Expr::DynamicCall { callable, args } => {
+                Self::collect_free_vars(callable, bound, out);
+                for arg in args {
+                    Self::collect_free_vars(arg, bound, out);
+                }
+            }
+            Expr::Isset(exprs) => {
+                for e in exprs {
+                    Self::collect_free_vars(e, bound, out);
+                }
+            }
+            Expr::PostInc(name) | Expr::PostDec(name) | Expr::PreInc(name) | Expr::PreDec(name) => {
+                if !bound.contains(name.as_str()) && !out.contains(name) {
+                    out.push(name.clone());
+                }
+            }
+            Expr::Ternary { condition, then_expr, else_expr } => {
+                Self::collect_free_vars(condition, bound, out);
+                Self::collect_free_vars(then_expr, bound, out);
+                Self::collect_free_vars(else_expr, bound, out);
+            }
+            Expr::NullCoalesce { left, right } | Expr::Elvis { left, right } => {
+                Self::collect_free_vars(left, bound, out);
+                Self::collect_free_vars(right, bound, out);
+            }
+            Expr::ArrayLiteral(elements) => {
+                for elem in elements {
+                    if let Some(k) = &elem.key {
+                        Self::collect_free_vars(k, bound, out);
+                    }
+                    Self::collect_free_vars(&elem.value, bound, out);
+                }
+            }
+            Expr::ArrayAccess { array, index } => {
+                Self::collect_free_vars(array, bound, out);
+                Self::collect_free_vars(index, bound, out);
+            }
+            Expr::PropertyAccess { object, .. } => {
+                Self::collect_free_vars(object, bound, out);
+            }
+            Expr::MethodCall { object, args, .. } => {
+                Self::collect_free_vars(object, bound, out);
+                for arg in args {
+                    Self::collect_free_vars(arg, bound, out);
+                }
+            }
+            Expr::Closure { use_vars, .. } => {
+                // Nested closure — only capture its explicit use vars
+                for v in use_vars {
+                    if !bound.contains(v.as_str()) && !out.contains(v) {
+                        out.push(v.clone());
+                    }
+                }
+            }
+            Expr::Cast { expr: inner, .. } => {
+                Self::collect_free_vars(inner, bound, out);
+            }
+            Expr::Instanceof { expr: inner, .. } => {
+                Self::collect_free_vars(inner, bound, out);
+            }
+            Expr::New { args, .. } => {
+                for arg in args {
+                    Self::collect_free_vars(arg, bound, out);
+                }
+            }
+            Expr::Match { expr: inner, arms } => {
+                Self::collect_free_vars(inner, bound, out);
+                for arm in arms {
+                    if let Some(conds) = &arm.conditions {
+                        for cond in conds {
+                            Self::collect_free_vars(cond, bound, out);
+                        }
+                    }
+                    Self::collect_free_vars(&arm.body, bound, out);
+                }
+            }
+            Expr::StaticProperty { .. } => {}
+            // Literals and constants — no variables
+            Expr::Integer(_) | Expr::Float(_) | Expr::StringLiteral(_)
+            | Expr::Bool(_) | Expr::Null | Expr::Constant(_) => {}
+        }
     }
 
     /// Parse closure: function($a, $b) use($c) { ... }

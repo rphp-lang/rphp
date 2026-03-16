@@ -2,6 +2,10 @@
 /// Converts parsed statements into VM instructions.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+/// Global closure counter — ensures unique names across nested compilers.
+static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use crate::value::Value;
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param};
@@ -1203,6 +1207,39 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
+            Expr::Elvis { left, right } => {
+                // Evaluate LHS once, store in tmp
+                let (left_op, left_type) = self.compile_expr(left);
+                let tmp = self.alloc_tmp();
+                let mut assign_left = Instruction::new(OpCode::AssignCv);
+                assign_left.op1_type = OpType::Tmp;
+                assign_left.op1 = tmp;
+                assign_left.op2_type = left_type;
+                assign_left.op2 = left_op;
+                self.instructions.push(assign_left);
+
+                // JmpNZ tmp → end (if truthy, result is already in tmp)
+                let jmpnz_idx = self.instructions.len();
+                let mut jmpnz = Instruction::new(OpCode::JmpNZ);
+                jmpnz.op1 = tmp;
+                jmpnz.op1_type = OpType::Tmp;
+                jmpnz.op2 = 0; // placeholder
+                self.instructions.push(jmpnz);
+
+                // Else branch: evaluate RHS, overwrite tmp
+                let (right_op, right_type) = self.compile_expr(right);
+                let mut assign_right = Instruction::new(OpCode::AssignCv);
+                assign_right.op1_type = OpType::Tmp;
+                assign_right.op1 = tmp;
+                assign_right.op2_type = right_type;
+                assign_right.op2 = right_op;
+                self.instructions.push(assign_right);
+
+                let end_label = self.instructions.len() as u32;
+                self.instructions[jmpnz_idx].op2 = end_label;
+
+                (tmp, OpType::Tmp)
+            }
             Expr::Not(inner) => {
                 let (op, op_type) = self.compile_expr(inner);
                 let tmp = self.alloc_tmp();
@@ -1567,7 +1604,7 @@ impl Compiler {
                 let user_func = make_user_function_with_defaults(op_array, num_args, required_num_args);
 
                 // Register closure as anonymous function with unique name
-                let closure_name = format!("__closure_{}", self.functions.len());
+                let closure_name = format!("__closure_{}", CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed));
                 self.functions.extend(func_compiler.functions);
                 self.functions.push((closure_name.clone(), user_func));
 

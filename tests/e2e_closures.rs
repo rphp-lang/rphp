@@ -130,3 +130,100 @@ fn test_closure_body_compile_error_no_panic() {
     let result = rphp::compiler::compile::Compiler::new().compile(&stmts);
     assert!(result.is_err(), "Expected compile error for break inside closure");
 }
+
+// ============================================================================
+// Arrow functions: fn($x) => expr
+// ============================================================================
+
+#[test]
+fn test_arrow_basic() {
+    assert_eq!(run_php(r#"<?php
+$double = fn($x) => $x * 2;
+echo $double(5);
+"#), "10");
+}
+
+#[test]
+fn test_arrow_multiple_params() {
+    assert_eq!(run_php(r#"<?php
+$add = fn($a, $b) => $a + $b;
+echo $add(3, 7);
+"#), "10");
+}
+
+#[test]
+fn test_arrow_captures_outer_variable() {
+    assert_eq!(run_php(r#"<?php
+$factor = 3;
+$mul = fn($x) => $x * $factor;
+echo $mul(5);
+"#), "15");
+}
+
+#[test]
+fn test_arrow_captures_multiple_vars() {
+    assert_eq!(run_php(r#"<?php
+$prefix = "Hello";
+$suffix = "!";
+$greet = fn($name) => $prefix . " " . $name . $suffix;
+echo $greet("PHP");
+"#), "Hello PHP!");
+}
+
+#[test]
+fn test_arrow_no_params() {
+    assert_eq!(run_php(r#"<?php
+$val = 42;
+$get = fn() => $val;
+echo $get();
+"#), "42");
+}
+
+#[test]
+fn test_arrow_with_default_param() {
+    assert_eq!(run_php(r#"<?php
+$f = fn($x, $y = 10) => $x + $y;
+echo $f(5);
+echo " ";
+echo $f(5, 20);
+"#), "15 25");
+}
+
+#[test]
+fn test_arrow_nested() {
+    assert_eq!(run_php(r#"<?php
+$add = fn($a) => fn($b) => $a + $b;
+$add5 = $add(5);
+echo $add5(3);
+"#), "8");
+}
+
+#[test]
+fn test_arrow_in_array_map_style() {
+    // Using arrow function as callback passed to another function
+    assert_eq!(run_php(r#"<?php
+function apply($fn, $val) {
+    return $fn($val);
+}
+$square = fn($x) => $x * $x;
+echo apply($square, 4);
+"#), "16");
+}
+
+#[test]
+fn test_arrow_with_string_concat() {
+    assert_eq!(run_php(r#"<?php
+$wrap = fn($s) => "[" . $s . "]";
+echo $wrap("test");
+"#), "[test]");
+}
+
+#[test]
+fn test_arrow_with_ternary() {
+    assert_eq!(run_php(r#"<?php
+$abs = fn($x) => $x >= 0 ? $x : -$x;
+echo $abs(5);
+echo " ";
+echo $abs(-3);
+"#), "5 3");
+}
