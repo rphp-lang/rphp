@@ -289,7 +289,7 @@ fn test_internal_function_call() {
         Ok(())
     }
 
-    let my_double_func = make_internal_function(my_double_handler, 1, 1);
+    let my_double_func = make_internal_function(my_double_handler, 1, 1, vec!["value".to_string()]);
 
     // Main script:
     // INIT_FCALL 1, CONST(0)="my_double"
@@ -463,7 +463,7 @@ fn test_nested_calls() {
         }
         Ok(())
     }
-    let my_double_func = make_internal_function(my_double_handler, 1, 1);
+    let my_double_func = make_internal_function(my_double_handler, 1, 1, vec!["value".to_string()]);
 
     // --- add_one: user function, return $x + 1 ---
     let mut add = Instruction::new(OpCode::Add);

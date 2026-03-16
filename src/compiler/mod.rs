@@ -3,7 +3,7 @@ pub mod compile;
 use crate::value::Value;
 use crate::vm::instruction::Instruction;
 use crate::vm::function::{
-    FunctionCommon, FunctionType, UserFunction,
+    FunctionCommon, FunctionType, UserFunction, ParamTypeHint,
     InternalFunction, InternalFunctionHandler,
 };
 
@@ -52,6 +52,35 @@ pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_ar
             variadic_cv_index,
             ref_args,
             this_offset: 0,
+            param_type_hints: vec![],
+            param_names: vec![],
+        },
+        op_array,
+    }
+}
+
+/// Extended full constructor with type hints and param names.
+pub fn make_user_function_typed(
+    op_array: OpArray,
+    num_args: u32,
+    required_num_args: u32,
+    is_variadic: bool,
+    variadic_cv_index: u32,
+    ref_args: u64,
+    param_type_hints: Vec<ParamTypeHint>,
+    param_names: Vec<String>,
+) -> UserFunction {
+    UserFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::User,
+            num_args,
+            required_num_args,
+            is_variadic,
+            variadic_cv_index,
+            ref_args,
+            this_offset: 0,
+            param_type_hints,
+            param_names,
         },
         op_array,
     }
@@ -62,6 +91,7 @@ pub fn make_internal_function(
     handler: InternalFunctionHandler,
     num_args: u32,
     required_num_args: u32,
+    param_names: Vec<String>,
 ) -> InternalFunction {
     InternalFunction {
         common: FunctionCommon {
@@ -72,6 +102,8 @@ pub fn make_internal_function(
             variadic_cv_index: 0,
             ref_args: 0,
             this_offset: 0,
+            param_type_hints: vec![],
+            param_names,
         },
         handler,
     }
@@ -83,6 +115,7 @@ pub fn make_internal_method(
     handler: InternalFunctionHandler,
     num_args: u32,
     required_num_args: u32,
+    param_names: Vec<String>,
 ) -> InternalFunction {
     InternalFunction {
         common: FunctionCommon {
@@ -93,6 +126,8 @@ pub fn make_internal_method(
             variadic_cv_index: 0,
             ref_args: 0,
             this_offset: 1,
+            param_type_hints: vec![],
+            param_names,
         },
         handler,
     }
@@ -104,6 +139,7 @@ pub fn make_internal_function_ref(
     num_args: u32,
     required_num_args: u32,
     ref_args: u64,
+    param_names: Vec<String>,
 ) -> InternalFunction {
     InternalFunction {
         common: FunctionCommon {
@@ -114,6 +150,8 @@ pub fn make_internal_function_ref(
             variadic_cv_index: 0,
             ref_args,
             this_offset: 0,
+            param_type_hints: vec![],
+            param_names,
         },
         handler,
     }
@@ -123,6 +161,7 @@ pub fn make_internal_function_ref(
 pub fn make_internal_function_variadic(
     handler: InternalFunctionHandler,
     required_num_args: u32,
+    param_names: Vec<String>,
 ) -> InternalFunction {
     InternalFunction {
         common: FunctionCommon {
@@ -133,6 +172,8 @@ pub fn make_internal_function_variadic(
             variadic_cv_index: required_num_args,
             ref_args: 0,
             this_offset: 0,
+            param_type_hints: vec![],
+            param_names,
         },
         handler,
     }

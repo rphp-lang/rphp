@@ -30,7 +30,7 @@ fn test_e2e_function_call() {
         Ok(())
     }
 
-    let my_double_func = make_internal_function(my_double_handler, 1, 1);
+    let my_double_func = make_internal_function(my_double_handler, 1, 1, vec!["value".to_string()]);
 
     let output = run_php_with_functions(
         "<?php echo my_double(21);",
@@ -59,7 +59,7 @@ fn test_e2e_variable_in_function_call() {
         Ok(())
     }
 
-    let my_double_func = make_internal_function(my_double_handler, 1, 1);
+    let my_double_func = make_internal_function(my_double_handler, 1, 1, vec!["value".to_string()]);
 
     let output = run_php_with_functions(
         "<?php $x = 21; echo my_double($x);",

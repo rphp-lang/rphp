@@ -8,12 +8,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use crate::value::Value;
-use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param};
+use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{Instruction, OpType};
 use super::OpArray;
 
-use super::{make_user_function_with_args, make_user_function_full};
+use super::{make_user_function_with_args, make_user_function_full, make_user_function_typed};
 use crate::vm::function::UserFunction;
 
 /// Result of compiling a script — main OpArray + declared functions + class defs.
@@ -39,6 +39,17 @@ pub struct TryEntry {
     pub catches: Vec<CatchEntry>,  // ordered list of catch clauses
     pub finally_start: u32,  // 0xFFFFFFFF if no finally
     pub finally_end: u32,    // instruction after finally block
+}
+
+/// Compiled parameter metadata from compile_params.
+pub(crate) struct CompiledParams {
+    pub num_args: u32,
+    pub required_num_args: u32,
+    pub is_variadic: bool,
+    pub variadic_cv_index: u32,
+    pub ref_args: u64,
+    pub type_hints: Vec<crate::vm::function::ParamTypeHint>,
+    pub param_names: Vec<String>,
 }
 
 /// Compiled class definition
@@ -244,8 +255,7 @@ impl Compiler {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
-                let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) =
-                    Self::compile_params(&mut func_compiler, params, name)?;
+                let cp = Self::compile_params(&mut func_compiler, params, name)?;
                 for s in body {
                     func_compiler.compile_stmt(s)?;
                 }
@@ -262,7 +272,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                 };
-                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
+                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -837,8 +847,7 @@ impl Compiler {
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
                     let context = format!("method {}::{}", name, method.name);
-                    let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) =
-                        Self::compile_params(&mut func_compiler, &method.params, &context)?;
+                    let cp = Self::compile_params(&mut func_compiler, &method.params, &context)?;
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
@@ -857,7 +866,7 @@ impl Compiler {
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let mut user_func = make_user_function_full(op_array, num_args + 1, required_num_args, is_variadic, variadic_cv, ref_args);
+                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
                     user_func.common.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
@@ -897,8 +906,7 @@ impl Compiler {
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("interface method {}::{}", name, method.name);
-                    let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) =
-                        Self::compile_params(&mut func_compiler, &method.params, &context)?;
+                    let cp = Self::compile_params(&mut func_compiler, &method.params, &context)?;
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;
@@ -912,7 +920,7 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                     };
-                    let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
+                    let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
                 }
@@ -973,16 +981,24 @@ impl Compiler {
 
     /// Compile parameter list into CV slots. Returns (num_args, required_num_args, is_variadic, variadic_cv_index, ref_args).
     /// num_args counts only non-variadic params. The variadic param gets its own CV.
-    fn compile_params(func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<(u32, u32, bool, u32, u64), String> {
+    fn compile_params(func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<CompiledParams, String> {
         let mut required_num_args = 0u32;
         let mut seen_default = false;
         let mut is_variadic = false;
         let mut variadic_cv_index = 0u32;
         let mut ref_args = 0u64;
+        let mut type_hints = Vec::new();
+        let mut param_names = Vec::new();
         for (i, param) in params.iter().enumerate() {
             if param.is_ref && i < 64 {
                 ref_args |= 1u64 << i;
             }
+            // Collect type hint
+            let hint = Self::convert_type_hint(&param.type_hint);
+            type_hints.push(hint);
+            // Collect param name
+            param_names.push(param.name.clone());
+
             if param.is_variadic {
                 if i != params.len() - 1 {
                     return Err(format!("Variadic parameter ${} must be last in {}", param.name, context));
@@ -1008,7 +1024,28 @@ impl Compiler {
         }
         // num_args = non-variadic params count
         let num_args = if is_variadic { (params.len() - 1) as u32 } else { params.len() as u32 };
-        Ok((num_args, required_num_args, is_variadic, variadic_cv_index, ref_args))
+        Ok(CompiledParams { num_args, required_num_args, is_variadic, variadic_cv_index, ref_args, type_hints, param_names })
+    }
+
+    /// Convert parser TypeHint to runtime ParamTypeHint.
+    fn convert_type_hint(hint: &Option<crate::parser::TypeHint>) -> crate::vm::function::ParamTypeHint {
+        use crate::parser::TypeHint;
+        use crate::vm::function::ParamTypeHint;
+        match hint {
+            None => ParamTypeHint::None,
+            Some(TypeHint::Int) => ParamTypeHint::Int,
+            Some(TypeHint::Float) => ParamTypeHint::Float,
+            Some(TypeHint::String) => ParamTypeHint::String,
+            Some(TypeHint::Bool) => ParamTypeHint::Bool,
+            Some(TypeHint::Array) => ParamTypeHint::Array,
+            Some(TypeHint::Callable) => ParamTypeHint::Callable,
+            Some(TypeHint::Null) => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+            Some(TypeHint::ClassName(name)) => ParamTypeHint::ClassName(name.clone()),
+            Some(TypeHint::Nullable(inner)) => {
+                let inner_hint = Self::convert_type_hint(&Some(*inner.clone()));
+                ParamTypeHint::Nullable(Box::new(inner_hint))
+            }
+        }
     }
 
     /// Emit default parameter initialization for a single param.
@@ -1364,19 +1401,33 @@ impl Compiler {
                 self.instructions.push(init);
 
                 for (i, arg) in args.iter().enumerate() {
-                    let is_ref_param = i < 64 && (ref_args & (1u64 << i)) != 0;
-                    let (operand, op_type) = self.compile_expr(arg);
-                    // Use SendRef only when param is by-ref AND arg is a CV (variable)
-                    let opcode = if is_ref_param && op_type == OpType::Cv {
-                        OpCode::SendRef
-                    } else {
-                        OpCode::SendVal
-                    };
-                    let mut send = Instruction::new(opcode);
-                    send.op1 = operand;
-                    send.op1_type = op_type;
-                    send.op2 = i as u32;
-                    self.instructions.push(send);
+                    match arg {
+                        CallArg::Positional(expr) => {
+                            let is_ref_param = i < 64 && (ref_args & (1u64 << i)) != 0;
+                            let (operand, op_type) = self.compile_expr(expr);
+                            // Use SendRef only when param is by-ref AND arg is a CV (variable)
+                            let opcode = if is_ref_param && op_type == OpType::Cv {
+                                OpCode::SendRef
+                            } else {
+                                OpCode::SendVal
+                            };
+                            let mut send = Instruction::new(opcode);
+                            send.op1 = operand;
+                            send.op1_type = op_type;
+                            send.op2 = i as u32;
+                            self.instructions.push(send);
+                        }
+                        CallArg::Named { name, value } => {
+                            let (operand, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            let mut send = Instruction::new(OpCode::SendNamed);
+                            send.op1 = operand;
+                            send.op1_type = op_type;
+                            send.op2 = name_idx;
+                            send.op2_type = OpType::Const;
+                            self.instructions.push(send);
+                        }
+                    }
                 }
 
                 let tmp = self.alloc_tmp();
@@ -1672,11 +1723,11 @@ impl Compiler {
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 // params come first as CVs (args), then use_vars
                 let compile_result = Self::compile_params(&mut func_compiler, params, "closure");
-                let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) = match compile_result {
+                let cp = match compile_result {
                     Ok(r) => r,
                     Err(e) => {
                         self.deferred_error = Some(e);
-                        (params.len() as u32, params.len() as u32, false, 0, 0)
+                        CompiledParams { num_args: params.len() as u32, required_num_args: params.len() as u32, is_variadic: false, variadic_cv_index: 0, ref_args: 0, type_hints: vec![], param_names: vec![] }
                     }
                 };
                 for v in use_vars {
@@ -1701,7 +1752,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                 };
-                let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
+                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
 
                 // Register closure as anonymous function with unique name
                 let closure_name = format!("__closure_{}", CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed));
@@ -1745,8 +1796,19 @@ impl Compiler {
             Expr::New { class_name, args } => {
                 // Pre-compile arg expressions BEFORE NewObj so side effects
                 // always execute, even when the class has no __construct.
-                let compiled_args: Vec<(u32, OpType)> = args.iter()
-                    .map(|arg| self.compile_expr(arg))
+                // Compile args, tracking which are named for SendNamed emission
+                let compiled_args: Vec<(u32, OpType, Option<u32>)> = args.iter()
+                    .map(|arg| match arg {
+                        CallArg::Positional(expr) => {
+                            let (op, op_type) = self.compile_expr(expr);
+                            (op, op_type, None)
+                        }
+                        CallArg::Named { name, value } => {
+                            let (op, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            (op, op_type, Some(name_idx))
+                        }
+                    })
                     .collect();
 
                 let name_idx = self.add_literal(Value::string(class_name.clone()));
@@ -1760,12 +1822,21 @@ impl Compiler {
                 self.instructions.push(new_obj);
 
                 // Send constructor args — offset by 1 because CV 0 is $this
-                for (i, (op, op_type)) in compiled_args.iter().enumerate() {
-                    let mut send = Instruction::new(OpCode::SendVal);
-                    send.op1 = *op;
-                    send.op1_type = *op_type;
-                    send.op2 = (i + 1) as u32; // +1 to skip $this at CV 0
-                    self.instructions.push(send);
+                for (i, (op, op_type, named_idx)) in compiled_args.iter().enumerate() {
+                    if let Some(name_const) = named_idx {
+                        let mut send = Instruction::new(OpCode::SendNamed);
+                        send.op1 = *op;
+                        send.op1_type = *op_type;
+                        send.op2 = *name_const;
+                        send.op2_type = OpType::Const;
+                        self.instructions.push(send);
+                    } else {
+                        let mut send = Instruction::new(OpCode::SendVal);
+                        send.op1 = *op;
+                        send.op1_type = *op_type;
+                        send.op2 = (i + 1) as u32; // +1 to skip $this at CV 0
+                        self.instructions.push(send);
+                    }
                 }
 
                 // DoFcall to run __construct (VM skips if no constructor exists)
@@ -1804,15 +1875,28 @@ impl Compiler {
                 self.instructions.push(init);
 
                 for (i, arg) in args.iter().enumerate() {
-                    let (op, op_type) = self.compile_expr(arg);
-                    // Use SendVarEx for runtime ref_args check (method not known at compile time)
-                    let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
-                    let mut send = Instruction::new(opcode);
-                    send.op1 = op;
-                    send.op1_type = op_type;
-                    send.op2 = (i + 1) as u32; // +1 to skip CV 0 ($this)
-                    send.extended_value = i as u32; // param index for ref_args check
-                    self.instructions.push(send);
+                    match arg {
+                        CallArg::Positional(expr) => {
+                            let (op, op_type) = self.compile_expr(expr);
+                            let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
+                            let mut send = Instruction::new(opcode);
+                            send.op1 = op;
+                            send.op1_type = op_type;
+                            send.op2 = (i + 1) as u32; // +1 to skip CV 0 ($this)
+                            send.extended_value = i as u32; // param index for ref_args check
+                            self.instructions.push(send);
+                        }
+                        CallArg::Named { name, value } => {
+                            let (op, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            let mut send = Instruction::new(OpCode::SendNamed);
+                            send.op1 = op;
+                            send.op1_type = op_type;
+                            send.op2 = name_idx;
+                            send.op2_type = OpType::Const;
+                            self.instructions.push(send);
+                        }
+                    }
                 }
 
                 let tmp = self.alloc_tmp();
@@ -1836,14 +1920,28 @@ impl Compiler {
                 self.instructions.push(init);
 
                 for (i, arg) in args.iter().enumerate() {
-                    let (op, op_type) = self.compile_expr(arg);
-                    let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
-                    let mut send = Instruction::new(opcode);
-                    send.op1 = op;
-                    send.op1_type = op_type;
-                    send.op2 = (i + 1) as u32; // +1: CV 0 is $this even for static methods
-                    send.extended_value = i as u32; // param index for ref_args check
-                    self.instructions.push(send);
+                    match arg {
+                        CallArg::Positional(expr) => {
+                            let (op, op_type) = self.compile_expr(expr);
+                            let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
+                            let mut send = Instruction::new(opcode);
+                            send.op1 = op;
+                            send.op1_type = op_type;
+                            send.op2 = (i + 1) as u32; // +1: CV 0 is $this even for static methods
+                            send.extended_value = i as u32; // param index for ref_args check
+                            self.instructions.push(send);
+                        }
+                        CallArg::Named { name, value } => {
+                            let (op, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            let mut send = Instruction::new(OpCode::SendNamed);
+                            send.op1 = op;
+                            send.op1_type = op_type;
+                            send.op2 = name_idx;
+                            send.op2_type = OpType::Const;
+                            self.instructions.push(send);
+                        }
+                    }
                 }
 
                 let tmp = self.alloc_tmp();
@@ -1891,14 +1989,28 @@ impl Compiler {
 
                 // Send arguments
                 for (i, arg) in args.iter().enumerate() {
-                    let (op, op_type) = self.compile_expr(arg);
-                    let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
-                    let mut send = Instruction::new(opcode);
-                    send.op1 = op;
-                    send.op1_type = op_type;
-                    send.op2 = i as u32;
-                    send.extended_value = i as u32; // param index for ref_args check
-                    self.instructions.push(send);
+                    match arg {
+                        CallArg::Positional(expr) => {
+                            let (op, op_type) = self.compile_expr(expr);
+                            let opcode = if op_type == OpType::Cv { OpCode::SendVarEx } else { OpCode::SendVal };
+                            let mut send = Instruction::new(opcode);
+                            send.op1 = op;
+                            send.op1_type = op_type;
+                            send.op2 = i as u32;
+                            send.extended_value = i as u32; // param index for ref_args check
+                            self.instructions.push(send);
+                        }
+                        CallArg::Named { name, value } => {
+                            let (op, op_type) = self.compile_expr(value);
+                            let name_idx = self.add_literal(Value::string(name.clone()));
+                            let mut send = Instruction::new(OpCode::SendNamed);
+                            send.op1 = op;
+                            send.op1_type = op_type;
+                            send.op2 = name_idx;
+                            send.op2_type = OpType::Const;
+                            self.instructions.push(send);
+                        }
+                    }
                 }
 
                 // DoFcall

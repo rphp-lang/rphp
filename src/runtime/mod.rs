@@ -60,6 +60,11 @@ pub struct ExecutorGlobals {
     pub method_declaring_class: HashMap<*const FunctionCommon, String>,
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
+    /// Temporary buffer for named variadic arguments.
+    /// Key = call frame pointer as usize, value = vec of (name, value) pairs.
+    /// Populated by SendNamed when target function is variadic and name isn't a declared param.
+    /// Consumed by DoFcall during variadic packing.
+    pub pending_named_variadic: HashMap<usize, Vec<(String, crate::value::Value)>>,
 }
 
 impl ExecutorGlobals {
@@ -76,6 +81,7 @@ impl ExecutorGlobals {
             method_declaring_class: HashMap::new(),
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
+            pending_named_variadic: HashMap::new(),
         }
     }
 
@@ -93,6 +99,7 @@ impl ExecutorGlobals {
             method_declaring_class: HashMap::new(),
 
             output: std::cell::RefCell::new(output),
+            pending_named_variadic: HashMap::new(),
         }
     }
 

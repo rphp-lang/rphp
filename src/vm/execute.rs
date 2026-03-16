@@ -24,6 +24,37 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
     eg.declaring_class_of(func).map(|s| s.to_string())
 }
 
+/// Check a value against a parameter type hint. Returns true if the value satisfies the hint.
+fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &ExecutorGlobals) -> bool {
+    use crate::vm::function::ParamTypeHint;
+    match hint {
+        ParamTypeHint::None => true,
+        ParamTypeHint::Int => val.value_type() == ValueType::Long,
+        ParamTypeHint::Float => matches!(val.value_type(), ValueType::Double | ValueType::Long),
+        ParamTypeHint::String => val.value_type() == ValueType::String,
+        ParamTypeHint::Bool => matches!(val.value_type(), ValueType::True | ValueType::False),
+        ParamTypeHint::Array => val.value_type() == ValueType::Array,
+        ParamTypeHint::Callable => {
+            // Simplified: string (function name), array [obj, method], or closure
+            matches!(val.value_type(), ValueType::String | ValueType::Array)
+        }
+        ParamTypeHint::ClassName(class_name) => {
+            if let Some(obj) = val.as_object() {
+                eg.class_is_a(&obj.class_name, class_name)
+            } else {
+                false
+            }
+        }
+        ParamTypeHint::Nullable(inner) => {
+            if val.value_type() == ValueType::Null {
+                true
+            } else {
+                check_type_hint(val, inner, eg)
+            }
+        }
+    }
+}
+
 /// VM error — replaces panic! in all runtime paths
 #[derive(Debug)]
 pub enum VmError {
@@ -265,7 +296,7 @@ pub fn call_function(
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
 
-    loop {
+    'vm: loop {
         let opline = unsafe { &*(*frame).opline };
         let mut op_array = unsafe { (*frame).op_array() };
 
@@ -701,6 +732,171 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::SendNamed => {
+                // Named argument: op1=value, op2=CONST name string
+                // Resolve param name → position using callee's param_names,
+                // then use ref-aware semantics like SendRef/SendVarEx.
+                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let name = name_val.as_str().unwrap_or("");
+                let call = unsafe { (*frame).call };
+                debug_assert!(!call.is_null());
+                let func_common = unsafe { &*(*call).func };
+                let this_offset = func_common.this_offset;
+                let ref_args = func_common.ref_args;
+
+                // Find the parameter position by name
+                let mut resolved_idx: Option<u32> = None;
+                for (idx, pname) in func_common.param_names.iter().enumerate() {
+                    if pname == name {
+                        resolved_idx = Some(idx as u32);
+                        break;
+                    }
+                }
+
+                // Determine if the resolved index targets the variadic parameter itself.
+                // In that case, route to the variadic buffer, not the CV slot.
+                let public_max = func_common.num_args - this_offset;
+                let is_variadic_target = func_common.is_variadic && match resolved_idx {
+                    Some(idx) => idx >= public_max,
+                    None => true,
+                };
+
+                if is_variadic_target {
+                    // Route to variadic named buffer — covers both:
+                    // (a) name matches the variadic param itself (e.g. rest: 1)
+                    // (b) name not in param_names at all (extra named arg)
+                    // Internal (built-in) variadic functions do NOT accept named
+                    // variadic extras — only user-defined functions do.
+                    if !func_common.is_variadic
+                        || func_common.fn_type == crate::vm::function::FunctionType::Internal
+                    {
+                        let err = make_error_value("Error", &format!(
+                            "Unknown named parameter ${}", name
+                        ));
+                        // Clean up the pending call frame before throwing
+                        let call_key = call as usize;
+                        eg.pending_named_variadic.remove(&call_key);
+                        unsafe {
+                            (*frame).call = (*call).call;
+                            cleanup_frame_slots(call);
+                        }
+                        eg.vm_stack.pop_call_frame(call);
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                        }
+                    }
+
+                    // Duplicate check: scan the pending buffer for this name
+                    let call_key = call as usize;
+                    if let Some(existing) = eg.pending_named_variadic.get(&call_key) {
+                        if existing.iter().any(|(n, _)| n == name) {
+                            let err = make_error_value("Error", &format!(
+                                "Named parameter ${} overwrites previous argument", name
+                            ));
+                            eg.pending_named_variadic.remove(&call_key);
+                            unsafe {
+                                (*frame).call = (*call).call;
+                                cleanup_frame_slots(call);
+                            }
+                            eg.vm_stack.pop_call_frame(call);
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                    }
+
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let cloned = val.clone();
+                    eg.pending_named_variadic
+                        .entry(call_key)
+                        .or_insert_with(Vec::new)
+                        .push((name.to_string(), cloned));
+                    // This named arg doesn't occupy a CV slot, so decrement
+                    // num_args so DoFcall's positional variadic count is correct.
+                    unsafe {
+                        if (*call).num_args > 0 {
+                            (*call).num_args -= 1;
+                        }
+                    }
+                } else {
+                    match resolved_idx {
+                        Some(idx) => {
+                            let cv_idx = idx + this_offset;
+
+                            // Check for duplicate: if CV slot already has a non-undef value,
+                            // the parameter was already passed (positionally or by a prior named arg).
+                            let existing = unsafe { &*(*call).cv(cv_idx) };
+                            if !existing.is_undef() {
+                                let err = make_error_value("Error", &format!(
+                                    "Named parameter ${} overwrites previous argument", name
+                                ));
+                                let call_key = call as usize;
+                                eg.pending_named_variadic.remove(&call_key);
+                                unsafe {
+                                    (*frame).call = (*call).call;
+                                    cleanup_frame_slots(call);
+                                }
+                                eg.vm_stack.pop_call_frame(call);
+                                match throw_in_frame(eg, frame, err) {
+                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                }
+                            }
+
+                            let is_ref = (idx < 64) && (ref_args & (1u64 << idx)) != 0;
+
+                            if is_ref && opline.op1_type == OpType::Cv {
+                                // By-reference: same logic as SendRef
+                                let caller_cv_ptr = unsafe {
+                                    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                                    let raw_ptr = base.add(opline.op1 as usize);
+                                    if (*raw_ptr).is_reference() {
+                                        (*raw_ptr).as_ref_ptr()
+                                    } else {
+                                        raw_ptr
+                                    }
+                                };
+                                let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
+                                unsafe { std::ptr::drop_in_place(arg_slot as *mut Value) };
+                                unsafe { (arg_slot as *mut Value).write(Value::reference(caller_cv_ptr)) };
+                            } else {
+                                // By-value: same logic as SendVal
+                                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                                let cloned = val.clone();
+                                let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
+                                *arg_slot = cloned;
+                            }
+
+                            // Update num_args to cover this position
+                            let public_pos = idx + 1; // 1-based count
+                            unsafe {
+                                if (*call).num_args < public_pos {
+                                    (*call).num_args = public_pos;
+                                }
+                            }
+                        }
+                        None => {
+                            let err = make_error_value("Error", &format!(
+                                "Unknown named parameter ${}", name
+                            ));
+                            let call_key = call as usize;
+                            eg.pending_named_variadic.remove(&call_key);
+                            unsafe {
+                                (*frame).call = (*call).call;
+                                cleanup_frame_slots(call);
+                            }
+                            eg.vm_stack.pop_call_frame(call);
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                    }
+                }
+            }
+
             OpCode::DoFcall => {
                 // Execute the pending call
                 let call = unsafe { (*frame).call };
@@ -715,6 +911,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     std::ptr::null_mut()
                 };
                 unsafe { (*call).return_value = return_value_ptr };
+
+                // Eagerly extract any pending named variadic args so they don't
+                // leak on error paths (TypeError, arity, etc.).
+                let call_key = call as usize;
+                let pending_named = eg.pending_named_variadic.remove(&call_key);
 
                 // Validate argument count
                 // `num_args` is the explicit (public) arg count from the call site.
@@ -737,6 +938,52 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     )));
                 }
 
+                // Named args can skip required positional params; verify no holes
+                // in the required range. A required param is one at index < required_num_args.
+                if func_common.required_num_args > 0 {
+                    let this_off = func_common.this_offset;
+                    for i in 0..func_common.required_num_args {
+                        let cv_idx = i + this_off;
+                        let val = unsafe { &*(*call).cv(cv_idx) };
+                        if val.is_undef() {
+                            return Err(VmError::Fatal(format!(
+                                "Too few arguments, {} passed and exactly {} expected",
+                                num_args, func_common.required_num_args
+                            )));
+                        }
+                    }
+                }
+
+                // Type-check arguments against declared type hints
+                if !func_common.param_type_hints.is_empty() {
+                    let mut type_error: Option<Value> = None;
+                    for (i, hint) in func_common.param_type_hints.iter().enumerate() {
+                        if matches!(hint, crate::vm::function::ParamTypeHint::None) { continue; }
+                        let cv_idx = i as u32 + func_common.this_offset;
+                        if (i as u32) >= num_args { break; }
+                        let val = unsafe { &*(*call).cv(cv_idx) };
+                        if val.is_undef() { continue; }
+                        if !check_type_hint(val, hint, eg) {
+                            type_error = Some(make_error_value("TypeError", &format!(
+                                "Argument #{} must be of type {}, {} given",
+                                i + 1,
+                                hint.display_name(),
+                                val.type_name()
+                            )));
+                            break;
+                        }
+                    }
+                    if let Some(err) = type_error {
+                        // Clean up call frame before throwing
+                        unsafe { cleanup_frame_slots(call) };
+                        eg.vm_stack.pop_call_frame(call);
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                        }
+                    }
+                }
+
                 // Pack extra arguments into variadic parameter array
                 if func_common.is_variadic {
                     let extra_count = num_args.saturating_sub(public_max);
@@ -745,6 +992,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for i in 0..extra_count {
                         let arg = unsafe { (*call).cv(cv_start + i) }.clone();
                         variadic_arr.push(arg);
+                    }
+                    // Merge any named variadic args (extracted at start of DoFcall)
+                    if let Some(named_extras) = pending_named {
+                        // Type-check each named extra against the variadic param's type hint
+                        let variadic_hint_idx = public_max as usize; // index in param_type_hints
+                        let variadic_hint = func_common.param_type_hints.get(variadic_hint_idx);
+                        for (name, val) in named_extras {
+                            if let Some(hint) = variadic_hint {
+                                if !matches!(hint, crate::vm::function::ParamTypeHint::None)
+                                    && !check_type_hint(&val, hint, eg)
+                                {
+                                    let type_err = make_error_value("TypeError", &format!(
+                                        "Named parameter ${} must be of type {}, {} given",
+                                        name,
+                                        hint.display_name(),
+                                        val.type_name()
+                                    ));
+                                    unsafe { cleanup_frame_slots(call) };
+                                    eg.vm_stack.pop_call_frame(call);
+                                    match throw_in_frame(eg, frame, type_err) {
+                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                    }
+                                }
+                            }
+                            variadic_arr.set_str(&name, val);
+                        }
                     }
                     // Overwrite the variadic CV slot with the packed array
                     let variadic_slot = unsafe { (*call).cv_mut(cv_start) };

@@ -14,6 +14,37 @@ pub enum FunctionType {
     Internal = 2,
 }
 
+/// Runtime representation of a parameter type hint.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParamTypeHint {
+    None,
+    Int,
+    Float,
+    String,
+    Bool,
+    Array,
+    Callable,
+    ClassName(std::string::String),
+    Nullable(Box<ParamTypeHint>),
+}
+
+impl ParamTypeHint {
+    /// Human-readable name for error messages.
+    pub fn display_name(&self) -> std::string::String {
+        match self {
+            ParamTypeHint::None => "mixed".to_string(),
+            ParamTypeHint::Int => "int".to_string(),
+            ParamTypeHint::Float => "float".to_string(),
+            ParamTypeHint::String => "string".to_string(),
+            ParamTypeHint::Bool => "bool".to_string(),
+            ParamTypeHint::Array => "array".to_string(),
+            ParamTypeHint::Callable => "callable".to_string(),
+            ParamTypeHint::ClassName(name) => name.clone(),
+            ParamTypeHint::Nullable(inner) => format!("?{}", inner.display_name()),
+        }
+    }
+}
+
 /// Common header shared by all function types.
 /// MUST be first field in UserFunction and InternalFunction (#[repr(C)]).
 #[repr(C)]
@@ -34,6 +65,12 @@ pub struct FunctionCommon {
     /// Number of hidden CV slots before explicit args (0 for functions, 1 for methods with $this).
     /// DoFcall uses `num_args - this_offset` for public arity check.
     pub this_offset: u32,
+    /// Per-parameter type hints (indexed by public param position, 0-based).
+    /// Empty vec = no type hints declared.
+    pub param_type_hints: Vec<ParamTypeHint>,
+    /// Per-parameter names (indexed by public param position, 0-based).
+    /// Used for named argument resolution.
+    pub param_names: Vec<std::string::String>,
 }
 
 /// User-defined PHP function — contains compiled OpArray.

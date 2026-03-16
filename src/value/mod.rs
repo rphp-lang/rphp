@@ -321,6 +321,22 @@ impl Value {
         unsafe { std::mem::transmute((self.type_info & 0xFF) as u8) }
     }
 
+    /// Human-readable PHP type name for error messages.
+    pub fn type_name(&self) -> &'static str {
+        match self.value_type() {
+            ValueType::Undef => "unknown",
+            ValueType::Null => "null",
+            ValueType::False | ValueType::True => "bool",
+            ValueType::Long => "int",
+            ValueType::Double => "float",
+            ValueType::String => "string",
+            ValueType::Array => "array",
+            ValueType::Object => "object",
+            ValueType::Resource => "resource",
+            ValueType::Reference => "reference",
+        }
+    }
+
     #[inline]
     pub fn as_long(&self) -> Option<i64> {
         if self.value_type() == ValueType::Long {

@@ -23,6 +23,7 @@ pub enum OpCode {
     SendVal = 63,
     SendRef = 64,
     SendVarEx = 65,  // Runtime check: send by-ref if callee expects it, else by-val
+    SendNamed = 66,  // Named argument: op1=value, op2=CONST name string; resolved to CV slot at runtime
 
     // Comparison
     IsEqual = 15,

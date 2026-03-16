@@ -100,9 +100,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     let class_funcs = register_builtin_classes(eg);
     funcs.extend(class_funcs);
 
+    /// Helper to turn a list of &str into Vec<String> for param_names.
+    macro_rules! pn {
+        ($($name:expr),*) => { vec![$($name.to_string()),*] };
+    }
+
     macro_rules! reg {
+        ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function($handler, $max_args, $min_args, pn![$($pnames),*]));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr) => {{
-            let f = Box::new(make_internal_function($handler, $max_args, $min_args));
+            let f = Box::new(make_internal_function($handler, $max_args, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -110,8 +121,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
 
     macro_rules! reg_ref {
+        ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $ref_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args, pn![$($pnames),*]));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr, $ref_args:expr) => {{
-            let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args));
+            let f = Box::new(make_internal_function_ref($handler, $max_args, $min_args, $ref_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -119,8 +136,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
 
     macro_rules! reg_var {
+        ($name:expr, $handler:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_function_variadic($handler, $min_args, pn![$($pnames),*]));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
         ($name:expr, $handler:expr, $min_args:expr) => {{
-            let f = Box::new(make_internal_function_variadic($handler, $min_args));
+            let f = Box::new(make_internal_function_variadic($handler, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -128,127 +151,127 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     }
 
     // --- Array functions (by-ref: arg 0) ---
-    reg!("count", fn_count, 1, 1);
-    reg!("sizeof", fn_count, 1, 1);
-    reg_ref!("array_push", fn_array_push, 2, 2, 0b1);
-    reg_ref!("array_pop", fn_array_pop, 1, 1, 0b1);
-    reg_ref!("array_shift", fn_array_shift, 1, 1, 0b1);
-    reg_ref!("array_unshift", fn_array_unshift, 2, 2, 0b1);
-    reg!("array_key_exists", fn_array_key_exists, 2, 2);
-    reg!("in_array", fn_in_array, 2, 2);
-    reg!("array_reverse", fn_array_reverse, 1, 1);
-    reg!("array_merge", fn_array_merge, 2, 2);
-    reg!("array_keys", fn_array_keys, 1, 1);
-    reg!("array_values", fn_array_values, 1, 1);
-    reg!("array_slice", fn_array_slice, 3, 2);
-    reg!("array_unique", fn_array_unique, 1, 1);
-    reg!("array_flip", fn_array_flip, 1, 1);
-    reg!("array_combine", fn_array_combine, 2, 2);
-    reg!("array_sum", fn_array_sum, 1, 1);
-    reg!("array_product", fn_array_product, 1, 1);
-    reg!("array_count_values", fn_array_count_values, 1, 1);
-    reg!("array_fill", fn_array_fill, 3, 3);
-    reg!("array_pad", fn_array_pad, 3, 3);
-    reg!("array_chunk", fn_array_chunk, 2, 2);
-    reg!("array_column", fn_array_column, 2, 2);
-    reg_ref!("sort", fn_sort, 1, 1, 0b1);
-    reg_ref!("rsort", fn_rsort, 1, 1, 0b1);
-    reg!("array_search", fn_array_search, 2, 2);
-    reg!("range", fn_range, 2, 2);
-    reg_ref!("array_splice", fn_array_splice, 4, 2, 0b1);
-    reg!("array_rand", fn_array_rand, 1, 1);
-    reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1);
-    reg!("array_map", fn_array_map, 2, 2);
-    reg!("array_filter", fn_array_filter, 2, 1);
+    reg!("count", fn_count, 1, 1, "value");
+    reg!("sizeof", fn_count, 1, 1, "value");
+    reg_ref!("array_push", fn_array_push, 2, 2, 0b1, "array", "value");
+    reg_ref!("array_pop", fn_array_pop, 1, 1, 0b1, "array");
+    reg_ref!("array_shift", fn_array_shift, 1, 1, 0b1, "array");
+    reg_ref!("array_unshift", fn_array_unshift, 2, 2, 0b1, "array", "value");
+    reg!("array_key_exists", fn_array_key_exists, 2, 2, "key", "array");
+    reg!("in_array", fn_in_array, 2, 2, "needle", "haystack");
+    reg!("array_reverse", fn_array_reverse, 1, 1, "array");
+    reg!("array_merge", fn_array_merge, 2, 2, "array1", "array2");
+    reg!("array_keys", fn_array_keys, 1, 1, "array");
+    reg!("array_values", fn_array_values, 1, 1, "array");
+    reg!("array_slice", fn_array_slice, 3, 2, "array", "offset", "length");
+    reg!("array_unique", fn_array_unique, 1, 1, "array");
+    reg!("array_flip", fn_array_flip, 1, 1, "array");
+    reg!("array_combine", fn_array_combine, 2, 2, "keys", "values");
+    reg!("array_sum", fn_array_sum, 1, 1, "array");
+    reg!("array_product", fn_array_product, 1, 1, "array");
+    reg!("array_count_values", fn_array_count_values, 1, 1, "array");
+    reg!("array_fill", fn_array_fill, 3, 3, "start_index", "count", "value");
+    reg!("array_pad", fn_array_pad, 3, 3, "array", "length", "value");
+    reg!("array_chunk", fn_array_chunk, 2, 2, "array", "length");
+    reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
+    reg_ref!("sort", fn_sort, 1, 1, 0b1, "array");
+    reg_ref!("rsort", fn_rsort, 1, 1, 0b1, "array");
+    reg!("array_search", fn_array_search, 2, 2, "needle", "haystack");
+    reg!("range", fn_range, 2, 2, "start", "end");
+    reg_ref!("array_splice", fn_array_splice, 4, 2, 0b1, "array", "offset", "length", "replacement");
+    reg!("array_rand", fn_array_rand, 1, 1, "array");
+    reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
+    reg!("array_map", fn_array_map, 2, 2, "callback", "array");
+    reg!("array_filter", fn_array_filter, 2, 1, "array", "callback");
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
     // --- String functions ---
-    reg!("strlen", fn_strlen, 1, 1);
-    reg!("substr", fn_substr, 3, 2);
-    reg!("strpos", fn_strpos, 2, 2);
-    reg!("strrpos", fn_strrpos, 2, 2);
-    reg!("str_replace", fn_str_replace, 3, 3);
-    reg!("strtolower", fn_strtolower, 1, 1);
-    reg!("strtoupper", fn_strtoupper, 1, 1);
-    reg!("trim", fn_trim, 1, 1);
-    reg!("rtrim", fn_rtrim, 1, 1);
-    reg!("ltrim", fn_ltrim, 1, 1);
-    reg!("explode", fn_explode, 2, 2);
-    reg!("implode", fn_implode, 2, 2);
-    reg!("join", fn_implode, 2, 2);
-    reg!("str_repeat", fn_str_repeat, 2, 2);
-    reg!("substr_count", fn_substr_count, 2, 2);
-    reg!("str_contains", fn_str_contains, 2, 2);
-    reg!("str_starts_with", fn_str_starts_with, 2, 2);
-    reg!("str_ends_with", fn_str_ends_with, 2, 2);
-    reg!("str_pad", fn_str_pad, 3, 2);
-    reg!("str_split", fn_str_split, 2, 1);
-    reg!("ucfirst", fn_ucfirst, 1, 1);
-    reg!("lcfirst", fn_lcfirst, 1, 1);
-    reg!("str_word_count", fn_str_word_count, 1, 1);
-    reg!("wordwrap", fn_wordwrap, 4, 1);
-    reg!("nl2br", fn_nl2br, 1, 1);
-    reg!("str_rev", fn_str_rev, 1, 1);
-    reg!("number_format", fn_number_format, 4, 1);
-    reg!("ord", fn_ord, 1, 1);
-    reg!("chr", fn_chr, 1, 1);
-    reg_var!("sprintf", fn_sprintf, 1);
+    reg!("strlen", fn_strlen, 1, 1, "string");
+    reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
+    reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
+    reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
+    reg!("str_replace", fn_str_replace, 3, 3, "search", "replace", "subject");
+    reg!("strtolower", fn_strtolower, 1, 1, "string");
+    reg!("strtoupper", fn_strtoupper, 1, 1, "string");
+    reg!("trim", fn_trim, 1, 1, "string");
+    reg!("rtrim", fn_rtrim, 1, 1, "string");
+    reg!("ltrim", fn_ltrim, 1, 1, "string");
+    reg!("explode", fn_explode, 2, 2, "separator", "string");
+    reg!("implode", fn_implode, 2, 2, "separator", "array");
+    reg!("join", fn_implode, 2, 2, "separator", "array");
+    reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
+    reg!("substr_count", fn_substr_count, 2, 2, "haystack", "needle");
+    reg!("str_contains", fn_str_contains, 2, 2, "haystack", "needle");
+    reg!("str_starts_with", fn_str_starts_with, 2, 2, "haystack", "needle");
+    reg!("str_ends_with", fn_str_ends_with, 2, 2, "haystack", "needle");
+    reg!("str_pad", fn_str_pad, 3, 2, "string", "length", "pad_string");
+    reg!("str_split", fn_str_split, 2, 1, "string", "length");
+    reg!("ucfirst", fn_ucfirst, 1, 1, "string");
+    reg!("lcfirst", fn_lcfirst, 1, 1, "string");
+    reg!("str_word_count", fn_str_word_count, 1, 1, "string");
+    reg!("wordwrap", fn_wordwrap, 4, 1, "string", "width", "break_str", "cut_long_words");
+    reg!("nl2br", fn_nl2br, 1, 1, "string");
+    reg!("str_rev", fn_str_rev, 1, 1, "string");
+    reg!("number_format", fn_number_format, 4, 1, "num", "decimals", "decimal_separator", "thousands_separator");
+    reg!("ord", fn_ord, 1, 1, "character");
+    reg!("chr", fn_chr, 1, 1, "codepoint");
+    reg_var!("sprintf", fn_sprintf, 1, "format");
 
     // --- Type functions ---
-    reg!("intval", fn_intval, 1, 1);
-    reg!("strval", fn_strval, 1, 1);
-    reg!("floatval", fn_floatval, 1, 1);
-    reg!("boolval", fn_boolval, 1, 1);
-    reg_ref!("settype", fn_settype, 2, 2, 0b1);
-    reg!("is_array", fn_is_array, 1, 1);
-    reg!("is_string", fn_is_string, 1, 1);
-    reg!("is_int", fn_is_int, 1, 1);
-    reg!("is_integer", fn_is_int, 1, 1);
-    reg!("is_long", fn_is_int, 1, 1);
-    reg!("is_float", fn_is_float, 1, 1);
-    reg!("is_double", fn_is_float, 1, 1);
-    reg!("is_null", fn_is_null, 1, 1);
-    reg!("is_bool", fn_is_bool, 1, 1);
-    reg!("is_numeric", fn_is_numeric, 1, 1);
-    reg!("is_object", fn_is_object, 1, 1);
-    reg!("gettype", fn_gettype, 1, 1);
+    reg!("intval", fn_intval, 1, 1, "value");
+    reg!("strval", fn_strval, 1, 1, "value");
+    reg!("floatval", fn_floatval, 1, 1, "value");
+    reg!("boolval", fn_boolval, 1, 1, "value");
+    reg_ref!("settype", fn_settype, 2, 2, 0b1, "var", "type");
+    reg!("is_array", fn_is_array, 1, 1, "value");
+    reg!("is_string", fn_is_string, 1, 1, "value");
+    reg!("is_int", fn_is_int, 1, 1, "value");
+    reg!("is_integer", fn_is_int, 1, 1, "value");
+    reg!("is_long", fn_is_int, 1, 1, "value");
+    reg!("is_float", fn_is_float, 1, 1, "value");
+    reg!("is_double", fn_is_float, 1, 1, "value");
+    reg!("is_null", fn_is_null, 1, 1, "value");
+    reg!("is_bool", fn_is_bool, 1, 1, "value");
+    reg!("is_numeric", fn_is_numeric, 1, 1, "value");
+    reg!("is_object", fn_is_object, 1, 1, "value");
+    reg!("gettype", fn_gettype, 1, 1, "value");
 
     // --- Math functions ---
-    reg!("abs", fn_abs, 1, 1);
-    reg!("max", fn_max, 2, 2);
-    reg!("min", fn_min, 2, 2);
-    reg!("floor", fn_floor, 1, 1);
-    reg!("ceil", fn_ceil, 1, 1);
-    reg!("round", fn_round, 2, 1);
-    reg!("pow", fn_pow, 2, 2);
-    reg!("sqrt", fn_sqrt, 1, 1);
-    reg!("intdiv", fn_intdiv, 2, 2);
-    reg!("fmod", fn_fmod, 2, 2);
-    reg!("log", fn_log, 1, 1);
-    reg!("log10", fn_log10, 1, 1);
-    reg!("log2", fn_log2, 1, 1);
+    reg!("abs", fn_abs, 1, 1, "num");
+    reg!("max", fn_max, 2, 2, "value1", "value2");
+    reg!("min", fn_min, 2, 2, "value1", "value2");
+    reg!("floor", fn_floor, 1, 1, "num");
+    reg!("ceil", fn_ceil, 1, 1, "num");
+    reg!("round", fn_round, 2, 1, "num", "precision");
+    reg!("pow", fn_pow, 2, 2, "base", "exponent");
+    reg!("sqrt", fn_sqrt, 1, 1, "num");
+    reg!("intdiv", fn_intdiv, 2, 2, "dividend", "divisor");
+    reg!("fmod", fn_fmod, 2, 2, "x", "y");
+    reg!("log", fn_log, 1, 1, "num");
+    reg!("log10", fn_log10, 1, 1, "num");
+    reg!("log2", fn_log2, 1, 1, "num");
     reg!("pi", fn_pi, 0, 0);
-    reg!("rand", fn_rand, 2, 0);
-    reg!("mt_rand", fn_rand, 2, 0);
+    reg!("rand", fn_rand, 2, 0, "min", "max");
+    reg!("mt_rand", fn_rand, 2, 0, "min", "max");
 
     // --- Output ---
-    reg!("var_dump", fn_var_dump, 1, 1);
-    reg!("print_r", fn_print_r, 1, 1);
-    reg!("var_export", fn_var_export, 2, 1);
+    reg!("var_dump", fn_var_dump, 1, 1, "value");
+    reg!("print_r", fn_print_r, 1, 1, "value");
+    reg!("var_export", fn_var_export, 2, 1, "value", "return");
 
     // --- Constants ---
-    reg!("define", fn_define, 2, 2);
-    reg!("defined", fn_defined, 1, 1);
-    reg!("constant", fn_constant, 1, 1);
+    reg!("define", fn_define, 2, 2, "constant_name", "value");
+    reg!("defined", fn_defined, 1, 1, "constant_name");
+    reg!("constant", fn_constant, 1, 1, "name");
 
     // --- JSON ---
-    reg!("json_encode", fn_json_encode, 1, 1);
-    reg!("json_decode", fn_json_decode, 2, 1);
+    reg!("json_encode", fn_json_encode, 1, 1, "value");
+    reg!("json_decode", fn_json_decode, 2, 1, "json", "associative");
 
     // --- Misc ---
-    reg!("isset_func", fn_isset_func, 1, 1); // internal; real isset is a compiler construct
-    reg!("empty_func", fn_empty_func, 1, 1);
-    reg!("unset_func", fn_unset_func, 1, 1);
+    reg!("isset_func", fn_isset_func, 1, 1, "value");
+    reg!("empty_func", fn_empty_func, 1, 1, "value");
+    reg!("unset_func", fn_unset_func, 1, 1, "value");
 
     funcs
 }
@@ -293,8 +316,16 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 
     // Helper: register an internal method and return its func pointer
     macro_rules! reg_method {
+        ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![$($pnames.to_string()),*]));
+            let ptr = &f.common as *const FunctionCommon;
+            let full_name = format!("{}::{}", $class, $method).to_lowercase();
+            eg.function_table.insert(full_name, ptr);
+            eg.method_declaring_class.insert(ptr, $class.to_string());
+            funcs.push(f);
+        }};
         ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr) => {{
-            let f = Box::new(make_internal_method($handler, $num_args, $min_args));
+            let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
             let full_name = format!("{}::{}", $class, $method).to_lowercase();
             eg.function_table.insert(full_name, ptr);
@@ -363,7 +394,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // num_args = 1 for getMessage (CV 0 = $this)
     for class in &["Throwable", "Exception", "Error", "TypeError", "ArgumentCountError"] {
         // __construct: num_args=2 (CV 0=$this, CV 1=$message), required=0 ($message is optional)
-        reg_method!(class, "__construct", fn_throwable_construct, 2, 0);
+        reg_method!(class, "__construct", fn_throwable_construct, 2, 0, "message");
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
     }
