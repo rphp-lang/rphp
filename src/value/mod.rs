@@ -530,6 +530,17 @@ impl Drop for Value {
     }
 }
 
+/// Create an Error/TypeError/Exception object with a message property.
+/// Used by the VM to throw PHP-compatible exceptions.
+pub fn make_error_value(class_name: &str, message: &str) -> Value {
+    let mut props = std::collections::HashMap::new();
+    props.insert("message".to_string(), Value::string(message));
+    Value::object(PhpObject {
+        class_name: class_name.to_string(),
+        properties: props,
+    })
+}
+
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.value_type() {

@@ -1,11 +1,28 @@
 use std::sync::atomic::Ordering;
 
-use crate::value::{Value, PhpArray, PhpObject, ArrayKey, ValueType};
+use crate::value::{Value, PhpArray, PhpObject, ArrayKey, ValueType, make_error_value};
 use crate::runtime::ExecutorGlobals;
+use crate::parser::Visibility;
 use super::opcode::OpCode;
 use super::instruction::OpType;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
 use super::function::{Function, FunctionCommon, FunctionType, UserFunction};
+
+/// Get the current caller's **lexical** (declaring) class name from the frame.
+/// Uses the `method_declaring_class` map on EG rather than runtime $this,
+/// so that `private` checks use the class that defines the code, not the
+/// dynamic receiver.  Returns None if in top-level code or a plain function.
+#[inline]
+fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<String> {
+    if frame.is_null() {
+        return None;
+    }
+    let func = unsafe { (*frame).func };
+    if func.is_null() {
+        return None;
+    }
+    eg.declaring_class_of(func).map(|s| s.to_string())
+}
 
 /// VM error — replaces panic! in all runtime paths
 #[derive(Debug)]
@@ -23,19 +40,17 @@ unsafe fn write_val(ptr: *mut Value, val: Value) {
 }
 
 /// Check if an exception value matches a catch clause's type list.
-/// "Exception" catches everything (including non-object throws like strings/ints).
-/// For objects, checks the class hierarchy.
+/// PHP 8 semantics: only Throwable objects can be thrown.
+/// - `catch (Exception $e)` matches Exception and subclasses only
+/// - `catch (Error $e)` matches Error and subclasses (TypeError, etc.) only
+/// - `catch (Throwable $e)` matches both Error and Exception hierarchies
+/// For objects: checks class hierarchy via class_is_a.
 fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobals) -> bool {
     if types.is_empty() {
         return true; // no type constraint = catch all
     }
-    for type_name in types {
-        // "Exception" is the universal catch-all in our simplified model
-        if type_name.eq_ignore_ascii_case("Exception") || type_name.eq_ignore_ascii_case("Throwable") {
-            return true;
-        }
-        // For object exceptions, check class hierarchy
-        if let Some(obj) = thrown.as_object() {
+    if let Some(obj) = thrown.as_object() {
+        for type_name in types {
             if eg.class_is_a(&obj.class_name, type_name) {
                 return true;
             }
@@ -159,8 +174,16 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
     // Check for uncaught exception that propagated through execute_ex
     if let Some(exc) = eg.exception.take() {
-        let msg = exc.echo_to_string();
-        return Err(VmError::Fatal(format!("Uncaught Exception: {}", msg)));
+        let (class_name, message) = if let Some(obj) = exc.as_object() {
+            let cls = obj.class_name.clone();
+            let msg = obj.properties.get("message")
+                .map(|v| v.echo_to_string())
+                .unwrap_or_default();
+            (cls, msg)
+        } else {
+            ("Exception".to_string(), exc.echo_to_string())
+        };
+        return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
     }
 
     Ok(return_value)
@@ -226,7 +249,8 @@ pub fn call_function(
         }
         FunctionType::Undef => {
             eg.current_execute_data.set(saved_execute_data);
-            return Err(VmError::Fatal("Call to undefined function".into()));
+            eg.exception = Some(make_error_value("Error", "Call to undefined function"));
+            return Ok(Value::null());
         }
     }
 
@@ -581,9 +605,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let name = name_val.as_str().unwrap_or_else(|| {
                     panic!("INIT_FCALL: op2 must be a string");
                 });
-                let func_ptr = eg.find_function(name).ok_or_else(|| {
-                    VmError::Fatal(format!("Call to undefined function {}()", name))
-                })?;
+                let func_ptr = match eg.find_function(name) {
+                    Some(ptr) => ptr,
+                    None => {
+                        let err = make_error_value("Error", &format!("Call to undefined function {}()", name));
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(thrown) => {
+                                eg.exception = Some(thrown);
+                                return Ok(());
+                            }
+                        }
+                    }
+                };
 
                 let num_args = opline.op1;
                 let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
@@ -679,24 +717,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe { (*call).return_value = return_value_ptr };
 
                 // Validate argument count
+                // `num_args` is the explicit (public) arg count from the call site.
+                // `func_common.num_args` includes hidden $this for methods.
+                // `this_offset` separates storage width from public arity:
+                //   public_max = num_args - this_offset
                 let func_common = unsafe { &*(*call).func };
                 let num_args = unsafe { (*call).num_args };
+                let public_max = func_common.num_args - func_common.this_offset;
                 if num_args < func_common.required_num_args {
                     return Err(VmError::Fatal(format!(
                         "Too few arguments, {} passed and exactly {} expected",
                         num_args, func_common.required_num_args
                     )));
                 }
-                if !func_common.is_variadic && num_args > func_common.num_args {
+                if !func_common.is_variadic && num_args > public_max {
                     return Err(VmError::Fatal(format!(
                         "Too many arguments, {} passed and at most {} expected",
-                        num_args, func_common.num_args
+                        num_args, public_max
                     )));
                 }
 
                 // Pack extra arguments into variadic parameter array
                 if func_common.is_variadic {
-                    let extra_count = num_args.saturating_sub(func_common.num_args);
+                    let extra_count = num_args.saturating_sub(public_max);
                     let mut variadic_arr = crate::value::PhpArray::new();
                     let cv_start = func_common.variadic_cv_index;
                     for i in 0..extra_count {
@@ -751,7 +794,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     }
                     FunctionType::Undef => {
-                        return Err(VmError::Fatal("Call to undefined function".into()));
+                        let err = make_error_value("Error", "Call to undefined function");
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(thrown) => {
+                                eg.exception = Some(thrown);
+                                return Ok(());
+                            }
+                        }
                     }
                 }
             }
@@ -1063,6 +1117,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Throw => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                // PHP 8: only Throwable objects can be thrown
+                if val.as_object().is_none() || {
+                    let obj = val.as_object().unwrap();
+                    !eg.class_is_a(&obj.class_name, "Throwable")
+                } {
+                    let type_name = match val.value_type() {
+                        ValueType::Long => "int",
+                        ValueType::Double => "float",
+                        ValueType::String => "string",
+                        ValueType::True | ValueType::False => "bool",
+                        ValueType::Null | ValueType::Undef => "null",
+                        ValueType::Array => "array",
+                        ValueType::Object => {
+                            // Object but not Throwable
+                            let obj = val.as_object().unwrap();
+                            return Err(VmError::Fatal(format!(
+                                "Cannot throw objects that do not implement Throwable (class {})", obj.class_name
+                            )));
+                        }
+                        _ => "unknown",
+                    };
+                    return Err(VmError::Fatal(format!(
+                        "Can only throw objects implementing Throwable, {} given", type_name
+                    )));
+                }
                 let thrown = val.clone();
 
                 match throw_in_frame(eg, frame, thrown) {
@@ -1084,14 +1163,38 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let name = class_name.as_str().unwrap_or("");
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
 
-                // Create new object with default properties from class definition
+                // Reject instantiation of interfaces and abstract classes
+                if let Some(class_def) = eg.class_table.get(name) {
+                    if class_def.is_interface {
+                        return Err(VmError::Fatal(format!(
+                            "Cannot instantiate interface {}",
+                            name
+                        )));
+                    }
+                    if class_def.is_abstract {
+                        return Err(VmError::Fatal(format!(
+                            "Cannot instantiate abstract class {}",
+                            name
+                        )));
+                    }
+                }
+
+                // Create new object with default properties from class definition.
+                // Private properties are stored under a mangled key (ClassName\0prop)
+                // so that parent and child private properties with the same name
+                // occupy separate slots, matching PHP semantics.
                 let mut props = std::collections::HashMap::new();
                 if let Some(class_def) = eg.class_table.get(name) {
-                    for (prop_name, default_val) in &class_def.properties {
+                    for (prop_name, default_val, vis, declaring) in &class_def.properties {
                         let val = default_val.as_ref()
                             .map(|v| v.clone())
                             .unwrap_or(Value::null());
-                        props.insert(prop_name.clone(), val);
+                        let key = if *vis == Visibility::Private {
+                            crate::runtime::mangle_private_prop(declaring, prop_name)
+                        } else {
+                            prop_name.clone()
+                        };
+                        props.insert(key, val);
                     }
                 }
 
@@ -1105,8 +1208,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let num_args = opline.extended_value;
                 let construct_name = format!("{}::__construct", name);
                 if let Some(func_ptr) = eg.find_function(&construct_name) {
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args); // num_args from caller (excl $this)
+                    // +1 for $this at CV 0; SendVal writes args to CV 1..N
+                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
                     unsafe {
+                        (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
                         (*call).prev_execute_data = frame;
                         (*call).call = (*frame).call;
                         (*frame).call = call;
@@ -1134,7 +1239,48 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let Some(obj) = obj_val.as_object() {
                     let name = prop_name.as_str().unwrap_or("");
-                    let val = obj.properties.get(name).cloned().unwrap_or(Value::null());
+                    let caller_class = get_caller_class(frame, eg);
+
+                    // Private property early binding is only valid when the receiver
+                    // is in the same inheritance hierarchy as the caller.  When
+                    // accessing an unrelated object, the caller's private property
+                    // must NOT leak — use target-only key resolution.
+                    let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
+                        eg.class_is_a(&obj.class_name, cc)
+                    });
+                    let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
+
+                    // Resolve storage key (mangled for private properties)
+                    let key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
+                    // Visibility check
+                    if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
+                        if vis != Visibility::Public {
+                            // Skip check if the caller owns the defining class AND
+                            // the receiver is in that scope (same hierarchy).
+                            let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                                vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
+                            });
+                            // Also skip if caller's class declares its own private
+                            // with same name AND the receiver is in scope.
+                            let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                                if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, name) {
+                                    dc.eq_ignore_ascii_case(cc)
+                                } else {
+                                    false
+                                }
+                            });
+                            if !own_private && !caller_has_own {
+                                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                                    return Err(VmError::Fatal(format!(
+                                        "Cannot access {} property {}::${}",
+                                        vis_str, defining_class, name
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                    let val = obj.properties.get(&key).cloned().unwrap_or(Value::null());
                     unsafe { write_val(result_ptr, val) };
                 } else {
                     return Err(VmError::Fatal("Attempt to read property on non-object".into()));
@@ -1150,7 +1296,42 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let obj = unsafe { &*obj_ptr };
 
                 if let Some(mut php_obj) = obj.as_object_mut() {
-                    php_obj.properties.insert(name, cloned);
+                    let caller_class = get_caller_class(frame, eg);
+
+                    // Same receiver-in-scope guard as FetchObjR — only allow
+                    // private bypass when the receiver is in the caller's hierarchy.
+                    let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
+                        eg.class_is_a(&php_obj.class_name, cc)
+                    });
+                    let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
+
+                    // Visibility check — use declaring class, not receiver class
+                    if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
+                        if vis != Visibility::Public {
+                            let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                                vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
+                            });
+                            let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                                if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, &name) {
+                                    dc.eq_ignore_ascii_case(cc)
+                                } else {
+                                    false
+                                }
+                            });
+                            if !own_private && !caller_has_own {
+                                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                                    return Err(VmError::Fatal(format!(
+                                        "Cannot access {} property {}::${}",
+                                        vis_str, defining_class, name
+                                    )));
+                                }
+                            }
+                        }
+                    }
+                    // Resolve storage key (mangled for private properties)
+                    let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
+                    php_obj.properties.insert(key, cloned);
                 } else {
                     return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
                 }
@@ -1162,14 +1343,68 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let method = method_name.as_str().unwrap_or("");
 
                 if let Some(obj) = obj_val.as_object() {
-                    let full_name = format!("{}::{}", obj.class_name, method);
-                    let func_ptr = eg.find_function(&full_name).ok_or_else(|| {
-                        VmError::Fatal(format!("Call to undefined method {}::{}()", obj.class_name, method))
-                    })?;
+                    let caller_class = get_caller_class(frame, eg);
+                    let target_class = obj.class_name.clone();
+
+                    // PHP private method early binding: if the caller's class itself
+                    // declares a private method with this name AND the receiver is
+                    // an instance of the caller's class (i.e. in the same inheritance
+                    // hierarchy), dispatch to the caller's version.
+                    // Example: A::callA() calls $this->who() on a B that extends A —
+                    // when A has private who(), resolve to A::who().
+                    // But if the receiver is unrelated (not an instance of the caller's
+                    // class), fall through to normal dispatch + visibility check.
+                    let dispatch_class = if let Some(ref cc) = caller_class {
+                        if let Some((Visibility::Private, ref defining)) = eg.find_method_visibility(cc, method) {
+                            if defining.eq_ignore_ascii_case(cc)
+                                && eg.class_is_a(&target_class, cc)
+                            {
+                                cc.clone()
+                            } else {
+                                target_class.clone()
+                            }
+                        } else {
+                            target_class.clone()
+                        }
+                    } else {
+                        target_class.clone()
+                    };
+
+                    let full_name = format!("{}::{}", dispatch_class, method);
+                    let func_ptr = match eg.find_function(&full_name) {
+                        Some(ptr) => ptr,
+                        None => {
+                            let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                    };
+
+                    // Visibility check — use defining class for scope
+                    if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
+                        if vis != Visibility::Public {
+                            if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                                let vis_str = match vis {
+                                    Visibility::Protected => "protected",
+                                    Visibility::Private => "private",
+                                    _ => "public",
+                                };
+                                return Err(VmError::Fatal(format!(
+                                    "Call to {} method {}::{}() from scope {}",
+                                    vis_str, defining_class, method,
+                                    caller_class.as_deref().unwrap_or("global")
+                                )));
+                            }
+                        }
+                    }
 
                     let num_args = opline.extended_value;
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+                    // +1 for $this at CV 0; SendVarEx writes args to CV 1..N
+                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
                     unsafe {
+                        (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
                         (*call).prev_execute_data = frame;
                         (*call).call = (*frame).call;
                         (*frame).call = call;
@@ -1178,7 +1413,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         *this_ptr = obj_val.clone();
                     }
                 } else {
-                    return Err(VmError::Fatal(format!("Call to member function {}() on non-object", method)));
+                    let err = make_error_value("Error", &format!("Call to member function {}() on non-object", method));
+                    match throw_in_frame(eg, frame, err) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue;
+                        }
+                        ThrowResult::Unhandled(thrown) => {
+                            eg.exception = Some(thrown);
+                            return Ok(());
+                        }
+                    }
                 }
             }
 
@@ -1189,13 +1435,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let method = method_name.as_str().unwrap_or("");
 
                 let full_name = format!("{}::{}", class, method);
-                let func_ptr = eg.find_function(&full_name).ok_or_else(|| {
-                    VmError::Fatal(format!("Call to undefined method {}::{}()", class, method))
-                })?;
+                let func_ptr = match eg.find_function(&full_name) {
+                    Some(ptr) => ptr,
+                    None => {
+                        let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", class, method));
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(thrown) => {
+                                eg.exception = Some(thrown);
+                                return Ok(());
+                            }
+                        }
+                    }
+                };
+
+                // Visibility check — use defining class for private scope
+                if let Some((vis, defining_class)) = eg.find_method_visibility(class, method) {
+                    if vis != Visibility::Public {
+                        let caller_class = get_caller_class(frame, eg);
+                        if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                            let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                            return Err(VmError::Fatal(format!(
+                                "Call to {} method {}::{}() from scope {}",
+                                vis_str, defining_class, method,
+                                caller_class.as_deref().unwrap_or("global")
+                            )));
+                        }
+                    }
+                }
 
                 let num_args = opline.extended_value;
-                let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+                // +1 for $this at CV 0 (compiler allocates $this even for static calls)
+                let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
                 unsafe {
+                    (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
                     (*call).prev_execute_data = frame;
                     (*call).call = (*frame).call;
                     (*frame).call = call;

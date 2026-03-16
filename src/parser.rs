@@ -204,8 +204,15 @@ pub enum Stmt {
     Class {
         name: String,
         parent: Option<String>,
+        implements: Vec<String>,
+        is_abstract: bool,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
+    },
+    Interface {
+        name: String,
+        extends: Vec<String>,
+        methods: Vec<ClassMethod>,  // all public, abstract (no body)
     },
     AssignProp {       // $obj->prop = expr
         object: Expr,
@@ -576,8 +583,11 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Throw(expr))
             }
-            Token::Class => {
+            Token::Class | Token::Abstract => {
                 self.parse_class()
+            }
+            Token::Interface => {
+                self.parse_interface()
             }
             Token::Isset | Token::Empty | Token::Match | Token::New => {
                 let expr = self.parse_expr()?;
@@ -1296,6 +1306,12 @@ impl Parser {
 
     /// Parse class declaration
     fn parse_class(&mut self) -> Result<Stmt, String> {
+        let is_abstract = if self.peek() == Token::Abstract {
+            self.advance();
+            true
+        } else {
+            false
+        };
         self.advance(); // consume 'class'
         let name = match self.advance() {
             Token::Identifier(n) => n,
@@ -1309,6 +1325,24 @@ impl Parser {
             }
         } else {
             None
+        };
+        let implements = if self.peek() == Token::Implements {
+            self.advance();
+            let mut ifaces = Vec::new();
+            loop {
+                match self.advance() {
+                    Token::Identifier(n) => ifaces.push(n),
+                    other => return Err(format!("Expected interface name, got {:?}", other)),
+                }
+                if self.peek() == Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            ifaces
+        } else {
+            Vec::new()
         };
         self.expect(&Token::LBrace)?;
 
@@ -1355,7 +1389,66 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Class { name, parent, properties, methods })
+        Ok(Stmt::Class { name, parent, implements, is_abstract, properties, methods })
+    }
+
+    /// Parse interface declaration
+    fn parse_interface(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'interface'
+        let name = match self.advance() {
+            Token::Identifier(n) => n,
+            other => return Err(format!("Expected interface name, got {:?}", other)),
+        };
+        // interface Foo extends Bar, Baz { ... }
+        let extends = if self.peek() == Token::Extends {
+            self.advance();
+            let mut parents = Vec::new();
+            loop {
+                match self.advance() {
+                    Token::Identifier(n) => parents.push(n),
+                    other => return Err(format!("Expected interface name, got {:?}", other)),
+                }
+                if self.peek() == Token::Comma {
+                    self.advance();
+                } else {
+                    break;
+                }
+            }
+            parents
+        } else {
+            Vec::new()
+        };
+        self.expect(&Token::LBrace)?;
+
+        let mut methods = Vec::new();
+        while self.peek() != Token::RBrace && !self.at_eof() {
+            let (vis, is_static) = self.parse_visibility_and_static();
+            if self.peek() == Token::Function {
+                self.advance(); // consume 'function'
+                let method_name = match self.advance() {
+                    Token::Identifier(n) => n,
+                    other => return Err(format!("Expected method name, got {:?}", other)),
+                };
+                // Interface methods must be public (PHP rule)
+                if vis != Visibility::Public {
+                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                    return Err(format!(
+                        "Access type for interface method {}::{}() must be public (got {})",
+                        name, method_name, vis_str
+                    ));
+                }
+                self.expect(&Token::LParen)?;
+                let params = self.parse_param_list()?;
+                self.expect(&Token::RParen)?;
+                self.expect(&Token::Semicolon)?; // interface methods end with ;
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body: vec![], is_static });
+            } else {
+                return Err(format!("Unexpected token in interface body: {:?}", self.peek()));
+            }
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(Stmt::Interface { name, extends, methods })
     }
 
     fn parse_visibility_and_static(&mut self) -> (Visibility, bool) {

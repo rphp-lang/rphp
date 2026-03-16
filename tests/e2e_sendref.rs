@@ -1,0 +1,331 @@
+/// Tests for pass-by-reference (SendRef) — both user functions and stdlib.
+
+mod common;
+use common::run_php;
+
+// ============================================================
+// User function &$param tests
+// ============================================================
+
+#[test]
+fn test_user_ref_basic() {
+    let out = run_php(r#"<?php
+function inc(&$x) { $x = $x + 1; }
+$a = 10;
+inc($a);
+echo $a;
+"#);
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_user_ref_string() {
+    let out = run_php(r#"<?php
+function append(&$s, $suffix) { $s = $s . $suffix; }
+$str = "hello";
+append($str, " world");
+echo $str;
+"#);
+    assert_eq!(out, "hello world");
+}
+
+#[test]
+fn test_user_ref_swap() {
+    let out = run_php(r#"<?php
+function swap(&$a, &$b) {
+    $tmp = $a;
+    $a = $b;
+    $b = $tmp;
+}
+$x = 1;
+$y = 2;
+swap($x, $y);
+echo $x . "," . $y;
+"#);
+    assert_eq!(out, "2,1");
+}
+
+#[test]
+fn test_user_ref_array() {
+    let out = run_php(r#"<?php
+function add_elem(&$arr, $val) { $arr[] = $val; }
+$a = [1, 2];
+add_elem($a, 3);
+echo count($a);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_user_ref_with_default() {
+    let out = run_php(r#"<?php
+function maybe_inc(&$x, $amount = 1) { $x = $x + $amount; }
+$a = 5;
+maybe_inc($a);
+echo $a . ",";
+maybe_inc($a, 10);
+echo $a;
+"#);
+    assert_eq!(out, "6,16");
+}
+
+#[test]
+fn test_user_ref_mixed_params() {
+    // Only first param is by-ref, second is by-val
+    let out = run_php(r#"<?php
+function add_to(&$target, $val) { $target = $target + $val; }
+$x = 100;
+$y = 50;
+add_to($x, $y);
+echo $x . "," . $y;
+"#);
+    assert_eq!(out, "150,50");
+}
+
+#[test]
+fn test_user_ref_nested_calls() {
+    let out = run_php(r#"<?php
+function double(&$x) { $x = $x * 2; }
+function double_twice(&$x) { double($x); double($x); }
+$a = 3;
+double_twice($a);
+echo $a;
+"#);
+    assert_eq!(out, "12");
+}
+
+// ============================================================
+// Stdlib by-ref tests — sort, array_push, array_pop, etc.
+// ============================================================
+
+#[test]
+fn test_sort_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [3, 1, 2];
+sort($arr);
+echo $arr[0] . "," . $arr[1] . "," . $arr[2];
+"#);
+    assert_eq!(out, "1,2,3");
+}
+
+#[test]
+fn test_rsort_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [1, 3, 2];
+rsort($arr);
+echo $arr[0] . "," . $arr[1] . "," . $arr[2];
+"#);
+    assert_eq!(out, "3,2,1");
+}
+
+#[test]
+fn test_array_push_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [1, 2];
+array_push($arr, 3);
+echo count($arr) . "," . $arr[2];
+"#);
+    assert_eq!(out, "3,3");
+}
+
+#[test]
+fn test_array_pop_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [10, 20, 30];
+$last = array_pop($arr);
+echo $last . "," . count($arr);
+"#);
+    assert_eq!(out, "30,2");
+}
+
+#[test]
+fn test_array_shift_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [10, 20, 30];
+$first = array_shift($arr);
+echo $first . "," . count($arr);
+"#);
+    assert_eq!(out, "10,2");
+}
+
+#[test]
+fn test_array_unshift_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [2, 3];
+array_unshift($arr, 1);
+echo $arr[0] . "," . count($arr);
+"#);
+    assert_eq!(out, "1,3");
+}
+
+#[test]
+fn test_shuffle_modifies_caller() {
+    // shuffle is random, but the array should still have 3 elements
+    let out = run_php(r#"<?php
+$arr = [1, 2, 3];
+shuffle($arr);
+echo count($arr);
+"#);
+    assert_eq!(out, "3");
+}
+
+#[test]
+fn test_settype_modifies_caller() {
+    let out = run_php(r#"<?php
+$x = "42";
+settype($x, "integer");
+echo $x + 8;
+"#);
+    assert_eq!(out, "50");
+}
+
+#[test]
+fn test_array_splice_modifies_caller() {
+    let out = run_php(r#"<?php
+$arr = [1, 2, 3, 4, 5];
+array_splice($arr, 1, 2);
+echo count($arr) . "," . $arr[0] . "," . $arr[1] . "," . $arr[2];
+"#);
+    assert_eq!(out, "3,1,4,5");
+}
+
+#[test]
+fn test_ref_after_multiple_calls() {
+    // Verify the caller variable stays correct after multiple by-ref calls
+    let out = run_php(r#"<?php
+$arr = [];
+array_push($arr, 1);
+array_push($arr, 2);
+array_push($arr, 3);
+echo count($arr) . "," . $arr[0] . "," . $arr[1] . "," . $arr[2];
+"#);
+    assert_eq!(out, "3,1,2,3");
+}
+
+#[test]
+fn test_user_ref_return_value() {
+    // Function with &$param can still return a value
+    let out = run_php(r#"<?php
+function pop_and_count(&$arr) {
+    array_pop($arr);
+    return count($arr);
+}
+$a = [1, 2, 3];
+$n = pop_and_count($a);
+echo $n . "," . count($a);
+"#);
+    assert_eq!(out, "2,2");
+}
+
+#[test]
+fn test_ref_parser_ampersand() {
+    // Verify &$param parses correctly with variadic
+    let out = run_php(r#"<?php
+function fill(&$arr, ...$vals) {
+    for ($i = 0; $i < count($vals); $i++) {
+        $arr[] = $vals[$i];
+    }
+}
+$a = [];
+fill($a, 10, 20, 30);
+echo count($a) . "," . $a[0] . "," . $a[2];
+"#);
+    assert_eq!(out, "3,10,30");
+}
+
+// ============================================================
+// Method call by-ref (SendVarEx runtime check)
+// ============================================================
+
+#[test]
+fn test_method_ref_basic() {
+    let out = run_php(r#"<?php
+class Counter {
+    public $val = 0;
+    function increment(&$x) {
+        $x = $x + 1;
+    }
+}
+$c = new Counter();
+$a = 10;
+$c->increment($a);
+echo $a;
+"#);
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_method_ref_multiple() {
+    let out = run_php(r#"<?php
+class Modifier {
+    function double(&$x) { $x = $x * 2; }
+    function addOne(&$x) { $x = $x + 1; }
+}
+$m = new Modifier();
+$a = 5;
+$m->double($a);
+$m->addOne($a);
+echo $a;
+"#);
+    assert_eq!(out, "11");
+}
+
+#[test]
+fn test_method_ref_mixed_params() {
+    let out = run_php(r#"<?php
+class Math {
+    function addTo(&$target, $amount) {
+        $target = $target + $amount;
+    }
+}
+$m = new Math();
+$x = 100;
+$m->addTo($x, 42);
+echo $x;
+"#);
+    assert_eq!(out, "142");
+}
+
+// ============================================================
+// Static call by-ref (SendVarEx)
+// ============================================================
+
+#[test]
+fn test_static_ref_basic() {
+    let out = run_php(r#"<?php
+class Utils {
+    static function inc(&$x) { $x = $x + 1; }
+}
+$a = 7;
+Utils::inc($a);
+echo $a;
+"#);
+    assert_eq!(out, "8");
+}
+
+// ============================================================
+// Dynamic/closure call by-ref (SendVarEx)
+// ============================================================
+
+#[test]
+fn test_dynamic_call_ref() {
+    let out = run_php(r#"<?php
+function inc(&$x) { $x = $x + 1; }
+$f = "inc";
+$a = 20;
+$f($a);
+echo $a;
+"#);
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_closure_ref() {
+    let out = run_php(r#"<?php
+$inc = function(&$x) { $x = $x + 1; };
+$a = 30;
+$inc($a);
+echo $a;
+"#);
+    assert_eq!(out, "31");
+}

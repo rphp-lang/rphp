@@ -45,7 +45,10 @@ pub struct TryEntry {
 pub struct ClassDef {
     pub name: String,
     pub parent: Option<String>,
-    pub properties: Vec<(String, Option<Value>)>,  // (name, default_value)
+    pub implements: Vec<String>,
+    pub is_interface: bool,
+    pub is_abstract: bool,
+    pub properties: Vec<(String, Option<Value>, Visibility, String)>,  // (name, default_value, visibility, declaring_class)
     pub methods: Vec<(String, Visibility, bool, UserFunction)>, // (name, vis, is_static, func)
 }
 
@@ -824,7 +827,7 @@ impl Compiler {
                 instr.extended_value = 1;
                 self.instructions.push(instr);
             }
-            Stmt::Class { name, parent, properties, methods } => {
+            Stmt::Class { name, parent, implements, is_abstract, properties, methods } => {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
@@ -852,13 +855,16 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                     };
-                    let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
+                    // Methods have $this at CV 0 — add 1 to num_args to include $this
+                    // and set this_offset=1 so arity check and visibility detection work correctly
+                    let mut user_func = make_user_function_full(op_array, num_args + 1, required_num_args, is_variadic, variadic_cv, ref_args);
+                    user_func.common.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
                 }
 
                 // Evaluate property defaults (constant expressions only)
-                let mut compiled_props: Vec<(String, Option<Value>)> = Vec::new();
+                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr(expr).map_err(|e| {
@@ -866,14 +872,59 @@ impl Compiler {
                         })?),
                         None => None,
                     };
-                    compiled_props.push((prop.name.clone(), default));
+                    compiled_props.push((prop.name.clone(), default, prop.visibility, name.clone()));
                 }
 
                 // Store class definition for runtime
                 self.class_defs.push(ClassDef {
                     name: name.clone(),
                     parent: parent.clone(),
+                    implements: implements.clone(),
+                    is_interface: false,
+                    is_abstract: *is_abstract,
                     properties: compiled_props,
+                    methods: compiled_methods,
+                });
+            }
+            Stmt::Interface { name, extends, methods } => {
+                // Interface methods have no body — we still create stub UserFunctions
+                // so they appear in the class_def for type checking, but they should
+                // never be called directly (implementing class provides the body).
+                let mut compiled_methods = Vec::new();
+                for method in methods {
+                    // Create a minimal op_array that just returns null
+                    let mut func_compiler = Compiler::new();
+                    func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.resolve_cv("this");
+                    let context = format!("interface method {}::{}", name, method.name);
+                    let (num_args, required_num_args, is_variadic, variadic_cv, ref_args) =
+                        Self::compile_params(&mut func_compiler, &method.params, &context)?;
+                    let null_idx = func_compiler.add_literal(Value::null());
+                    let mut ret = Instruction::new(OpCode::Return);
+                    ret.op1_type = OpType::Const;
+                    ret.op1 = null_idx;
+                    func_compiler.instructions.push(ret);
+
+                    let op_array = OpArray {
+                        num_cvs: func_compiler.next_cv,
+                        num_temps: func_compiler.next_tmp,
+                        instructions: func_compiler.instructions,
+                        literals: func_compiler.literals,
+                        try_entries: func_compiler.try_entries,
+                    };
+                    let user_func = make_user_function_full(op_array, num_args, required_num_args, is_variadic, variadic_cv, ref_args);
+                    self.functions.extend(func_compiler.functions);
+                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
+                }
+
+                // For interface "extends", all parent interfaces become the implements list
+                self.class_defs.push(ClassDef {
+                    name: name.clone(),
+                    parent: None,
+                    implements: extends.clone(),
+                    is_interface: true,
+                    is_abstract: false,
+                    properties: vec![],
                     methods: compiled_methods,
                 });
             }

@@ -80,7 +80,7 @@ fn perf_throw_catch_loop() {
 $count = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     try {{
-        throw "err";
+        throw new Exception("err");
     }} catch (Exception $e) {{
         $count = $count + 1;
     }}
@@ -89,7 +89,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 
     bench("throw across function call (10k)", &format!(r#"<?php
 function thrower() {{
-    throw "err";
+    throw new Exception("err");
 }}
 $count = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
@@ -122,7 +122,7 @@ for ($i = 0; $i < 1000; $i = $i + 1) {
     bench("try/catch/finally with throw (1k)", r#"<?php
 function g() {
     try {
-        throw "err";
+        throw new Exception("err");
     } catch (Exception $e) {
         return 1;
     } finally {
@@ -138,7 +138,7 @@ $count = 0;
 for ($i = 0; $i < 1000; $i = $i + 1) {
     try {
         try {
-            throw "inner";
+            throw new Exception("inner");
         } finally {
             $count = $count + 1;
         }

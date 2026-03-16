@@ -16,9 +16,10 @@ use crate::value::{Value, ValueType, PhpArray, ArrayKey};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
 use crate::runtime::ExecutorGlobals;
-use crate::compiler::{make_internal_function, make_internal_function_ref, make_internal_function_variadic};
+use crate::compiler::{make_internal_function, make_internal_function_ref, make_internal_function_variadic, make_internal_method};
 use crate::vm::function::InternalFunction;
 use crate::vm::execute::{call_function, VmError};
+use crate::parser::Visibility;
 
 // ============================================================================
 // Helper macros — zero-cost abstractions for stdlib handlers
@@ -94,6 +95,10 @@ macro_rules! ret {
 /// The returned Vec must live as long as the EG (owns the InternalFunction structs).
 pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(80);
+
+    // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
+    let class_funcs = register_builtin_classes(eg);
+    funcs.extend(class_funcs);
 
     macro_rules! reg {
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr) => {{
@@ -244,6 +249,124 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("isset_func", fn_isset_func, 1, 1); // internal; real isset is a compiler construct
     reg!("empty_func", fn_empty_func, 1, 1);
     reg!("unset_func", fn_unset_func, 1, 1);
+
+    funcs
+}
+
+// ============================================================================
+// Built-in exception classes (Throwable hierarchy)
+// ============================================================================
+
+/// Internal handler for Error/Exception __construct($message = "")
+/// CV 0 = $this, CV 1 = $message
+fn fn_throwable_construct(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let this_val = arg!(ed, 0);
+    let message = arg_opt!(ed, 1);
+    if let Some(mut obj) = this_val.as_object_mut() {
+        let msg = match message {
+            Some(v) => v.clone(),
+            None => Value::string(""),
+        };
+        obj.properties.insert("message".to_string(), msg);
+    }
+    Ok(())
+}
+
+/// Internal handler for Error/Exception getMessage()
+/// CV 0 = $this
+fn fn_throwable_get_message(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let this_val = arg!(ed, 0);
+    if let Some(obj) = this_val.as_object() {
+        let msg = obj.properties.get("message").cloned().unwrap_or(Value::string(""));
+        ret!(rv, msg);
+    }
+    ret!(rv, Value::string(""));
+}
+
+/// Register Throwable, Error, TypeError, Exception classes with
+/// __construct and getMessage methods.
+pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
+    use crate::compiler::compile::ClassDef;
+    use crate::parser::Visibility;
+
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::new();
+
+    // Helper: register an internal method and return its func pointer
+    macro_rules! reg_method {
+        ($class:expr, $method:expr, $handler:expr, $num_args:expr, $min_args:expr) => {{
+            let f = Box::new(make_internal_method($handler, $num_args, $min_args));
+            let ptr = &f.common as *const FunctionCommon;
+            let full_name = format!("{}::{}", $class, $method).to_lowercase();
+            eg.function_table.insert(full_name, ptr);
+            eg.method_declaring_class.insert(ptr, $class.to_string());
+            funcs.push(f);
+        }};
+    }
+
+    // Throwable — proper interface (PHP 8 compatible)
+    eg.register_class(ClassDef {
+        name: "Throwable".to_string(),
+        parent: None,
+        implements: vec![],
+        is_interface: true,
+        is_abstract: false,
+        properties: vec![],
+        methods: vec![],
+    }).unwrap();
+
+    // Exception implements Throwable
+    eg.register_class(ClassDef {
+        name: "Exception".to_string(),
+        parent: None,
+        implements: vec!["Throwable".to_string()],
+        is_interface: false,
+        is_abstract: false,
+        properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Exception".to_string())],
+        methods: vec![],
+    }).unwrap();
+
+    // Error implements Throwable
+    eg.register_class(ClassDef {
+        name: "Error".to_string(),
+        parent: None,
+        implements: vec!["Throwable".to_string()],
+        is_interface: false,
+        is_abstract: false,
+        properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Error".to_string())],
+        methods: vec![],
+    }).unwrap();
+
+    // TypeError extends Error
+    eg.register_class(ClassDef {
+        name: "TypeError".to_string(),
+        parent: Some("Error".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        properties: vec![],
+        methods: vec![],
+    }).unwrap();
+
+    // ArgumentCountError extends Error
+    eg.register_class(ClassDef {
+        name: "ArgumentCountError".to_string(),
+        parent: Some("Error".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        properties: vec![],
+        methods: vec![],
+    }).unwrap();
+
+    // Register __construct and getMessage for each throwable class
+    // num_args = 2 for __construct (CV 0 = $this, CV 1 = $message)
+    // num_args = 1 for getMessage (CV 0 = $this)
+    for class in &["Throwable", "Exception", "Error", "TypeError", "ArgumentCountError"] {
+        // __construct: num_args=2 (CV 0=$this, CV 1=$message), required=0 ($message is optional)
+        reg_method!(class, "__construct", fn_throwable_construct, 2, 0);
+        // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
+        reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
+    }
 
     funcs
 }
@@ -770,9 +893,10 @@ fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
     let func_ptr = match eg.find_function(&callback_name) {
         Some(ptr) => ptr,
         None => {
-            return Err(VmError::Fatal(format!(
+            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
                 "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found", callback_name
             )));
+            return Ok(());
         }
     };
     if let Some(arr) = arr_val.as_array() {
@@ -803,9 +927,10 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
                 let func_ptr = match eg.find_function(&cb_name) {
                     Some(ptr) => ptr,
                     None => {
-                        return Err(VmError::Fatal(format!(
+                        eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
                             "array_filter(): Argument #2 ($callback) must be a valid callback, function \"{}\" not found", cb_name
                         )));
+                        return Ok(());
                     }
                 };
                 for (key, val) in arr.entries().iter() {

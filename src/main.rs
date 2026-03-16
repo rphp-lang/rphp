@@ -55,7 +55,10 @@ fn main() {
 
     // Register class definitions
     for class_def in result.class_defs {
-        eg.register_class(class_def);
+        if let Err(e) = eg.register_class(class_def) {
+            eprintln!("Fatal error: {}", e);
+            std::process::exit(255);
+        }
     }
 
     match execute::execute(&mut eg, &main_func) {

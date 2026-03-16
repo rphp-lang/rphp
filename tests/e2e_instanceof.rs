@@ -68,9 +68,9 @@ echo $a instanceof Dog ? "yes" : "no";
 #[test]
 fn test_catch_specific_exception_class() {
     assert_eq!(run_php(r#"<?php
-class MyError {}
+class MyError extends Exception {}
 try {
-    throw new MyError();
+    throw new MyError("test");
 } catch (MyError $e) {
     echo "caught MyError";
 }
@@ -80,10 +80,10 @@ try {
 #[test]
 fn test_catch_parent_exception_class() {
     assert_eq!(run_php(r#"<?php
-class BaseError {}
+class BaseError extends Exception {}
 class ChildError extends BaseError {}
 try {
-    throw new ChildError();
+    throw new ChildError("test");
 } catch (BaseError $e) {
     echo "caught BaseError";
 }
@@ -93,10 +93,10 @@ try {
 #[test]
 fn test_catch_wrong_type_falls_through() {
     let err = run_php_expect_error(r#"<?php
-class FooError {}
-class BarError {}
+class FooError extends Exception {}
+class BarError extends Exception {}
 try {
-    throw new FooError();
+    throw new FooError("test");
 } catch (BarError $e) {
     echo "caught BarError";
 }
@@ -112,10 +112,10 @@ try {
 #[test]
 fn test_catch_multiple_clauses_second_matches() {
     assert_eq!(run_php(r#"<?php
-class FooError {}
-class BarError {}
+class FooError extends Exception {}
+class BarError extends Exception {}
 try {
-    throw new BarError();
+    throw new BarError("test");
 } catch (FooError $e) {
     echo "caught Foo";
 } catch (BarError $e) {
@@ -127,10 +127,10 @@ try {
 #[test]
 fn test_catch_multiple_clauses_first_matches() {
     assert_eq!(run_php(r#"<?php
-class FooError {}
-class BarError {}
+class FooError extends Exception {}
+class BarError extends Exception {}
 try {
-    throw new FooError();
+    throw new FooError("test");
 } catch (FooError $e) {
     echo "caught Foo";
 } catch (BarError $e) {
@@ -140,24 +140,24 @@ try {
 }
 
 #[test]
-fn test_catch_exception_catches_string_throw() {
-    // "Exception" type catches non-object throws (backward compat)
+fn test_catch_exception_catches_exception_throw() {
+    // Exception type catches Exception objects
     assert_eq!(run_php(r#"<?php
 try {
-    throw "string error";
+    throw new Exception("error msg");
 } catch (Exception $e) {
-    echo "caught: " . $e;
+    echo "caught: " . $e->getMessage();
 }
-"#), "caught: string error");
+"#), "caught: error msg");
 }
 
 #[test]
-fn test_catch_specific_type_does_not_catch_string() {
-    // Specific class type should NOT catch a string throw
+fn test_catch_specific_type_does_not_catch_exception() {
+    // Specific class type should NOT catch an Exception throw (unless it's that type)
     let err = run_php_expect_error(r#"<?php
-class MyError {}
+class MyError extends Error {}
 try {
-    throw "string error";
+    throw new Exception("error");
 } catch (MyError $e) {
     echo "caught";
 }
@@ -174,10 +174,10 @@ try {
 fn test_catch_with_finally_type_mismatch() {
     // Exception doesn't match catch type, finally still runs, then uncaught
     let err = run_php_expect_error(r#"<?php
-class FooError {}
-class BarError {}
+class FooError extends Exception {}
+class BarError extends Exception {}
 try {
-    throw new FooError();
+    throw new FooError("test");
 } catch (BarError $e) {
     echo "caught";
 } finally {
@@ -208,4 +208,21 @@ function describe($animal) {
 }
 echo describe(new Cat()) . " " . describe(new Dog());
 "#), "cat dog");
+}
+
+// ── throw validation ──
+
+#[test]
+fn test_throw_non_throwable_class_is_fatal() {
+    let err = run_php_expect_error(r#"<?php
+class NotThrowable {}
+throw new NotThrowable();
+"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Throwable"), "Expected Throwable error, got: {}", msg);
+            assert!(msg.contains("NotThrowable"), "Expected class name, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
 }

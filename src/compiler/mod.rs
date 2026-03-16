@@ -51,6 +51,7 @@ pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_ar
             is_variadic,
             variadic_cv_index,
             ref_args,
+            this_offset: 0,
         },
         op_array,
     }
@@ -70,6 +71,28 @@ pub fn make_internal_function(
             is_variadic: false,
             variadic_cv_index: 0,
             ref_args: 0,
+            this_offset: 0,
+        },
+        handler,
+    }
+}
+
+/// Create an InternalFunction for a method (with $this in CV 0).
+/// `num_args` includes the hidden $this slot; `this_offset` is set to 1.
+pub fn make_internal_method(
+    handler: InternalFunctionHandler,
+    num_args: u32,
+    required_num_args: u32,
+) -> InternalFunction {
+    InternalFunction {
+        common: FunctionCommon {
+            fn_type: FunctionType::Internal,
+            num_args,
+            required_num_args,
+            is_variadic: false,
+            variadic_cv_index: 0,
+            ref_args: 0,
+            this_offset: 1,
         },
         handler,
     }
@@ -90,6 +113,7 @@ pub fn make_internal_function_ref(
             is_variadic: false,
             variadic_cv_index: 0,
             ref_args,
+            this_offset: 0,
         },
         handler,
     }
@@ -108,6 +132,7 @@ pub fn make_internal_function_variadic(
             is_variadic: true,
             variadic_cv_index: required_num_args,
             ref_args: 0,
+            this_offset: 0,
         },
         handler,
     }

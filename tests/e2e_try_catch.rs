@@ -6,9 +6,9 @@ use common::{run_php, run_php_expect_error};
 fn test_try_catch_basic() {
     assert_eq!(run_php(r#"<?php
 try {
-    throw "error!";
+    throw new Exception("error!");
 } catch (Exception $e) {
-    echo "caught: " . $e;
+    echo "caught: " . $e->getMessage();
 }
 "#), "caught: error!");
 }
@@ -28,7 +28,7 @@ try {
 fn test_try_catch_code_after() {
     assert_eq!(run_php(r#"<?php
 try {
-    throw "err";
+    throw new Exception("err");
 } catch (Exception $e) {
     echo "caught";
 }
@@ -41,7 +41,7 @@ fn test_try_catch_throw_skips_rest() {
     assert_eq!(run_php(r#"<?php
 try {
     echo "before";
-    throw "err";
+    throw new Exception("err");
     echo "after";
 } catch (Exception $e) {
     echo " caught";
@@ -53,30 +53,31 @@ try {
 fn test_try_catch_exception_value() {
     assert_eq!(run_php(r#"<?php
 try {
-    throw "specific error";
+    throw new Exception("specific error");
 } catch (Exception $e) {
-    echo $e;
+    echo $e->getMessage();
 }
 "#), "specific error");
 }
 
 #[test]
-fn test_try_catch_integer_exception() {
+fn test_try_catch_exception_with_getmessage() {
     assert_eq!(run_php(r#"<?php
 try {
-    throw 42;
+    throw new Exception("hello world");
 } catch (Exception $e) {
-    echo $e;
+    echo $e->getMessage();
 }
-"#), "42");
+"#), "hello world");
 }
 
 #[test]
 fn test_uncaught_exception_is_fatal() {
-    let err = run_php_expect_error("<?php throw \"boom\";");
+    let err = run_php_expect_error(r#"<?php throw new Exception("boom");"#);
     match err {
         rphp::vm::execute::VmError::Fatal(msg) => {
             assert!(msg.contains("Uncaught"), "Expected uncaught exception, got: {}", msg);
+            assert!(msg.contains("boom"), "Expected message in error, got: {}", msg);
         }
         other => panic!("Expected Fatal, got: {:?}", other),
     }
@@ -86,12 +87,12 @@ fn test_uncaught_exception_is_fatal() {
 fn test_try_catch_in_function() {
     assert_eq!(run_php(r#"<?php
 function risky() {
-    throw "oops";
+    throw new Exception("oops");
 }
 try {
     risky();
 } catch (Exception $e) {
-    echo "caught: " . $e;
+    echo "caught: " . $e->getMessage();
 }
 "#), "caught: oops");
 }
@@ -101,13 +102,13 @@ fn test_nested_try_catch() {
     assert_eq!(run_php(r#"<?php
 try {
     try {
-        throw "inner";
+        throw new Exception("inner");
     } catch (Exception $e) {
-        echo "inner: " . $e;
+        echo "inner: " . $e->getMessage();
     }
     echo " outer ok";
 } catch (Exception $e2) {
-    echo "outer: " . $e2;
+    echo "outer: " . $e2->getMessage();
 }
 "#), "inner: inner outer ok");
 }
@@ -129,7 +130,7 @@ fn test_try_catch_finally_catch_flow() {
     // Finally runs after catch
     assert_eq!(run_php(r#"<?php
 try {
-    throw "err";
+    throw new Exception("err");
 } catch (Exception $e) {
     echo "caught";
 } finally {
@@ -144,7 +145,7 @@ fn test_try_finally_on_throw() {
     let err = run_php_expect_error(r#"<?php
 try {
     echo "before ";
-    throw "boom";
+    throw new Exception("boom");
 } finally {
     echo "finally";
 }
@@ -192,7 +193,7 @@ fn test_return_inside_catch_runs_finally() {
     assert_eq!(run_php(r#"<?php
 function f() {
     try {
-        throw "err";
+        throw new Exception("err");
     } catch (Exception $e) {
         return "C";
     } finally {
@@ -209,21 +210,19 @@ fn test_nested_try_finally_exception_propagates() {
     assert_eq!(run_php(r#"<?php
 try {
     try {
-        throw "boom";
+        throw new Exception("boom");
     } finally {
         echo "F ";
     }
 } catch (Exception $e) {
-    echo "caught: " . $e;
+    echo "caught: " . $e->getMessage();
 }
 "#), "F caught: boom");
 }
 
 #[test]
-fn test_throw_undef_in_try_finally_is_uncaught() {
-    // Regression: Value::undef() sentinel must not collide with real undef throw.
-    // `throw $x` where $x is undefined inside try/finally must still be an uncaught fatal,
-    // not silently swallowed as a deferred return.
+fn test_throw_undef_in_try_finally_is_fatal() {
+    // `throw $x` where $x is undefined → fatal: not a Throwable
     let err = run_php_expect_error(r#"<?php
 function f() {
     try {
@@ -236,7 +235,7 @@ f();
 "#);
     match err {
         rphp::vm::execute::VmError::Fatal(msg) => {
-            assert!(msg.contains("Uncaught"), "Expected uncaught exception, got: {}", msg);
+            assert!(msg.contains("Throwable"), "Expected Throwable error, got: {}", msg);
         }
         other => panic!("Expected Fatal, got: {:?}", other),
     }
@@ -244,9 +243,6 @@ f();
 
 #[test]
 fn test_nested_finally_return_not_lost() {
-    // Regression: pending_return_after_finally must be per-frame, not global.
-    // Inner function returning through its own try/finally must not clobber
-    // outer function's pending return state.
     assert_eq!(run_php(r#"<?php
 function inner() {
     try {
@@ -268,11 +264,10 @@ echo outer();
 #[test]
 fn test_return_in_finally_suppresses_exception() {
     // PHP semantics: return inside finally suppresses any pending exception.
-    // After f() returns, no exception should leak into the caller.
     assert_eq!(run_php(r#"<?php
 function f() {
     try {
-        throw "err";
+        throw new Exception("err");
     } finally {
         return 1;
     }
@@ -285,4 +280,237 @@ function g() {
 }
 echo "F" . f() . "G" . g();
 "#), "F1GZ");
+}
+
+// ============================================================
+// Error vs Exception hierarchy tests
+// ============================================================
+
+#[test]
+fn test_catch_error_catches_undefined_function() {
+    // PHP 8: undefined function throws Error, catchable by catch(Error)
+    assert_eq!(run_php(r#"<?php
+try {
+    nonexistent();
+} catch (Error $e) {
+    echo "caught: " . $e->getMessage();
+}
+"#), "caught: Call to undefined function nonexistent()");
+}
+
+#[test]
+fn test_catch_exception_does_not_catch_error() {
+    // PHP 8: catch(Exception) does NOT catch Error
+    let err = run_php_expect_error(r#"<?php
+try {
+    nonexistent();
+} catch (Exception $e) {
+    echo "caught";
+}
+"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Uncaught Error"), "Expected Uncaught Error, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_catch_throwable_catches_both() {
+    // catch(Throwable) catches both Error and Exception
+    assert_eq!(run_php(r#"<?php
+try {
+    nonexistent();
+} catch (Throwable $e) {
+    echo "caught error";
+}
+try {
+    throw new Exception("ex");
+} catch (Throwable $e) {
+    echo " caught exception";
+}
+"#), "caught error caught exception");
+}
+
+#[test]
+fn test_catch_error_does_not_catch_exception() {
+    // catch(Error) does NOT catch Exception
+    let err = run_php_expect_error(r#"<?php
+try {
+    throw new Exception("test");
+} catch (Error $e) {
+    echo "caught";
+}
+"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Uncaught Exception"), "Expected Uncaught Exception, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_catch_typeerror() {
+    // TypeError extends Error, catchable by catch(TypeError) and catch(Error)
+    assert_eq!(run_php(r#"<?php
+try {
+    array_map("nonexistent", [1]);
+} catch (TypeError $e) {
+    echo "TypeError";
+}
+"#), "TypeError");
+}
+
+#[test]
+fn test_catch_error_catches_typeerror() {
+    // TypeError extends Error, so catch(Error) catches it too
+    assert_eq!(run_php(r#"<?php
+try {
+    array_map("nonexistent", [1]);
+} catch (Error $e) {
+    echo "Error";
+}
+"#), "Error");
+}
+
+// ============================================================
+// throw validation — only Throwable objects allowed
+// ============================================================
+
+#[test]
+fn test_throw_string_is_fatal() {
+    // PHP 8: throw "string" is not allowed
+    let err = run_php_expect_error(r#"<?php throw "boom";"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Throwable"), "Expected Throwable error, got: {}", msg);
+            assert!(msg.contains("string"), "Expected 'string' type mentioned, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_throw_integer_is_fatal() {
+    let err = run_php_expect_error(r#"<?php throw 42;"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Throwable"), "Expected Throwable error, got: {}", msg);
+            assert!(msg.contains("int"), "Expected 'int' type mentioned, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_throw_non_throwable_object_is_fatal() {
+    let err = run_php_expect_error(r#"<?php
+class Foo {}
+throw new Foo();
+"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Throwable"), "Expected Throwable error, got: {}", msg);
+            assert!(msg.contains("Foo"), "Expected class name mentioned, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_throw_null_is_fatal() {
+    let err = run_php_expect_error(r#"<?php throw null;"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Throwable"), "Expected Throwable error, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_throw_error_subclass_is_ok() {
+    // User-defined class extending Error should be throwable
+    assert_eq!(run_php(r#"<?php
+class MyError extends Error {}
+try {
+    throw new MyError("custom");
+} catch (Error $e) {
+    echo "caught: " . $e->getMessage();
+}
+"#), "caught: custom");
+}
+
+#[test]
+fn test_throw_exception_subclass_is_ok() {
+    assert_eq!(run_php(r#"<?php
+class AppException extends Exception {}
+try {
+    throw new AppException("app error");
+} catch (Exception $e) {
+    echo "caught: " . $e->getMessage();
+}
+"#), "caught: app error");
+}
+
+#[test]
+fn test_new_exception_extra_args_too_many() {
+    // Exception("msg", "extra") — only 1 public arg ($message), so 2 is too many
+    let err = run_php_expect_error(r#"<?php
+try {
+    throw new Exception("msg", "extra");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Too many arguments"), "Expected too many args, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_getmessage_extra_args_too_many() {
+    // getMessage("unused") — getMessage takes 0 public args, so 1 is too many
+    let err = run_php_expect_error(r#"<?php
+try {
+    throw new Exception("hello");
+} catch (Exception $e) {
+    echo $e->getMessage("unused");
+}
+"#);
+    match err {
+        rphp::vm::execute::VmError::Fatal(msg) => {
+            assert!(msg.contains("Too many arguments"), "Expected too many args, got: {}", msg);
+        }
+        other => panic!("Expected Fatal, got: {:?}", other),
+    }
+}
+
+#[test]
+fn test_new_exception_one_arg_ok() {
+    // Exception("msg") — exactly 1 public arg, should work fine
+    assert_eq!(run_php(r#"<?php
+try {
+    throw new Exception("msg");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#), "msg");
+}
+
+#[test]
+fn test_getmessage_no_args_ok() {
+    // getMessage() with no extra args — normal case
+    assert_eq!(run_php(r#"<?php
+try {
+    throw new Exception("hello");
+} catch (Exception $e) {
+    echo $e->getMessage();
+}
+"#), "hello");
 }

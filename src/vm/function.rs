@@ -19,7 +19,11 @@ pub enum FunctionType {
 #[repr(C)]
 pub struct FunctionCommon {
     pub fn_type: FunctionType,
+    /// Total number of CV slots used by this function's parameters.
+    /// For internal methods: includes hidden $this (e.g. __construct($msg) = 2).
+    /// For user functions: only declared params (op_array.num_cvs handles $this separately).
     pub num_args: u32,
+    /// Minimum number of explicit (public) arguments required.
     pub required_num_args: u32,
     pub is_variadic: bool,
     /// CV index where variadic args array is stored (only valid when is_variadic=true)
@@ -27,6 +31,9 @@ pub struct FunctionCommon {
     /// Bitmask: bit N = 1 means parameter N is pass-by-reference.
     /// Supports up to 64 parameters.
     pub ref_args: u64,
+    /// Number of hidden CV slots before explicit args (0 for functions, 1 for methods with $this).
+    /// DoFcall uses `num_args - this_offset` for public arity check.
+    pub this_offset: u32,
 }
 
 /// User-defined PHP function — contains compiled OpArray.

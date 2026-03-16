@@ -57,7 +57,7 @@ pub fn run_php_with_functions(
     }
     // Register class definitions
     for class_def in result.class_defs {
-        eg.register_class(class_def);
+        eg.register_class(class_def).unwrap();
     }
     register(&mut eg);
     execute::execute(&mut eg, &main_func).unwrap();
@@ -77,7 +77,7 @@ pub fn run_php_silent(source: &str) {
         eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
     }
     for class_def in result.class_defs {
-        eg.register_class(class_def);
+        eg.register_class(class_def).unwrap();
     }
     execute::execute(&mut eg, &main_func).unwrap();
 }
@@ -95,7 +95,7 @@ pub fn run_php_expect_error(source: &str) -> execute::VmError {
         eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
     }
     for class_def in result.class_defs {
-        eg.register_class(class_def);
+        eg.register_class(class_def).unwrap();
     }
     execute::execute(&mut eg, &main_func).unwrap_err()
 }
