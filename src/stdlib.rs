@@ -242,6 +242,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_object", fn_is_object, 1, 1, "value");
     reg!("gettype", fn_gettype, 1, 1, "value");
 
+    // --- Reflection / class introspection ---
+    reg!("get_class", fn_get_class, 1, 0, "object");
+    reg!("class_exists", fn_class_exists, 2, 1, "class_name", "autoload");
+    reg!("method_exists", fn_method_exists, 2, 2, "object_or_class", "method");
+
     // --- Math functions ---
     reg!("abs", fn_abs, 1, 1, "num");
     reg!("max", fn_max, 2, 2, "value1", "value2");
@@ -278,6 +283,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("isset_func", fn_isset_func, 1, 1, "value");
     reg!("empty_func", fn_empty_func, 1, 1, "value");
     reg!("unset_func", fn_unset_func, 1, 1, "value");
+
+    // --- Callable functions ---
+    reg_var!("call_user_func", fn_call_user_func, 1, "callback");
+    reg!("is_callable", fn_is_callable, 1, 1, "value");
 
     funcs
 }
@@ -1503,6 +1512,58 @@ fn fn_gettype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 }
 
 // ============================================================================
+// Reflection / class introspection
+// ============================================================================
+
+fn fn_get_class(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let v = arg!(ed, 0);
+    if v.value_type() == ValueType::Undef {
+        // No argument — return the current class name (deprecated in PHP 8 but still works)
+        let caller_class = get_calling_scope_class(ed, eg);
+        if let Some(cls) = caller_class {
+            eg.write_output(b"Deprecated: Calling get_class() without arguments is deprecated\n");
+            ret!(rv, Value::string(&cls));
+        }
+        // Outside class scope: PHP throws Error
+        eg.exception = Some(crate::value::make_error_value(
+            "Error", "get_class() without arguments must be called from within a class"
+        ));
+        return Ok(());
+    }
+    if let Some(obj) = v.as_object() {
+        ret!(rv, Value::string(&obj.class_name));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+fn fn_class_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let name = arg_str!(ed, 0);
+    let lower = name.to_ascii_lowercase();
+    let found = eg.class_table.iter().any(|(k, cd)| {
+        k.to_ascii_lowercase() == lower && !cd.is_interface && !cd.is_trait
+    });
+    ret!(rv, Value::bool(found));
+}
+
+fn fn_method_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let first = arg!(ed, 0);
+    let method_name = arg_str!(ed, 1);
+
+    // Resolve the class name: from object or string
+    let class_name: String = if let Some(obj) = first.as_object() {
+        obj.class_name.clone()
+    } else if let Some(s) = first.as_str() {
+        s.to_string()
+    } else {
+        ret!(rv, Value::bool(false));
+    };
+
+    // Look up method in class hierarchy (own + parent chain + traits)
+    let found = find_method_in_class_hierarchy(eg, &class_name, &method_name).is_some();
+    ret!(rv, Value::bool(found));
+}
+
+// ============================================================================
 // Math functions
 // ============================================================================
 
@@ -2177,4 +2238,244 @@ fn fn_preg_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
 
     let result = re.replace_all(&subject, &replacement);
     ret!(rv, Value::string(result));
+}
+
+// ============================================================================
+// Callable functions
+// ============================================================================
+
+/// Search for a method in a class hierarchy (own methods + parent chain + trait uses).
+/// Returns Some((visibility, is_static)) if found.
+/// Returns (visibility, is_static, declaring_class_lower) for a method in the hierarchy.
+fn find_method_in_class_hierarchy(
+    eg: &ExecutorGlobals,
+    class_name: &str,
+    method_name: &str,
+) -> Option<(Visibility, bool, String)> {
+    let method_lower = method_name.to_ascii_lowercase();
+    let mut current = Some(class_name.to_ascii_lowercase());
+    while let Some(ref cls) = current {
+        let entry = eg.class_table.iter().find(|(k, _)| k.to_ascii_lowercase() == *cls);
+        if let Some((_, cd)) = entry {
+            // Check own methods
+            if let Some((_, vis, is_static, _, _)) = cd.methods.iter().find(|(m, _, _, _, _)| m.to_ascii_lowercase() == method_lower) {
+                return Some((*vis, *is_static, cls.clone()));
+            }
+            // Check trait-composed methods
+            for trait_name in &cd.uses {
+                let trait_lower = trait_name.to_ascii_lowercase();
+                if let Some((_, trait_def)) = eg.class_table.iter().find(|(k, _)| k.to_ascii_lowercase() == trait_lower) {
+                    if let Some((_, vis, is_static, _, _)) = trait_def.methods.iter().find(|(m, _, _, _, _)| m.to_ascii_lowercase() == method_lower) {
+                        return Some((*vis, *is_static, cls.clone()));
+                    }
+                }
+            }
+            current = cd.parent.as_ref().map(|p| p.to_ascii_lowercase());
+        } else {
+            break;
+        }
+    }
+    None
+}
+
+/// Result of resolving a callback: func pointer + args to prepend (e.g. $this, use_vars).
+struct ResolvedCallback {
+    func_ptr: *const FunctionCommon,
+    /// Args to prepend before user-supplied args.
+    /// For plain functions: empty.
+    /// For method calls: [$this].
+    /// For closures: use_vars (appended after user args, not prepended).
+    prepend_args: Vec<Value>,
+    /// Captured use_vars for closures (appended after all params).
+    use_vars: Vec<Value>,
+}
+
+/// Get the calling scope's class name from an ExecuteData frame.
+/// Walks prev_execute_data to find the caller's declaring class.
+fn get_calling_scope_class(ed: *mut crate::vm::frame::ExecuteData, eg: &ExecutorGlobals) -> Option<String> {
+    if ed.is_null() { return None; }
+    // ed is the stdlib function's own frame; the caller is prev_execute_data
+    let caller = unsafe { (*ed).prev_execute_data };
+    if caller.is_null() { return None; }
+    let func = unsafe { (*caller).func };
+    if func.is_null() { return None; }
+    eg.declaring_class_of(func).map(|s| s.to_string())
+}
+
+/// Resolve a callback value to a function pointer.
+/// Supports: string (function name), array [func_name, use_vars...] (closure),
+/// array [object, "method"], and objects with __invoke.
+/// `caller_class` is the class scope of the call site — used to allow
+/// private/protected method callbacks when called from the declaring class.
+fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str>) -> Option<ResolvedCallback> {
+    match val.value_type() {
+        ValueType::String => {
+            let name = val.as_str().unwrap();
+            eg.find_function(name).map(|ptr| ResolvedCallback {
+                func_ptr: ptr, prepend_args: vec![], use_vars: vec![],
+            })
+        }
+        ValueType::Array => {
+            let arr = val.as_array()?;
+            let entries = arr.entries();
+            if entries.is_empty() { return None; }
+
+            // Case 1: Closure descriptor array [func_name_string, use_val1, ...]
+            if let Some(func_name) = entries[0].1.as_str() {
+                if func_name.starts_with("__closure_") {
+                    let func_ptr = eg.find_function(func_name)?;
+                    let use_vars: Vec<Value> = entries.iter().skip(1).map(|(_, v)| v.clone()).collect();
+                    return Some(ResolvedCallback {
+                        func_ptr, prepend_args: vec![], use_vars,
+                    });
+                }
+            }
+
+            // Case 2: Method callback [object_or_class, "method_name"]
+            if entries.len() != 2 { return None; }
+            let obj_val = &entries[0].1;
+            let method_val = &entries[1].1;
+            let method_name = method_val.as_str()?;
+            if let Some(obj) = obj_val.as_object() {
+                // Instance method: [$obj, "method"]
+                // Public: always callable. Private/protected: only from declaring scope.
+                let class_name = obj.class_name.clone();
+                drop(obj);
+                match find_method_in_class_hierarchy(eg, &class_name, method_name) {
+                    Some((Visibility::Public, _, _)) => {}
+                    Some((Visibility::Protected, _, _)) => {
+                        // Protected: caller must be in the same hierarchy
+                        let allowed = caller_class.map_or(false, |cc| {
+                            eg.class_is_a(&class_name, cc) || eg.class_is_a(cc, &class_name)
+                        });
+                        if !allowed { return None; }
+                    }
+                    Some((Visibility::Private, _, ref declaring)) => {
+                        // Private: caller must be exactly the declaring class
+                        let allowed = caller_class.map_or(false, |cc| {
+                            cc.to_ascii_lowercase() == *declaring
+                        });
+                        if !allowed { return None; }
+                    }
+                    _ => return None,
+                }
+                let full = format!("{}::{}", class_name, method_name).to_lowercase();
+                // Try exact class first, then walk parents for function_table lookup
+                let func_ptr = eg.function_table.get(&full).copied()
+                    .or_else(|| {
+                        // Walk parent chain for the function_table entry
+                        let mut cur = eg.class_table.iter()
+                            .find(|(k, _)| k.to_ascii_lowercase() == class_name.to_ascii_lowercase())
+                            .and_then(|(_, cd)| cd.parent.clone());
+                        while let Some(ref parent) = cur {
+                            let key = format!("{}::{}", parent, method_name).to_lowercase();
+                            if let Some(&ptr) = eg.function_table.get(&key) {
+                                return Some(ptr);
+                            }
+                            cur = eg.class_table.iter()
+                                .find(|(k, _)| k.to_ascii_lowercase() == parent.to_ascii_lowercase())
+                                .and_then(|(_, cd)| cd.parent.clone());
+                        }
+                        None
+                    });
+                func_ptr.map(|ptr| ResolvedCallback {
+                    func_ptr: ptr, prepend_args: vec![obj_val.clone()], use_vars: vec![],
+                })
+            } else if let Some(class_str) = obj_val.as_str() {
+                // Static method: ["ClassName", "method"] — must be static; visibility depends on scope
+                match find_method_in_class_hierarchy(eg, class_str, method_name) {
+                    Some((Visibility::Public, true, _)) => {}
+                    Some((Visibility::Protected, true, _)) => {
+                        let allowed = caller_class.map_or(false, |cc| {
+                            eg.class_is_a(class_str, cc) || eg.class_is_a(cc, class_str)
+                        });
+                        if !allowed { return None; }
+                    }
+                    Some((Visibility::Private, true, ref declaring)) => {
+                        let allowed = caller_class.map_or(false, |cc| {
+                            cc.to_ascii_lowercase() == *declaring
+                        });
+                        if !allowed { return None; }
+                    }
+                    _ => return None,
+                }
+                let full = format!("{}::{}", class_str, method_name).to_lowercase();
+                let func_ptr = eg.function_table.get(&full).copied()
+                    .or_else(|| {
+                        let mut cur = eg.class_table.iter()
+                            .find(|(k, _)| k.to_ascii_lowercase() == class_str.to_ascii_lowercase())
+                            .and_then(|(_, cd)| cd.parent.clone());
+                        while let Some(ref parent) = cur {
+                            let key = format!("{}::{}", parent, method_name).to_lowercase();
+                            if let Some(&ptr) = eg.function_table.get(&key) {
+                                return Some(ptr);
+                            }
+                            cur = eg.class_table.iter()
+                                .find(|(k, _)| k.to_ascii_lowercase() == parent.to_ascii_lowercase())
+                                .and_then(|(_, cd)| cd.parent.clone());
+                        }
+                        None
+                    });
+                func_ptr.map(|ptr| ResolvedCallback {
+                    func_ptr: ptr, prepend_args: vec![Value::null()], use_vars: vec![],
+                })
+            } else {
+                None
+            }
+        }
+        ValueType::Object => {
+            let obj = val.as_object()?;
+            let full = format!("{}::__invoke", obj.class_name).to_lowercase();
+            drop(obj);
+            eg.function_table.get(&full).map(|&ptr| ResolvedCallback {
+                func_ptr: ptr, prepend_args: vec![val.clone()], use_vars: vec![],
+            })
+        }
+        _ => None,
+    }
+}
+
+/// call_user_func($callback, ...$args)
+/// CV 0 = callback, CV 1 = variadic array of extra args
+fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let callback = arg!(ed, 0);
+    let caller_class = get_calling_scope_class(ed, eg);
+    // Variadic args packed at CV(1)
+    let variadic_val = arg!(ed, 1);
+    let extra_args: Vec<Value> = if let Some(arr) = variadic_val.as_array() {
+        arr.entries().iter().map(|(_, v)| v.clone()).collect()
+    } else if variadic_val.value_type() != ValueType::Undef {
+        vec![variadic_val.clone()]
+    } else {
+        vec![]
+    };
+
+    let resolved = match resolve_callback(callback, eg, caller_class.as_deref()) {
+        Some(r) => r,
+        None => {
+            let desc = callback.echo_to_string();
+            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
+                "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable", desc
+            )));
+            return Ok(());
+        }
+    };
+
+    // Build args: prepend_args (e.g. $this) + user args + use_vars (closure captures)
+    let mut args = Vec::with_capacity(resolved.prepend_args.len() + extra_args.len() + resolved.use_vars.len());
+    args.extend(resolved.prepend_args);
+    args.extend(extra_args);
+    args.extend(resolved.use_vars);
+
+    let result = call_function(eg, resolved.func_ptr, &args)?;
+    if eg.exception.is_some() { return Ok(()); }
+    ret!(rv, result);
+}
+
+/// is_callable($value) — check if value is callable
+fn fn_is_callable(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let val = arg!(ed, 0);
+    let caller_class = get_calling_scope_class(ed, eg);
+    let callable = resolve_callback(val, eg, caller_class.as_deref()).is_some();
+    ret!(rv, Value::bool(callable));
 }

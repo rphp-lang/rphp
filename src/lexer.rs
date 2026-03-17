@@ -55,6 +55,7 @@ pub enum Token {
     From,           // from (used after yield)
     Print,          // print
     Global,         // global
+    Clone,          // clone
     Include,        // include
     IncludeOnce,    // include_once
     Require,        // require
@@ -112,6 +113,7 @@ pub enum Token {
     RBracket,       // ]
     DoubleArrow,    // =>
     Arrow,          // ->
+    NullSafe,       // ?->
     DoubleColon,    // ::
     Fn,             // fn (arrow functions)
     Use,            // use (closure use)
@@ -431,6 +433,9 @@ impl<'a> Lexer<'a> {
                     if self.peek_next() == Some(b'?') {
                         tokens.push(Token::QuestionQuestion);
                         self.pos += 2;
+                    } else if self.peek_next() == Some(b'-') && self.src.get(self.pos + 2) == Some(&b'>') {
+                        tokens.push(Token::NullSafe);
+                        self.pos += 3;
                     } else {
                         tokens.push(Token::Question);
                         self.pos += 1;
@@ -510,6 +515,7 @@ impl<'a> Lexer<'a> {
                         "use" => tokens.push(Token::Use),
                         "print" => tokens.push(Token::Print),
                         "global" => tokens.push(Token::Global),
+                        "clone" => tokens.push(Token::Clone),
                         "include" => tokens.push(Token::Include),
                         "include_once" => tokens.push(Token::IncludeOnce),
                         "require" => tokens.push(Token::Require),

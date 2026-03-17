@@ -3339,6 +3339,91 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::CloneObj => {
+                let src_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                if src_val.value_type() != ValueType::Object {
+                    return Err(VmError::Fatal(
+                        "__clone method called on non-object".into()
+                    ));
+                }
+
+                // Enum cases are singletons — cloning is forbidden
+                {
+                    let obj = src_val.as_object().unwrap();
+                    if let Some(class_def) = eg.class_table.get(&obj.class_name) {
+                        if class_def.is_enum {
+                            let err = make_error_value("Error", &format!(
+                                "Trying to clone an uncloneable object of class {}", obj.class_name
+                            ));
+                            drop(obj);
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                    }
+                }
+
+                let cloned_obj = {
+                    let obj = src_val.as_object().unwrap();
+                    PhpObject {
+                        class_name: obj.class_name.clone(),
+                        properties: obj.properties.clone(),
+                        generator: None,
+                    }
+                };
+                let cloned_val = Value::object(cloned_obj);
+
+                let _ = call_magic_method(eg, &cloned_val, "__clone", &[])?;
+
+                // If __clone threw an exception, propagate it
+                if let Some(exc) = eg.exception.take() {
+                    match throw_in_frame(eg, frame, exc) {
+                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                    }
+                }
+
+                unsafe { write_val(result_ptr, cloned_val) };
+            }
+
+            OpCode::NullSafeCheck => {
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let is_null = val.value_type() == ValueType::Null;
+                let is_non_object = !is_null && val.as_object().is_none();
+
+                if is_null {
+                    // null ?-> anything  =>  null (short-circuit)
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    unsafe { write_val(result_ptr, Value::null()) };
+                    let target = opline.op2 as usize;
+                    unsafe {
+                        (*frame).opline = op_array.instructions.as_ptr().add(target);
+                    }
+                    continue;
+                } else if is_non_object {
+                    // extended_value: 0 = property access (warning + null), 1 = method call (fatal)
+                    if opline.extended_value == 1 {
+                        // Method call on scalar: fatal error (like PHP)
+                        return Err(VmError::Fatal(
+                            "Call to a member function on a non-object".into()
+                        ));
+                    } else {
+                        // Property access on scalar: warning + null (like PHP)
+                        eg.write_output(b"Warning: Attempt to read property on non-object\n");
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        unsafe { write_val(result_ptr, Value::null()) };
+                        let target = opline.op2 as usize;
+                        unsafe {
+                            (*frame).opline = op_array.instructions.as_ptr().add(target);
+                        }
+                        continue;
+                    }
+                }
+            }
+
             // All opcodes handled — new opcodes must be added above
         }
 

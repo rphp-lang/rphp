@@ -89,14 +89,16 @@ pub enum Expr {
         class_name: String,
         args: Vec<CallArg>,
     },
-    PropertyAccess {   // $obj->prop
+    PropertyAccess {   // $obj->prop or $obj?->prop
         object: Box<Expr>,
         property: String,
+        nullsafe: bool,
     },
-    MethodCall {       // $obj->method(args)
+    MethodCall {       // $obj->method(args) or $obj?->method(args)
         object: Box<Expr>,
         method: String,
         args: Vec<CallArg>,
+        nullsafe: bool,
     },
     StaticCall {       // ClassName::method(args)
         class_name: String,
@@ -128,6 +130,7 @@ pub enum Expr {
     YieldFrom(Box<Expr>),  // yield from $expr
     Print(Box<Expr>),      // print expr (returns 1)
     BitwiseNot(Box<Expr>), // ~expr
+    Clone(Box<Expr>),      // clone $expr
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -576,7 +579,7 @@ impl Parser {
                         let is_obj_dim_assign = matches!(&expr, Expr::ArrayAccess { array, .. } if matches!(array.as_ref(), Expr::PropertyAccess { .. }));
 
                         if is_prop_assign {
-                            if let Expr::PropertyAccess { object, property } = expr {
+                            if let Expr::PropertyAccess { object, property, .. } = expr {
                                 self.advance(); // consume '='
                                 let rhs = self.parse_expr()?;
                                 self.expect(&Token::Semicolon)?;
@@ -584,7 +587,7 @@ impl Parser {
                             }
                         } else if is_obj_dim_assign {
                             if let Expr::ArrayAccess { array, index } = expr {
-                                if let Expr::PropertyAccess { object, property } = *array {
+                                if let Expr::PropertyAccess { object, property, .. } = *array {
                                     self.advance(); // consume '='
                                     let rhs = self.parse_expr()?;
                                     self.expect(&Token::Semicolon)?;
@@ -806,7 +809,7 @@ impl Parser {
             Token::Trait => {
                 self.parse_trait()
             }
-            Token::Isset | Token::Empty | Token::Match | Token::New | Token::Yield => {
+            Token::Isset | Token::Empty | Token::Match | Token::New | Token::Yield | Token::Clone => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))
@@ -1567,6 +1570,11 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 return Ok(Expr::Throw(Box::new(expr)));
             }
+            Token::Clone => {
+                self.advance(); // consume 'clone'
+                let expr = self.parse_unary()?;
+                return Ok(Expr::Clone(Box::new(expr)));
+            }
             Token::LBracket => {
                 // Short array syntax: [1, 2, 'a' => 3]
                 self.advance(); // consume '['
@@ -1637,11 +1645,12 @@ impl Parser {
                         args,
                     };
                 }
-                Token::Arrow => {
+                Token::Arrow | Token::NullSafe => {
+                    let nullsafe = matches!(self.peek(), Token::NullSafe);
                     self.advance();
                     let member = match self.advance() {
                         Token::Identifier(n) => n,
-                        other => return Err(format!("Expected property/method name after ->, got {:?}", other)),
+                        other => return Err(format!("Expected property/method name after {}, got {:?}", if nullsafe { "?->" } else { "->" }, other)),
                     };
                     if self.peek() == Token::LParen {
                         self.advance();
@@ -1650,11 +1659,13 @@ impl Parser {
                             object: Box::new(expr),
                             method: member,
                             args,
+                            nullsafe,
                         };
                     } else {
                         expr = Expr::PropertyAccess {
                             object: Box::new(expr),
                             property: member,
+                            nullsafe,
                         };
                     }
                 }
@@ -2213,6 +2224,9 @@ impl Parser {
             Expr::YieldFrom(sub) => {
                 Self::collect_free_vars(sub, bound, out);
             }
+            Expr::Clone(inner) => {
+                Self::collect_free_vars(inner, bound, out);
+            }
         }
     }
 
@@ -2327,6 +2341,7 @@ impl Parser {
             Token::From => Some("from".to_string()),
             Token::Global => Some("global".to_string()),
             Token::Print => Some("print".to_string()),
+            Token::Clone => Some("clone".to_string()),
             _ => None,
         }
     }

@@ -2283,10 +2283,26 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::PropertyAccess { object, property } => {
+            Expr::PropertyAccess { object, property, nullsafe } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
-                let prop_idx = self.add_literal(Value::string(property.clone()));
                 let tmp = self.alloc_tmp();
+
+                let nullsafe_patch = if *nullsafe {
+                    let mut check = Instruction::new(OpCode::NullSafeCheck);
+                    check.op1 = obj_op;
+                    check.op1_type = obj_type;
+                    check.op2 = 0;
+                    check.result = tmp;
+                    check.result_type = OpType::Tmp;
+                    check.extended_value = 0; // 0 = property access (warn + null on scalar)
+                    let idx = self.instructions.len();
+                    self.instructions.push(check);
+                    Some(idx)
+                } else {
+                    None
+                };
+
+                let prop_idx = self.add_literal(Value::string(property.clone()));
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = obj_op;
                 fetch.op1_type = obj_type;
@@ -2295,10 +2311,32 @@ impl Compiler {
                 fetch.result = tmp;
                 fetch.result_type = OpType::Tmp;
                 self.instructions.push(fetch);
+
+                if let Some(idx) = nullsafe_patch {
+                    self.instructions[idx].op2 = self.instructions.len() as u32;
+                }
+
                 (tmp, OpType::Tmp)
             }
-            Expr::MethodCall { object, method, args } => {
+            Expr::MethodCall { object, method, args, nullsafe } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
+                let tmp = self.alloc_tmp();
+
+                let nullsafe_patch = if *nullsafe {
+                    let mut check = Instruction::new(OpCode::NullSafeCheck);
+                    check.op1 = obj_op;
+                    check.op1_type = obj_type;
+                    check.op2 = 0;
+                    check.result = tmp;
+                    check.result_type = OpType::Tmp;
+                    check.extended_value = 1; // 1 = method call (fatal on scalar)
+                    let idx = self.instructions.len();
+                    self.instructions.push(check);
+                    Some(idx)
+                } else {
+                    None
+                };
+
                 let method_idx = self.add_literal(Value::string(method.clone()));
 
                 let mut init = Instruction::new(OpCode::InitMethodCall);
@@ -2311,11 +2349,14 @@ impl Compiler {
 
                 self.emit_call_args(args, 1, 0, true, true);
 
-                let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
+
+                if let Some(idx) = nullsafe_patch {
+                    self.instructions[idx].op2 = self.instructions.len() as u32;
+                }
 
                 (tmp, OpType::Tmp)
             }
@@ -2466,6 +2507,17 @@ impl Compiler {
                 let mut instr = Instruction::new(OpCode::YieldFrom);
                 instr.op1 = sub_op;
                 instr.op1_type = sub_type;
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
+                self.instructions.push(instr);
+                (tmp, OpType::Tmp)
+            }
+            Expr::Clone(inner) => {
+                let (src_op, src_type) = self.compile_expr(inner);
+                let tmp = self.alloc_tmp();
+                let mut instr = Instruction::new(OpCode::CloneObj);
+                instr.op1 = src_op;
+                instr.op1_type = src_type;
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 self.instructions.push(instr);
