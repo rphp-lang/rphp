@@ -364,6 +364,32 @@ impl Value {
         }
     }
 
+    /// Structural equality check for compile-time constant values.
+    /// Used for trait property collision detection.
+    /// Supports scalars, null, and arrays (recursive). Objects always return false.
+    pub fn structurally_equal(&self, other: &Value) -> bool {
+        if self.value_type() != other.value_type() {
+            return false;
+        }
+        match self.value_type() {
+            ValueType::Undef | ValueType::Null | ValueType::True | ValueType::False => true,
+            ValueType::Long => unsafe { self.data.long == other.data.long },
+            ValueType::Double => unsafe { self.data.double == other.data.double },
+            ValueType::String => self.as_str() == other.as_str(),
+            ValueType::Array => {
+                let a = self.as_array().unwrap();
+                let b = other.as_array().unwrap();
+                if a.len() != b.len() {
+                    return false;
+                }
+                a.entries().iter().zip(b.entries().iter()).all(|((ka, va), (kb, vb))| {
+                    ka == kb && va.structurally_equal(vb)
+                })
+            }
+            _ => false,
+        }
+    }
+
     /// Display value as PHP would echo it
     pub fn echo_to_string(&self) -> String {
         match self.value_type() {

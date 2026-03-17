@@ -50,6 +50,7 @@ pub(crate) struct CompiledParams {
     pub ref_args: u64,
     pub type_hints: Vec<crate::vm::function::ParamTypeHint>,
     pub param_names: Vec<String>,
+    pub return_type_hint: crate::vm::function::ParamTypeHint,
 }
 
 /// Compiled class definition
@@ -59,6 +60,8 @@ pub struct ClassDef {
     pub implements: Vec<String>,
     pub is_interface: bool,
     pub is_abstract: bool,
+    pub is_trait: bool,
+    pub uses: Vec<String>,  // trait names from `use Foo, Bar;`
     pub properties: Vec<(String, Option<Value>, Visibility, String)>,  // (name, default_value, visibility, declaring_class)
     pub methods: Vec<(String, Visibility, bool, UserFunction)>, // (name, vis, is_static, func)
 }
@@ -95,6 +98,12 @@ pub struct Compiler {
     deferred_error: Option<String>,
     /// ref_args for functions known from parent scope (inherited by child compilers)
     known_ref_args: HashMap<String, u64>,
+    /// Per-file strict_types flag from `declare(strict_types=1);`
+    strict_types: bool,
+    /// Current namespace (None = global namespace)
+    current_namespace: Option<String>,
+    /// Use aliases: alias → fully qualified name
+    use_map: HashMap<String, String>,
 }
 
 /// Get ref_args bitmask for built-in stdlib functions.
@@ -124,7 +133,40 @@ impl Compiler {
             class_defs: Vec::new(),
             deferred_error: None,
             known_ref_args: HashMap::new(),
+            strict_types: false,
+            current_namespace: None,
+            use_map: HashMap::new(),
         }
+    }
+
+    /// Resolve a class/function name against current namespace and use map.
+    /// Rules:
+    /// - Fully qualified names (starting with \) are used as-is (without leading \)
+    /// - Names in the use map are replaced with their fully qualified target
+    /// - Unqualified names in a namespace get the namespace prefix
+    /// - Names already containing \ (relative qualified) get namespace prefix
+    fn resolve_name(&self, name: &str) -> String {
+        // Fully qualified: strip leading backslash
+        if name.starts_with('\\') {
+            return name[1..].to_string();
+        }
+        // Check use map: first segment might be an alias
+        let first_segment = name.split('\\').next().unwrap_or(name);
+        if let Some(fqn) = self.use_map.get(first_segment) {
+            if name.contains('\\') {
+                // e.g. `User\Sub` where User is aliased to `App\Models\User`
+                let rest = &name[first_segment.len()..]; // starts with '\'
+                return format!("{}{}", fqn, rest);
+            } else {
+                return fqn.clone();
+            }
+        }
+        // In a namespace: prefix with namespace
+        if let Some(ns) = &self.current_namespace {
+            return format!("{}\\{}", ns, name);
+        }
+        // Global namespace: use as-is
+        name.to_string()
     }
 
     /// Look up ref_args for a function: check user functions, known_ref_args, then builtins.
@@ -176,6 +218,7 @@ impl Compiler {
                 instructions: self.instructions,
                 literals: self.literals,
                 try_entries: self.try_entries,
+                strict_types: self.strict_types,
             },
             functions: self.functions,
             class_defs: self.class_defs,
@@ -251,11 +294,12 @@ impl Compiler {
                     self.instructions[jmp_idx].op1 = after_else;
                 }
             }
-            Stmt::Function { name, params, body } => {
+            Stmt::Function { name, params, body, return_type } => {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
-                let cp = Self::compile_params(&mut func_compiler, params, name)?;
+                let mut cp = self.compile_params(&mut func_compiler, params, name)?;
+                cp.return_type_hint = self.convert_type_hint(return_type);
                 for s in body {
                     func_compiler.compile_stmt(s)?;
                 }
@@ -271,23 +315,28 @@ impl Compiler {
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
+                    strict_types: self.strict_types,
                 };
-                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
+                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
-                self.functions.push((name.clone(), user_func));
+                let resolved_name = self.resolve_name(name);
+                self.functions.push((resolved_name, user_func));
             }
             Stmt::Return(expr) => {
-                let (op, op_type) = if let Some(e) = expr {
-                    self.compile_expr(e)
+                let (op, op_type, has_explicit_value) = if let Some(e) = expr {
+                    let (o, t) = self.compile_expr(e);
+                    (o, t, true)
                 } else {
                     let idx = self.add_literal(Value::null());
-                    (idx, OpType::Const)
+                    (idx, OpType::Const, false)
                 };
                 let mut ret = Instruction::new(OpCode::Return);
                 ret.op1 = op;
                 ret.op1_type = op_type;
+                // extended_value=1 means explicit "return expr;", 0 means bare "return;"
+                ret.extended_value = if has_explicit_value { 1 } else { 0 };
                 self.instructions.push(ret);
             }
             Stmt::ExprStmt(expr) => {
@@ -742,8 +791,9 @@ impl Compiler {
                     let catch_start = self.instructions.len() as u32;
                     let catch_cv = self.resolve_cv(&catch.var);
 
+                    let resolved_types: Vec<String> = catch.types.iter().map(|t| self.resolve_name(t)).collect();
                     catch_entries.push(CatchEntry {
-                        types: catch.types.clone(),
+                        types: resolved_types,
                         catch_start,
                         catch_cv,
                     });
@@ -823,6 +873,32 @@ impl Compiler {
                 assign.result_type = val_type;
                 self.instructions.push(assign);
             }
+            Stmt::Declare { directive, value } => {
+                match directive.as_str() {
+                    "strict_types" => {
+                        self.strict_types = *value != 0;
+                    }
+                    _ => {
+                        // Ignore unknown directives (encoding, ticks)
+                    }
+                }
+            }
+            Stmt::Namespace { name, body } => {
+                let prev_ns = self.current_namespace.clone();
+                let prev_use_map = self.use_map.clone();
+                self.current_namespace = Some(name.clone());
+                self.use_map.clear();
+                for stmt in body {
+                    self.compile_stmt(stmt)?;
+                }
+                self.current_namespace = prev_ns;
+                self.use_map = prev_use_map;
+            }
+            Stmt::UseDecl { imports } => {
+                for (fqn, alias) in imports {
+                    self.use_map.insert(alias.clone(), fqn.clone());
+                }
+            }
             Stmt::Const { name, value } => {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
@@ -837,7 +913,7 @@ impl Compiler {
                 instr.extended_value = 1;
                 self.instructions.push(instr);
             }
-            Stmt::Class { name, parent, implements, is_abstract, properties, methods } => {
+            Stmt::Class { name, parent, implements, is_abstract, uses, properties, methods } => {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
@@ -847,7 +923,8 @@ impl Compiler {
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
                     let context = format!("method {}::{}", name, method.name);
-                    let cp = Self::compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
@@ -863,10 +940,11 @@ impl Compiler {
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
+                        strict_types: self.strict_types,
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
+                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
@@ -885,12 +963,18 @@ impl Compiler {
                 }
 
                 // Store class definition for runtime
+                let resolved_class = self.resolve_name(name);
+                let resolved_parent = parent.as_ref().map(|p| self.resolve_name(p));
+                let resolved_implements: Vec<String> = implements.iter().map(|i| self.resolve_name(i)).collect();
+                let resolved_uses: Vec<String> = uses.iter().map(|u| self.resolve_name(u)).collect();
                 self.class_defs.push(ClassDef {
-                    name: name.clone(),
-                    parent: parent.clone(),
-                    implements: implements.clone(),
+                    name: resolved_class,
+                    parent: resolved_parent,
+                    implements: resolved_implements,
                     is_interface: false,
                     is_abstract: *is_abstract,
+                    is_trait: false,
+                    uses: resolved_uses,
                     properties: compiled_props,
                     methods: compiled_methods,
                 });
@@ -906,7 +990,8 @@ impl Compiler {
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("interface method {}::{}", name, method.name);
-                    let cp = Self::compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
                     ret.op1_type = OpType::Const;
@@ -919,20 +1004,83 @@ impl Compiler {
                         instructions: func_compiler.instructions,
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
+                        strict_types: self.strict_types,
                     };
-                    let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
+                    let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
                 }
 
                 // For interface "extends", all parent interfaces become the implements list
+                let resolved_iface = self.resolve_name(name);
+                let resolved_extends: Vec<String> = extends.iter().map(|e| self.resolve_name(e)).collect();
                 self.class_defs.push(ClassDef {
-                    name: name.clone(),
+                    name: resolved_iface,
                     parent: None,
-                    implements: extends.clone(),
+                    implements: resolved_extends,
                     is_interface: true,
                     is_abstract: false,
+                    is_trait: false,
+                    uses: vec![],
                     properties: vec![],
+                    methods: compiled_methods,
+                });
+            }
+            Stmt::Trait { name, properties, methods } => {
+                // Compile trait — very similar to class, but flagged as is_trait=true.
+                // Trait methods get compiled exactly like class methods.
+                let mut compiled_methods = Vec::new();
+                for method in methods {
+                    let mut func_compiler = Compiler::new();
+                    func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.resolve_cv("this");
+                    let context = format!("trait method {}::{}", name, method.name);
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    for s in &method.body {
+                        func_compiler.compile_stmt(s)?;
+                    }
+                    let null_idx = func_compiler.add_literal(Value::null());
+                    let mut ret = Instruction::new(OpCode::Return);
+                    ret.op1_type = OpType::Const;
+                    ret.op1 = null_idx;
+                    func_compiler.instructions.push(ret);
+
+                    let op_array = OpArray {
+                        num_cvs: func_compiler.next_cv,
+                        num_temps: func_compiler.next_tmp,
+                        instructions: func_compiler.instructions,
+                        literals: func_compiler.literals,
+                        try_entries: func_compiler.try_entries,
+                        strict_types: self.strict_types,
+                    };
+                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
+                    user_func.common.this_offset = 1;
+                    self.functions.extend(func_compiler.functions);
+                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
+                }
+
+                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
+                for prop in properties {
+                    let default = match &prop.default {
+                        Some(expr) => Some(Self::eval_const_expr(expr).map_err(|e| {
+                            format!("Cannot use non-constant expression as default value for trait property {}::${}: {}", name, prop.name, e)
+                        })?),
+                        None => None,
+                    };
+                    compiled_props.push((prop.name.clone(), default, prop.visibility, name.clone()));
+                }
+
+                let resolved_trait = self.resolve_name(name);
+                self.class_defs.push(ClassDef {
+                    name: resolved_trait,
+                    parent: None,
+                    implements: vec![],
+                    is_interface: false,
+                    is_abstract: false,
+                    is_trait: true,
+                    uses: vec![],
+                    properties: compiled_props,
                     methods: compiled_methods,
                 });
             }
@@ -981,7 +1129,7 @@ impl Compiler {
 
     /// Compile parameter list into CV slots. Returns (num_args, required_num_args, is_variadic, variadic_cv_index, ref_args).
     /// num_args counts only non-variadic params. The variadic param gets its own CV.
-    fn compile_params(func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<CompiledParams, String> {
+    fn compile_params(&self, func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<CompiledParams, String> {
         let mut required_num_args = 0u32;
         let mut seen_default = false;
         let mut is_variadic = false;
@@ -994,7 +1142,7 @@ impl Compiler {
                 ref_args |= 1u64 << i;
             }
             // Collect type hint
-            let hint = Self::convert_type_hint(&param.type_hint);
+            let hint = self.convert_type_hint(&param.type_hint);
             type_hints.push(hint);
             // Collect param name
             param_names.push(param.name.clone());
@@ -1024,11 +1172,11 @@ impl Compiler {
         }
         // num_args = non-variadic params count
         let num_args = if is_variadic { (params.len() - 1) as u32 } else { params.len() as u32 };
-        Ok(CompiledParams { num_args, required_num_args, is_variadic, variadic_cv_index, ref_args, type_hints, param_names })
+        Ok(CompiledParams { num_args, required_num_args, is_variadic, variadic_cv_index, ref_args, type_hints, param_names, return_type_hint: crate::vm::function::ParamTypeHint::None })
     }
 
     /// Convert parser TypeHint to runtime ParamTypeHint.
-    fn convert_type_hint(hint: &Option<crate::parser::TypeHint>) -> crate::vm::function::ParamTypeHint {
+    fn convert_type_hint(&self, hint: &Option<crate::parser::TypeHint>) -> crate::vm::function::ParamTypeHint {
         use crate::parser::TypeHint;
         use crate::vm::function::ParamTypeHint;
         match hint {
@@ -1040,10 +1188,25 @@ impl Compiler {
             Some(TypeHint::Array) => ParamTypeHint::Array,
             Some(TypeHint::Callable) => ParamTypeHint::Callable,
             Some(TypeHint::Null) => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
-            Some(TypeHint::ClassName(name)) => ParamTypeHint::ClassName(name.clone()),
+            Some(TypeHint::ClassName(name)) => {
+                // `self` and `parent` are special PHP pseudo-types — don't resolve through namespaces
+                match name.as_str() {
+                    "self" | "parent" | "static" => ParamTypeHint::ClassName(name.clone()),
+                    _ => ParamTypeHint::ClassName(self.resolve_name(name)),
+                }
+            }
             Some(TypeHint::Nullable(inner)) => {
-                let inner_hint = Self::convert_type_hint(&Some(*inner.clone()));
+                let inner_hint = self.convert_type_hint(&Some(*inner.clone()));
                 ParamTypeHint::Nullable(Box::new(inner_hint))
+            }
+            Some(TypeHint::Void) => ParamTypeHint::Void,
+            Some(TypeHint::Mixed) => ParamTypeHint::Mixed,
+            Some(TypeHint::Never) => ParamTypeHint::Never,
+            Some(TypeHint::Union(types)) => {
+                let converted: Vec<ParamTypeHint> = types.iter()
+                    .map(|t| self.convert_type_hint(&Some(t.clone())))
+                    .collect();
+                ParamTypeHint::Union(converted)
             }
         }
     }
@@ -1391,13 +1554,24 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::FunctionCall { name, args } => {
-                let ref_args = self.lookup_ref_args(name);
-                let name_idx = self.add_literal(Value::string(name.clone()));
+                let resolved = self.resolve_name(name);
+                let ref_args = self.lookup_ref_args(&resolved);
+                let name_idx = self.add_literal(Value::string(resolved));
+
+                // For unqualified function calls in a namespace, PHP falls back to global.
+                // Store the original unqualified name as a fallback literal.
+                // Qualified/FQ names (containing \) get no fallback.
+                let fallback_idx = if self.current_namespace.is_some() && !name.contains('\\') {
+                    self.add_literal(Value::string(name.clone()))
+                } else {
+                    0 // no fallback
+                };
 
                 let mut init = Instruction::new(OpCode::InitFcall);
                 init.op1 = args.len() as u32;
                 init.op2_type = OpType::Const;
                 init.op2 = name_idx;
+                init.extended_value = fallback_idx;
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 0, ref_args, false, false);
@@ -1689,19 +1863,20 @@ impl Compiler {
 
                 (result_tmp, OpType::Tmp)
             }
-            Expr::Closure { params, use_vars, body } => {
+            Expr::Closure { params, use_vars, body, return_type } => {
                 // Compile closure body into a separate function
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 // params come first as CVs (args), then use_vars
-                let compile_result = Self::compile_params(&mut func_compiler, params, "closure");
-                let cp = match compile_result {
+                let compile_result = self.compile_params(&mut func_compiler, params, "closure");
+                let mut cp = match compile_result {
                     Ok(r) => r,
                     Err(e) => {
                         self.deferred_error = Some(e);
-                        CompiledParams { num_args: params.len() as u32, required_num_args: params.len() as u32, is_variadic: false, variadic_cv_index: 0, ref_args: 0, type_hints: vec![], param_names: vec![] }
+                        CompiledParams { num_args: params.len() as u32, required_num_args: params.len() as u32, is_variadic: false, variadic_cv_index: 0, ref_args: 0, type_hints: vec![], param_names: vec![], return_type_hint: crate::vm::function::ParamTypeHint::None }
                     }
                 };
+                cp.return_type_hint = self.convert_type_hint(return_type);
                 for v in use_vars {
                     func_compiler.resolve_cv(v);
                 }
@@ -1723,8 +1898,9 @@ impl Compiler {
                     instructions: func_compiler.instructions,
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
+                    strict_types: self.strict_types,
                 };
-                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names);
+                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
                 // Register closure as anonymous function with unique name
                 let closure_name = format!("__closure_{}", CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed));
@@ -1783,7 +1959,8 @@ impl Compiler {
                     })
                     .collect();
 
-                let name_idx = self.add_literal(Value::string(class_name.clone()));
+                let resolved_class = self.resolve_name(class_name);
+                let name_idx = self.add_literal(Value::string(resolved_class));
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
                 new_obj.op1 = name_idx;
@@ -1842,7 +2019,8 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::StaticCall { class_name, method, args } => {
-                let class_idx = self.add_literal(Value::string(class_name.clone()));
+                let resolved_class = self.resolve_name(class_name);
+                let class_idx = self.add_literal(Value::string(resolved_class));
                 let method_idx = self.add_literal(Value::string(method.clone()));
 
                 let mut init = Instruction::new(OpCode::InitStaticCall);
@@ -1912,7 +2090,8 @@ impl Compiler {
             }
             Expr::Instanceof { expr, class_name } => {
                 let (obj_op, obj_type) = self.compile_expr(expr);
-                let name_idx = self.add_literal(Value::string(class_name.clone()));
+                let resolved_class = self.resolve_name(class_name);
+                let name_idx = self.add_literal(Value::string(resolved_class));
                 let tmp = self.alloc_tmp();
                 let mut inst = Instruction::new(OpCode::Instanceof);
                 inst.op1 = obj_op;

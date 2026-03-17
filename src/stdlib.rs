@@ -341,6 +341,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: true,
         is_abstract: false,
+        is_trait: false,
+        uses: vec![],
         properties: vec![],
         methods: vec![],
     }).unwrap();
@@ -352,6 +354,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec!["Throwable".to_string()],
         is_interface: false,
         is_abstract: false,
+        is_trait: false,
+        uses: vec![],
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Exception".to_string())],
         methods: vec![],
     }).unwrap();
@@ -363,6 +367,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec!["Throwable".to_string()],
         is_interface: false,
         is_abstract: false,
+        is_trait: false,
+        uses: vec![],
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Error".to_string())],
         methods: vec![],
     }).unwrap();
@@ -374,6 +380,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: false,
         is_abstract: false,
+        is_trait: false,
+        uses: vec![],
         properties: vec![],
         methods: vec![],
     }).unwrap();
@@ -385,6 +393,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: false,
         is_abstract: false,
+        is_trait: false,
+        uses: vec![],
         properties: vec![],
         methods: vec![],
     }).unwrap();

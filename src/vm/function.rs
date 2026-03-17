@@ -24,8 +24,12 @@ pub enum ParamTypeHint {
     Bool,
     Array,
     Callable,
+    Void,
+    Mixed,
+    Never,
     ClassName(std::string::String),
     Nullable(Box<ParamTypeHint>),
+    Union(Vec<ParamTypeHint>),
 }
 
 impl ParamTypeHint {
@@ -41,6 +45,12 @@ impl ParamTypeHint {
             ParamTypeHint::Callable => "callable".to_string(),
             ParamTypeHint::ClassName(name) => name.clone(),
             ParamTypeHint::Nullable(inner) => format!("?{}", inner.display_name()),
+            ParamTypeHint::Void => "void".to_string(),
+            ParamTypeHint::Mixed => "mixed".to_string(),
+            ParamTypeHint::Never => "never".to_string(),
+            ParamTypeHint::Union(parts) => {
+                parts.iter().map(|p| p.display_name()).collect::<Vec<_>>().join("|")
+            }
         }
     }
 }
@@ -71,6 +81,8 @@ pub struct FunctionCommon {
     /// Per-parameter names (indexed by public param position, 0-based).
     /// Used for named argument resolution.
     pub param_names: Vec<std::string::String>,
+    /// Declared return type hint (None = no return type declared).
+    pub return_type_hint: ParamTypeHint,
 }
 
 impl FunctionCommon {

@@ -25,12 +25,22 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
 }
 
 /// Check a value against a parameter type hint. Returns true if the value satisfies the hint.
-fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &ExecutorGlobals) -> bool {
+/// Check a value against a type hint.
+/// `callee_class`: the declaring class of the function whose hint is being checked.
+/// Used to resolve `self`, `parent`, `static` pseudo-types.
+/// Pass `None` for global functions.
+fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &ExecutorGlobals, strict: bool, callee_class: Option<&str>) -> bool {
     use crate::vm::function::ParamTypeHint;
     match hint {
         ParamTypeHint::None => true,
         ParamTypeHint::Int => val.value_type() == ValueType::Long,
-        ParamTypeHint::Float => matches!(val.value_type(), ValueType::Double | ValueType::Long),
+        ParamTypeHint::Float => {
+            if strict {
+                val.value_type() == ValueType::Double
+            } else {
+                matches!(val.value_type(), ValueType::Double | ValueType::Long)
+            }
+        }
         ParamTypeHint::String => val.value_type() == ValueType::String,
         ParamTypeHint::Bool => matches!(val.value_type(), ValueType::True | ValueType::False),
         ParamTypeHint::Array => val.value_type() == ValueType::Array,
@@ -40,7 +50,25 @@ fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &
         }
         ParamTypeHint::ClassName(class_name) => {
             if let Some(obj) = val.as_object() {
-                eg.class_is_a(&obj.class_name, class_name)
+                // Resolve `self`, `parent`, `static` pseudo-types using callee's declaring class
+                let resolved = match class_name.as_str() {
+                    "self" | "static" => {
+                        callee_class.unwrap_or(class_name.as_str())
+                    }
+                    "parent" => {
+                        if let Some(decl) = callee_class {
+                            if let Some(class_def) = eg.class_table.get(decl) {
+                                class_def.parent.as_deref().unwrap_or(class_name.as_str())
+                            } else {
+                                class_name.as_str()
+                            }
+                        } else {
+                            class_name.as_str()
+                        }
+                    }
+                    _ => class_name.as_str(),
+                };
+                eg.class_is_a(&obj.class_name, resolved)
             } else {
                 false
             }
@@ -49,8 +77,14 @@ fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &
             if val.value_type() == ValueType::Null {
                 true
             } else {
-                check_type_hint(val, inner, eg)
+                check_type_hint(val, inner, eg, strict, callee_class)
             }
+        }
+        ParamTypeHint::Void => false,
+        ParamTypeHint::Mixed => true,
+        ParamTypeHint::Never => false,
+        ParamTypeHint::Union(types) => {
+            types.iter().any(|t| check_type_hint(val, t, eg, strict, callee_class))
         }
     }
 }
@@ -650,13 +684,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitFcall => {
-                // op1 = num_args (extended_value in PHP, we use op1 for now)
+                // op1 = num_args
                 // op2 = CONST index pointing to function name string
+                // extended_value = CONST index of fallback name (for unqualified calls in namespace), 0 = no fallback
                 let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
                 let name = name_val.as_str().unwrap_or_else(|| {
                     panic!("INIT_FCALL: op2 must be a string");
                 });
-                let func_ptr = match eg.find_function(name) {
+                let func_ptr_opt = eg.find_function(name).or_else(|| {
+                    // Try fallback name (unqualified global name) if provided
+                    if opline.extended_value != 0 {
+                        let fallback_val = unsafe { &*(*frame).get_op_ptr(opline.extended_value, OpType::Const, op_array) };
+                        if let Some(fallback_name) = fallback_val.as_str() {
+                            return eg.find_function(fallback_name);
+                        }
+                    }
+                    None
+                });
+                let func_ptr = match func_ptr_opt {
                     Some(ptr) => ptr,
                     None => {
                         let err = make_error_value("Error", &format!("Call to undefined function {}()", name));
@@ -941,6 +986,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 }
 
+                // Resolve callee's declaring class for self/parent/static type hints
+                let callee_class = eg.declaring_class_of(unsafe { (*call).func }).map(|s| s.to_string());
+                let callee_class_ref = callee_class.as_deref();
+
                 // Type-check arguments against declared type hints
                 if !func_common.param_type_hints.is_empty() {
                     let mut type_error: Option<Value> = None;
@@ -950,7 +999,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if (i as u32) >= num_args { break; }
                         let val = unsafe { &*(*call).cv(cv_idx) };
                         if val.is_undef() { continue; }
-                        if !check_type_hint(val, hint, eg) {
+                        if !check_type_hint(val, hint, eg, op_array.strict_types, callee_class_ref) {
                             type_error = Some(make_error_value("TypeError", &format!(
                                 "Argument #{} must be of type {}, {} given",
                                 i + 1,
@@ -988,7 +1037,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         for (name, val) in named_extras {
                             if let Some(hint) = variadic_hint {
                                 if !matches!(hint, crate::vm::function::ParamTypeHint::None)
-                                    && !check_type_hint(&val, hint, eg)
+                                    && !check_type_hint(&val, hint, eg, op_array.strict_types, callee_class_ref)
                                 {
                                     let type_err = make_error_value("TypeError", &format!(
                                         "Named parameter ${} must be of type {}, {} given",
@@ -1849,6 +1898,56 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Return => {
+                // ── Return type validation ──
+                let func_common = unsafe { &*(*frame).func };
+                let return_hint = &func_common.return_type_hint;
+                if !matches!(return_hint, crate::vm::function::ParamTypeHint::None) {
+                    let has_explicit_value = opline.extended_value == 1;
+                    match return_hint {
+                        crate::vm::function::ParamTypeHint::Void => {
+                            if has_explicit_value {
+                                // Any explicit `return expr;` in a void function is an error,
+                                // including `return null;` (PHP rejects it).
+                                // Only bare `return;` (extended_value=0) is allowed.
+                                let err = make_error_value("TypeError",
+                                    "A void function must not return a value");
+                                match throw_in_frame(eg, frame, err) {
+                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                }
+                            }
+                            // bare "return;" is OK for void
+                        }
+                        crate::vm::function::ParamTypeHint::Never => {
+                            let err = make_error_value("TypeError",
+                                "A never-returning function must not return");
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                        hint => {
+                            if opline.op1_type != OpType::Unused {
+                                let retval = unsafe {
+                                    &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                                };
+                                let ret_callee_class = eg.declaring_class_of(unsafe { (*frame).func });
+                                if !check_type_hint(retval, hint, eg, op_array.strict_types, ret_callee_class) {
+                                    let err = make_error_value("TypeError", &format!(
+                                        "Return value must be of type {}, {} returned",
+                                        hint.display_name(),
+                                        retval.type_name()
+                                    ));
+                                    match throw_in_frame(eg, frame, err) {
+                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Check if we're inside a try region with a finally block
                 let current_ip = unsafe {
                     (*frame).opline.offset_from(op_array.instructions.as_ptr()) as u32

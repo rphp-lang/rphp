@@ -14,6 +14,8 @@ pub struct OpArray {
     pub instructions: Vec<Instruction>,
     pub literals: Vec<Value>,
     pub try_entries: Vec<compile::TryEntry>,
+    /// Per-file strict_types flag, set by `declare(strict_types=1);`
+    pub strict_types: bool,
 }
 
 impl OpArray {
@@ -54,6 +56,7 @@ pub fn make_user_function_full(op_array: OpArray, num_args: u32, required_num_ar
             this_offset: 0,
             param_type_hints: vec![],
             param_names: vec![],
+            return_type_hint: ParamTypeHint::None,
         },
         op_array,
     }
@@ -69,6 +72,7 @@ pub fn make_user_function_typed(
     ref_args: u64,
     param_type_hints: Vec<ParamTypeHint>,
     param_names: Vec<String>,
+    return_type_hint: ParamTypeHint,
 ) -> UserFunction {
     UserFunction {
         common: FunctionCommon {
@@ -81,6 +85,7 @@ pub fn make_user_function_typed(
             this_offset: 0,
             param_type_hints,
             param_names,
+            return_type_hint,
         },
         op_array,
     }
@@ -104,6 +109,7 @@ pub fn make_internal_function(
             this_offset: 0,
             param_type_hints: vec![],
             param_names,
+            return_type_hint: ParamTypeHint::None,
         },
         handler,
     }
@@ -128,6 +134,7 @@ pub fn make_internal_method(
             this_offset: 1,
             param_type_hints: vec![],
             param_names,
+            return_type_hint: ParamTypeHint::None,
         },
         handler,
     }
@@ -152,6 +159,7 @@ pub fn make_internal_function_ref(
             this_offset: 0,
             param_type_hints: vec![],
             param_names,
+            return_type_hint: ParamTypeHint::None,
         },
         handler,
     }
@@ -174,6 +182,7 @@ pub fn make_internal_function_variadic(
             this_offset: 0,
             param_type_hints: vec![],
             param_names,
+            return_type_hint: ParamTypeHint::None,
         },
         handler,
     }

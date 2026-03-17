@@ -46,6 +46,7 @@ fn test_echo_int() {
         instructions: vec![echo, ret],
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -72,6 +73,7 @@ fn test_echo_negative() {
         instructions: vec![echo, ret],
         literals: vec![Value::long(-1), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -107,6 +109,7 @@ fn test_add_and_echo() {
         instructions: vec![add, echo, ret],
         literals: vec![Value::long(20), Value::long(22), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -136,6 +139,7 @@ fn test_overflow_to_float() {
         instructions: vec![add, ret],
         literals: vec![Value::long(i64::MAX), Value::long(1)],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -162,6 +166,7 @@ fn test_timeout_interrupt() {
         instructions: vec![echo, ret],
         literals: vec![Value::long(1), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -210,6 +215,7 @@ fn test_assign_and_echo_cv() {
         instructions: vec![assign, echo, ret],
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -261,6 +267,7 @@ fn test_assign_add_echo() {
         instructions: vec![assign_a, assign_b, add, echo, ret],
         literals: vec![Value::long(20), Value::long(22), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -326,6 +333,7 @@ fn test_internal_function_call() {
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("my_double"), Value::long(21), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -361,6 +369,7 @@ fn test_user_function_call() {
         instructions: vec![add, fn_ret],
         literals: vec![Value::long(1)],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let add_one_func = make_user_function_with_args(fn_op_array, 1);
@@ -400,6 +409,7 @@ fn test_user_function_call() {
         instructions: vec![init, send, do_fcall, echo, ret],
         literals: vec![Value::string("add_one"), Value::long(41), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(main_op_array);
@@ -430,6 +440,7 @@ fn test_undefined_function_error() {
         instructions: vec![init, do_fcall, ret],
         literals: vec![Value::string("nonexistent"), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -484,6 +495,7 @@ fn test_nested_calls() {
         instructions: vec![add, fn_ret],
         literals: vec![Value::long(1)],
         try_entries: vec![],
+        strict_types: false,
     }, 1);
 
     // --- main script ---
@@ -550,6 +562,7 @@ fn test_nested_calls() {
             Value::null(),
         ],
         try_entries: vec![],
+        strict_types: false,
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -591,6 +604,7 @@ fn test_recursive_countdown() {
         instructions: vec![f1_ret],
         literals: vec![Value::long(42)],
         try_entries: vec![],
+        strict_types: false,
     });
 
     // f2: return f1()
@@ -613,6 +627,7 @@ fn test_recursive_countdown() {
         instructions: vec![f2_init, f2_do, f2_ret],
         literals: vec![Value::string("f1")],
         try_entries: vec![],
+        strict_types: false,
     });
 
     // f3: return f2()
@@ -635,6 +650,7 @@ fn test_recursive_countdown() {
         instructions: vec![f3_init, f3_do, f3_ret],
         literals: vec![Value::string("f2")],
         try_entries: vec![],
+        strict_types: false,
     });
 
     // main: echo f3()
@@ -661,6 +677,7 @@ fn test_recursive_countdown() {
         instructions: vec![main_init, main_do, main_echo, main_ret],
         literals: vec![Value::string("f3"), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -693,6 +710,7 @@ fn test_interrupt_during_deep_call() {
         instructions: vec![f1_echo, f1_ret],
         literals: vec![Value::long(1), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     });
 
     // main: init_fcall f1, do_fcall, echo "2", return
@@ -718,6 +736,7 @@ fn test_interrupt_during_deep_call() {
         instructions: vec![init, do_fcall, echo2, ret],
         literals: vec![Value::string("f1"), Value::long(2), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
@@ -773,6 +792,7 @@ fn test_assign_result_used() {
         instructions: vec![assign_b, assign_a, echo, ret],
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
+        strict_types: false,
     });
 
     let (mut eg, buf) = make_eg_with_capture();

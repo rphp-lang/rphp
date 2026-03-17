@@ -43,8 +43,12 @@ pub enum Token {
     Instanceof,     // instanceof
     Const,          // const
     Interface,      // interface
+    Trait,          // trait
     Implements,     // implements
     Abstract,       // abstract
+    Declare,        // declare
+    Namespace,      // namespace
+    Backslash,      // \ (namespace separator)
     // Literals
     Integer(i64),   // 42, -1
     Float(f64),     // 3.14, 1.5e10
@@ -436,12 +440,19 @@ impl<'a> Lexer<'a> {
                         "instanceof" => tokens.push(Token::Instanceof),
                         "const" => tokens.push(Token::Const),
                         "interface" => tokens.push(Token::Interface),
+                        "trait" => tokens.push(Token::Trait),
                         "implements" => tokens.push(Token::Implements),
                         "abstract" => tokens.push(Token::Abstract),
+                        "declare" => tokens.push(Token::Declare),
+                        "namespace" => tokens.push(Token::Namespace),
                         "fn" => tokens.push(Token::Fn),
                         "use" => tokens.push(Token::Use),
                         _ => tokens.push(Token::Identifier(ident)),
                     }
+                }
+                b'\\' => {
+                    tokens.push(Token::Backslash);
+                    self.pos += 1;
                 }
                 _ => {
                     return Err(format!(

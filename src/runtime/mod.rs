@@ -161,6 +161,77 @@ impl ExecutorGlobals {
             }
         }
 
+        // Merge traits: copy trait methods and properties into this class.
+        // Must happen after parent inheritance so trait methods override inherited ones
+        // (matching PHP semantics: trait > parent, class > trait).
+        let trait_names = class_def.uses.clone();
+        for trait_name in &trait_names {
+            if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
+                // Merge trait properties (class's own props take precedence)
+                // Check for incompatible trait property collisions
+                let mut new_props = Vec::new();
+                for (name, default, vis, _declaring) in &trait_def.properties {
+                    // Check if this property already exists (from class itself or another trait)
+                    let existing = class_def.properties.iter()
+                        .find(|(n, _, _, _)| n == name);
+                    if let Some((_, _existing_default, existing_vis, existing_declaring)) = existing {
+                        // If declared by the class itself (not a trait), class takes precedence
+                        if existing_declaring == &class_name {
+                            continue;
+                        }
+                        // Two traits define the same property — check compatibility
+                        // PHP checks both visibility and default value compatibility.
+                        if existing_vis != vis {
+                            return Err(format!(
+                                "{} and {} define the same property (${}) in the composition of {}. \
+                                 However, the definition differs and is considered incompatible",
+                                existing_declaring, trait_name, name, class_name
+                            ));
+                        }
+                        // Check default value compatibility
+                        let defaults_compatible = match (default, _existing_default) {
+                            (None, None) => true,
+                            (Some(a), Some(b)) => a.structurally_equal(b),
+                            _ => false, // one has default, other doesn't
+                        };
+                        if !defaults_compatible {
+                            return Err(format!(
+                                "{} and {} define the same property (${}) in the composition of {}. \
+                                 However, the definition differs and is considered incompatible",
+                                existing_declaring, trait_name, name, class_name
+                            ));
+                        }
+                        // Same visibility and default — compatible, skip duplicate
+                        continue;
+                    }
+                    new_props.push((name.clone(), default.clone(), *vis, trait_name.clone()));
+                }
+                class_def.properties.extend(new_props);
+
+                // Merge trait methods: copy function_table pointers
+                let child_method_names: std::collections::HashSet<String> = class_def.methods
+                    .iter().map(|(n, _, _, _)| n.to_lowercase()).collect();
+                let trait_prefix = format!("{}::", trait_name).to_lowercase();
+                let trait_methods: Vec<(String, *const FunctionCommon)> = self.function_table.iter()
+                    .filter(|(k, _)| k.starts_with(&trait_prefix))
+                    .map(|(k, v)| {
+                        let method_name = &k[trait_prefix.len()..];
+                        (method_name.to_string(), *v)
+                    })
+                    .collect();
+                for (method_name, func_ptr) in trait_methods {
+                    if !child_method_names.contains(&method_name) {
+                        let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
+                        self.function_table.insert(child_full, func_ptr);
+                        // Also record declaring class as this class for visibility purposes
+                        self.method_declaring_class.insert(func_ptr, class_name.clone());
+                    }
+                }
+            } else {
+                return Err(format!("Trait not found: {}", trait_name));
+            }
+        }
+
         // Do NOT inherit method stubs from interfaces — interface methods are contracts,
         // not implementations. The implementing class must provide its own body.
         // (Interface stub functions exist only in the interface's own ClassDef for type info.)
@@ -225,8 +296,8 @@ impl ExecutorGlobals {
     }
 
     /// Collect all required interface method signatures (recursively through interface extends).
-    /// Returns Vec of (method_name_lower, visibility, num_args, required_num_args, is_static, interface_name).
-    fn collect_interface_methods(&self, iface_name: &str) -> Vec<(String, Visibility, u32, u32, bool, String)> {
+    /// Returns Vec of (method_name_lower, visibility, num_args, required_num_args, is_static, interface_name, return_type_hint, param_type_hints).
+    fn collect_interface_methods(&self, iface_name: &str) -> Vec<(String, Visibility, u32, u32, bool, String, crate::vm::function::ParamTypeHint, Vec<crate::vm::function::ParamTypeHint>)> {
         let mut result = Vec::new();
         if let Some(iface_def) = self.class_table.get(iface_name) {
             for (method_name, vis, is_static, func) in &iface_def.methods {
@@ -237,6 +308,8 @@ impl ExecutorGlobals {
                     func.common.required_num_args,
                     *is_static,
                     iface_name.to_string(),
+                    func.common.return_type_hint.clone(),
+                    func.common.param_type_hints.clone(),
                 ));
             }
             // Recurse into parent interfaces
@@ -265,8 +338,8 @@ impl ExecutorGlobals {
     pub fn validate_interface_contracts(&self, class_name: &str) -> Vec<(String, String)> {
         let mut errors = Vec::new();
         if let Some(class_def) = self.class_table.get(class_name) {
-            if class_def.is_interface || class_def.is_abstract {
-                return errors; // interfaces/abstract classes don't need to implement
+            if class_def.is_interface || class_def.is_abstract || class_def.is_trait {
+                return errors; // interfaces/abstract classes/traits don't need to implement
             }
         }
         // Collect interfaces from the entire parent chain (fix P2: inherited obligations)
@@ -275,7 +348,7 @@ impl ExecutorGlobals {
         for iface_name in all_ifaces {
             if !seen.insert(iface_name.clone()) { continue; }
             let required = self.collect_interface_methods(&iface_name);
-            for (method, _iface_vis, iface_nargs, iface_required, iface_static, declaring_iface) in required {
+            for (method, _iface_vis, iface_nargs, iface_required, iface_static, declaring_iface, iface_return_hint, iface_param_hints) in required {
                 let full = format!("{}::{}", class_name, method).to_lowercase();
                 if !self.function_table.contains_key(&full) {
                     errors.push((declaring_iface.clone(), method.clone()));
@@ -334,6 +407,56 @@ impl ExecutorGlobals {
                             method, impl_required, iface_required
                         )));
                     }
+                    // Check parameter type compatibility (contravariance):
+                    // Interface param A => implementation must accept A or a supertype of A.
+                    // For simplicity, we require exact match or widening (impl accepts more).
+                    use crate::vm::function::ParamTypeHint;
+                    let check_count = iface_param_hints.len().max(impl_common.param_type_hints.len());
+                    for i in 0..check_count {
+                        let iface_param = iface_param_hints.get(i);
+                        let impl_param = impl_common.param_type_hints.get(i);
+                        match (impl_param, iface_param) {
+                            // Both untyped or both absent — ok
+                            (None | Some(ParamTypeHint::None), None | Some(ParamTypeHint::None)) => {}
+                            // Impl has no type / mixed — always compatible
+                            (None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed), Some(_)) => {}
+                            // Interface has no type but impl adds a type — narrowing, rejected
+                            (Some(impl_p), None | Some(ParamTypeHint::None)) => {
+                                if !matches!(impl_p, ParamTypeHint::Mixed) {
+                                    errors.push((declaring_iface.clone(), format!(
+                                        "{} (parameter {} must not add type {}, interface has no type)",
+                                        method, i + 1,
+                                        impl_p.display_name()
+                                    )));
+                                }
+                            }
+                            // Both have types — check contravariance
+                            (Some(impl_p), Some(iface_p)) => {
+                                if !self.is_param_type_compatible(impl_p, iface_p) {
+                                    errors.push((declaring_iface.clone(), format!(
+                                        "{} (parameter {} type must be compatible with {}, got {})",
+                                        method, i + 1,
+                                        iface_p.display_name(),
+                                        impl_p.display_name()
+                                    )));
+                                }
+                            }
+                        }
+                    }
+
+                    // Check return type compatibility: if the interface declares a return type,
+                    // the implementation must declare the same or a covariant return type.
+                    if !matches!(iface_return_hint, ParamTypeHint::None) {
+                        let impl_return = &impl_common.return_type_hint;
+                        if !self.is_return_type_compatible(impl_return, &iface_return_hint) {
+                            errors.push((declaring_iface.clone(), format!(
+                                "{} (return type must be compatible with {}, got {})",
+                                method,
+                                iface_return_hint.display_name(),
+                                impl_return.display_name()
+                            )));
+                        }
+                    }
                 }
             }
         }
@@ -351,9 +474,21 @@ impl ExecutorGlobals {
     pub fn find_method_info(&self, class_name: &str, method_name: &str) -> Option<(Visibility, bool, String)> {
         let method_lower = method_name.to_lowercase();
         if let Some(class_def) = self.class_table.get(class_name) {
+            // Check own methods
             for (name, vis, is_static, _func) in &class_def.methods {
                 if name.to_lowercase() == method_lower {
                     return Some((*vis, *is_static, class_name.to_string()));
+                }
+            }
+            // Check used traits (trait methods are copied to function_table but not to methods vec)
+            for trait_name in &class_def.uses {
+                if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
+                    for (name, vis, is_static, _func) in &trait_def.methods {
+                        if name.to_lowercase() == method_lower {
+                            // Trait method visibility applies as if declared in the using class
+                            return Some((*vis, *is_static, class_name.to_string()));
+                        }
+                    }
                 }
             }
             // Check parent
@@ -444,6 +579,154 @@ impl ExecutorGlobals {
     /// Look up a constant by name (case-sensitive).
     pub fn find_constant(&self, name: &str) -> Option<crate::value::Value> {
         self.constant_table.borrow().get(name).cloned()
+    }
+
+    /// Check if an implementation's return type is compatible with (covariant to) an interface's
+    /// declared return type. Rules:
+    /// - Same type → compatible
+    /// - ClassName vs ClassName → compatible if impl class `is_a` interface class (covariance)
+    /// - None (no type declared) when interface declares one → incompatible
+    /// - Nullable: ?T is compatible with ?T, T is compatible with ?T (narrowing is fine)
+    /// - Mixed accepts anything
+    fn is_return_type_compatible(&self, impl_hint: &crate::vm::function::ParamTypeHint, iface_hint: &crate::vm::function::ParamTypeHint) -> bool {
+        use crate::vm::function::ParamTypeHint;
+
+        // If implementation has no type hint but interface does, incompatible
+        // (even if interface declares `mixed` — PHP requires explicit declaration)
+        if matches!(impl_hint, ParamTypeHint::None) {
+            return false;
+        }
+
+        // `never` is the bottom type — covariant with any return type
+        if matches!(impl_hint, ParamTypeHint::Never) {
+            return true;
+        }
+
+        // If interface says Mixed, any explicit type is compatible — except void
+        if matches!(iface_hint, ParamTypeHint::Mixed) {
+            return !matches!(impl_hint, ParamTypeHint::Void);
+        }
+
+        // Exact match
+        if impl_hint == iface_hint {
+            return true;
+        }
+
+        // Nullable unwrapping: impl T is compatible with iface ?T (narrowing)
+        // impl ?T is compatible with iface ?T (checked above by equality)
+        match (impl_hint, iface_hint) {
+            (_, ParamTypeHint::Nullable(inner_iface)) => {
+                // impl_hint (non-nullable or differently nullable) vs ?T
+                // Check if impl is compatible with the inner type
+                return self.is_return_type_compatible(impl_hint, inner_iface);
+            }
+            (ParamTypeHint::Nullable(_), _) => {
+                // impl ?T vs iface T (widening) — incompatible
+                return false;
+            }
+            _ => {}
+        }
+
+        // Class name covariance
+        match (impl_hint, iface_hint) {
+            (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
+                return self.class_is_a(impl_class, iface_class);
+            }
+            _ => {}
+        }
+
+        // Union narrowing (covariance): impl returns int, iface returns int|float
+        // The impl type must be a member of (or compatible with) at least one union member
+        match iface_hint {
+            ParamTypeHint::Union(iface_parts) => {
+                match impl_hint {
+                    ParamTypeHint::Union(impl_parts) => {
+                        // Every impl union member must be compatible with at least one iface member
+                        return impl_parts.iter().all(|ip| {
+                            iface_parts.iter().any(|ifp| self.is_return_type_compatible(ip, ifp))
+                        });
+                    }
+                    _ => {
+                        // Single impl type must be compatible with at least one iface union member
+                        return iface_parts.iter().any(|ifp| self.is_return_type_compatible(impl_hint, ifp));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        // Everything else: incompatible
+        false
+    }
+
+    /// Check if an implementation's parameter type is compatible with an interface's
+    /// declared parameter type (contravariance).
+    /// The implementation must accept at least as much as the interface declares:
+    /// - Same type → compatible
+    /// - ClassName vs ClassName → compatible if iface class `is_a` impl class (contravariance:
+    ///   impl accepts a supertype)
+    /// - Nullable: ?T in impl is compatible with T in iface (impl accepts more)
+    /// - Mixed in impl → always compatible (accepts anything)
+    fn is_param_type_compatible(&self, impl_hint: &crate::vm::function::ParamTypeHint, iface_hint: &crate::vm::function::ParamTypeHint) -> bool {
+        use crate::vm::function::ParamTypeHint;
+
+        // Mixed accepts anything — always compatible
+        if matches!(impl_hint, ParamTypeHint::Mixed) {
+            return true;
+        }
+
+        // Exact match
+        if impl_hint == iface_hint {
+            return true;
+        }
+
+        // Nullable handling (contravariance):
+        // impl ?T vs iface T → ok (impl accepts more: T + null)
+        // impl ?T vs iface ?T → already caught by exact match above
+        // impl T vs iface ?T → INCOMPATIBLE (impl rejects null that iface promises to accept)
+        match (impl_hint, iface_hint) {
+            (ParamTypeHint::Nullable(inner_impl), _) => {
+                // ?T in impl vs T in iface — impl accepts more, check inner
+                return self.is_param_type_compatible(inner_impl, iface_hint);
+            }
+            (_, ParamTypeHint::Nullable(_)) => {
+                // T in impl vs ?T in iface — impl rejects null, incompatible
+                return false;
+            }
+            _ => {}
+        }
+
+        // Class name contravariance: iface declares A, impl declares B
+        // Compatible if A is_a B (A is a subtype of B, so impl accepts wider)
+        match (impl_hint, iface_hint) {
+            (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
+                return self.class_is_a(iface_class, impl_class);
+            }
+            _ => {}
+        }
+
+        // Union widening: impl int|float vs iface int → ok if iface type is subset of impl union
+        match impl_hint {
+            ParamTypeHint::Union(impl_parts) => {
+                // Check if the interface type is one of the union members
+                // (impl accepts at least everything iface declares)
+                match iface_hint {
+                    ParamTypeHint::Union(iface_parts) => {
+                        // Every iface union member must be compatible with at least one impl member
+                        return iface_parts.iter().all(|ip| {
+                            impl_parts.iter().any(|imp| self.is_param_type_compatible(imp, ip))
+                        });
+                    }
+                    _ => {
+                        // Single iface type must match at least one impl union member
+                        return impl_parts.iter().any(|imp| self.is_param_type_compatible(imp, iface_hint));
+                    }
+                }
+            }
+            _ => {}
+        }
+
+        false
     }
 
     pub fn write_output(&self, data: &[u8]) {

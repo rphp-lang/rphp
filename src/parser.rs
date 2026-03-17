@@ -70,10 +70,11 @@ pub enum Expr {
         expr: Box<Expr>,
         arms: Vec<MatchArm>,
     },
-    Closure {          // function($x) use($y) { ... }
+    Closure {          // function($x) use($y) { ... }: ReturnType
         params: Vec<Param>,
         use_vars: Vec<String>,
         body: Vec<Stmt>,
+        return_type: Option<TypeHint>,
     },
     New {              // new ClassName(args)
         class_name: String,
@@ -158,8 +159,12 @@ pub enum TypeHint {
     Array,
     Callable,
     Null,
+    Void,
+    Mixed,
+    Never,
     ClassName(std::string::String),  // includes "self", "parent", "static"
     Nullable(Box<TypeHint>),         // ?int, ?string, ?ClassName, etc.
+    Union(Vec<TypeHint>),            // int|string, Foo|Bar, etc.
 }
 
 /// Function parameter with optional default value.
@@ -198,6 +203,7 @@ pub enum Stmt {
         name: String,
         params: Vec<Param>,
         body: Vec<Stmt>,
+        return_type: Option<TypeHint>,
     },
     DoWhile {
         condition: Expr,
@@ -240,16 +246,33 @@ pub enum Stmt {
         is_abstract: bool,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
+        uses: Vec<String>,          // trait names from `use Foo, Bar;`
     },
     Interface {
         name: String,
         extends: Vec<String>,
         methods: Vec<ClassMethod>,  // all public, abstract (no body)
     },
+    Trait {
+        name: String,
+        properties: Vec<ClassProperty>,
+        methods: Vec<ClassMethod>,
+    },
     AssignProp {       // $obj->prop = expr
         object: Expr,
         property: String,
         expr: Expr,
+    },
+    Declare {           // declare(strict_types=1);
+        directive: String,
+        value: i64,
+    },
+    Namespace {         // namespace App\Models;
+        name: String,
+        body: Vec<Stmt>, // if braced: namespace App { ... }, else: rest of file
+    },
+    UseDecl {           // use App\Models\User; or use App\Models\User as U;
+        imports: Vec<(String, String)>, // (fully_qualified, alias)
     },
     Const {            // const FOO = expr;
         name: String,
@@ -286,6 +309,7 @@ pub struct ClassMethod {
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
     pub is_static: bool,
+    pub return_type: Option<TypeHint>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -305,11 +329,12 @@ pub struct SwitchCase {
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    in_class_body: bool,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self { tokens, pos: 0, in_class_body: false }
     }
 
     pub fn parse(&mut self) -> Result<Vec<Stmt>, String> {
@@ -325,6 +350,72 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         match self.peek() {
+            Token::Declare => {
+                self.advance(); // consume 'declare'
+                self.expect(&Token::LParen)?;
+                let directive = match self.advance() {
+                    Token::Identifier(n) => n,
+                    other => return Err(format!("Expected directive name in declare(), got {:?}", other)),
+                };
+                self.expect(&Token::Assign)?;
+                let value = match self.advance() {
+                    Token::Integer(n) => n,
+                    Token::True => 1,
+                    Token::False => 0,
+                    other => return Err(format!("Expected integer value in declare(), got {:?}", other)),
+                };
+                self.expect(&Token::RParen)?;
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::Declare { directive, value })
+            }
+            Token::Namespace => {
+                self.advance(); // consume 'namespace'
+                let name = self.parse_qualified_name()?;
+                if self.peek() == Token::LBrace {
+                    // Braced namespace: namespace App\Models { ... }
+                    self.advance(); // consume '{'
+                    let mut body = Vec::new();
+                    while self.peek() != Token::RBrace && self.peek() != Token::Eof {
+                        body.push(self.parse_stmt()?);
+                    }
+                    self.expect(&Token::RBrace)?;
+                    Ok(Stmt::Namespace { name, body })
+                } else {
+                    // Unbraced namespace: namespace App\Models; (rest of file belongs to this namespace)
+                    self.expect(&Token::Semicolon)?;
+                    let mut body = Vec::new();
+                    while self.peek() != Token::Eof && self.peek() != Token::Namespace {
+                        body.push(self.parse_stmt()?);
+                    }
+                    Ok(Stmt::Namespace { name, body })
+                }
+            }
+            Token::Use if !self.in_class_body => {
+                // Top-level use declaration: use App\Models\User; or use App\Models\User as Alias;
+                self.advance(); // consume 'use'
+                let mut imports = Vec::new();
+                loop {
+                    let fqn = self.parse_qualified_name()?;
+                    let alias = if self.peek() == Token::As {
+                        self.advance(); // consume 'as'
+                        match self.advance() {
+                            Token::Identifier(n) => n,
+                            other => return Err(format!("Expected alias name after 'as', got {:?}", other)),
+                        }
+                    } else {
+                        // Default alias = last segment
+                        fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
+                    };
+                    imports.push((fqn, alias));
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::UseDecl { imports })
+            }
             Token::Const => {
                 self.advance(); // consume 'const'
                 let name = match self.advance() {
@@ -566,13 +657,14 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let return_type = self.parse_return_type()?;
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                Ok(Stmt::Function { name, params, body })
+                Ok(Stmt::Function { name, params, body, return_type })
             }
             Token::Return => {
                 self.advance(); // consume 'return'
@@ -621,12 +713,15 @@ impl Parser {
             Token::Interface => {
                 self.parse_interface()
             }
+            Token::Trait => {
+                self.parse_trait()
+            }
             Token::Isset | Token::Empty | Token::Match | Token::New => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))
             }
-            Token::Identifier(_) => {
+            Token::Identifier(_) | Token::Backslash => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))
@@ -834,9 +929,10 @@ impl Parser {
             // instanceof has same precedence as comparison operators
             if self.peek() == Token::Instanceof {
                 self.advance();
-                let class_name = match self.advance() {
-                    Token::Identifier(name) => name,
-                    other => return Err(format!("Expected class name after instanceof, got {:?}", other)),
+                let class_name = if self.peek() == Token::Backslash || matches!(self.peek(), Token::Identifier(_)) {
+                    self.parse_qualified_name()?
+                } else {
+                    return Err(format!("Expected class name after instanceof, got {:?}", self.peek()));
                 };
                 left = Expr::Instanceof {
                     expr: Box::new(left),
@@ -1072,10 +1168,40 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 Ok(Expr::Empty(Box::new(expr)))
             }
+            Token::Backslash => {
+                // Fully qualified name: \App\Models\User() or \App\Models\User::method()
+                let name = self.parse_qualified_name()?;
+                if self.peek() == Token::DoubleColon {
+                    self.advance();
+                    if let Token::Variable(_) = self.peek() {
+                        // TODO: static property access
+                        return Err("Static property access not yet supported".to_string());
+                    }
+                    let method = match self.advance() {
+                        Token::Identifier(n) => n,
+                        other => return Err(format!("Expected method name after ::, got {:?}", other)),
+                    };
+                    self.expect(&Token::LParen)?;
+                    let args = self.parse_call_args()?;
+                    return Ok(Expr::StaticCall { class_name: name, method, args });
+                }
+                if self.peek() == Token::LParen {
+                    self.advance();
+                    let args = self.parse_call_args()?;
+                    Ok(Expr::FunctionCall { name, args })
+                } else {
+                    Ok(Expr::Constant(name))
+                }
+            }
             Token::Identifier(_) => {
-                let name = match self.advance() {
-                    Token::Identifier(n) => n,
-                    _ => unreachable!(),
+                let name = if self.peek_at(1) == Token::Backslash {
+                    // Qualified name: App\Models\User
+                    self.parse_qualified_name()?
+                } else {
+                    match self.advance() {
+                        Token::Identifier(n) => n,
+                        _ => unreachable!(),
+                    }
                 };
                 // Static access: ClassName::method() or ClassName::$prop
                 if self.peek() == Token::DoubleColon {
@@ -1118,9 +1244,10 @@ impl Parser {
             }
             Token::New => {
                 self.advance(); // consume 'new'
-                let class_name = match self.advance() {
-                    Token::Identifier(n) => n,
-                    other => return Err(format!("Expected class name after 'new', got {:?}", other)),
+                let class_name = if self.peek() == Token::Backslash || matches!(self.peek(), Token::Identifier(_)) {
+                    self.parse_qualified_name()?
+                } else {
+                    return Err(format!("Expected class name after 'new', got {:?}", self.peek()));
                 };
                 let args = if self.peek() == Token::LParen {
                     self.advance(); // consume (
@@ -1251,17 +1378,11 @@ impl Parser {
             self.expect(&Token::LParen)?;
             // Parse exception type(s): ExA | ExB
             let mut types = Vec::new();
-            let type_name = match self.advance() {
-                Token::Identifier(n) => n,
-                other => return Err(format!("Expected exception type, got {:?}", other)),
-            };
+            let type_name = self.parse_qualified_name()?;
             types.push(type_name);
             while self.peek() == Token::Pipe {
                 self.advance();
-                let t = match self.advance() {
-                    Token::Identifier(n) => n,
-                    other => return Err(format!("Expected exception type, got {:?}", other)),
-                };
+                let t = self.parse_qualified_name()?;
                 types.push(t);
             }
             let var = match self.advance() {
@@ -1313,10 +1434,7 @@ impl Parser {
         };
         let parent = if self.peek() == Token::Extends {
             self.advance();
-            match self.advance() {
-                Token::Identifier(n) => Some(n),
-                other => return Err(format!("Expected parent class name, got {:?}", other)),
-            }
+            Some(self.parse_qualified_name()?)
         } else {
             None
         };
@@ -1324,10 +1442,7 @@ impl Parser {
             self.advance();
             let mut ifaces = Vec::new();
             loop {
-                match self.advance() {
-                    Token::Identifier(n) => ifaces.push(n),
-                    other => return Err(format!("Expected interface name, got {:?}", other)),
-                }
+                ifaces.push(self.parse_qualified_name()?);
                 if self.peek() == Token::Comma {
                     self.advance();
                 } else {
@@ -1342,8 +1457,27 @@ impl Parser {
 
         let mut properties = Vec::new();
         let mut methods = Vec::new();
+        let mut uses = Vec::new();
+
+        let prev_in_class = self.in_class_body;
+        self.in_class_body = true;
 
         while self.peek() != Token::RBrace && !self.at_eof() {
+            // Trait `use` statements: use Foo, Bar;
+            if self.peek() == Token::Use {
+                self.advance(); // consume 'use'
+                loop {
+                    uses.push(self.parse_qualified_name()?);
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::Semicolon)?;
+                continue;
+            }
+
             let (vis, is_static) = self.parse_visibility_and_static();
 
             if self.peek() == Token::Function {
@@ -1356,13 +1490,14 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let return_type = self.parse_return_type()?;
                 self.expect(&Token::LBrace)?;
                 let mut body = Vec::new();
                 while self.peek() != Token::RBrace && !self.at_eof() {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static });
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, return_type });
             } else if let Token::Variable(_) = self.peek() {
                 // Property
                 let prop_name = match self.advance() {
@@ -1381,9 +1516,64 @@ impl Parser {
                 return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             }
         }
+        self.in_class_body = prev_in_class;
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Class { name, parent, implements, is_abstract, properties, methods })
+        Ok(Stmt::Class { name, parent, implements, is_abstract, properties, methods, uses })
+    }
+
+    /// Parse trait declaration
+    fn parse_trait(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'trait'
+        let name = match self.advance() {
+            Token::Identifier(n) => n,
+            other => return Err(format!("Expected trait name, got {:?}", other)),
+        };
+        self.expect(&Token::LBrace)?;
+
+        let mut properties = Vec::new();
+        let mut methods = Vec::new();
+
+        while self.peek() != Token::RBrace && !self.at_eof() {
+            let (vis, is_static) = self.parse_visibility_and_static();
+
+            if self.peek() == Token::Function {
+                self.advance();
+                let method_name = match self.advance() {
+                    Token::Identifier(n) => n,
+                    other => return Err(format!("Expected method name, got {:?}", other)),
+                };
+                self.expect(&Token::LParen)?;
+                let params = self.parse_param_list()?;
+                self.expect(&Token::RParen)?;
+                let return_type = self.parse_return_type()?;
+                self.expect(&Token::LBrace)?;
+                let mut body = Vec::new();
+                while self.peek() != Token::RBrace && !self.at_eof() {
+                    body.push(self.parse_stmt()?);
+                }
+                self.expect(&Token::RBrace)?;
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, return_type });
+            } else if let Token::Variable(_) = self.peek() {
+                let prop_name = match self.advance() {
+                    Token::Variable(n) => n,
+                    _ => unreachable!(),
+                };
+                let default = if self.peek() == Token::Assign {
+                    self.advance();
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::Semicolon)?;
+                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static });
+            } else {
+                return Err(format!("Unexpected token in trait body: {:?}", self.peek()));
+            }
+        }
+        self.expect(&Token::RBrace)?;
+
+        Ok(Stmt::Trait { name, properties, methods })
     }
 
     /// Parse interface declaration
@@ -1398,10 +1588,7 @@ impl Parser {
             self.advance();
             let mut parents = Vec::new();
             loop {
-                match self.advance() {
-                    Token::Identifier(n) => parents.push(n),
-                    other => return Err(format!("Expected interface name, got {:?}", other)),
-                }
+                parents.push(self.parse_qualified_name()?);
                 if self.peek() == Token::Comma {
                     self.advance();
                 } else {
@@ -1434,8 +1621,9 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
+                let return_type = self.parse_return_type()?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body: vec![], is_static });
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body: vec![], is_static, return_type });
             } else {
                 return Err(format!("Unexpected token in interface body: {:?}", self.peek()));
             }
@@ -1509,6 +1697,7 @@ impl Parser {
         self.expect(&Token::LParen)?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
+        let return_type = self.parse_return_type()?;
         self.expect(&Token::DoubleArrow)?;
         let expr = self.parse_expr()?;
 
@@ -1518,7 +1707,7 @@ impl Parser {
         Self::collect_free_vars(&expr, &param_names, &mut free_vars);
 
         let body = vec![Stmt::Return(Some(expr))];
-        Ok(Expr::Closure { params, use_vars: free_vars, body })
+        Ok(Expr::Closure { params, use_vars: free_vars, body, return_type })
     }
 
     /// Collect variable names referenced in an expression that are not in `bound`.
@@ -1657,6 +1846,8 @@ impl Parser {
             self.expect(&Token::RParen)?;
         }
 
+        let return_type = self.parse_return_type()?;
+
         self.expect(&Token::LBrace)?;
         let mut body = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
@@ -1664,7 +1855,7 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Expr::Closure { params, use_vars, body })
+        Ok(Expr::Closure { params, use_vars, body, return_type })
     }
 
     fn peek(&self) -> Token {
@@ -1730,6 +1921,9 @@ impl Parser {
             Token::Unset => Some("unset".to_string()),
             Token::Fn => Some("fn".to_string()),
             Token::Use => Some("use".to_string()),
+            Token::Declare => Some("declare".to_string()),
+            Token::Trait => Some("trait".to_string()),
+            Token::Namespace => Some("namespace".to_string()),
             _ => None,
         }
     }
@@ -1815,6 +2009,70 @@ impl Parser {
         )
     }
 
+    /// Parse an optional return type hint after `)`.
+    /// If the next token is `:`, consume it and parse a type hint.
+    /// Parse a qualified name like `App\Models\User` or `\App\Models\User`.
+    /// Consumes Identifier (Backslash Identifier)* tokens.
+    /// May start with a leading backslash for fully qualified names.
+    fn parse_qualified_name(&mut self) -> Result<String, String> {
+        let mut parts = Vec::new();
+        // Optional leading backslash (fully qualified)
+        let leading_bs = if self.peek() == Token::Backslash {
+            self.advance();
+            true
+        } else {
+            false
+        };
+        match self.advance() {
+            Token::Identifier(n) => parts.push(n),
+            other => return Err(format!("Expected identifier in qualified name, got {:?}", other)),
+        }
+        while self.peek() == Token::Backslash {
+            self.advance(); // consume '\'
+            match self.advance() {
+                Token::Identifier(n) => parts.push(n),
+                other => return Err(format!("Expected identifier after '\\' in qualified name, got {:?}", other)),
+            }
+        }
+        let name = parts.join("\\");
+        if leading_bs {
+            Ok(format!("\\{}", name))
+        } else {
+            Ok(name)
+        }
+    }
+
+    fn parse_return_type(&mut self) -> Result<Option<TypeHint>, String> {
+        if self.peek() == Token::Colon {
+            self.advance(); // consume ':'
+            // Handle nullable return types: ?: type
+            if self.peek() == Token::Question {
+                self.advance(); // consume '?'
+                let inner = self.parse_base_type_hint()?;
+                return Ok(Some(TypeHint::Nullable(Box::new(inner))));
+            }
+            let hint = self.parse_base_type_hint()?;
+            let hint = self.maybe_parse_union_type(hint)?;
+            Ok(Some(hint))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// If the next token is `|`, parse remaining types to form a union type.
+    fn maybe_parse_union_type(&mut self, first: TypeHint) -> Result<TypeHint, String> {
+        if self.peek() != Token::Pipe {
+            return Ok(first);
+        }
+        let mut types = vec![first];
+        while self.peek() == Token::Pipe {
+            self.advance(); // consume '|'
+            let t = self.parse_base_type_hint()?;
+            types.push(t);
+        }
+        Ok(TypeHint::Union(types))
+    }
+
     /// Try to parse a type hint at the start of a parameter.
     /// Returns None if no type hint is present (next token is $var, &, or ...).
     fn try_parse_type_hint(&mut self) -> Result<Option<TypeHint>, String> {
@@ -1841,9 +2099,11 @@ impl Parser {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(next,
                     Some(Token::Variable(_)) | Some(Token::Ampersand) | Some(Token::DotDotDot)
+                    | Some(Token::Pipe)
                 );
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
+                    let hint = self.maybe_parse_union_type(hint)?;
                     return Ok(Some(hint));
                 }
                 Ok(None)
@@ -1852,10 +2112,12 @@ impl Parser {
                 let next = self.tokens.get(self.pos + 1);
                 let is_type_context = matches!(next,
                     Some(Token::Variable(_)) | Some(Token::Ampersand) | Some(Token::DotDotDot)
+                    | Some(Token::Pipe)
                 );
                 if is_type_context {
                     self.advance(); // consume 'array'
-                    return Ok(Some(TypeHint::Array));
+                    let hint = self.maybe_parse_union_type(TypeHint::Array)?;
+                    return Ok(Some(hint));
                 }
                 Ok(None)
             }
@@ -1874,6 +2136,9 @@ impl Parser {
                     "bool" | "boolean" => Ok(TypeHint::Bool),
                     "callable" => Ok(TypeHint::Callable),
                     "null" => Ok(TypeHint::Null),
+                    "void" => Ok(TypeHint::Void),
+                    "mixed" => Ok(TypeHint::Mixed),
+                    "never" => Ok(TypeHint::Never),
                     _ => Ok(TypeHint::ClassName(name)),
                 }
             }
