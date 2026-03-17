@@ -65,6 +65,8 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: HashMap<usize, Vec<(String, crate::value::Value)>>,
+    /// Active generator being executed (set during resume, used by Yield opcode)
+    pub active_generator: Option<crate::vm::generator::GeneratorRef>,
 }
 
 impl ExecutorGlobals {
@@ -82,6 +84,7 @@ impl ExecutorGlobals {
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             pending_named_variadic: HashMap::new(),
+            active_generator: None,
         }
     }
 
@@ -100,6 +103,7 @@ impl ExecutorGlobals {
 
             output: std::cell::RefCell::new(output),
             pending_named_variadic: HashMap::new(),
+            active_generator: None,
         }
     }
 

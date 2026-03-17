@@ -16,6 +16,8 @@ pub struct OpArray {
     pub try_entries: Vec<compile::TryEntry>,
     /// Per-file strict_types flag, set by `declare(strict_types=1);`
     pub strict_types: bool,
+    /// True if this function contains yield — it's a generator
+    pub is_generator: bool,
 }
 
 impl OpArray {

@@ -3,11 +3,15 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+use crate::vm::generator::GeneratorRef;
+
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
 pub struct PhpObject {
     pub class_name: String,
     pub properties: HashMap<String, Value>,
+    /// If this object is a Generator, holds the generator state
+    pub generator: Option<GeneratorRef>,
 }
 
 /// PHP array — ordered hash map with integer and string keys.
@@ -580,6 +584,7 @@ pub fn make_error_value(class_name: &str, message: &str) -> Value {
     Value::object(PhpObject {
         class_name: class_name.to_string(),
         properties: props,
+        generator: None,
     })
 }
 

@@ -346,6 +346,270 @@ pub fn call_function(
     Ok(return_value)
 }
 
+/// Resume a generator: set up frame, copy state, execute until yield/return.
+/// The generator's state is updated in place.
+pub fn resume_generator(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    send_value: Value,
+) -> Result<(), VmError> {
+    use crate::vm::generator::GeneratorState;
+
+    {
+        let gen_data = gen_ref.borrow();
+        match gen_data.state {
+            GeneratorState::Completed => return Ok(()),
+            GeneratorState::Running => {
+                return Err(VmError::Fatal("Cannot resume an already running generator".into()));
+            }
+            _ => {}
+        }
+    }
+
+    // Handle yield from delegation
+    {
+        use crate::vm::generator::YieldFromDelegate;
+        let has_delegate = gen_ref.borrow().delegate.is_some();
+        if has_delegate {
+            let delegate = gen_ref.borrow_mut().delegate.take();
+            match delegate {
+                Some(YieldFromDelegate::Generator(inner_gen_ref)) => {
+                    // Forward send value to inner generator
+                    resume_generator(eg, &inner_gen_ref, send_value)?;
+
+                    let inner_state = inner_gen_ref.borrow().state;
+                    if inner_state == GeneratorState::Completed {
+                        // Inner generator done — remove delegate, resume outer with return value
+                        let ret_val = inner_gen_ref.borrow().return_value.clone();
+                        gen_ref.borrow_mut().delegate = None;
+
+                        // Resume the outer generator at the YieldFrom instruction
+                        // It will advance past it. We need to write the return value
+                        // to the result slot. We'll do this by resuming normally
+                        // but first advancing ip past the YieldFrom and writing result.
+                        {
+                            let mut gen_data = gen_ref.borrow_mut();
+                            // ip_offset points to YieldFrom instruction, advance past it
+                            gen_data.ip_offset += 1;
+                            gen_data.state = GeneratorState::Suspended;
+                            // Store return value in send_value to be written to result slot
+                            // We'll handle this by writing it after frame setup below
+                        }
+
+                        // Now do a normal resume, but we need to write ret_val to the
+                        // YieldFrom result TMP. We handle this by writing it after frame setup.
+                        // Actually, let's just set ip_offset-1 to point to YieldFrom so the
+                        // send value write logic handles it... but it checks for OpCode::Yield.
+                        // Better approach: resume the generator normally and write ret_val
+                        // to the YieldFrom's result TMP slot manually.
+                        let func_ptr = gen_ref.borrow().func;
+                        let user = unsafe { &*(func_ptr as *const UserFunction) };
+
+                        gen_ref.borrow_mut().state = GeneratorState::Running;
+                        let saved_execute_data = eg.current_execute_data.get();
+                        let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+                        let mut dummy_return = Value::null();
+                        unsafe {
+                            (*frame).return_value = &mut dummy_return;
+                            (*frame).prev_execute_data = std::ptr::null_mut();
+                        }
+
+                        {
+                            let gen_data = gen_ref.borrow();
+                            for (i, val) in gen_data.cv_values.iter().enumerate() {
+                                let slot = unsafe { (*frame).cv_mut(i as u32) };
+                                unsafe { (slot as *mut Value).write(val.clone()) };
+                            }
+                            for (i, val) in gen_data.tmp_values.iter().enumerate() {
+                                let slot = unsafe { (*frame).tmp_mut(i as u32) };
+                                unsafe { (slot as *mut Value).write(val.clone()) };
+                            }
+                            unsafe {
+                                (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
+                            }
+                        }
+
+                        // Write return value to the YieldFrom result slot
+                        {
+                            let result_slot = gen_ref.borrow().yield_from_result_slot;
+                            let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
+                            if yield_from_instr.result_type != OpType::Unused {
+                                let slot = unsafe { (*frame).tmp_mut(result_slot) };
+                                unsafe { (slot as *mut Value).write(ret_val) };
+                            }
+                        }
+
+                        let saved_active = eg.active_generator.take();
+                        eg.active_generator = Some(gen_ref.clone());
+                        eg.current_execute_data.set(frame);
+                        let result = execute_ex(eg, frame);
+                        eg.current_execute_data.set(saved_execute_data);
+                        eg.active_generator = saved_active;
+                        if result.is_err() {
+                            gen_ref.borrow_mut().state = GeneratorState::Completed;
+                        }
+                        return result;
+                    } else {
+                        // Inner generator yielded again — copy its value/key to outer
+                        let mut gen_data = gen_ref.borrow_mut();
+                        let inner = inner_gen_ref.borrow();
+                        gen_data.value = inner.value.clone();
+                        gen_data.key = inner.key.clone();
+                        drop(inner);
+                        gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref));
+                        gen_data.state = GeneratorState::Suspended;
+                        return Ok(());
+                    }
+                }
+                Some(YieldFromDelegate::Array(entries, pos)) => {
+                    if pos >= entries.len() {
+                        // Array exhausted — remove delegate, resume outer
+                        gen_ref.borrow_mut().delegate = None;
+                        {
+                            let mut gen_data = gen_ref.borrow_mut();
+                            gen_data.ip_offset += 1;
+                            gen_data.state = GeneratorState::Suspended;
+                        }
+
+                        let func_ptr = gen_ref.borrow().func;
+                        let user = unsafe { &*(func_ptr as *const UserFunction) };
+
+                        gen_ref.borrow_mut().state = GeneratorState::Running;
+                        let saved_execute_data = eg.current_execute_data.get();
+                        let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+                        let mut dummy_return = Value::null();
+                        unsafe {
+                            (*frame).return_value = &mut dummy_return;
+                            (*frame).prev_execute_data = std::ptr::null_mut();
+                        }
+
+                        {
+                            let gen_data = gen_ref.borrow();
+                            for (i, val) in gen_data.cv_values.iter().enumerate() {
+                                let slot = unsafe { (*frame).cv_mut(i as u32) };
+                                unsafe { (slot as *mut Value).write(val.clone()) };
+                            }
+                            for (i, val) in gen_data.tmp_values.iter().enumerate() {
+                                let slot = unsafe { (*frame).tmp_mut(i as u32) };
+                                unsafe { (slot as *mut Value).write(val.clone()) };
+                            }
+                            unsafe {
+                                (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
+                            }
+                        }
+
+                        // Write null to YieldFrom result (arrays return null)
+                        {
+                            let result_slot = gen_ref.borrow().yield_from_result_slot;
+                            let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
+                            if yield_from_instr.result_type != OpType::Unused {
+                                let slot = unsafe { (*frame).tmp_mut(result_slot) };
+                                unsafe { (slot as *mut Value).write(Value::null()) };
+                            }
+                        }
+
+                        let saved_active = eg.active_generator.take();
+                        eg.active_generator = Some(gen_ref.clone());
+                        eg.current_execute_data.set(frame);
+                        let result = execute_ex(eg, frame);
+                        eg.current_execute_data.set(saved_execute_data);
+                        eg.active_generator = saved_active;
+                        if result.is_err() {
+                            gen_ref.borrow_mut().state = GeneratorState::Completed;
+                        }
+                        return result;
+                    } else {
+                        // Yield next array element
+                        let mut gen_data = gen_ref.borrow_mut();
+                        let (ref key, ref val) = entries[pos];
+                        gen_data.value = val.clone();
+                        gen_data.key = match key {
+                            crate::value::ArrayKey::Int(i) => Value::long(*i),
+                            crate::value::ArrayKey::String(s) => Value::string(s.clone()),
+                        };
+                        gen_data.delegate = Some(YieldFromDelegate::Array(entries, pos + 1));
+                        gen_data.state = GeneratorState::Suspended;
+                        return Ok(());
+                    }
+                }
+                None => unreachable!(),
+            }
+        }
+    }
+
+    // Mark as running
+    gen_ref.borrow_mut().state = GeneratorState::Running;
+
+    let func_ptr = gen_ref.borrow().func;
+    let user = unsafe { &*(func_ptr as *const UserFunction) };
+    let saved_execute_data = eg.current_execute_data.get();
+
+    // Push a frame for the generator
+    let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+    let mut dummy_return = Value::null();
+    unsafe {
+        (*frame).return_value = &mut dummy_return;
+        (*frame).prev_execute_data = std::ptr::null_mut();
+    }
+
+    // Copy saved CV values into frame
+    {
+        let gen_data = gen_ref.borrow();
+        for (i, val) in gen_data.cv_values.iter().enumerate() {
+            let slot = unsafe { (*frame).cv_mut(i as u32) };
+            unsafe { (slot as *mut Value).write(val.clone()) };
+        }
+        for (i, val) in gen_data.tmp_values.iter().enumerate() {
+            let slot = unsafe { (*frame).tmp_mut(i as u32) };
+            unsafe { (slot as *mut Value).write(val.clone()) };
+        }
+
+        // Set instruction pointer
+        unsafe {
+            (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
+        }
+    }
+
+    // If resuming from a yield (not first call), write send value to the
+    // previous yield's result TMP. The yield instruction at ip_offset-1
+    // told us its result slot.
+    {
+        let gen_data = gen_ref.borrow();
+        if gen_data.state == GeneratorState::Running && gen_data.ip_offset > 0 {
+            // The yield instruction is at ip_offset - 1
+            let yield_instr = &user.op_array.instructions[gen_data.ip_offset - 1];
+            if yield_instr.opcode == crate::vm::opcode::OpCode::Yield
+                && yield_instr.result_type != OpType::Unused
+            {
+                let tmp_slot = unsafe { (*frame).tmp_mut(yield_instr.result) };
+                unsafe { (tmp_slot as *mut Value).write(send_value.clone()) };
+            }
+        }
+    }
+
+    // Set active generator so Yield/Return can find it
+    let saved_active = eg.active_generator.take();
+    eg.active_generator = Some(gen_ref.clone());
+
+    eg.current_execute_data.set(frame);
+    let result = execute_ex(eg, frame);
+
+    // Restore state
+    eg.current_execute_data.set(saved_execute_data);
+    eg.active_generator = saved_active;
+
+    // Clean up frame (CV/TMP already saved by Yield handler)
+    // Note: Yield handler already cleaned up the frame, but if Return happened
+    // or an error occurred, the frame might still be allocated.
+    // The Yield/Return handlers pop the frame themselves, so we only need
+    // to handle the error case.
+    if result.is_err() {
+        gen_ref.borrow_mut().state = GeneratorState::Completed;
+    }
+
+    result
+}
+
 /// Inner execute loop — equivalent to zend_execute_ex.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -1066,13 +1330,50 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 match call_fn_type {
                     FunctionType::User => {
                         let user = unsafe { &*((*call).func as *const UserFunction) };
-                        unsafe {
-                            (*call).opline = user.op_array.instructions.as_ptr();
-                            (*frame).opline = (*frame).opline.add(1);
+
+                        // Generator function — create Generator object instead of executing
+                        if user.op_array.is_generator {
+                            use crate::vm::generator::{Generator, new_generator_ref};
+
+                            // Collect argument values from the call frame CV slots
+                            let mut args = Vec::new();
+                            let num_cvs = user.op_array.num_cvs as usize;
+                            for i in 0..num_cvs {
+                                let val = unsafe { (*call).cv(i as u32) }.clone();
+                                args.push(val);
+                            }
+
+                            let generator = Generator::new(
+                                unsafe { (*call).func },
+                                args,
+                                user.op_array.num_cvs,
+                                user.op_array.num_temps,
+                            );
+                            let gen_ref = new_generator_ref(generator);
+                            let gen_obj = PhpObject {
+                                class_name: "Generator".to_string(),
+                                properties: std::collections::HashMap::new(),
+                                generator: Some(gen_ref),
+                            };
+                            let gen_val = Value::object(gen_obj);
+
+                            // Write generator object as return value
+                            if !return_value_ptr.is_null() {
+                                unsafe { write_val(return_value_ptr, gen_val) };
+                            }
+
+                            // Clean up the call frame (we didn't execute it)
+                            unsafe { cleanup_frame_slots(call) };
+                            eg.vm_stack.pop_call_frame(call);
+                        } else {
+                            unsafe {
+                                (*call).opline = user.op_array.instructions.as_ptr();
+                                (*frame).opline = (*frame).opline.add(1);
+                            }
+                            eg.current_execute_data.set(call);
+                            frame = call;
+                            continue;
                         }
-                        eg.current_execute_data.set(call);
-                        frame = call;
-                        continue;
                     }
                     FunctionType::Internal => {
                         let internal = unsafe {
@@ -1345,80 +1646,150 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ForeachInit => {
-                // Copy array from op1 to result TMP, set position TMP (extended_value) to 0
-                // If array is empty or not an array, jump to op2
+                // Copy array/generator from op1 to result TMP, set position to 0
+                // If empty or not iterable, jump to op2
                 let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let is_empty = match arr_val.as_array() {
-                    Some(arr) => arr.is_empty(),
-                    None => {
-                        // PHP: foreach() argument must be of type array|object
-                        eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
-                        let type_name = match arr_val.value_type() {
-                            ValueType::Null => "null",
-                            ValueType::True | ValueType::False => "bool",
-                            ValueType::Long => "int",
-                            ValueType::Double => "float",
-                            ValueType::String => "string",
-                            _ => "unknown",
-                        };
-                        eg.write_output(type_name.as_bytes());
-                        eg.write_output(b" given\n");
-                        true
-                    }
+
+                // Check for Generator object
+                let is_generator = if let Some(obj) = arr_val.as_object() {
+                    obj.class_name == "Generator" && arr_val.as_object_rc().map_or(false, |rc| rc.borrow().generator.is_some())
+                } else {
+                    false
                 };
-                if is_empty {
-                    // Jump to after-loop
-                    let target = opline.op2 as usize;
-                    let base_ptr = op_array.instructions.as_ptr();
-                    unsafe { (*frame).opline = base_ptr.add(target) };
-                    continue;
+
+                if is_generator {
+                    // Start the generator (rewind)
+                    let gen_ref = arr_val.as_object_rc().unwrap().borrow().generator.clone().unwrap();
+                    {
+                        let state = gen_ref.borrow().state;
+                        if state == crate::vm::generator::GeneratorState::Created {
+                            resume_generator(eg, &gen_ref, Value::null())?;
+                        }
+                    }
+                    let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
+                    if !is_valid {
+                        let target = opline.op2 as usize;
+                        let base_ptr = op_array.instructions.as_ptr();
+                        unsafe { (*frame).opline = base_ptr.add(target) };
+                        continue;
+                    }
+                    // Store generator object in result TMP
+                    let cloned = arr_val.clone();
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    unsafe { write_val(result_ptr, cloned) };
+                    // Set position TMP to 0 (0 = first iteration, don't call next)
+                    let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
+                    unsafe { write_val(pos_ptr, Value::long(0)) };
+                } else {
+                    let is_empty = match arr_val.as_array() {
+                        Some(arr) => arr.is_empty(),
+                        None => {
+                            eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
+                            let type_name = match arr_val.value_type() {
+                                ValueType::Null => "null",
+                                ValueType::True | ValueType::False => "bool",
+                                ValueType::Long => "int",
+                                ValueType::Double => "float",
+                                ValueType::String => "string",
+                                _ => "unknown",
+                            };
+                            eg.write_output(type_name.as_bytes());
+                            eg.write_output(b" given\n");
+                            true
+                        }
+                    };
+                    if is_empty {
+                        let target = opline.op2 as usize;
+                        let base_ptr = op_array.instructions.as_ptr();
+                        unsafe { (*frame).opline = base_ptr.add(target) };
+                        continue;
+                    }
+                    // Copy array to result TMP
+                    let cloned = arr_val.clone();
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    unsafe { write_val(result_ptr, cloned) };
+                    // Set position TMP to 0
+                    let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
+                    unsafe { write_val(pos_ptr, Value::long(0)) };
                 }
-                // Copy array to result TMP
-                let cloned = arr_val.clone();
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                unsafe { write_val(result_ptr, cloned) };
-                // Set position TMP to 0
-                let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-                unsafe { write_val(pos_ptr, Value::long(0)) };
             }
 
             OpCode::ForeachNext => {
-                // op1 = array copy TMP, op2 = position TMP
+                // op1 = array/generator copy TMP, op2 = position TMP
                 // result = has_more TMP (bool: true if entry fetched, false if done)
                 // extended_value: low 16 bits = value_cv, high 16 bits = key_cv + 1 (0 = no key)
                 let val_cv = (opline.extended_value & 0xFFFF) as u32;
                 let key_encoded = (opline.extended_value >> 16) as u32;
 
                 let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let pos = pos_val.as_long().unwrap_or(0) as usize;
 
-                let has_more = if let Some(arr) = arr_val.as_array() {
-                    let entries = arr.entries();
-                    if pos < entries.len() {
-                        let (ref key, ref val) = entries[pos];
-                        // Assign value CV
+                // Check for Generator object
+                let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
+                    if obj.class_name == "Generator" {
+                        arr_val.as_object_rc().and_then(|rc| rc.borrow().generator.clone())
+                    } else { None }
+                } else { None };
+
+                let has_more = if let Some(gen_ref) = gen_ref_opt {
+                    let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let pos = pos_val.as_long().unwrap_or(0);
+
+                    // On first iteration (pos=0), generator is already started by ForeachInit
+                    // On subsequent iterations, call next()
+                    if pos > 0 {
+                        let state = gen_ref.borrow().state;
+                        if state == crate::vm::generator::GeneratorState::Suspended {
+                            resume_generator(eg, &gen_ref, Value::null())?;
+                        }
+                    }
+
+                    let gen_data = gen_ref.borrow();
+                    if gen_data.state != crate::vm::generator::GeneratorState::Completed {
+                        // Write current value to value_cv
                         let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                        unsafe { write_val(val_ptr, val.clone()) };
-                        // Assign key CV if requested
+                        unsafe { write_val(val_ptr, gen_data.value.clone()) };
+                        // Write key if requested
                         if key_encoded > 0 {
                             let key_cv = key_encoded - 1;
-                            let key_val = match key {
-                                ArrayKey::Int(k) => Value::long(*k),
-                                ArrayKey::String(k) => Value::string(k.clone()),
-                            };
                             let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                            unsafe { write_val(key_ptr, key_val) };
+                            unsafe { write_val(key_ptr, gen_data.key.clone()) };
                         }
+                        drop(gen_data);
                         // Increment position
                         let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
-                        unsafe { write_val(pos_ptr, Value::long((pos + 1) as i64)) };
+                        unsafe { write_val(pos_ptr, Value::long(pos + 1)) };
                         true
                     } else {
                         false
                     }
                 } else {
-                    false
+                    let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let pos = pos_val.as_long().unwrap_or(0) as usize;
+
+                    if let Some(arr) = arr_val.as_array() {
+                        let entries = arr.entries();
+                        if pos < entries.len() {
+                            let (ref key, ref val) = entries[pos];
+                            let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
+                            unsafe { write_val(val_ptr, val.clone()) };
+                            if key_encoded > 0 {
+                                let key_cv = key_encoded - 1;
+                                let key_val = match key {
+                                    ArrayKey::Int(k) => Value::long(*k),
+                                    ArrayKey::String(k) => Value::string(k.clone()),
+                                };
+                                let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
+                                unsafe { write_val(key_ptr, key_val) };
+                            }
+                            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
+                            unsafe { write_val(pos_ptr, Value::long((pos + 1) as i64)) };
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        false
+                    }
                 };
 
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
@@ -1473,7 +1844,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let name = class_name.as_str().unwrap_or("");
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
 
-                // Reject instantiation of interfaces and abstract classes
+                // Reject instantiation of interfaces, abstract classes, and internal-only classes
+                if name == "Generator" {
+                    return Err(VmError::Fatal(
+                        "The \"Generator\" class is reserved for internal use and cannot be manually instantiated".into()
+                    ));
+                }
                 if let Some(class_def) = eg.class_table.get(name) {
                     if class_def.is_interface {
                         return Err(VmError::Fatal(format!(
@@ -1511,6 +1887,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let obj = PhpObject {
                     class_name: name.to_string(),
                     properties: props,
+                    generator: None,
                 };
                 unsafe { write_val(result_ptr, Value::object(obj)) };
 
@@ -1991,6 +2368,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.exception = None;
                 }
 
+                // Generator return — save return value and mark completed
+                if op_array.is_generator {
+                    if let Some(gen_ref) = eg.active_generator.take() {
+                        let mut gen_data = gen_ref.borrow_mut();
+                        if opline.op1_type != OpType::Unused {
+                            let retval = unsafe {
+                                &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                            };
+                            gen_data.return_value = retval.clone();
+                        }
+                        gen_data.state = crate::vm::generator::GeneratorState::Completed;
+                        gen_data.value = Value::null();
+                        gen_data.key = Value::null();
+                        drop(gen_data);
+                        eg.active_generator = Some(gen_ref);
+                    }
+
+                    let prev = unsafe { (*frame).prev_execute_data };
+                    if prev.is_null() {
+                        return Ok(());
+                    }
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    frame = prev;
+                    continue;
+                }
+
                 if opline.op1_type != OpType::Unused {
                     let retval = unsafe {
                         &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
@@ -2011,6 +2416,254 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 eg.vm_stack.pop_call_frame(frame);
                 frame = prev;
                 continue;
+            }
+
+            OpCode::Yield => {
+                // Yield: suspend generator execution
+                // op1 = yielded value, op2 = key (optional), result = received value slot
+                use crate::vm::generator::GeneratorState;
+
+                let yielded_value = if opline.op1_type != OpType::Unused {
+                    unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone()
+                } else {
+                    Value::null()
+                };
+
+                let yielded_key = if opline.op2_type != OpType::Unused {
+                    Some(unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) }.clone())
+                } else {
+                    None
+                };
+
+                // result TMP index is stored in the instruction itself
+                // resume_generator reads it from yield_instr.result when resuming
+
+                // Find the generator object for this frame by walking up to the
+                // resume_generator caller's context via eg.generator_context
+                if let Some(gen_ref) = eg.active_generator.take() {
+                    let mut gen_data = gen_ref.borrow_mut();
+
+                    // Set yielded value/key
+                    gen_data.value = yielded_value;
+                    if let Some(key) = yielded_key {
+                        gen_data.key = key;
+                    } else {
+                        gen_data.key = Value::long(gen_data.implicit_key);
+                        gen_data.implicit_key += 1;
+                    }
+
+                    // Save frame state back to generator
+                    let num_cvs = unsafe { (*frame).num_cvs } as usize;
+                    let num_temps = unsafe { (*frame).num_temps } as usize;
+                    gen_data.cv_values.clear();
+                    for i in 0..num_cvs {
+                        gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                    }
+                    gen_data.tmp_values.clear();
+                    for i in 0..num_temps {
+                        gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                    }
+
+                    // Save instruction pointer (advance past yield for resume)
+                    let base = op_array.instructions.as_ptr();
+                    gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize + 1 };
+                    gen_data.state = GeneratorState::Suspended;
+
+                    // Remember where to write send() value on resume
+                    gen_data.send_value = Value::null();
+                    // Store result slot info in ip_offset's associated data
+                    // We'll use a simpler approach: resume_generator will write send_value
+                    // to the result TMP before continuing
+
+                    drop(gen_data);
+                    // Put gen_ref back so resume_generator can retrieve it
+                    eg.active_generator = Some(gen_ref);
+                }
+
+                // Return from generator frame (like OpCode::Return)
+                let prev = unsafe { (*frame).prev_execute_data };
+                if prev.is_null() {
+                    return Ok(());
+                }
+                eg.current_execute_data.set(prev);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                frame = prev;
+                continue;
+            }
+
+            OpCode::YieldFrom => {
+                use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+                let source_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone();
+
+                if let Some(gen_ref) = eg.active_generator.take() {
+                    let result_slot = opline.result;
+
+                    // Determine delegate type
+                    if let Some(obj_data) = source_val.as_object() {
+                        if obj_data.class_name == "Generator" {
+                            if let Some(inner_gen_ref) = obj_data.generator.clone() {
+                                drop(obj_data);
+                                // Start inner generator if needed
+                                {
+                                    let inner_state: GeneratorState = inner_gen_ref.borrow().state;
+                                    if inner_state == GeneratorState::Created {
+                                        eg.active_generator = Some(gen_ref.clone());
+                                        drop(eg.active_generator.take());
+                                        resume_generator(eg, &inner_gen_ref, Value::null())?;
+                                    }
+                                }
+
+                                let inner_state: GeneratorState = inner_gen_ref.borrow().state;
+                                if inner_state == GeneratorState::Completed {
+                                    // Sub-generator already done, write return value to result
+                                    let ret_val = inner_gen_ref.borrow().return_value.clone();
+                                    eg.active_generator = Some(gen_ref);
+                                    // Write result to TMP and continue (don't suspend)
+                                    if opline.result_type != OpType::Unused {
+                                        let slot = unsafe { (*frame).tmp_mut(result_slot) };
+                                        unsafe { (slot as *mut Value).write(ret_val) };
+                                    }
+                                    unsafe { (*frame).opline = (*frame).opline.add(1); }
+                                    continue;
+                                }
+
+                                // Set up delegation
+                                {
+                                    let mut gen_data = gen_ref.borrow_mut();
+                                    gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref.clone()));
+                                    gen_data.yield_from_result_slot = result_slot;
+
+                                    // Copy inner generator's current value/key to outer
+                                    let inner = inner_gen_ref.borrow();
+                                    gen_data.value = inner.value.clone();
+                                    gen_data.key = inner.key.clone();
+
+                                    // Save frame state
+                                    let num_cvs = unsafe { (*frame).num_cvs } as usize;
+                                    let num_temps = unsafe { (*frame).num_temps } as usize;
+                                    gen_data.cv_values.clear();
+                                    for i in 0..num_cvs {
+                                        gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                                    }
+                                    gen_data.tmp_values.clear();
+                                    for i in 0..num_temps {
+                                        gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                                    }
+                                    let base = op_array.instructions.as_ptr();
+                                    // Stay at same instruction — resume will re-enter YieldFrom
+                                    // Actually, save ip at current instruction so when delegate
+                                    // finishes we come back to this YieldFrom and advance past it
+                                    gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
+                                    gen_data.state = GeneratorState::Suspended;
+                                }
+
+                                eg.active_generator = Some(gen_ref);
+
+                                // Pop frame like Yield
+                                let prev = unsafe { (*frame).prev_execute_data };
+                                if prev.is_null() {
+                                    return Ok(());
+                                }
+                                eg.current_execute_data.set(prev);
+                                unsafe { cleanup_frame_slots(frame) };
+                                eg.vm_stack.pop_call_frame(frame);
+                                frame = prev;
+                                continue;
+                            }
+                        }
+                        drop(obj_data);
+                        eg.active_generator = Some(gen_ref);
+                        let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exc) => {
+                                eg.exception = Some(exc);
+                                return Ok(());
+                            }
+                        }
+                    } else if let Some(arr) = source_val.as_array() {
+                        let entries: Vec<(crate::value::ArrayKey, Value)> = arr.entries().iter().map(|(k, v): &(crate::value::ArrayKey, Value)| (k.clone(), v.clone())).collect();
+
+                        if entries.is_empty() {
+                            // Empty array — result is null, continue
+                            eg.active_generator = Some(gen_ref);
+                            if opline.result_type != OpType::Unused {
+                                let slot = unsafe { (*frame).tmp_mut(result_slot) };
+                                unsafe { (slot as *mut Value).write(Value::null()) };
+                            }
+                            unsafe { (*frame).opline = (*frame).opline.add(1); }
+                            continue;
+                        }
+
+                        // Set up array delegation
+                        {
+                            let mut gen_data = gen_ref.borrow_mut();
+                            // Yield first element
+                            let (ref key, ref val) = entries[0];
+                            gen_data.value = val.clone();
+                            gen_data.key = match key {
+                                crate::value::ArrayKey::Int(i) => Value::long(*i),
+                                crate::value::ArrayKey::String(s) => Value::string(s.clone()),
+                            };
+                            gen_data.delegate = Some(YieldFromDelegate::Array(entries, 1)); // position after first
+                            gen_data.yield_from_result_slot = result_slot;
+
+                            // Save frame state
+                            let num_cvs = unsafe { (*frame).num_cvs } as usize;
+                            let num_temps = unsafe { (*frame).num_temps } as usize;
+                            gen_data.cv_values.clear();
+                            for i in 0..num_cvs {
+                                gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                            }
+                            gen_data.tmp_values.clear();
+                            for i in 0..num_temps {
+                                gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                            }
+                            let base = op_array.instructions.as_ptr();
+                            gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
+                            gen_data.state = GeneratorState::Suspended;
+                        }
+
+                        eg.active_generator = Some(gen_ref);
+
+                        // Pop frame like Yield
+                        let prev = unsafe { (*frame).prev_execute_data };
+                        if prev.is_null() {
+                            return Ok(());
+                        }
+                        eg.current_execute_data.set(prev);
+                        unsafe { cleanup_frame_slots(frame) };
+                        eg.vm_stack.pop_call_frame(frame);
+                        frame = prev;
+                        continue;
+                    } else {
+                        eg.active_generator = Some(gen_ref);
+                        let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(new_frame, new_op_array) => {
+                                frame = new_frame;
+                                op_array = new_op_array;
+                                continue;
+                            }
+                            ThrowResult::Unhandled(exc) => {
+                                eg.exception = Some(exc);
+                                return Ok(());
+                            }
+                        }
+                    }
+                } else {
+                    return Err(VmError::Fatal("yield from outside generator".into()));
+                }
+            }
+
+            OpCode::GeneratorReturn => {
+                return Err(VmError::Fatal("GeneratorReturn outside generator context".into()));
             }
 
             // All opcodes handled — new opcodes must be added above

@@ -112,6 +112,11 @@ pub enum Expr {
         class_name: String,
     },
     Constant(String),  // FOO, PHP_INT_MAX — named constant reference
+    Yield {            // yield $value or yield $key => $value
+        value: Option<Box<Expr>>,
+        key: Option<Box<Expr>>,
+    },
+    YieldFrom(Box<Expr>),  // yield from $expr
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -716,7 +721,7 @@ impl Parser {
             Token::Trait => {
                 self.parse_trait()
             }
-            Token::Isset | Token::Empty | Token::Match | Token::New => {
+            Token::Isset | Token::Empty | Token::Match | Token::New | Token::Yield => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))
@@ -823,6 +828,11 @@ impl Parser {
 
     /// Parse expression: ternary ? : (lowest precedence, non-associative in PHP 8+)
     fn parse_expr(&mut self) -> Result<Expr, String> {
+        // yield has the lowest precedence
+        if self.peek() == Token::Yield {
+            return self.parse_yield_expr();
+        }
+
         let expr = self.parse_ternary()?;
 
         // Handle assignment as expression: $var = expr
@@ -835,6 +845,32 @@ impl Parser {
         }
 
         Ok(expr)
+    }
+
+    fn parse_yield_expr(&mut self) -> Result<Expr, String> {
+        self.advance(); // consume 'yield'
+
+        // yield from <expr>
+        if self.peek() == Token::From {
+            self.advance(); // consume 'from'
+            let expr = self.parse_expr()?;
+            return Ok(Expr::YieldFrom(Box::new(expr)));
+        }
+
+        // yield; or yield at end of expression context (no value)
+        if matches!(self.peek(), Token::Semicolon | Token::RParen | Token::RBracket | Token::RBrace | Token::Comma | Token::Eof) {
+            return Ok(Expr::Yield { value: None, key: None });
+        }
+
+        // yield <expr> or yield <key> => <value>
+        let first = self.parse_ternary()?;
+        if self.peek() == Token::DoubleArrow {
+            self.advance(); // consume '=>'
+            let value = self.parse_ternary()?;
+            Ok(Expr::Yield { key: Some(Box::new(first)), value: Some(Box::new(value)) })
+        } else {
+            Ok(Expr::Yield { value: Some(Box::new(first)), key: None })
+        }
     }
 
     fn parse_ternary(&mut self) -> Result<Expr, String> {
@@ -1816,6 +1852,14 @@ impl Parser {
             // Literals and constants — no variables
             Expr::Integer(_) | Expr::Float(_) | Expr::StringLiteral(_)
             | Expr::Bool(_) | Expr::Null | Expr::Constant(_) => {}
+            // Yield — collect vars from value/key expressions
+            Expr::Yield { value, key } => {
+                if let Some(v) = value { Self::collect_free_vars(v, bound, out); }
+                if let Some(k) = key { Self::collect_free_vars(k, bound, out); }
+            }
+            Expr::YieldFrom(sub) => {
+                Self::collect_free_vars(sub, bound, out);
+            }
         }
     }
 
@@ -1924,6 +1968,8 @@ impl Parser {
             Token::Declare => Some("declare".to_string()),
             Token::Trait => Some("trait".to_string()),
             Token::Namespace => Some("namespace".to_string()),
+            Token::Yield => Some("yield".to_string()),
+            Token::From => Some("from".to_string()),
             _ => None,
         }
     }

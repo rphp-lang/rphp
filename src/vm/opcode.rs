@@ -78,4 +78,9 @@ pub enum OpCode {
     Instanceof = 107,      // result = op1 instanceof op2 (op2=class_name_const)
     FetchConst = 108,      // result = constant by name (op1=CONST name string)
     BindDefaultParam = 109, // If CV op1 is NOT undef (arg was passed), jump to op2 (skip default init)
+
+    // Generator
+    Yield = 110,        // Yield value: op1=value, op2=key (Unused if no key), result=received value from send()
+    YieldFrom = 111,    // Yield from: op1=sub-generator/iterable, result=return value of sub-generator
+    GeneratorReturn = 112, // Return from generator: op1=return value (like Return but for generators)
 }

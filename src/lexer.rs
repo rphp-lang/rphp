@@ -49,6 +49,8 @@ pub enum Token {
     Declare,        // declare
     Namespace,      // namespace
     Backslash,      // \ (namespace separator)
+    Yield,          // yield
+    From,           // from (used after yield)
     // Literals
     Integer(i64),   // 42, -1
     Float(f64),     // 3.14, 1.5e10
@@ -445,6 +447,8 @@ impl<'a> Lexer<'a> {
                         "abstract" => tokens.push(Token::Abstract),
                         "declare" => tokens.push(Token::Declare),
                         "namespace" => tokens.push(Token::Namespace),
+                        "yield" => tokens.push(Token::Yield),
+                        "from" => tokens.push(Token::From),
                         "fn" => tokens.push(Token::Fn),
                         "use" => tokens.push(Token::Use),
                         _ => tokens.push(Token::Identifier(ident)),

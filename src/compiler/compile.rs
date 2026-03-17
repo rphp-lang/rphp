@@ -104,6 +104,8 @@ pub struct Compiler {
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
     use_map: HashMap<String, String>,
+    /// True if this function body contains a yield expression (makes it a generator)
+    contains_yield: bool,
 }
 
 /// Get ref_args bitmask for built-in stdlib functions.
@@ -136,6 +138,7 @@ impl Compiler {
             strict_types: false,
             current_namespace: None,
             use_map: HashMap::new(),
+            contains_yield: false,
         }
     }
 
@@ -219,6 +222,7 @@ impl Compiler {
                 literals: self.literals,
                 try_entries: self.try_entries,
                 strict_types: self.strict_types,
+                is_generator: false,
             },
             functions: self.functions,
             class_defs: self.class_defs,
@@ -316,6 +320,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                     strict_types: self.strict_types,
+                    is_generator: func_compiler.contains_yield,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -941,6 +946,7 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
+                        is_generator: func_compiler.contains_yield,
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
@@ -1005,6 +1011,7 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
+                        is_generator: func_compiler.contains_yield,
                     };
                     let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     self.functions.extend(func_compiler.functions);
@@ -1053,6 +1060,7 @@ impl Compiler {
                         literals: func_compiler.literals,
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
+                        is_generator: func_compiler.contains_yield,
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.this_offset = 1;
@@ -1899,6 +1907,7 @@ impl Compiler {
                     literals: func_compiler.literals,
                     try_entries: func_compiler.try_entries,
                     strict_types: self.strict_types,
+                    is_generator: func_compiler.contains_yield,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -2128,6 +2137,44 @@ impl Compiler {
                 instr.result_type = OpType::Tmp;
                 // extended_value = 0 means "read mode" (fetch constant)
                 instr.extended_value = 0;
+                self.instructions.push(instr);
+                (tmp, OpType::Tmp)
+            }
+            Expr::Yield { value, key } => {
+                self.contains_yield = true;
+                let mut instr = Instruction::new(OpCode::Yield);
+                // op1 = yielded value
+                if let Some(val_expr) = value {
+                    let (val_op, val_type) = self.compile_expr(val_expr);
+                    instr.op1 = val_op;
+                    instr.op1_type = val_type;
+                } else {
+                    let null_idx = self.add_literal(Value::null());
+                    instr.op1 = null_idx;
+                    instr.op1_type = OpType::Const;
+                }
+                // op2 = key (if yield $key => $value)
+                if let Some(key_expr) = key {
+                    let (key_op, key_type) = self.compile_expr(key_expr);
+                    instr.op2 = key_op;
+                    instr.op2_type = key_type;
+                }
+                // result = value received from send()
+                let tmp = self.alloc_tmp();
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
+                self.instructions.push(instr);
+                (tmp, OpType::Tmp)
+            }
+            Expr::YieldFrom(sub_expr) => {
+                self.contains_yield = true;
+                let (sub_op, sub_type) = self.compile_expr(sub_expr);
+                let tmp = self.alloc_tmp();
+                let mut instr = Instruction::new(OpCode::YieldFrom);
+                instr.op1 = sub_op;
+                instr.op1_type = sub_type;
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }

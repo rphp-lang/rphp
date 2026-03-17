@@ -409,6 +409,28 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
     }
 
+    // Generator class — implements Iterator
+    eg.register_class(ClassDef {
+        name: "Generator".to_string(),
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_trait: false,
+        uses: vec![],
+        properties: vec![],
+        methods: vec![],
+    }).unwrap();
+
+    // Generator methods: $this is CV 0
+    reg_method!("Generator", "current", fn_generator_current, 1, 0);
+    reg_method!("Generator", "key", fn_generator_key, 1, 0);
+    reg_method!("Generator", "next", fn_generator_next, 1, 0);
+    reg_method!("Generator", "valid", fn_generator_valid, 1, 0);
+    reg_method!("Generator", "rewind", fn_generator_rewind, 1, 0);
+    reg_method!("Generator", "send", fn_generator_send, 2, 1, "value");
+    reg_method!("Generator", "getreturn", fn_generator_get_return, 1, 0);
+
     funcs
 }
 
@@ -1858,7 +1880,7 @@ fn json_decode_string(s: &str, assoc: bool) -> Value {
             use crate::value::PhpObject;
             use std::collections::HashMap;
             if inner.is_empty() {
-                return Value::object(PhpObject { class_name: "stdClass".to_string(), properties: HashMap::new() });
+                return Value::object(PhpObject { class_name: "stdClass".to_string(), properties: HashMap::new(), generator: None });
             }
             let mut props = HashMap::new();
             for item in json_split_items(inner) {
@@ -1873,7 +1895,7 @@ fn json_decode_string(s: &str, assoc: bool) -> Value {
                     props.insert(key_str, json_decode_string(val, false));
                 }
             }
-            return Value::object(PhpObject { class_name: "stdClass".to_string(), properties: props });
+            return Value::object(PhpObject { class_name: "stdClass".to_string(), properties: props, generator: None });
         }
     }
     Value::null()
@@ -1916,4 +1938,133 @@ fn find_json_colon(s: &str) -> Option<usize> {
         if !in_str && c == ':' { return Some(i); }
     }
     None
+}
+
+// ============================================================================
+// Generator methods
+// ============================================================================
+
+/// Helper: extract GeneratorRef from $this (CV 0)
+fn get_generator_ref(ed: *mut ExecuteData) -> Option<crate::vm::generator::GeneratorRef> {
+    let this_val = arg!(ed, 0);
+    if let Some(obj) = this_val.as_object() {
+        if obj.class_name == "Generator" {
+            if let Some(rc) = this_val.as_object_rc() {
+                let borrowed = rc.borrow();
+                return borrowed.generator.clone();
+            }
+        }
+    }
+    None
+}
+
+/// Ensure generator is started (first next/send/rewind triggers initial execution)
+fn ensure_generator_started(gen_ref: &crate::vm::generator::GeneratorRef, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use crate::vm::generator::GeneratorState;
+    let state = gen_ref.borrow().state;
+    if state == GeneratorState::Created {
+        crate::vm::execute::resume_generator(eg, gen_ref, Value::null())?;
+    }
+    Ok(())
+}
+
+fn fn_generator_current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        ensure_generator_started(&gen_ref, eg)?;
+        let val = gen_ref.borrow().value.clone();
+        ret!(rv, val);
+    } else {
+        ret!(rv, Value::null());
+    }
+    Ok(())
+}
+
+fn fn_generator_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        ensure_generator_started(&gen_ref, eg)?;
+        let gen_data = gen_ref.borrow();
+        let val = if gen_data.state == crate::vm::generator::GeneratorState::Completed {
+            Value::null()
+        } else {
+            gen_data.key.clone()
+        };
+        ret!(rv, val);
+    } else {
+        ret!(rv, Value::null());
+    }
+    Ok(())
+}
+
+fn fn_generator_next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        ensure_generator_started(&gen_ref, eg)?;
+        // Advance past current yield
+        let state = gen_ref.borrow().state;
+        if state == crate::vm::generator::GeneratorState::Suspended {
+            crate::vm::execute::resume_generator(eg, &gen_ref, Value::null())?;
+        }
+    }
+    ret!(rv, Value::null());
+    Ok(())
+}
+
+fn fn_generator_valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        ensure_generator_started(&gen_ref, eg)?;
+        let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
+        ret!(rv, Value::bool(is_valid));
+    } else {
+        ret!(rv, Value::bool(false));
+    }
+    Ok(())
+}
+
+fn fn_generator_rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        ensure_generator_started(&gen_ref, eg)?;
+    }
+    ret!(rv, Value::null());
+    Ok(())
+}
+
+fn fn_generator_send(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        let send_val = arg!(ed, 1).clone();
+
+        // PHP semantics: ensure_initialized first, then inject send value.
+        // If Created: start generator (runs to first yield), THEN resume with send value.
+        // If Suspended: resume with send value directly.
+        let state = gen_ref.borrow().state;
+        if state == crate::vm::generator::GeneratorState::Created {
+            // Start generator — runs to first yield, sets up send_target
+            crate::vm::execute::resume_generator(eg, &gen_ref, Value::null())?;
+            // Now resume with the actual send value (if still suspended)
+            let state2 = gen_ref.borrow().state;
+            if state2 == crate::vm::generator::GeneratorState::Suspended {
+                crate::vm::execute::resume_generator(eg, &gen_ref, send_val)?;
+            }
+        } else if state == crate::vm::generator::GeneratorState::Suspended {
+            crate::vm::execute::resume_generator(eg, &gen_ref, send_val)?;
+        }
+
+        // Return current yielded value
+        let val = gen_ref.borrow().value.clone();
+        ret!(rv, val);
+    } else {
+        ret!(rv, Value::null());
+    }
+    Ok(())
+}
+
+fn fn_generator_get_return(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    if let Some(gen_ref) = get_generator_ref(ed) {
+        let gen_data = gen_ref.borrow();
+        if gen_data.state != crate::vm::generator::GeneratorState::Completed {
+            return Err(VmError::Fatal("Cannot get return value of a generator that hasn't returned".into()));
+        }
+        ret!(rv, gen_data.return_value.clone());
+    } else {
+        ret!(rv, Value::null());
+    }
+    Ok(())
 }

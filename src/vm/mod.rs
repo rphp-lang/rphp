@@ -4,3 +4,4 @@ pub mod function;
 pub mod frame;
 pub mod stack;
 pub mod execute;
+pub mod generator;
