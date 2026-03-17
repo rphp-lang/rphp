@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
 use crate::value::{Value, PhpArray, PhpObject, ArrayKey, ValueType, make_error_value};
@@ -161,6 +162,64 @@ unsafe fn cleanup_call_and_throw<'a>(
     cleanup_frame_slots(call);
     eg.vm_stack.pop_call_frame(call);
     throw_in_frame(eg, frame, err)
+}
+
+/// Call a magic method on an object.
+/// Looks up `classname::method_name` in the function table and, if found,
+/// pushes a temporary call frame, executes it, and returns the result.
+/// `obj_val` must be an Object value (caller ensures this).
+/// `args` are the explicit arguments to pass (excluding $this).
+fn call_magic_method(
+    eg: &mut ExecutorGlobals,
+    obj_val: &Value,
+    method_name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let class_name = {
+        let obj = obj_val.as_object().unwrap();
+        obj.class_name.clone()
+    };
+    let full_name = format!("{}::{}", class_name.to_lowercase(), method_name);
+    let func_ptr = match eg.find_function(&full_name) {
+        Some(ptr) => ptr,
+        None => return Ok(None),
+    };
+
+    let func_common = unsafe { &*func_ptr };
+    if func_common.fn_type != FunctionType::User {
+        return Ok(None);
+    }
+
+    let user = unsafe { &*(func_ptr as *const UserFunction) };
+    let num_explicit_args = args.len() as u32;
+
+    // Push a call frame: +1 for $this at CV 0
+    let call = eg.vm_stack.push_call_frame(func_ptr, num_explicit_args + 1);
+    let mut return_value = Value::null();
+    unsafe {
+        (*call).num_args = num_explicit_args;
+        (*call).return_value = &mut return_value;
+        (*call).prev_execute_data = std::ptr::null_mut();
+        (*call).opline = user.op_array.instructions.as_ptr();
+        // Set $this as CV 0
+        let this_ptr = (*call).cv_mut(0);
+        *this_ptr = obj_val.clone();
+        // Set arguments in CV slots starting at 1 (after $this)
+        for (i, arg) in args.iter().enumerate() {
+            let cv = (*call).cv_mut(1 + i as u32);
+            *cv = arg.clone();
+        }
+    }
+
+    let saved_execute_data = eg.current_execute_data.get();
+    eg.current_execute_data.set(call);
+    let result = execute_ex(eg, call);
+    eg.current_execute_data.set(saved_execute_data);
+
+    match result {
+        Ok(()) => Ok(Some(return_value)),
+        Err(e) => Err(e),
+    }
 }
 
 /// Execute a top-level script.
@@ -715,8 +774,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Echo => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let output = val.echo_to_string();
-                eg.write_output(output.as_bytes());
+                if val.value_type() == ValueType::Object {
+                    if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
+                        let output = result.echo_to_string();
+                        eg.write_output(output.as_bytes());
+                    } else {
+                        let output = val.echo_to_string();
+                        eg.write_output(output.as_bytes());
+                    }
+                } else {
+                    let output = val.echo_to_string();
+                    eg.write_output(output.as_bytes());
+                }
             }
 
             OpCode::Add => {
@@ -820,10 +889,123 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
 
-                let s1 = op1.echo_to_string();
-                let s2 = op2.echo_to_string();
+                let s1 = if op1.value_type() == ValueType::Object {
+                    if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
+                        result.echo_to_string()
+                    } else {
+                        op1.echo_to_string()
+                    }
+                } else {
+                    op1.echo_to_string()
+                };
+                let s2 = if op2.value_type() == ValueType::Object {
+                    if let Some(result) = call_magic_method(eg, op2, "__tostring", &[])? {
+                        result.echo_to_string()
+                    } else {
+                        op2.echo_to_string()
+                    }
+                } else {
+                    op2.echo_to_string()
+                };
                 let concatenated = format!("{}{}", s1, s2);
                 unsafe { write_val(result_ptr, Value::string(concatenated)) };
+            }
+
+            OpCode::Spaceship => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                let cmp = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1.cmp(&l2)
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1.partial_cmp(&d2).unwrap_or(std::cmp::Ordering::Equal)
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1.cmp(s2)
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for <=>".into()));
+                };
+                let val = match cmp {
+                    std::cmp::Ordering::Less => -1i64,
+                    std::cmp::Ordering::Equal => 0,
+                    std::cmp::Ordering::Greater => 1,
+                };
+                unsafe { write_val(result_ptr, Value::long(val)) };
+            }
+
+            OpCode::Pow => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    if l2 >= 0 {
+                        unsafe { write_val(result_ptr, Value::long(l1.wrapping_pow(l2 as u32))) };
+                    } else {
+                        unsafe { write_val(result_ptr, Value::double((l1 as f64).powf(l2 as f64))) };
+                    }
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { write_val(result_ptr, Value::double(d1.powf(d2))) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for **".into()));
+                }
+            }
+
+            OpCode::BitwiseAnd => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                let l1 = op1.to_long_val();
+                let l2 = op2.to_long_val();
+                unsafe { write_val(result_ptr, Value::long(l1 & l2)) };
+            }
+
+            OpCode::BitwiseOr => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                let l1 = op1.to_long_val();
+                let l2 = op2.to_long_val();
+                unsafe { write_val(result_ptr, Value::long(l1 | l2)) };
+            }
+
+            OpCode::BitwiseXor => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                let l1 = op1.to_long_val();
+                let l2 = op2.to_long_val();
+                unsafe { write_val(result_ptr, Value::long(l1 ^ l2)) };
+            }
+
+            OpCode::ShiftLeft => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                let l1 = op1.to_long_val();
+                let l2 = op2.to_long_val();
+                unsafe { write_val(result_ptr, Value::long(l1.wrapping_shl(l2 as u32))) };
+            }
+
+            OpCode::ShiftRight => {
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+                let l1 = op1.to_long_val();
+                let l2 = op2.to_long_val();
+                unsafe { write_val(result_ptr, Value::long(l1.wrapping_shr(l2 as u32))) };
+            }
+
+            OpCode::BitwiseNot => {
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let l = val.to_long_val();
+                unsafe { write_val(result_ptr, Value::long(!l)) };
             }
 
             OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual => {
@@ -889,7 +1071,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let casted = match opline.extended_value {
                     0 => Value::long(val.to_long_val()),    // (int)
                     1 => Value::double(val.to_float_val()), // (float)
-                    2 => Value::string(val.echo_to_string()), // (string)
+                    2 => {                                   // (string)
+                        if val.value_type() == ValueType::Object {
+                            if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
+                                Value::string(result.echo_to_string())
+                            } else {
+                                Value::string(val.echo_to_string())
+                            }
+                        } else {
+                            Value::string(val.echo_to_string())
+                        }
+                    }
                     3 => Value::bool(val.is_truthy()),      // (bool)
                     4 => {                                   // (array)
                         match val.value_type() {
@@ -1216,6 +1408,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call_key = call as usize;
                 let pending_named = eg.pending_named_variadic.remove(&call_key);
 
+                // __invoke dispatch: SendVal wrote args to CV 0..N-1 but the
+                // method expects $this at CV 0 and args at CV 1..N.
+                // Shift args right by 1 and place $this at CV 0.
+                if let Some(this_val) = eg.pending_invoke_this.take() {
+                    let num = unsafe { (*call).num_args };
+                    // Shift args from CV[N-1] down to CV[0] into CV[N]..CV[1]
+                    for i in (0..num).rev() {
+                        let val = unsafe { (*call).cv(i).clone() };
+                        let dst = unsafe { (*call).cv_mut(i + 1) };
+                        *dst = val;
+                    }
+                    // Place $this at CV 0
+                    let this_slot = unsafe { (*call).cv_mut(0) };
+                    *this_slot = this_val;
+                    // num_args stays as the public arg count (excluding $this)
+                    // — same convention as InitMethodCall
+                }
+
                 // Validate argument count
                 // `num_args` is the explicit (public) arg count from the call site.
                 // `public_arity()` = declared param count excluding hidden $this.
@@ -1366,6 +1576,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             unsafe { cleanup_frame_slots(call) };
                             eg.vm_stack.pop_call_frame(call);
                         } else {
+                            // Sync caller's scope vars to eg.globals before entering callee.
+                            // For main script: sync all top-level CVs (main_scope_vars).
+                            // For functions: sync only explicit `global $x;` bindings.
+                            let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
+                                &op_array.main_scope_vars
+                            } else {
+                                &op_array.global_vars
+                            };
+                            for (cv_idx, var_name) in vars_to_sync {
+                                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                                let val = unsafe { (*cv_ptr).clone() };
+                                eg.globals.insert(var_name.clone(), val);
+                            }
                             unsafe {
                                 (*call).opline = user.op_array.instructions.as_ptr();
                                 (*frame).opline = (*frame).opline.add(1);
@@ -1863,6 +2086,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             name
                         )));
                     }
+                    if class_def.is_enum {
+                        let err = make_error_value("Error", &format!(
+                            "Cannot instantiate enum {}",
+                            name
+                        ));
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                        }
+                    }
                 }
 
                 // Create new object with default properties from class definition.
@@ -1872,9 +2105,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let mut props = std::collections::HashMap::new();
                 if let Some(class_def) = eg.class_table.get(name) {
                     for (prop_name, default_val, vis, declaring) in &class_def.properties {
+                        let is_readonly = eg.class_table.get(name)
+                            .map(|cd| cd.readonly_props.contains(prop_name))
+                            .unwrap_or(false);
                         let val = default_val.as_ref()
                             .map(|v| v.clone())
-                            .unwrap_or(Value::null());
+                            .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
                         let key = if *vis == Visibility::Private {
                             crate::runtime::mangle_private_prop(declaring, prop_name)
                         } else {
@@ -1967,8 +2203,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
-                    let val = obj.properties.get(&key).cloned().unwrap_or(Value::null());
-                    unsafe { write_val(result_ptr, val) };
+                    let found_val = obj.properties.get(&key).cloned();
+                    drop(obj); // Release borrow before potential magic method call
+                    if let Some(val) = found_val {
+                        unsafe { write_val(result_ptr, val) };
+                    } else {
+                        // Property not found — try __get magic method
+                        if let Some(result) = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])? {
+                            unsafe { write_val(result_ptr, result) };
+                        } else {
+                            unsafe { write_val(result_ptr, Value::null()) };
+                        }
+                    }
                 } else {
                     return Err(VmError::Fatal("Attempt to read property on non-object".into()));
                 }
@@ -2016,9 +2262,112 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
+                    // Enum guard: enum cases are sealed — no property writes allowed
+                    if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
+                        if class_def.is_enum {
+                            let err = make_error_value("Error", &format!(
+                                "Cannot modify readonly property {}::${}",
+                                php_obj.class_name, name
+                            ));
+                            drop(php_obj);
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                    }
+                    // Readonly property check
+                    if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
+                        if class_def.readonly_props.contains(&name) {
+                            let key_check = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
+                            let already_init = php_obj.properties.get(&key_check)
+                                .map_or(false, |v| !v.is_undef());
+                            if already_init {
+                                // Already initialized — always error
+                                let err = make_error_value("Error", &format!(
+                                    "Cannot modify readonly property {}::${}",
+                                    php_obj.class_name, name
+                                ));
+                                drop(php_obj);
+                                match throw_in_frame(eg, frame, err) {
+                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                }
+                            } else {
+                                // First initialization — only allowed from declaring class scope
+                                let in_declaring_scope = caller_class.as_ref().map_or(false, |cc| {
+                                    cc.eq_ignore_ascii_case(&php_obj.class_name)
+                                });
+                                if !in_declaring_scope {
+                                    let err = make_error_value("Error", &format!(
+                                        "Cannot initialize readonly property {}::${} from {}",
+                                        php_obj.class_name, name,
+                                        caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
+                                    ));
+                                    drop(php_obj);
+                                    match throw_in_frame(eg, frame, err) {
+                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                    }
+                                }
+                            }
+                        }
+                    }
                     // Resolve storage key (mangled for private properties)
                     let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
-                    php_obj.properties.insert(key, cloned);
+                    let prop_exists = php_obj.properties.contains_key(&key);
+                    if prop_exists {
+                        php_obj.properties.insert(key, cloned);
+                    } else {
+                        drop(php_obj); // Release borrow before potential magic method call
+                        // Property not found — try __set magic method
+                        if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), cloned.clone()])?.is_none() {
+                            // No __set — fall back to direct insert
+                            if let Some(mut php_obj) = obj.as_object_mut() {
+                                php_obj.properties.insert(key, cloned);
+                            }
+                        }
+                    }
+                } else {
+                    return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
+                }
+            }
+
+            OpCode::AssignObjDim => {
+                // $obj->prop[$key] = val
+                let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let key_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
+                let prop_name_val = &op_array.literals[opline.extended_value as usize];
+                let prop_name = prop_name_val.as_str().unwrap_or("").to_string();
+                let key = key_val.clone();
+                let new_val = val.clone();
+
+                let arr_key = value_to_array_key(&key)?;
+                let obj = unsafe { &*obj_ptr };
+                if let Some(mut php_obj) = obj.as_object_mut() {
+                    let caller_class = get_caller_class(frame, eg);
+                    let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
+                        eg.class_is_a(&php_obj.class_name, cc)
+                    });
+                    let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
+                    let storage_key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &prop_name, effective_caller);
+
+                    if let Some(arr_val) = php_obj.properties.get_mut(&storage_key) {
+                        // Property exists — mutate the array in place
+                        if let Some(arr) = arr_val.as_array_mut() {
+                            arr.set(arr_key, new_val);
+                        } else {
+                            return Err(VmError::Fatal(format!(
+                                "Cannot use object of type {} as array", php_obj.class_name
+                            )));
+                        }
+                    } else {
+                        // Property doesn't exist — create new array
+                        let mut new_arr = crate::value::PhpArray::new();
+                        new_arr.set(arr_key, new_val);
+                        php_obj.properties.insert(storage_key, Value::array(new_arr));
+                    }
                 } else {
                     return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
                 }
@@ -2213,16 +2562,60 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         (*call).call = (*frame).call;
                         (*frame).call = call;
                     }
+                } else if callable.value_type() == ValueType::Object {
+                    // Object with __invoke: set up as method call to __invoke
+                    let obj = callable.as_object().unwrap();
+                    let class_name = obj.class_name.clone();
+                    drop(obj);
+                    let full_name = format!("{}::__invoke", class_name.to_lowercase());
+                    let func_ptr = match eg.find_function(&full_name) {
+                        Some(ptr) => ptr,
+                        None => return Err(VmError::Fatal(format!("Call to undefined method {}::__invoke()", class_name))),
+                    };
+
+                    let num_args = opline.extended_value;
+                    // +1 for $this at CV 0; but don't write $this yet because
+                    // SendVal will write args to CV 0..N-1 (compiler doesn't know
+                    // it's a method call). We'll shift args in DoFcall.
+                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+                    unsafe {
+                        (*call).num_args = num_args;
+                        (*call).num_cvs = num_args + 1; // track total CVs needed
+                        (*call).prev_execute_data = frame;
+                        (*call).call = (*frame).call;
+                        (*frame).call = call;
+                    }
+                    // Stash $this object for injection in DoFcall
+                    eg.pending_invoke_this = Some(callable.clone());
                 } else {
                     return Err(VmError::Fatal(format!("Value of type {:?} is not callable", callable.value_type())));
                 }
             }
 
             OpCode::FetchStaticProp => {
-                // For now, static properties are stored as class-level state
-                // Simple implementation: look up in class table
+                // Look up static property from class definition (used for enum cases)
+                let class_name_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let prop_name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                unsafe { write_val(result_ptr, Value::null()) }; // TODO: implement properly
+
+                let cls = class_name_val.as_str().unwrap_or("");
+                let prop = prop_name_val.as_str().unwrap_or("");
+
+                let mut found = false;
+                if let Some(class_def) = eg.class_table.get(cls) {
+                    for (pname, default, _vis, _declaring) in &class_def.properties {
+                        if pname == prop {
+                            if let Some(val) = default {
+                                unsafe { write_val(result_ptr, val.clone()) };
+                                found = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                if !found {
+                    unsafe { write_val(result_ptr, Value::null()) };
+                }
             }
 
             OpCode::Instanceof => {
@@ -2274,7 +2667,74 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Otherwise fall through — next instructions compute and assign default
             }
 
+            OpCode::BindGlobal => {
+                // Bind a CV to a global variable: copy eg.globals[name] into CV
+                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let name = name_val.as_str().unwrap_or("").to_string();
+                if let Some(val) = eg.globals.get(&name) {
+                    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                    unsafe { write_val(cv_ptr, val.clone()) };
+                }
+                // If not in globals, CV stays undef/null — that's fine, it will be written back on return
+            }
+
+            OpCode::BindStatic => {
+                // Bind a CV to a static variable
+                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let var_name = name_val.as_str().unwrap_or("").to_string();
+                let func_name_val = &op_array.literals[opline.extended_value as usize];
+                let func_name = func_name_val.as_str().unwrap_or("").to_string();
+
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                if let Some(func_statics) = eg.static_vars.get(&func_name) {
+                    if let Some(val) = func_statics.get(&var_name) {
+                        unsafe { write_val(cv_ptr, val.clone()) };
+                    } else {
+                        // First call — initialize with default value
+                        if opline.result_type != OpType::Unused {
+                            let default_val = unsafe {
+                                &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array)
+                            };
+                            unsafe { write_val(cv_ptr, default_val.clone()) };
+                        } else {
+                            unsafe { write_val(cv_ptr, Value::null()) };
+                        }
+                    }
+                } else {
+                    // First call — no statics for this function yet, use default
+                    if opline.result_type != OpType::Unused {
+                        let default_val = unsafe {
+                            &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array)
+                        };
+                        unsafe { write_val(cv_ptr, default_val.clone()) };
+                    } else {
+                        unsafe { write_val(cv_ptr, Value::null()) };
+                    }
+                }
+            }
+
             OpCode::Return => {
+                // ── Write back global and static variables before return ──
+                eg.dirty_globals.clear();
+                if !op_array.global_vars.is_empty() {
+                    for (cv_idx, var_name) in &op_array.global_vars {
+                        let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                        let val = unsafe { (*cv_ptr).clone() };
+                        eg.globals.insert(var_name.clone(), val);
+                        eg.dirty_globals.insert(var_name.clone());
+                    }
+                }
+                if !op_array.static_vars.is_empty() {
+                    let func_name = op_array.name.clone();
+                    for (cv_idx, var_name) in &op_array.static_vars {
+                        let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                        let val = unsafe { (*cv_ptr).clone() };
+                        eg.static_vars.entry(func_name.clone())
+                            .or_insert_with(HashMap::new)
+                            .insert(var_name.clone(), val);
+                    }
+                }
+
                 // ── Return type validation ──
                 let func_common = unsafe { &*(*frame).func };
                 let return_hint = &func_common.return_type_hint;
@@ -2415,6 +2875,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe { cleanup_frame_slots(frame) };
                 eg.vm_stack.pop_call_frame(frame);
                 frame = prev;
+                // After callee returns, selectively re-read globals that the callee modified.
+                // Only update caller CVs for variables the callee wrote back via `global` keyword.
+                // This avoids overwriting by-ref modifications to other variables.
+                if !eg.dirty_globals.is_empty() {
+                    let caller_op_array = unsafe { (*frame).op_array() };
+                    let vars_to_check = if !caller_op_array.main_scope_vars.is_empty() {
+                        &caller_op_array.main_scope_vars
+                    } else {
+                        &caller_op_array.global_vars
+                    };
+                    for (cv_idx, var_name) in vars_to_check {
+                        if eg.dirty_globals.contains(var_name) {
+                            if let Some(val) = eg.globals.get(var_name) {
+                                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                                unsafe { write_val(cv_ptr, val.clone()) };
+                            }
+                        }
+                    }
+                }
                 continue;
             }
 
@@ -2666,6 +3145,200 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 return Err(VmError::Fatal("GeneratorReturn outside generator context".into()));
             }
 
+            OpCode::Include => {
+                let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let path_str = path_val.echo_to_string();
+                let is_require = (opline.extended_value & 1) != 0;
+                let is_once = (opline.extended_value & 2) != 0;
+
+                // Resolve path: if relative, resolve relative to the directory of the
+                // currently executing file (not CWD). Fall back to CWD if no file context.
+                let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
+                    path_str.clone()
+                } else {
+                    // Try to get the directory of the including file from its op_array name
+                    let base_dir = {
+                        let op_name = &op_array.name;
+                        let p = std::path::Path::new(op_name);
+                        if p.is_file() {
+                            p.parent().map(|d| d.to_path_buf())
+                        } else {
+                            // Check included_files for the most recent file
+                            None
+                        }
+                    }.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+                    base_dir.join(&path_str).to_string_lossy().to_string()
+                };
+
+                // Canonicalize for _once dedup (best effort)
+                let canonical = std::fs::canonicalize(&resolved_path)
+                    .map(|p| p.to_string_lossy().to_string())
+                    .unwrap_or_else(|_| resolved_path.clone());
+
+                // _once check: skip if already included
+                if is_once && eg.included_files.contains(&canonical) {
+                    // Already included, skip
+                } else {
+                    // Read the file
+                    let source = match std::fs::read_to_string(&resolved_path) {
+                        Ok(s) => s,
+                        Err(e) => {
+                            if is_require {
+                                return Err(VmError::Fatal(format!(
+                                    "require({}): Failed opening required '{}' ({})",
+                                    path_str, resolved_path, e
+                                )));
+                            } else {
+                                // include: emit warning and continue
+                                let warning = format!(
+                                    "Warning: include({}): Failed opening '{}' for inclusion ({})\n",
+                                    path_str, resolved_path, e
+                                );
+                                eg.write_output(warning.as_bytes());
+                                // Don't return error — continue to next instruction
+                                unsafe { (*frame).opline = (*frame).opline.add(1); }
+                                continue;
+                            }
+                        }
+                    };
+
+                    // Mark as included for _once
+                    if is_once {
+                        eg.included_files.insert(canonical);
+                    }
+
+                    // Lex, parse, compile the included file
+                    let tokens = crate::lexer::Lexer::new(&source).tokenize()
+                        .map_err(|e| VmError::Fatal(format!("Syntax error in {}: {}", resolved_path, e)))?;
+                    let stmts = crate::parser::Parser::new(tokens).parse()
+                        .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
+                    let compile_result = crate::compiler::compile::Compiler::new().compile(&stmts)
+                        .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
+
+                    // Register functions and classes from included file.
+                    // Functions must be boxed and stored in eg.included_functions to keep
+                    // stable pointers (the function_table stores raw pointers).
+                    for (name, func) in compile_result.functions {
+                        let boxed = Box::new(func);
+                        let ptr = &boxed.common as *const FunctionCommon;
+                        eg.included_functions.push(boxed);
+                        let _ = eg.register_function(&name, ptr);
+                    }
+                    for class_def in compile_result.class_defs {
+                        eg.register_class(class_def).map_err(|e| VmError::Fatal(e))?;
+                    }
+
+                    // Execute the included file's main code.
+                    // Set the op_array name to the file path so nested includes
+                    // can resolve relative paths against this file's directory.
+                    let mut inc_op_array_main = compile_result.main;
+                    inc_op_array_main.name = resolved_path.clone();
+                    let main_func_boxed = Box::new(crate::compiler::make_user_function(inc_op_array_main));
+                    eg.included_functions.push(main_func_boxed);
+                    // Get a raw pointer to avoid holding a borrow on eg
+                    let main_func: &UserFunction = unsafe {
+                        &*(&**eg.included_functions.last().unwrap() as *const UserFunction)
+                    };
+
+                    // Copy current frame CVs to eg.globals so included code can access them.
+                    // Use all_cvs to share the full scope (not just main_scope_vars which
+                    // is empty for function-scoped includes).
+                    let scope_vars: Vec<(u32, String)> = if !op_array.all_cvs.is_empty() {
+                        op_array.all_cvs.clone()
+                    } else {
+                        op_array.main_scope_vars.clone()
+                    };
+                    for (cv_idx, var_name) in &scope_vars {
+                        if var_name == "this" { continue; } // don't leak $this to included file
+                        let cv_ptr = unsafe { (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array) };
+                        let val = unsafe { (*cv_ptr).clone() };
+                        eg.globals.insert(var_name.clone(), val);
+                    }
+
+                    // Execute the included file inline.
+                    // We set up a new frame with prev_execute_data = null so that
+                    // execute_ex returns when the included file's Return fires.
+                    let inc_func_ptr = &main_func.common as *const FunctionCommon;
+                    let mut inc_return_value = Value::null();
+                    let inc_frame = eg.vm_stack.push_call_frame(inc_func_ptr, 0);
+                    unsafe {
+                        (*inc_frame).return_value = &mut inc_return_value;
+                        (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
+                        (*inc_frame).prev_execute_data = std::ptr::null_mut();
+                    }
+                    // Initialize included file's CVs from eg.globals
+                    // so variables from the outer scope are visible.
+                    for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
+                        if let Some(val) = eg.globals.get(var_name) {
+                            let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
+                            unsafe { write_val(cv_ptr, val.clone()) };
+                        }
+                    }
+
+                    let prev_ed = eg.current_execute_data.get();
+                    eg.current_execute_data.set(inc_frame);
+
+                    let inc_result = execute_ex(eg, inc_frame);
+
+                    // Sync included file's CVs back to eg.globals before cleanup.
+                    let inc_op_array = unsafe { (*inc_frame).op_array() };
+                    let inc_scope = if !inc_op_array.all_cvs.is_empty() {
+                        &inc_op_array.all_cvs
+                    } else {
+                        &inc_op_array.main_scope_vars
+                    };
+                    for (cv_idx, var_name) in inc_scope {
+                        let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
+                        let val = unsafe { (*cv_ptr).clone() };
+                        eg.globals.insert(var_name.clone(), val);
+                    }
+
+                    eg.current_execute_data.set(prev_ed);
+                    unsafe { cleanup_frame_slots(inc_frame) };
+                    eg.vm_stack.pop_call_frame(inc_frame);
+
+                    // Refresh op_array since we resumed the outer frame
+                    op_array = unsafe { (*frame).op_array() };
+
+                    // Sync globals back to the caller's local scope
+                    // (included file may have modified variables)
+                    for (cv_idx, var_name) in &scope_vars {
+                        if var_name == "this" { continue; }
+                        if let Some(val) = eg.globals.get(var_name) {
+                            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                            unsafe { write_val(cv_ptr, val.clone()) };
+                        }
+                    }
+
+                    // Check for uncaught exception from included file
+                    if let Some(exc) = eg.exception.take() {
+                        let (class_name, message) = if let Some(obj) = exc.as_object() {
+                            let cls = obj.class_name.clone();
+                            let msg = obj.properties.get("message")
+                                .map(|v| v.echo_to_string())
+                                .unwrap_or_default();
+                            (cls, msg)
+                        } else {
+                            ("Exception".to_string(), exc.echo_to_string())
+                        };
+                        return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
+                    }
+
+                    // Copy back changed globals to current frame CVs
+                    for (cv_idx, var_name) in &op_array.main_scope_vars {
+                        if let Some(val) = eg.globals.get(var_name) {
+                            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                            unsafe { write_val(cv_ptr, val.clone()) };
+                        }
+                    }
+
+                    match inc_result {
+                        Ok(_) => {}
+                        Err(e) => return Err(e),
+                    }
+                }
+            }
+
             // All opcodes handled — new opcodes must be added above
         }
 
@@ -2730,6 +3403,12 @@ fn values_identical(a: &Value, b: &Value) -> bool {
                 }
             }
             true
+        }
+        ValueType::Object => {
+            // Objects are identical if they are the same instance (same Rc pointer)
+            let rc_a = a.as_object_rc().unwrap();
+            let rc_b = b.as_object_rc().unwrap();
+            std::rc::Rc::ptr_eq(rc_a, rc_b)
         }
         _ => false,
     }

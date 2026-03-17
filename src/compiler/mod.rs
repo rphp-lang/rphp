@@ -18,6 +18,18 @@ pub struct OpArray {
     pub strict_types: bool,
     /// True if this function contains yield — it's a generator
     pub is_generator: bool,
+    /// CVs bound to global variables via explicit `global $x;`: (cv_index, variable_name)
+    pub global_vars: Vec<(u32, String)>,
+    /// CVs bound to static variables: (cv_index, variable_name)
+    pub static_vars: Vec<(u32, String)>,
+    /// Function name (for static variable storage key)
+    pub name: String,
+    /// Main script scope CVs — all top-level variables synced to eg.globals before function calls.
+    /// Empty for non-main-script op_arrays.
+    pub main_scope_vars: Vec<(u32, String)>,
+    /// All CVs in this op_array: (cv_index, variable_name).
+    /// Used by include to share the caller's full local scope.
+    pub all_cvs: Vec<(u32, String)>,
 }
 
 impl OpArray {

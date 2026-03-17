@@ -12,6 +12,8 @@
 
 use std::borrow::Cow;
 
+use crate::regex::{Regex, parse_php_regex};
+
 use crate::value::{Value, ValueType, PhpArray, ArrayKey};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
@@ -217,6 +219,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format");
 
+    // --- Regex functions ---
+    reg_ref!("preg_match", fn_preg_match, 3, 2, 0b100, "pattern", "subject", "matches");
+    reg!("preg_replace", fn_preg_replace, 3, 3, "pattern", "replacement", "subject");
+
     // --- Type functions ---
     reg!("intval", fn_intval, 1, 1, "value");
     reg!("strval", fn_strval, 1, 1, "value");
@@ -341,9 +347,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: true,
         is_abstract: false,
+        is_final: false,
         is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![],
+        readonly_props: vec![],
         methods: vec![],
     }).unwrap();
 
@@ -354,9 +363,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec!["Throwable".to_string()],
         is_interface: false,
         is_abstract: false,
+        is_final: false,
         is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Exception".to_string())],
+        readonly_props: vec![],
         methods: vec![],
     }).unwrap();
 
@@ -367,9 +379,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec!["Throwable".to_string()],
         is_interface: false,
         is_abstract: false,
+        is_final: false,
         is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Error".to_string())],
+        readonly_props: vec![],
         methods: vec![],
     }).unwrap();
 
@@ -380,9 +395,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: false,
         is_abstract: false,
+        is_final: false,
         is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![],
+        readonly_props: vec![],
         methods: vec![],
     }).unwrap();
 
@@ -393,16 +411,35 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: false,
         is_abstract: false,
+        is_final: false,
         is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![],
+        readonly_props: vec![],
+        methods: vec![],
+    }).unwrap();
+
+    // UnhandledMatchError extends Error
+    eg.register_class(ClassDef {
+        name: "UnhandledMatchError".to_string(),
+        parent: Some("Error".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        properties: vec![],
+        readonly_props: vec![],
         methods: vec![],
     }).unwrap();
 
     // Register __construct and getMessage for each throwable class
     // num_args = 2 for __construct (CV 0 = $this, CV 1 = $message)
     // num_args = 1 for getMessage (CV 0 = $this)
-    for class in &["Throwable", "Exception", "Error", "TypeError", "ArgumentCountError"] {
+    for class in &["Throwable", "Exception", "Error", "TypeError", "ArgumentCountError", "UnhandledMatchError"] {
         // __construct: num_args=2 (CV 0=$this, CV 1=$message), required=0 ($message is optional)
         reg_method!(class, "__construct", fn_throwable_construct, 2, 0, "message");
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
@@ -416,9 +453,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         implements: vec![],
         is_interface: false,
         is_abstract: false,
+        is_final: false,
         is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![],
+        readonly_props: vec![],
         methods: vec![],
     }).unwrap();
 
@@ -1973,10 +2013,8 @@ fn fn_generator_current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorG
         ensure_generator_started(&gen_ref, eg)?;
         let val = gen_ref.borrow().value.clone();
         ret!(rv, val);
-    } else {
-        ret!(rv, Value::null());
     }
-    Ok(())
+    ret!(rv, Value::null());
 }
 
 fn fn_generator_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1989,10 +2027,8 @@ fn fn_generator_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGloba
             gen_data.key.clone()
         };
         ret!(rv, val);
-    } else {
-        ret!(rv, Value::null());
     }
-    Ok(())
+    ret!(rv, Value::null());
 }
 
 fn fn_generator_next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -2005,7 +2041,6 @@ fn fn_generator_next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
         }
     }
     ret!(rv, Value::null());
-    Ok(())
 }
 
 fn fn_generator_valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -2013,10 +2048,8 @@ fn fn_generator_valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlo
         ensure_generator_started(&gen_ref, eg)?;
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
         ret!(rv, Value::bool(is_valid));
-    } else {
-        ret!(rv, Value::bool(false));
     }
-    Ok(())
+    ret!(rv, Value::bool(false));
 }
 
 fn fn_generator_rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -2024,7 +2057,6 @@ fn fn_generator_rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGl
         ensure_generator_started(&gen_ref, eg)?;
     }
     ret!(rv, Value::null());
-    Ok(())
 }
 
 fn fn_generator_send(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -2050,10 +2082,8 @@ fn fn_generator_send(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
         // Return current yielded value
         let val = gen_ref.borrow().value.clone();
         ret!(rv, val);
-    } else {
-        ret!(rv, Value::null());
     }
-    Ok(())
+    ret!(rv, Value::null());
 }
 
 fn fn_generator_get_return(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -2063,8 +2093,88 @@ fn fn_generator_get_return(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Execu
             return Err(VmError::Fatal("Cannot get return value of a generator that hasn't returned".into()));
         }
         ret!(rv, gen_data.return_value.clone());
-    } else {
-        ret!(rv, Value::null());
     }
-    Ok(())
+    ret!(rv, Value::null());
+}
+
+// ============================================================================
+// Regex (PCRE) functions
+// ============================================================================
+
+/// preg_match($pattern, $subject [, &$matches]) -> int (0 or 1)
+fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let pattern_str = arg_str!(ed, 0);
+    let subject = arg_str!(ed, 1);
+
+    let has_matches = {
+        let raw = unsafe { (*ed).cv(2) };
+        !raw.is_undef()
+    };
+
+    let (pat, flags) = match parse_php_regex(&pattern_str) {
+        Ok(v) => v,
+        Err(_e) => {
+            // PHP emits a warning and returns false for invalid patterns
+            ret!(rv, Value::bool(false));
+        }
+    };
+    let re = match Regex::new(&pat, flags) {
+        Ok(r) => r,
+        Err(_e) => {
+            ret!(rv, Value::bool(false));
+        }
+    };
+
+    match re.captures(&subject) {
+        Some(caps) => {
+            if has_matches {
+                let matches_ptr = arg_mut!(ed, 2);
+                let mut arr = PhpArray::new();
+                for i in 0..caps.len() {
+                    match caps.get(i) {
+                        Some(m) => arr.push(Value::string(m.as_str(&subject))),
+                        None => arr.push(Value::string("")),
+                    }
+                }
+                // Add named capture groups as string-keyed entries
+                for (name, &idx) in caps.named_groups() {
+                    if let Some(m) = caps.get(idx) {
+                        arr.set_str(name, Value::string(m.as_str(&subject)));
+                    }
+                }
+                unsafe { std::ptr::drop_in_place(matches_ptr); matches_ptr.write(Value::array(arr)); }
+            }
+            ret!(rv, Value::long(1));
+        }
+        None => {
+            if has_matches {
+                let matches_ptr = arg_mut!(ed, 2);
+                unsafe { std::ptr::drop_in_place(matches_ptr); matches_ptr.write(Value::array(PhpArray::new())); }
+            }
+            ret!(rv, Value::long(0));
+        }
+    }
+}
+
+/// preg_replace($pattern, $replacement, $subject) -> string
+fn fn_preg_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let pattern_str = arg_str!(ed, 0);
+    let replacement = arg_str!(ed, 1);
+    let subject = arg_str!(ed, 2);
+
+    let (pat, flags) = match parse_php_regex(&pattern_str) {
+        Ok(v) => v,
+        Err(_e) => {
+            ret!(rv, Value::null());
+        }
+    };
+    let re = match Regex::new(&pat, flags) {
+        Ok(r) => r,
+        Err(_e) => {
+            ret!(rv, Value::null());
+        }
+    };
+
+    let result = re.replace_all(&subject, &replacement);
+    ret!(rv, Value::string(result));
 }

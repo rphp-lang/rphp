@@ -47,6 +47,12 @@ fn test_echo_int() {
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -74,6 +80,12 @@ fn test_echo_negative() {
         literals: vec![Value::long(-1), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -110,6 +122,12 @@ fn test_add_and_echo() {
         literals: vec![Value::long(20), Value::long(22), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -140,6 +158,12 @@ fn test_overflow_to_float() {
         literals: vec![Value::long(i64::MAX), Value::long(1)],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -167,6 +191,12 @@ fn test_timeout_interrupt() {
         literals: vec![Value::long(1), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -216,6 +246,12 @@ fn test_assign_and_echo_cv() {
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -268,6 +304,12 @@ fn test_assign_add_echo() {
         literals: vec![Value::long(20), Value::long(22), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -334,6 +376,12 @@ fn test_internal_function_call() {
         literals: vec![Value::string("my_double"), Value::long(21), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -370,6 +418,12 @@ fn test_user_function_call() {
         literals: vec![Value::long(1)],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let add_one_func = make_user_function_with_args(fn_op_array, 1);
@@ -410,6 +464,12 @@ fn test_user_function_call() {
         literals: vec![Value::string("add_one"), Value::long(41), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(main_op_array);
@@ -441,6 +501,12 @@ fn test_undefined_function_error() {
         literals: vec![Value::string("nonexistent"), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -496,6 +562,12 @@ fn test_nested_calls() {
         literals: vec![Value::long(1)],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     }, 1);
 
     // --- main script ---
@@ -563,6 +635,12 @@ fn test_nested_calls() {
         ],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -605,6 +683,12 @@ fn test_recursive_countdown() {
         literals: vec![Value::long(42)],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     // f2: return f1()
@@ -628,6 +712,12 @@ fn test_recursive_countdown() {
         literals: vec![Value::string("f1")],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     // f3: return f2()
@@ -651,6 +741,12 @@ fn test_recursive_countdown() {
         literals: vec![Value::string("f2")],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     // main: echo f3()
@@ -678,6 +774,12 @@ fn test_recursive_countdown() {
         literals: vec![Value::string("f3"), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -711,6 +813,12 @@ fn test_interrupt_during_deep_call() {
         literals: vec![Value::long(1), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     // main: init_fcall f1, do_fcall, echo "2", return
@@ -737,6 +845,12 @@ fn test_interrupt_during_deep_call() {
         literals: vec![Value::string("f1"), Value::long(2), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
@@ -793,6 +907,12 @@ fn test_assign_result_used() {
         literals: vec![Value::long(42), Value::null()],
         try_entries: vec![],
         strict_types: false,
+        is_generator: false,
+        global_vars: vec![],
+        static_vars: vec![],
+        name: String::new(),
+        main_scope_vars: vec![],
+        all_cvs: vec![],
     });
 
     let (mut eg, buf) = make_eg_with_capture();

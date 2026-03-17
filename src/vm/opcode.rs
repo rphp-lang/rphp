@@ -83,4 +83,20 @@ pub enum OpCode {
     Yield = 110,        // Yield value: op1=value, op2=key (Unused if no key), result=received value from send()
     YieldFrom = 111,    // Yield from: op1=sub-generator/iterable, result=return value of sub-generator
     GeneratorReturn = 112, // Return from generator: op1=return value (like Return but for generators)
+
+    // New operators
+    Spaceship = 113,       // <=>: compare two values, result is -1, 0, or 1
+    Pow = 114,             // **: numeric power
+    BitwiseAnd = 115,      // &: integer bitwise AND
+    BitwiseOr = 116,       // |: integer bitwise OR
+    BitwiseXor = 117,      // ^: integer bitwise XOR
+    ShiftLeft = 118,       // <<: integer left shift
+    ShiftRight = 119,      // >>: integer right shift
+    BitwiseNot = 120,      // ~: unary integer bitwise NOT
+
+    // Global/static variable binding
+    BindGlobal = 121,      // Bind CV op1 to global variable named op2 (CONST string)
+    BindStatic = 123,      // Bind CV op1 to static variable named op2 (CONST string), func name in extended_value (CONST)
+    AssignObjDim = 124,    // $obj->prop[$key] = val; op1=obj, op2=key, result=val, extended_value=prop literal idx
+    Include = 125,         // Include/require file: op1=path (CONST/TMP/CV), extended_value flags: bit0=require, bit1=once
 }

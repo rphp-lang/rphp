@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use crate::value::Value;
-use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg};
+use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{Instruction, OpType};
 use super::OpArray;
@@ -60,10 +60,13 @@ pub struct ClassDef {
     pub implements: Vec<String>,
     pub is_interface: bool,
     pub is_abstract: bool,
+    pub is_final: bool,
     pub is_trait: bool,
+    pub is_enum: bool,
     pub uses: Vec<String>,  // trait names from `use Foo, Bar;`
     pub properties: Vec<(String, Option<Value>, Visibility, String)>,  // (name, default_value, visibility, declaring_class)
-    pub methods: Vec<(String, Visibility, bool, UserFunction)>, // (name, vis, is_static, func)
+    pub readonly_props: Vec<String>,  // names of readonly properties
+    pub methods: Vec<(String, Visibility, bool, bool, UserFunction)>, // (name, vis, is_static, is_final, func)
 }
 
 /// Tracks loop context for break/continue patching
@@ -106,6 +109,12 @@ pub struct Compiler {
     use_map: HashMap<String, String>,
     /// True if this function body contains a yield expression (makes it a generator)
     contains_yield: bool,
+    /// CVs bound to global variables
+    global_vars: Vec<(u32, String)>,
+    /// CVs bound to static variables
+    static_vars: Vec<(u32, String)>,
+    /// Current function name (for static variable keying)
+    current_function_name: String,
 }
 
 /// Get ref_args bitmask for built-in stdlib functions.
@@ -117,6 +126,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "array_pop" | "array_shift" => 0b1,             // arg 0
         "array_splice" => 0b1,                           // arg 0
         "settype" => 0b1,                                // arg 0
+        "preg_match" => 0b100,                           // arg 2 (&$matches)
         _ => 0,
     }
 }
@@ -139,6 +149,9 @@ impl Compiler {
             current_namespace: None,
             use_map: HashMap::new(),
             contains_yield: false,
+            global_vars: Vec::new(),
+            static_vars: Vec::new(),
+            current_function_name: String::new(),
         }
     }
 
@@ -214,6 +227,14 @@ impl Compiler {
         ret.op1 = null_idx;
         self.instructions.push(ret);
 
+        // Main script: collect all CVs for syncing to eg.globals before function calls.
+        // These go into main_scope_vars (separate from explicit `global` bindings).
+        let mut main_scope_vars: Vec<(u32, String)> = Vec::new();
+        for (name, &cv_idx) in &self.cv_table {
+            main_scope_vars.push((cv_idx, name.clone()));
+        }
+        let all_cvs = self.all_cvs();
+
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
@@ -223,6 +244,11 @@ impl Compiler {
                 try_entries: self.try_entries,
                 strict_types: self.strict_types,
                 is_generator: false,
+                global_vars: self.global_vars,
+                static_vars: self.static_vars,
+                name: "<main>".to_string(),
+                main_scope_vars,
+                all_cvs,
             },
             functions: self.functions,
             class_defs: self.class_defs,
@@ -302,6 +328,7 @@ impl Compiler {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
+                func_compiler.current_function_name = self.resolve_name(name);
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 for s in body {
@@ -313,6 +340,8 @@ impl Compiler {
                 ret.op1 = null_idx;
                 func_compiler.instructions.push(ret);
 
+                let func_name = func_compiler.current_function_name.clone();
+                let func_all_cvs = func_compiler.all_cvs();
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -321,6 +350,11 @@ impl Compiler {
                     try_entries: func_compiler.try_entries,
                     strict_types: self.strict_types,
                     is_generator: func_compiler.contains_yield,
+                    global_vars: func_compiler.global_vars,
+                    static_vars: func_compiler.static_vars,
+                    name: func_name,
+                    main_scope_vars: vec![],
+                    all_cvs: func_all_cvs,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -878,6 +912,33 @@ impl Compiler {
                 assign.result_type = val_type;
                 self.instructions.push(assign);
             }
+            Stmt::AssignObjArrayDim { object, property, index, expr } => {
+                let (obj_op, obj_type) = self.compile_expr(object);
+                let (idx_op, idx_type) = self.compile_expr(index);
+                let (val_op, val_type) = self.compile_expr(expr);
+                let prop_idx = self.add_literal(Value::string(property.clone()));
+
+                let mut instr = Instruction::new(OpCode::AssignObjDim);
+                instr.op1 = obj_op;
+                instr.op1_type = obj_type;
+                instr.op2 = idx_op;
+                instr.op2_type = idx_type;
+                instr.result = val_op;
+                instr.result_type = val_type;
+                instr.extended_value = prop_idx;
+                self.instructions.push(instr);
+            }
+            Stmt::Include { path, is_require, is_once } => {
+                let (path_op, path_type) = self.compile_expr(path);
+                let mut instr = Instruction::new(OpCode::Include);
+                instr.op1 = path_op;
+                instr.op1_type = path_type;
+                let mut flags: u32 = 0;
+                if *is_require { flags |= 1; }
+                if *is_once { flags |= 2; }
+                instr.extended_value = flags;
+                self.instructions.push(instr);
+            }
             Stmt::Declare { directive, value } => {
                 match directive.as_str() {
                     "strict_types" => {
@@ -918,10 +979,64 @@ impl Compiler {
                 instr.extended_value = 1;
                 self.instructions.push(instr);
             }
-            Stmt::Class { name, parent, implements, is_abstract, uses, properties, methods } => {
+            Stmt::ListAssign { targets, expr } => {
+                // Compile the RHS expression
+                let (rhs_op, rhs_type) = self.compile_expr(expr);
+                // Store the RHS into a temp so we can index into it multiple times
+                let rhs_tmp = self.alloc_tmp();
+                let mut assign = Instruction::new(OpCode::AssignCv);
+                assign.op1_type = OpType::Tmp;
+                assign.op1 = rhs_tmp;
+                assign.op2_type = rhs_type;
+                assign.op2 = rhs_op;
+                self.instructions.push(assign);
+                // For each target, emit FetchDimR + AssignCv
+                self.compile_list_targets(targets, rhs_tmp, 0)?;
+            }
+            Stmt::Global(vars) => {
+                for var_name in vars {
+                    let cv_idx = self.resolve_cv(var_name);
+                    let name_idx = self.add_literal(Value::string(var_name.clone()));
+                    let mut instr = Instruction::new(OpCode::BindGlobal);
+                    instr.op1_type = OpType::Cv;
+                    instr.op1 = cv_idx;
+                    instr.op2_type = OpType::Const;
+                    instr.op2 = name_idx;
+                    self.instructions.push(instr);
+                    self.global_vars.push((cv_idx, var_name.clone()));
+                }
+            }
+            Stmt::StaticVar { vars } => {
+                for (var_name, default) in vars {
+                    let cv_idx = self.resolve_cv(var_name);
+                    let name_idx = self.add_literal(Value::string(var_name.clone()));
+                    let func_name_idx = self.add_literal(Value::string(self.current_function_name.clone()));
+                    // If there's a default, compile it and store as extended_value
+                    // We encode: op1=CV, op2=CONST(var_name), extended_value=CONST(func_name)
+                    // result = default value (or Unused)
+                    let mut instr = Instruction::new(OpCode::BindStatic);
+                    instr.op1_type = OpType::Cv;
+                    instr.op1 = cv_idx;
+                    instr.op2_type = OpType::Const;
+                    instr.op2 = name_idx;
+                    instr.extended_value = func_name_idx;
+                    if let Some(def_expr) = default {
+                        let (def_op, def_type) = self.compile_expr(def_expr);
+                        instr.result_type = def_type;
+                        instr.result = def_op;
+                    } else {
+                        instr.result_type = OpType::Unused;
+                    }
+                    self.instructions.push(instr);
+                    self.static_vars.push((cv_idx, var_name.clone()));
+                }
+            }
+            Stmt::Class { name, parent, implements, is_abstract, is_final, uses, properties, methods } => {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
+                // Collect promoted properties from constructor
+                let mut promoted_props: Vec<(String, Visibility, bool)> = Vec::new(); // (name, vis, is_readonly)
                 for method in methods {
                     let mut func_compiler = Compiler::new();
                     func_compiler.known_ref_args = self.build_known_ref_args();
@@ -930,6 +1045,28 @@ impl Compiler {
                     let context = format!("method {}::{}", name, method.name);
                     let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
+
+                    // Constructor property promotion: generate $this->param = $param assignments
+                    if method.name == "__construct" {
+                        for param in &method.params {
+                            if let Some((vis, is_ro)) = &param.promotion {
+                                promoted_props.push((param.name.clone(), *vis, *is_ro));
+                                // Generate: $this->paramName = $paramName;
+                                let this_cv = 0u32; // $this is always CV 0
+                                let param_cv = func_compiler.resolve_cv(&param.name);
+                                let prop_name_idx = func_compiler.add_literal(Value::string(param.name.clone()));
+                                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                                assign.op1_type = OpType::Cv;
+                                assign.op1 = this_cv;
+                                assign.op2_type = OpType::Const;
+                                assign.op2 = prop_name_idx;
+                                assign.result_type = OpType::Cv;
+                                assign.result = param_cv;
+                                func_compiler.instructions.push(assign);
+                            }
+                        }
+                    }
+
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
                     }
@@ -947,17 +1084,23 @@ impl Compiler {
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,
+                        global_vars: func_compiler.global_vars,
+                        static_vars: func_compiler.static_vars,
+                        name: func_compiler.current_function_name,
+                        main_scope_vars: vec![],
+                        all_cvs: vec![],
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
+                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
 
                 // Evaluate property defaults (constant expressions only)
                 let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
+                let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr(expr).map_err(|e| {
@@ -965,7 +1108,18 @@ impl Compiler {
                         })?),
                         None => None,
                     };
+                    if prop.is_readonly {
+                        readonly_props.push(prop.name.clone());
+                    }
                     compiled_props.push((prop.name.clone(), default, prop.visibility, name.clone()));
+                }
+
+                // Add promoted properties
+                for (pname, pvis, p_readonly) in &promoted_props {
+                    compiled_props.push((pname.clone(), None, *pvis, name.clone()));
+                    if *p_readonly {
+                        readonly_props.push(pname.clone());
+                    }
                 }
 
                 // Store class definition for runtime
@@ -979,9 +1133,12 @@ impl Compiler {
                     implements: resolved_implements,
                     is_interface: false,
                     is_abstract: *is_abstract,
+                    is_final: *is_final,
                     is_trait: false,
+                    is_enum: false,
                     uses: resolved_uses,
                     properties: compiled_props,
+                    readonly_props,
                     methods: compiled_methods,
                 });
             }
@@ -1012,10 +1169,15 @@ impl Compiler {
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,
+                        global_vars: func_compiler.global_vars,
+                        static_vars: func_compiler.static_vars,
+                        name: func_compiler.current_function_name,
+                        main_scope_vars: vec![],
+                        all_cvs: vec![],
                     };
                     let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
+                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, false, user_func));
                 }
 
                 // For interface "extends", all parent interfaces become the implements list
@@ -1027,9 +1189,12 @@ impl Compiler {
                     implements: resolved_extends,
                     is_interface: true,
                     is_abstract: false,
+                    is_final: false,
                     is_trait: false,
+                    is_enum: false,
                     uses: vec![],
                     properties: vec![],
+                    readonly_props: vec![],
                     methods: compiled_methods,
                 });
             }
@@ -1061,11 +1226,16 @@ impl Compiler {
                         try_entries: func_compiler.try_entries,
                         strict_types: self.strict_types,
                         is_generator: func_compiler.contains_yield,
+                        global_vars: func_compiler.global_vars,
+                        static_vars: func_compiler.static_vars,
+                        name: func_compiler.current_function_name,
+                        main_scope_vars: vec![],
+                        all_cvs: vec![],
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, user_func));
+                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
 
                 let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
@@ -1086,9 +1256,95 @@ impl Compiler {
                     implements: vec![],
                     is_interface: false,
                     is_abstract: false,
+                    is_final: false,
                     is_trait: true,
+                    is_enum: false,
                     uses: vec![],
                     properties: compiled_props,
+                    readonly_props: vec![],
+                    methods: compiled_methods,
+                });
+            }
+            Stmt::Enum { name, backing_type, cases, methods } => {
+                // Compile enum as a class. Each case becomes a static property
+                // holding a singleton object with `name` (and optionally `value`) properties.
+                let is_backed = backing_type.is_some();
+
+                // Compile methods
+                let mut compiled_methods = Vec::new();
+                for method in methods {
+                    let mut func_compiler = Compiler::new();
+                    func_compiler.known_ref_args = self.build_known_ref_args();
+                    func_compiler.resolve_cv("this");
+                    let context = format!("enum method {}::{}", name, method.name);
+                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    cp.return_type_hint = self.convert_type_hint(&method.return_type);
+                    for s in &method.body {
+                        func_compiler.compile_stmt(s)?;
+                    }
+                    let null_idx = func_compiler.add_literal(Value::null());
+                    let mut ret = Instruction::new(OpCode::Return);
+                    ret.op1_type = OpType::Const;
+                    ret.op1 = null_idx;
+                    func_compiler.instructions.push(ret);
+
+                    let op_array = OpArray {
+                        num_cvs: func_compiler.next_cv,
+                        num_temps: func_compiler.next_tmp,
+                        instructions: func_compiler.instructions,
+                        literals: func_compiler.literals,
+                        try_entries: func_compiler.try_entries,
+                        strict_types: self.strict_types,
+                        is_generator: func_compiler.contains_yield,
+                        global_vars: func_compiler.global_vars,
+                        static_vars: func_compiler.static_vars,
+                        name: func_compiler.current_function_name,
+                        main_scope_vars: vec![],
+                        all_cvs: vec![],
+                    };
+                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
+                    user_func.common.this_offset = 1;
+                    self.functions.extend(func_compiler.functions);
+                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
+                }
+
+                // Build properties for enum cases — each case is stored as a property
+                // with a default value that is a PhpObject with name/value fields.
+                // Static properties (cases) are stored as class properties with is_enum_case flag.
+                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
+                for (case_name, case_value) in cases {
+                    use crate::value::{PhpObject, PhpArray};
+                    let mut props = std::collections::HashMap::new();
+                    props.insert("name".to_string(), Value::string(case_name.clone()));
+                    if is_backed {
+                        if let Some(expr) = case_value {
+                            let val = Self::eval_const_expr(expr).map_err(|e| {
+                                format!("Cannot use non-constant expression as enum case value for {}::{}: {}", name, case_name, e)
+                            })?;
+                            props.insert("value".to_string(), val);
+                        }
+                    }
+                    let obj = Value::object(PhpObject {
+                        class_name: name.clone(),
+                        properties: props,
+                        generator: None,
+                    });
+                    compiled_props.push((case_name.clone(), Some(obj), Visibility::Public, name.clone()));
+                }
+
+                let resolved_enum = self.resolve_name(name);
+                self.class_defs.push(ClassDef {
+                    name: resolved_enum,
+                    parent: None,
+                    implements: vec![],
+                    is_interface: false,
+                    is_abstract: false,
+                    is_final: true, // enums are implicitly final
+                    is_trait: false,
+                    is_enum: true,
+                    uses: vec![],
+                    properties: compiled_props,
+                    readonly_props: vec![],
                     methods: compiled_methods,
                 });
             }
@@ -1410,6 +1666,13 @@ impl Compiler {
                     // PHP has no IS_GREATER opcode — it swaps operands
                     BinOp::Greater => OpCode::IsSmaller,
                     BinOp::GreaterEqual => OpCode::IsSmallerOrEqual,
+                    BinOp::Spaceship => OpCode::Spaceship,
+                    BinOp::Pow => OpCode::Pow,
+                    BinOp::BitwiseAnd => OpCode::BitwiseAnd,
+                    BinOp::BitwiseOr => OpCode::BitwiseOr,
+                    BinOp::BitwiseXor => OpCode::BitwiseXor,
+                    BinOp::ShiftLeft => OpCode::ShiftLeft,
+                    BinOp::ShiftRight => OpCode::ShiftRight,
                     BinOp::And | BinOp::Or => unreachable!(), // handled above
                 };
 
@@ -1560,6 +1823,28 @@ impl Compiler {
                 instr.result_type = OpType::Tmp;
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
+            }
+            Expr::BitwiseNot(inner) => {
+                let (op, op_type) = self.compile_expr(inner);
+                let tmp = self.alloc_tmp();
+                let mut instr = Instruction::new(OpCode::BitwiseNot);
+                instr.op1 = op;
+                instr.op1_type = op_type;
+                instr.result = tmp;
+                instr.result_type = OpType::Tmp;
+                self.instructions.push(instr);
+                (tmp, OpType::Tmp)
+            }
+            Expr::Print(inner) => {
+                // print expr: echo the expression, then result is integer 1
+                let (op, op_type) = self.compile_expr(inner);
+                let mut echo = Instruction::new(OpCode::Echo);
+                echo.op1 = op;
+                echo.op1_type = op_type;
+                self.instructions.push(echo);
+                // print returns 1
+                let one_lit = self.add_literal(Value::long(1));
+                (one_lit, OpType::Const)
             }
             Expr::FunctionCall { name, args } => {
                 let resolved = self.resolve_name(name);
@@ -1857,9 +2142,10 @@ impl Compiler {
                     self.instructions.push(set);
                 } else {
                     // No default: throw UnhandledMatchError at runtime
-                    let msg = self.add_literal(Value::string("Unhandled match case"));
+                    let err_obj = crate::value::make_error_value("UnhandledMatchError", "Unhandled match case");
+                    let err_idx = self.add_literal(err_obj);
                     let mut throw = Instruction::new(OpCode::Throw);
-                    throw.op1 = msg;
+                    throw.op1 = err_idx;
                     throw.op1_type = OpType::Const;
                     self.instructions.push(throw);
                 }
@@ -1900,6 +2186,7 @@ impl Compiler {
                 ret.op1 = null_idx;
                 func_compiler.instructions.push(ret);
 
+                let closure_all_cvs = func_compiler.all_cvs();
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -1908,6 +2195,11 @@ impl Compiler {
                     try_entries: func_compiler.try_entries,
                     strict_types: self.strict_types,
                     is_generator: func_compiler.contains_yield,
+                    global_vars: func_compiler.global_vars,
+                    static_vars: func_compiler.static_vars,
+                    name: func_compiler.current_function_name,
+                    main_scope_vars: vec![],
+                    all_cvs: closure_all_cvs,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -2051,7 +2343,8 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::StaticProperty { class_name, property } => {
-                let class_idx = self.add_literal(Value::string(class_name.clone()));
+                let resolved = self.resolve_name(class_name);
+                let class_idx = self.add_literal(Value::string(resolved));
                 let prop_idx = self.add_literal(Value::string(property.clone()));
                 let tmp = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchStaticProp);
@@ -2198,6 +2491,11 @@ impl Compiler {
         }
     }
 
+    /// Build list of all CVs from cv_table.
+    fn all_cvs(&self) -> Vec<(u32, String)> {
+        self.cv_table.iter().map(|(name, &idx)| (idx, name.clone())).collect()
+    }
+
     /// Controls how a positional argument's Send opcode is chosen.
     /// - `RefAware`: compile-time ref check (FunctionCall with known ref_args)
     /// - `ValOnly`: always SendVal (New — constructor ref_args unknown at compile time)
@@ -2287,5 +2585,78 @@ impl Compiler {
         let idx = self.next_tmp;
         self.next_tmp += 1;
         idx
+    }
+
+    /// Compile list destructuring targets. Each target gets a FetchDimR + AssignCv.
+    fn compile_list_targets(&mut self, targets: &[crate::parser::ListTarget], array_tmp: u32, start_index: usize) -> Result<(), String> {
+        use crate::parser::ListTarget;
+        let mut idx = start_index;
+        for target in targets {
+            match target {
+                ListTarget::Variable(var_name) => {
+                    // result = array_tmp[idx]
+                    let idx_literal = self.add_literal(Value::long(idx as i64));
+                    let fetch_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = OpType::Tmp;
+                    fetch.op1 = array_tmp;
+                    fetch.op2_type = OpType::Const;
+                    fetch.op2 = idx_literal;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = fetch_tmp;
+                    self.instructions.push(fetch);
+                    // assign to CV
+                    let cv_idx = self.resolve_cv(var_name);
+                    let mut assign = Instruction::new(OpCode::AssignCv);
+                    assign.op1_type = OpType::Cv;
+                    assign.op1 = cv_idx;
+                    assign.op2_type = OpType::Tmp;
+                    assign.op2 = fetch_tmp;
+                    self.instructions.push(assign);
+                    idx += 1;
+                }
+                ListTarget::Skip => {
+                    idx += 1;
+                }
+                ListTarget::Nested(inner_targets) => {
+                    // Fetch the sub-array at this index
+                    let idx_literal = self.add_literal(Value::long(idx as i64));
+                    let sub_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = OpType::Tmp;
+                    fetch.op1 = array_tmp;
+                    fetch.op2_type = OpType::Const;
+                    fetch.op2 = idx_literal;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = sub_tmp;
+                    self.instructions.push(fetch);
+                    // Recurse
+                    self.compile_list_targets(inner_targets, sub_tmp, 0)?;
+                    idx += 1;
+                }
+                ListTarget::KeyedVariable { key, var } => {
+                    // Use explicit key instead of sequential index
+                    let (key_op, key_type) = self.compile_expr(key);
+                    let fetch_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = OpType::Tmp;
+                    fetch.op1 = array_tmp;
+                    fetch.op2_type = key_type;
+                    fetch.op2 = key_op;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = fetch_tmp;
+                    self.instructions.push(fetch);
+                    let cv_idx = self.resolve_cv(var);
+                    let mut assign = Instruction::new(OpCode::AssignCv);
+                    assign.op1_type = OpType::Cv;
+                    assign.op1 = cv_idx;
+                    assign.op2_type = OpType::Tmp;
+                    assign.op2 = fetch_tmp;
+                    self.instructions.push(assign);
+                    // Don't increment idx for keyed — they use explicit keys
+                }
+            }
+        }
+        Ok(())
     }
 }

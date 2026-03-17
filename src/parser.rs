@@ -2,6 +2,15 @@
 
 use crate::lexer::Token;
 
+/// Target in a list()/[] destructuring assignment.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ListTarget {
+    Variable(String),
+    Skip,  // empty slot: list(,$b)
+    Nested(Vec<ListTarget>), // nested destructuring
+    KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
+}
+
 /// A call-site argument: either positional or named (PHP 8).
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallArg {
@@ -117,6 +126,8 @@ pub enum Expr {
         key: Option<Box<Expr>>,
     },
     YieldFrom(Box<Expr>),  // yield from $expr
+    Print(Box<Expr>),      // print expr (returns 1)
+    BitwiseNot(Box<Expr>), // ~expr
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -152,6 +163,13 @@ pub enum BinOp {
     GreaterEqual,
     And,    // &&
     Or,     // ||
+    Spaceship,    // <=>
+    Pow,          // **
+    BitwiseAnd,   // &
+    BitwiseOr,    // |
+    BitwiseXor,   // ^
+    ShiftLeft,    // <<
+    ShiftRight,   // >>
 }
 
 /// PHP type hint for function parameters.
@@ -180,6 +198,8 @@ pub struct Param {
     pub is_variadic: bool,
     pub is_ref: bool,
     pub type_hint: Option<TypeHint>,
+    /// Constructor property promotion: Some((visibility, is_readonly))
+    pub promotion: Option<(Visibility, bool)>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -249,6 +269,7 @@ pub enum Stmt {
         parent: Option<String>,
         implements: Vec<String>,
         is_abstract: bool,
+        is_final: bool,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
         uses: Vec<String>,          // trait names from `use Foo, Bar;`
@@ -268,6 +289,12 @@ pub enum Stmt {
         property: String,
         expr: Expr,
     },
+    AssignObjArrayDim {  // $obj->prop[$key] = expr
+        object: Expr,
+        property: String,
+        index: Expr,
+        expr: Expr,
+    },
     Declare {           // declare(strict_types=1);
         directive: String,
         value: i64,
@@ -282,6 +309,25 @@ pub enum Stmt {
     Const {            // const FOO = expr;
         name: String,
         value: Expr,
+    },
+    ListAssign {       // list($a, $b) = expr; or [$a, $b] = expr;
+        targets: Vec<ListTarget>,
+        expr: Expr,
+    },
+    Global(Vec<String>),  // global $a, $b;
+    StaticVar {           // static $a = 0, $b = "";
+        vars: Vec<(String, Option<Expr>)>,
+    },
+    Enum {
+        name: String,
+        backing_type: Option<TypeHint>,
+        cases: Vec<(String, Option<Expr>)>,  // (case_name, optional_value)
+        methods: Vec<ClassMethod>,
+    },
+    Include {
+        path: Expr,
+        is_require: bool,
+        is_once: bool,
     },
 }
 
@@ -305,6 +351,7 @@ pub struct ClassProperty {
     pub name: String,
     pub default: Option<Expr>,
     pub is_static: bool,
+    pub is_readonly: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -314,6 +361,7 @@ pub struct ClassMethod {
     pub params: Vec<Param>,
     pub body: Vec<Stmt>,
     pub is_static: bool,
+    pub is_final: bool,
     pub return_type: Option<TypeHint>,
 }
 
@@ -438,6 +486,19 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Echo(expr))
             }
+            Token::Include | Token::IncludeOnce | Token::Require | Token::RequireOnce => {
+                let tok = self.advance();
+                let (is_require, is_once) = match tok {
+                    Token::Include => (false, false),
+                    Token::IncludeOnce => (false, true),
+                    Token::Require => (true, false),
+                    Token::RequireOnce => (true, true),
+                    _ => unreachable!(),
+                };
+                let path = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::Include { path, is_require, is_once })
+            }
             Token::Variable(_) => {
                 // Peek ahead to determine statement type
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
@@ -508,13 +569,34 @@ impl Parser {
                     })
                 } else {
                     let expr = self.parse_expr()?;
-                    // Check for property assignment: $obj->prop = expr
+                    // Check for property/array-dim assignment: $obj->prop = expr or $obj->prop[$key] = expr
                     if self.peek() == Token::Assign {
-                        if let Expr::PropertyAccess { object, property } = expr {
-                            self.advance(); // consume '='
-                            let rhs = self.parse_expr()?;
-                            self.expect(&Token::Semicolon)?;
-                            return Ok(Stmt::AssignProp { object: *object, property, expr: rhs });
+                        // Check structure without consuming
+                        let is_prop_assign = matches!(&expr, Expr::PropertyAccess { .. });
+                        let is_obj_dim_assign = matches!(&expr, Expr::ArrayAccess { array, .. } if matches!(array.as_ref(), Expr::PropertyAccess { .. }));
+
+                        if is_prop_assign {
+                            if let Expr::PropertyAccess { object, property } = expr {
+                                self.advance(); // consume '='
+                                let rhs = self.parse_expr()?;
+                                self.expect(&Token::Semicolon)?;
+                                return Ok(Stmt::AssignProp { object: *object, property, expr: rhs });
+                            }
+                        } else if is_obj_dim_assign {
+                            if let Expr::ArrayAccess { array, index } = expr {
+                                if let Expr::PropertyAccess { object, property } = *array {
+                                    self.advance(); // consume '='
+                                    let rhs = self.parse_expr()?;
+                                    self.expect(&Token::Semicolon)?;
+                                    return Ok(Stmt::AssignObjArrayDim {
+                                        object: *object,
+                                        property,
+                                        index: *index,
+                                        expr: rhs,
+                                    });
+                                }
+                            }
+                            unreachable!();
                         }
                     }
                     self.expect(&Token::Semicolon)?;
@@ -712,8 +794,11 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Throw(expr))
             }
-            Token::Class | Token::Abstract => {
+            Token::Class | Token::Abstract | Token::Final => {
                 self.parse_class()
+            }
+            Token::Enum => {
+                self.parse_enum()
             }
             Token::Interface => {
                 self.parse_interface()
@@ -727,9 +812,67 @@ impl Parser {
                 Ok(Stmt::ExprStmt(expr))
             }
             Token::Identifier(_) | Token::Backslash => {
+                // Check for list() destructuring: list($a, $b) = expr;
+                if let Token::Identifier(ref name) = self.peek() {
+                    if name == "list" && self.peek_at(1) == Token::LParen {
+                        return self.parse_list_assign();
+                    }
+                }
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))
+            }
+            Token::LBracket => {
+                // Try short destructuring: [$a, $b] = expr;
+                if self.is_short_list_assign() {
+                    return self.parse_short_list_assign();
+                }
+                // Otherwise treat as expression statement (array literal)
+                let expr = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::ExprStmt(expr))
+            }
+            Token::Global => {
+                self.advance(); // consume 'global'
+                let mut vars = Vec::new();
+                loop {
+                    match self.advance() {
+                        Token::Variable(name) => vars.push(name),
+                        other => return Err(format!("Expected variable after 'global', got {:?}", other)),
+                    }
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::Global(vars))
+            }
+            Token::Static if !self.in_class_body && matches!(self.peek_at(1), Token::Variable(_)) => {
+                // static $var = expr; (function-level static variable)
+                self.advance(); // consume 'static'
+                let mut vars = Vec::new();
+                loop {
+                    let var_name = match self.advance() {
+                        Token::Variable(name) => name,
+                        other => return Err(format!("Expected variable after 'static', got {:?}", other)),
+                    };
+                    let default = if self.peek() == Token::Assign {
+                        self.advance();
+                        Some(self.parse_expr()?)
+                    } else {
+                        None
+                    };
+                    vars.push((var_name, default));
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                    } else {
+                        break;
+                    }
+                }
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::StaticVar { vars })
             }
             other => Err(format!("Unexpected token: {:?}", other)),
         }
@@ -741,9 +884,15 @@ impl Parser {
             Token::PlusAssign => Some(BinOp::Add),
             Token::MinusAssign => Some(BinOp::Sub),
             Token::StarAssign => Some(BinOp::Mul),
+            Token::StarStarAssign => Some(BinOp::Pow),
             Token::SlashAssign => Some(BinOp::Div),
             Token::PercentAssign => Some(BinOp::Mod),
             Token::DotAssign => Some(BinOp::Concat),
+            Token::AmpAssign => Some(BinOp::BitwiseAnd),
+            Token::PipeAssign => Some(BinOp::BitwiseOr),
+            Token::CaretAssign => Some(BinOp::BitwiseXor),
+            Token::ShiftLeftAssign => Some(BinOp::ShiftLeft),
+            Token::ShiftRightAssign => Some(BinOp::ShiftRight),
             _ => None,
         }
     }
@@ -942,11 +1091,11 @@ impl Parser {
 
     /// Logical AND: && (left-associative)
     fn parse_logical_and(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_comparison()?;
+        let mut left = self.parse_bitwise_or()?;
 
         while self.peek() == Token::AmpAmp {
             self.advance();
-            let right = self.parse_comparison()?;
+            let right = self.parse_bitwise_or()?;
             left = Expr::BinaryOp {
                 op: BinOp::And,
                 left: Box::new(left),
@@ -957,7 +1106,58 @@ impl Parser {
         Ok(left)
     }
 
-    /// Comparison: ==, !=, <, <=, >, >=, instanceof
+    /// Bitwise OR: | (left-associative)
+    fn parse_bitwise_or(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_bitwise_xor()?;
+
+        while self.peek() == Token::Pipe {
+            self.advance();
+            let right = self.parse_bitwise_xor()?;
+            left = Expr::BinaryOp {
+                op: BinOp::BitwiseOr,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Bitwise XOR: ^ (left-associative)
+    fn parse_bitwise_xor(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_bitwise_and()?;
+
+        while self.peek() == Token::Caret {
+            self.advance();
+            let right = self.parse_bitwise_and()?;
+            left = Expr::BinaryOp {
+                op: BinOp::BitwiseXor,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Bitwise AND: & (left-associative)
+    fn parse_bitwise_and(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_comparison()?;
+
+        while self.peek() == Token::Ampersand {
+            self.advance();
+            let right = self.parse_comparison()?;
+            left = Expr::BinaryOp {
+                op: BinOp::BitwiseAnd,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Comparison: ==, !=, <, <=, >, >=, <=>, instanceof
     fn parse_comparison(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_concat()?;
 
@@ -985,6 +1185,7 @@ impl Parser {
                 Token::LessEqual => BinOp::LessEqual,
                 Token::Greater => BinOp::Greater,
                 Token::GreaterEqual => BinOp::GreaterEqual,
+                Token::Spaceship => BinOp::Spaceship,
                 _ => break,
             };
             self.advance();
@@ -1001,13 +1202,35 @@ impl Parser {
 
     /// Concat: . (left-associative, lower than additive in PHP 8)
     fn parse_concat(&mut self) -> Result<Expr, String> {
-        let mut left = self.parse_additive()?;
+        let mut left = self.parse_shift()?;
 
         while self.peek() == Token::Dot {
             self.advance();
-            let right = self.parse_additive()?;
+            let right = self.parse_shift()?;
             left = Expr::BinaryOp {
                 op: BinOp::Concat,
+                left: Box::new(left),
+                right: Box::new(right),
+            };
+        }
+
+        Ok(left)
+    }
+
+    /// Shift: <<, >> (left-associative)
+    fn parse_shift(&mut self) -> Result<Expr, String> {
+        let mut left = self.parse_additive()?;
+
+        loop {
+            let op = match self.peek() {
+                Token::ShiftLeft => BinOp::ShiftLeft,
+                Token::ShiftRight => BinOp::ShiftRight,
+                _ => break,
+            };
+            self.advance();
+            let right = self.parse_additive()?;
+            left = Expr::BinaryOp {
+                op,
                 left: Box::new(left),
                 right: Box::new(right),
             };
@@ -1069,6 +1292,11 @@ impl Parser {
                 let expr = self.parse_unary()?;
                 Ok(Expr::UnaryMinus(Box::new(expr)))
             }
+            Token::Tilde => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::BitwiseNot(Box::new(expr)))
+            }
             Token::LParen => {
                 // Check for type cast: (int), (string), (float), (bool), (array)
                 let next = self.tokens.get(self.pos + 1).cloned().unwrap_or(Token::Eof);
@@ -1092,9 +1320,26 @@ impl Parser {
                         return Ok(Expr::Cast { cast_type: ct, expr: Box::new(expr) });
                     }
                 }
-                self.parse_primary()
+                self.parse_power()
             }
-            _ => self.parse_primary(),
+            _ => self.parse_power(),
+        }
+    }
+
+    /// Power: ** (right-associative, higher precedence than unary)
+    fn parse_power(&mut self) -> Result<Expr, String> {
+        let base = self.parse_primary()?;
+
+        if self.peek() == Token::StarStar {
+            self.advance();
+            let exp = self.parse_unary()?; // right-associative: recurse through unary
+            Ok(Expr::BinaryOp {
+                op: BinOp::Pow,
+                left: Box::new(base),
+                right: Box::new(exp),
+            })
+        } else {
+            Ok(base)
         }
     }
 
@@ -1171,6 +1416,11 @@ impl Parser {
                 let expr = self.parse_primary()?;
                 Ok(Expr::Not(Box::new(expr)))
             }
+            Token::Print => {
+                self.advance();
+                let expr = self.parse_expr()?;
+                Ok(Expr::Print(Box::new(expr)))
+            }
             Token::LParen => {
                 self.advance();
                 let expr = self.parse_expr()?;
@@ -1210,16 +1460,23 @@ impl Parser {
                 if self.peek() == Token::DoubleColon {
                     self.advance();
                     if let Token::Variable(_) = self.peek() {
-                        // TODO: static property access
-                        return Err("Static property access not yet supported".to_string());
+                        let prop = match self.advance() {
+                            Token::Variable(n) => n,
+                            _ => unreachable!(),
+                        };
+                        return Ok(Expr::StaticProperty { class_name: name, property: prop });
                     }
-                    let method = match self.advance() {
+                    let member = match self.advance() {
                         Token::Identifier(n) => n,
-                        other => return Err(format!("Expected method name after ::, got {:?}", other)),
+                        other => return Err(format!("Expected member name after ::, got {:?}", other)),
                     };
-                    self.expect(&Token::LParen)?;
-                    let args = self.parse_call_args()?;
-                    return Ok(Expr::StaticCall { class_name: name, method, args });
+                    if self.peek() == Token::LParen {
+                        self.advance();
+                        let args = self.parse_call_args()?;
+                        return Ok(Expr::StaticCall { class_name: name, method: member, args });
+                    } else {
+                        return Ok(Expr::StaticProperty { class_name: name, property: member });
+                    }
                 }
                 if self.peek() == Token::LParen {
                     self.advance();
@@ -1247,15 +1504,24 @@ impl Parser {
                             Token::Variable(n) => n,
                             _ => unreachable!(),
                         };
-                        return Ok(Expr::StaticProperty { class_name: name, property: prop });
+                        let expr = Expr::StaticProperty { class_name: name, property: prop };
+                        return Ok(self.parse_postfix_chain(expr)?);
                     }
-                    let method = match self.advance() {
+                    let member = match self.advance() {
                         Token::Identifier(n) => n,
-                        other => return Err(format!("Expected method name after ::, got {:?}", other)),
+                        Token::Class => "class".to_string(),
+                        other => return Err(format!("Expected member name after ::, got {:?}", other)),
                     };
-                    self.expect(&Token::LParen)?;
-                    let args = self.parse_call_args()?;
-                    return Ok(Expr::StaticCall { class_name: name, method, args });
+                    if self.peek() == Token::LParen {
+                        self.advance();
+                        let args = self.parse_call_args()?;
+                        let expr = Expr::StaticCall { class_name: name, method: member, args };
+                        return Ok(self.parse_postfix_chain(expr)?);
+                    } else {
+                        // Static constant/enum case access: ClassName::CONSTANT
+                        let expr = Expr::StaticProperty { class_name: name, property: member };
+                        return Ok(self.parse_postfix_chain(expr)?);
+                    }
                 }
                 // Check if this is a function call (followed by `(`)
                 if self.peek() == Token::LParen {
@@ -1457,12 +1723,19 @@ impl Parser {
 
     /// Parse class declaration
     fn parse_class(&mut self) -> Result<Stmt, String> {
-        let is_abstract = if self.peek() == Token::Abstract {
-            self.advance();
-            true
-        } else {
-            false
-        };
+        let mut is_abstract = false;
+        let mut is_final = false;
+        // Consume leading modifiers (abstract, final) in any order before 'class'
+        loop {
+            match self.peek() {
+                Token::Abstract => { self.advance(); is_abstract = true; }
+                Token::Final => { self.advance(); is_final = true; }
+                _ => break,
+            }
+        }
+        if is_abstract && is_final {
+            return Err("Cannot use the final modifier on an abstract class".into());
+        }
         self.advance(); // consume 'class'
         let name = match self.advance() {
             Token::Identifier(n) => n,
@@ -1514,7 +1787,7 @@ impl Parser {
                 continue;
             }
 
-            let (vis, is_static) = self.parse_visibility_and_static();
+            let (vis, is_static, is_final, is_readonly) = self.parse_visibility_and_static();
 
             if self.peek() == Token::Function {
                 // Method
@@ -1533,12 +1806,14 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, return_type });
-            } else if let Token::Variable(_) = self.peek() {
-                // Property
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, is_final, return_type });
+            } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
+                // Property — possibly with type hint: `private int $x = 0;`
+                // Skip type hint if present (we don't enforce property types at runtime yet)
+                let _type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
                     Token::Variable(n) => n,
-                    _ => unreachable!(),
+                    other => return Err(format!("Expected property variable, got {:?}", other)),
                 };
                 let default = if self.peek() == Token::Assign {
                     self.advance();
@@ -1547,7 +1822,10 @@ impl Parser {
                     None
                 };
                 self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static });
+                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static, is_readonly });
+            } else if matches!(self.peek(), Token::Const) {
+                // Class constants — not yet implemented
+                return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             } else {
                 return Err(format!("Unexpected token in class body: {:?}", self.peek()));
             }
@@ -1555,7 +1833,7 @@ impl Parser {
         self.in_class_body = prev_in_class;
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Class { name, parent, implements, is_abstract, properties, methods, uses })
+        Ok(Stmt::Class { name, parent, implements, is_abstract, is_final, properties, methods, uses })
     }
 
     /// Parse trait declaration
@@ -1571,7 +1849,7 @@ impl Parser {
         let mut methods = Vec::new();
 
         while self.peek() != Token::RBrace && !self.at_eof() {
-            let (vis, is_static) = self.parse_visibility_and_static();
+            let (vis, is_static, is_final, is_readonly) = self.parse_visibility_and_static();
 
             if self.peek() == Token::Function {
                 self.advance();
@@ -1589,11 +1867,13 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, return_type });
-            } else if let Token::Variable(_) = self.peek() {
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, is_final, return_type });
+            } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
+                // Property — possibly with type hint
+                let _type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
                     Token::Variable(n) => n,
-                    _ => unreachable!(),
+                    other => return Err(format!("Expected property variable, got {:?}", other)),
                 };
                 let default = if self.peek() == Token::Assign {
                     self.advance();
@@ -1602,7 +1882,7 @@ impl Parser {
                     None
                 };
                 self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static });
+                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static, is_readonly });
             } else {
                 return Err(format!("Unexpected token in trait body: {:?}", self.peek()));
             }
@@ -1639,7 +1919,7 @@ impl Parser {
 
         let mut methods = Vec::new();
         while self.peek() != Token::RBrace && !self.at_eof() {
-            let (vis, is_static) = self.parse_visibility_and_static();
+            let (vis, is_static, _is_final, _is_readonly) = self.parse_visibility_and_static();
             if self.peek() == Token::Function {
                 self.advance(); // consume 'function'
                 let method_name = match self.advance() {
@@ -1659,7 +1939,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body: vec![], is_static, return_type });
+                methods.push(ClassMethod { visibility: vis, name: method_name, params, body: vec![], is_static, is_final: false, return_type });
             } else {
                 return Err(format!("Unexpected token in interface body: {:?}", self.peek()));
             }
@@ -1669,9 +1949,79 @@ impl Parser {
         Ok(Stmt::Interface { name, extends, methods })
     }
 
-    fn parse_visibility_and_static(&mut self) -> (Visibility, bool) {
+    /// Parse enum declaration
+    fn parse_enum(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'enum'
+        let name = match self.advance() {
+            Token::Identifier(n) => n,
+            other => return Err(format!("Expected enum name, got {:?}", other)),
+        };
+        // Optional backing type: enum Foo: string { ... }
+        let backing_type = if self.peek() == Token::Colon {
+            self.advance(); // consume ':'
+            Some(self.parse_base_type_hint()?)
+        } else {
+            None
+        };
+        self.expect(&Token::LBrace)?;
+
+        let mut cases = Vec::new();
+        let mut methods = Vec::new();
+
+        let prev_in_class = self.in_class_body;
+        self.in_class_body = true;
+
+        while self.peek() != Token::RBrace && !self.at_eof() {
+            if self.peek() == Token::Case {
+                self.advance(); // consume 'case'
+                let case_name = match self.advance() {
+                    Token::Identifier(n) => n,
+                    other => return Err(format!("Expected enum case name, got {:?}", other)),
+                };
+                let value = if self.peek() == Token::Assign {
+                    self.advance();
+                    Some(self.parse_expr()?)
+                } else {
+                    None
+                };
+                self.expect(&Token::Semicolon)?;
+                cases.push((case_name, value));
+            } else {
+                // Method in enum
+                let (vis, is_static, is_final, _is_readonly) = self.parse_visibility_and_static();
+                if self.peek() == Token::Function {
+                    self.advance();
+                    let method_name = match self.advance() {
+                        Token::Identifier(n) => n,
+                        other => return Err(format!("Expected method name, got {:?}", other)),
+                    };
+                    self.expect(&Token::LParen)?;
+                    let params = self.parse_param_list()?;
+                    self.expect(&Token::RParen)?;
+                    let return_type = self.parse_return_type()?;
+                    self.expect(&Token::LBrace)?;
+                    let mut body = Vec::new();
+                    while self.peek() != Token::RBrace && !self.at_eof() {
+                        body.push(self.parse_stmt()?);
+                    }
+                    self.expect(&Token::RBrace)?;
+                    methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, is_final, return_type });
+                } else {
+                    return Err(format!("Unexpected token in enum body: {:?}", self.peek()));
+                }
+            }
+        }
+        self.in_class_body = prev_in_class;
+        self.expect(&Token::RBrace)?;
+
+        Ok(Stmt::Enum { name, backing_type, cases, methods })
+    }
+
+    fn parse_visibility_and_static(&mut self) -> (Visibility, bool, bool, bool) {
         let mut vis = Visibility::Public;
         let mut is_static = false;
+        let mut is_final = false;
+        let mut is_readonly = false;
 
         loop {
             match self.peek() {
@@ -1679,10 +2029,13 @@ impl Parser {
                 Token::Protected => { self.advance(); vis = Visibility::Protected; }
                 Token::Private => { self.advance(); vis = Visibility::Private; }
                 Token::Static => { self.advance(); is_static = true; }
+                Token::Final => { self.advance(); is_final = true; }
+                Token::Abstract => { self.advance(); /* absorbed for abstract methods */ }
+                Token::Identifier(ref s) if s == "readonly" => { self.advance(); is_readonly = true; }
                 _ => break,
             }
         }
-        (vis, is_static)
+        (vis, is_static, is_final, is_readonly)
     }
 
     /// Parse match expression
@@ -1758,7 +2111,7 @@ impl Parser {
                 Self::collect_free_vars(left, bound, out);
                 Self::collect_free_vars(right, bound, out);
             }
-            Expr::UnaryMinus(inner) | Expr::Not(inner) | Expr::Throw(inner) | Expr::Empty(inner) => {
+            Expr::UnaryMinus(inner) | Expr::Not(inner) | Expr::Throw(inner) | Expr::Empty(inner) | Expr::Print(inner) | Expr::BitwiseNot(inner) => {
                 Self::collect_free_vars(inner, bound, out);
             }
             Expr::Assign { var, expr: inner } => {
@@ -1967,9 +2320,13 @@ impl Parser {
             Token::Use => Some("use".to_string()),
             Token::Declare => Some("declare".to_string()),
             Token::Trait => Some("trait".to_string()),
+            Token::Final => Some("final".to_string()),
+            Token::Enum => Some("enum".to_string()),
             Token::Namespace => Some("namespace".to_string()),
             Token::Yield => Some("yield".to_string()),
             Token::From => Some("from".to_string()),
+            Token::Global => Some("global".to_string()),
+            Token::Print => Some("print".to_string()),
             _ => None,
         }
     }
@@ -2039,6 +2396,10 @@ impl Parser {
             params.push(self.parse_one_param()?);
             while self.peek() == Token::Comma {
                 self.advance();
+                // Allow trailing comma before closing paren
+                if !self.is_param_start() {
+                    break;
+                }
                 params.push(self.parse_one_param()?);
             }
         }
@@ -2052,6 +2413,7 @@ impl Parser {
             Token::Variable(_) | Token::DotDotDot | Token::Ampersand
             | Token::Question | Token::ArrayKw | Token::Null
             | Token::Identifier(_)
+            | Token::Public | Token::Protected | Token::Private
         )
     }
 
@@ -2117,6 +2479,21 @@ impl Parser {
             types.push(t);
         }
         Ok(TypeHint::Union(types))
+    }
+
+    /// Check if the current token could be the start of a type hint (without consuming tokens).
+    fn is_type_hint_start(&self) -> bool {
+        match self.peek() {
+            Token::Question => {
+                matches!(self.tokens.get(self.pos + 1),
+                    Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null))
+            }
+            Token::Identifier(_) | Token::ArrayKw | Token::Null => {
+                matches!(self.tokens.get(self.pos + 1),
+                    Some(Token::Variable(_)) | Some(Token::Pipe))
+            }
+            _ => false,
+        }
     }
 
     /// Try to parse a type hint at the start of a parameter.
@@ -2195,6 +2572,26 @@ impl Parser {
     }
 
     fn parse_one_param(&mut self) -> Result<Param, String> {
+        // Check for constructor property promotion: visibility keyword before type hint
+        let mut promotion: Option<(Visibility, bool)> = None;
+        let mut promo_readonly = false;
+        match self.peek() {
+            Token::Public | Token::Protected | Token::Private => {
+                let vis = match self.advance() {
+                    Token::Public => Visibility::Public,
+                    Token::Protected => Visibility::Protected,
+                    Token::Private => Visibility::Private,
+                    _ => unreachable!(),
+                };
+                // Check for 'readonly' after visibility
+                if matches!(self.peek(), Token::Identifier(ref s) if s == "readonly") {
+                    self.advance();
+                    promo_readonly = true;
+                }
+                promotion = Some((vis, promo_readonly));
+            }
+            _ => {}
+        }
         // Optional type hint before &, ..., $var
         let type_hint = self.try_parse_type_hint()?;
         // Optional & prefix for pass-by-reference
@@ -2223,7 +2620,7 @@ impl Parser {
         } else {
             None
         };
-        Ok(Param { name, default, is_variadic, is_ref, type_hint })
+        Ok(Param { name, default, is_variadic, is_ref, type_hint, promotion })
     }
 
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).
@@ -2253,6 +2650,106 @@ impl Parser {
             i += 1;
         }
         false
+    }
+
+    /// Check if `[` at current position starts a short list destructuring pattern.
+    /// Scans ahead for pattern: `[` (vars/commas) `]` `=`
+    fn is_short_list_assign(&self) -> bool {
+        let mut i = self.pos + 1; // skip '['
+        let mut depth = 1;
+        while i < self.tokens.len() && depth > 0 {
+            match &self.tokens[i] {
+                Token::LBracket => depth += 1,
+                Token::RBracket => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return self.tokens.get(i + 1) == Some(&Token::Assign);
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+        false
+    }
+
+    /// Parse `list($a, $b, ...) = expr;`
+    fn parse_list_assign(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume 'list' identifier
+        self.expect(&Token::LParen)?;
+        let targets = self.parse_list_targets(&Token::RParen)?;
+        self.expect(&Token::RParen)?;
+        self.expect(&Token::Assign)?;
+        let expr = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::ListAssign { targets, expr })
+    }
+
+    /// Parse `[$a, $b, ...] = expr;`
+    fn parse_short_list_assign(&mut self) -> Result<Stmt, String> {
+        self.advance(); // consume '['
+        let targets = self.parse_list_targets(&Token::RBracket)?;
+        self.expect(&Token::RBracket)?;
+        self.expect(&Token::Assign)?;
+        let expr = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::ListAssign { targets, expr })
+    }
+
+    /// Parse comma-separated list targets (variables, skips, nested brackets).
+    /// `end_token` is `)` for list() or `]` for short syntax.
+    fn parse_list_targets(&mut self, end_token: &Token) -> Result<Vec<ListTarget>, String> {
+        let mut targets = Vec::new();
+        while self.peek() != *end_token && !self.at_eof() {
+            if self.peek() == Token::Comma {
+                // Skip element (empty slot before comma or between commas)
+                targets.push(ListTarget::Skip);
+                self.advance(); // consume ','
+                continue;
+            }
+            // Check for nested: list(...) or [...]
+            if self.peek() == Token::LBracket {
+                self.advance(); // consume '['
+                let nested = self.parse_list_targets(&Token::RBracket)?;
+                self.expect(&Token::RBracket)?;
+                targets.push(ListTarget::Nested(nested));
+            } else if let Token::Identifier(ref name) = self.peek() {
+                if name == "list" && self.peek_at(1) == Token::LParen {
+                    self.advance(); // consume 'list'
+                    self.expect(&Token::LParen)?;
+                    let nested = self.parse_list_targets(&Token::RParen)?;
+                    self.expect(&Token::RParen)?;
+                    targets.push(ListTarget::Nested(nested));
+                } else {
+                    return Err(format!("Expected variable in list/destructuring, got identifier '{}'", name));
+                }
+            } else if let Token::Variable(_) = self.peek() {
+                // Could be plain $var or key => $var
+                let var_name = match self.advance() {
+                    Token::Variable(n) => n,
+                    _ => unreachable!(),
+                };
+                targets.push(ListTarget::Variable(var_name));
+            } else if matches!(self.peek(), Token::Integer(_) | Token::StringLiteral(_)) {
+                // Explicit key: 0 => $var, 'key' => $var
+                let key_expr = self.parse_expr()?;
+                self.expect(&Token::DoubleArrow)?;
+                let var_name = match self.advance() {
+                    Token::Variable(n) => n,
+                    other => return Err(format!("Expected variable after '=>' in list, got {:?}", other)),
+                };
+                targets.push(ListTarget::KeyedVariable { key: key_expr, var: var_name });
+            } else {
+                return Err(format!("Unexpected token in list/destructuring: {:?}", self.peek()));
+            }
+            // Consume comma if present
+            if self.peek() == Token::Comma {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        Ok(targets)
     }
 
     /// Parse optional integer level after break/continue (e.g. `break 2;`)

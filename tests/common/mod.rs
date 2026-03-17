@@ -83,19 +83,33 @@ pub fn run_php_silent(source: &str) {
 }
 
 /// Like run_php but returns the VmError instead of panicking.
+/// Catches errors from any stage: lexing, parsing, compilation, class registration, or execution.
 #[allow(dead_code)]
 pub fn run_php_expect_error(source: &str) -> execute::VmError {
-    let tokens = Lexer::new(source).tokenize().unwrap();
-    let stmts = Parser::new(tokens).parse().unwrap();
-    let result = Compiler::new().compile(&stmts).unwrap();
+    let tokens = match Lexer::new(source).tokenize() {
+        Ok(t) => t,
+        Err(e) => return execute::VmError::Fatal(e),
+    };
+    let stmts = match Parser::new(tokens).parse() {
+        Ok(s) => s,
+        Err(e) => return execute::VmError::Fatal(e),
+    };
+    let result = match Compiler::new().compile(&stmts) {
+        Ok(r) => r,
+        Err(e) => return execute::VmError::Fatal(e),
+    };
     let main_func = make_user_function(result.main);
     let (mut eg, _buf) = make_eg_with_capture();
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
-        eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
+        if let Err(e) = eg.register_function(name, &func.common as *const FunctionCommon) {
+            return execute::VmError::Fatal(format!("{}", e));
+        }
     }
     for class_def in result.class_defs {
-        eg.register_class(class_def).unwrap();
+        if let Err(e) = eg.register_class(class_def) {
+            return execute::VmError::Fatal(format!("{}", e));
+        }
     }
     execute::execute(&mut eg, &main_func).unwrap_err()
 }

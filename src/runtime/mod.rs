@@ -67,6 +67,18 @@ pub struct ExecutorGlobals {
     pub pending_named_variadic: HashMap<usize, Vec<(String, crate::value::Value)>>,
     /// Active generator being executed (set during resume, used by Yield opcode)
     pub active_generator: Option<crate::vm::generator::GeneratorRef>,
+    /// Global variables — shared across function calls via `global $x;`
+    pub globals: HashMap<String, crate::value::Value>,
+    /// Globals modified by the last callee Return (for selective re-read by caller)
+    pub dirty_globals: std::collections::HashSet<String>,
+    /// Static variables — persisted across function calls: func_name → (var_name → value)
+    pub static_vars: HashMap<String, HashMap<String, crate::value::Value>>,
+    /// Pending $this for __invoke calls (set in InitDynamicCall, consumed in DoFcall)
+    pub pending_invoke_this: Option<crate::value::Value>,
+    /// Set of absolute file paths already included via include_once/require_once
+    pub included_files: std::collections::HashSet<String>,
+    /// Owned storage for functions/data from included files (prevents dangling pointers)
+    pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
 }
 
 impl ExecutorGlobals {
@@ -85,6 +97,12 @@ impl ExecutorGlobals {
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             pending_named_variadic: HashMap::new(),
             active_generator: None,
+            globals: HashMap::new(),
+            dirty_globals: std::collections::HashSet::new(),
+            static_vars: HashMap::new(),
+            pending_invoke_this: None,
+            included_files: std::collections::HashSet::new(),
+            included_functions: Vec::new(),
         }
     }
 
@@ -104,6 +122,12 @@ impl ExecutorGlobals {
             output: std::cell::RefCell::new(output),
             pending_named_variadic: HashMap::new(),
             active_generator: None,
+            globals: HashMap::new(),
+            dirty_globals: std::collections::HashSet::new(),
+            static_vars: HashMap::new(),
+            pending_invoke_this: None,
+            included_files: std::collections::HashSet::new(),
+            included_functions: Vec::new(),
         }
     }
 
@@ -112,6 +136,18 @@ impl ExecutorGlobals {
     /// For non-interface, non-abstract classes: validates interface contracts.
     pub fn register_class(&mut self, mut class_def: ClassDef) -> Result<(), String> {
         let class_name = class_def.name.clone();
+
+        // Check if parent is final — cannot extend a final class
+        if let Some(parent_name) = &class_def.parent {
+            if let Some(parent) = self.class_table.get(parent_name.as_str()) {
+                if parent.is_final {
+                    return Err(format!(
+                        "Class {} cannot extend final class {}",
+                        class_name, parent_name
+                    ));
+                }
+            }
+        }
 
         // Resolve inheritance — merge parent's properties and methods
         if let Some(parent_name) = &class_def.parent {
@@ -144,10 +180,17 @@ impl ExecutorGlobals {
                 merged_props.extend(parent_props);
                 class_def.properties = merged_props;
 
+                // Inherit readonly property list from parent
+                for ro in &parent.readonly_props {
+                    if !class_def.readonly_props.contains(ro) {
+                        class_def.readonly_props.push(ro.clone());
+                    }
+                }
+
                 // Inherit methods: collect ALL parent::* entries from function_table
                 // (includes transitively inherited methods from grandparents)
                 let child_method_names: std::collections::HashSet<String> = class_def.methods
-                    .iter().map(|(n, _, _, _)| n.to_lowercase()).collect();
+                    .iter().map(|(n, _, _, _, _)| n.to_lowercase()).collect();
                 let parent_prefix = format!("{}::", parent_name).to_lowercase();
                 let inherited: Vec<(String, *const FunctionCommon)> = self.function_table.iter()
                     .filter(|(k, _)| k.starts_with(&parent_prefix))
@@ -214,7 +257,7 @@ impl ExecutorGlobals {
 
                 // Merge trait methods: copy function_table pointers
                 let child_method_names: std::collections::HashSet<String> = class_def.methods
-                    .iter().map(|(n, _, _, _)| n.to_lowercase()).collect();
+                    .iter().map(|(n, _, _, _, _)| n.to_lowercase()).collect();
                 let trait_prefix = format!("{}::", trait_name).to_lowercase();
                 let trait_methods: Vec<(String, *const FunctionCommon)> = self.function_table.iter()
                     .filter(|(k, _)| k.starts_with(&trait_prefix))
@@ -240,12 +283,38 @@ impl ExecutorGlobals {
         // not implementations. The implementing class must provide its own body.
         // (Interface stub functions exist only in the interface's own ClassDef for type info.)
 
+        // Check for final method override violations:
+        // If child overrides a parent method marked as final → error.
+        if let Some(parent_name) = &class_def.parent {
+            let child_method_names: Vec<String> = class_def.methods
+                .iter().map(|(n, _, _, _, _)| n.to_lowercase()).collect();
+            for child_method in &child_method_names {
+                // Walk parent chain to find if this method is final
+                let mut ancestor = Some(parent_name.clone());
+                while let Some(ref anc_name) = ancestor {
+                    if let Some(anc_def) = self.class_table.get(anc_name.as_str()) {
+                        for (m_name, _vis, _is_static, is_final, _func) in &anc_def.methods {
+                            if m_name.to_lowercase() == *child_method && *is_final {
+                                return Err(format!(
+                                    "Cannot override final method {}::{}()",
+                                    anc_name, m_name
+                                ));
+                            }
+                        }
+                        ancestor = anc_def.parent.clone();
+                    } else {
+                        break;
+                    }
+                }
+            }
+        }
+
         // Box to get stable heap address for function pointers
         self.class_table.insert(class_name.clone(), Box::new(class_def));
         // Register child's own method pointers from the stable location
         let class = self.class_table.get(&class_name).unwrap();
         let method_entries: Vec<(String, *const FunctionCommon)> = class.methods.iter()
-            .map(|(method_name, _vis, _is_static, func)| {
+            .map(|(method_name, _vis, _is_static, _is_final, func)| {
                 let full_name = format!("{}::{}", class_name, method_name).to_lowercase();
                 let func_ptr = &func.common as *const FunctionCommon;
                 (full_name, func_ptr)
@@ -304,7 +373,7 @@ impl ExecutorGlobals {
     fn collect_interface_methods(&self, iface_name: &str) -> Vec<(String, Visibility, u32, u32, bool, String, crate::vm::function::ParamTypeHint, Vec<crate::vm::function::ParamTypeHint>)> {
         let mut result = Vec::new();
         if let Some(iface_def) = self.class_table.get(iface_name) {
-            for (method_name, vis, is_static, func) in &iface_def.methods {
+            for (method_name, vis, is_static, _is_final, func) in &iface_def.methods {
                 result.push((
                     method_name.to_lowercase(),
                     *vis,
@@ -479,7 +548,7 @@ impl ExecutorGlobals {
         let method_lower = method_name.to_lowercase();
         if let Some(class_def) = self.class_table.get(class_name) {
             // Check own methods
-            for (name, vis, is_static, _func) in &class_def.methods {
+            for (name, vis, is_static, _is_final, _func) in &class_def.methods {
                 if name.to_lowercase() == method_lower {
                     return Some((*vis, *is_static, class_name.to_string()));
                 }
@@ -487,7 +556,7 @@ impl ExecutorGlobals {
             // Check used traits (trait methods are copied to function_table but not to methods vec)
             for trait_name in &class_def.uses {
                 if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
-                    for (name, vis, is_static, _func) in &trait_def.methods {
+                    for (name, vis, is_static, _is_final, _func) in &trait_def.methods {
                         if name.to_lowercase() == method_lower {
                             // Trait method visibility applies as if declared in the using class
                             return Some((*vis, *is_static, class_name.to_string()));

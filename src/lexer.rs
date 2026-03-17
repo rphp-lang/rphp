@@ -47,10 +47,18 @@ pub enum Token {
     Implements,     // implements
     Abstract,       // abstract
     Declare,        // declare
+    Final,          // final
+    Enum,           // enum
     Namespace,      // namespace
     Backslash,      // \ (namespace separator)
     Yield,          // yield
     From,           // from (used after yield)
+    Print,          // print
+    Global,         // global
+    Include,        // include
+    IncludeOnce,    // include_once
+    Require,        // require
+    RequireOnce,    // require_once
     // Literals
     Integer(i64),   // 42, -1
     Float(f64),     // 3.14, 1.5e10
@@ -81,9 +89,15 @@ pub enum Token {
     PlusAssign,     // +=
     MinusAssign,    // -=
     StarAssign,     // *=
+    StarStarAssign, // **=
     SlashAssign,    // /=
     PercentAssign,  // %=
     DotAssign,      // .=
+    AmpAssign,      // &=
+    PipeAssign,     // |=
+    CaretAssign,    // ^=
+    ShiftLeftAssign,  // <<=
+    ShiftRightAssign, // >>=
     Question,       // ?
     QuestionQuestion, // ??
     Colon,          // :
@@ -103,6 +117,12 @@ pub enum Token {
     Use,            // use (closure use)
     Pipe,           // | (bitwise or, multi-catch separator)
     Ampersand,      // & (bitwise and, reference)
+    Caret,          // ^ (bitwise xor)
+    Tilde,          // ~ (bitwise not)
+    StarStar,       // ** (power)
+    Spaceship,      // <=> (spaceship)
+    ShiftLeft,      // <<
+    ShiftRight,     // >>
     DotDotDot,      // ... (variadic / spread)
     Eof,
 }
@@ -183,15 +203,36 @@ impl<'a> Lexer<'a> {
                 }
                 b'<' => {
                     if self.peek_next() == Some(b'=') {
-                        tokens.push(Token::LessEqual);
-                        self.pos += 2;
+                        if self.src.get(self.pos + 2) == Some(&b'>') {
+                            tokens.push(Token::Spaceship);
+                            self.pos += 3;
+                        } else {
+                            tokens.push(Token::LessEqual);
+                            self.pos += 2;
+                        }
+                    } else if self.peek_next() == Some(b'<') {
+                        if self.src.get(self.pos + 2) == Some(&b'=') {
+                            tokens.push(Token::ShiftLeftAssign);
+                            self.pos += 3;
+                        } else {
+                            tokens.push(Token::ShiftLeft);
+                            self.pos += 2;
+                        }
                     } else {
                         tokens.push(Token::Less);
                         self.pos += 1;
                     }
                 }
                 b'>' => {
-                    if self.peek_next() == Some(b'=') {
+                    if self.peek_next() == Some(b'>') {
+                        if self.src.get(self.pos + 2) == Some(&b'=') {
+                            tokens.push(Token::ShiftRightAssign);
+                            self.pos += 3;
+                        } else {
+                            tokens.push(Token::ShiftRight);
+                            self.pos += 2;
+                        }
+                    } else if self.peek_next() == Some(b'=') {
                         tokens.push(Token::GreaterEqual);
                         self.pos += 2;
                     } else {
@@ -212,7 +253,15 @@ impl<'a> Lexer<'a> {
                     }
                 }
                 b'*' => {
-                    if self.peek_next() == Some(b'=') {
+                    if self.peek_next() == Some(b'*') {
+                        if self.src.get(self.pos + 2) == Some(&b'=') {
+                            tokens.push(Token::StarStarAssign);
+                            self.pos += 3;
+                        } else {
+                            tokens.push(Token::StarStar);
+                            self.pos += 2;
+                        }
+                    } else if self.peek_next() == Some(b'=') {
                         tokens.push(Token::StarAssign);
                         self.pos += 2;
                     } else {
@@ -254,6 +303,9 @@ impl<'a> Lexer<'a> {
                     if self.peek_next() == Some(b'&') {
                         tokens.push(Token::AmpAmp);
                         self.pos += 2;
+                    } else if self.peek_next() == Some(b'=') {
+                        tokens.push(Token::AmpAssign);
+                        self.pos += 2;
                     } else {
                         // Single & — bitwise and / reference
                         tokens.push(Token::Ampersand);
@@ -263,6 +315,9 @@ impl<'a> Lexer<'a> {
                 b'|' => {
                     if self.peek_next() == Some(b'|') {
                         tokens.push(Token::PipePipe);
+                        self.pos += 2;
+                    } else if self.peek_next() == Some(b'=') {
+                        tokens.push(Token::PipeAssign);
                         self.pos += 2;
                     } else {
                         tokens.push(Token::Pipe);
@@ -445,14 +500,35 @@ impl<'a> Lexer<'a> {
                         "trait" => tokens.push(Token::Trait),
                         "implements" => tokens.push(Token::Implements),
                         "abstract" => tokens.push(Token::Abstract),
+                        "final" => tokens.push(Token::Final),
+                        "enum" => tokens.push(Token::Enum),
                         "declare" => tokens.push(Token::Declare),
                         "namespace" => tokens.push(Token::Namespace),
                         "yield" => tokens.push(Token::Yield),
                         "from" => tokens.push(Token::From),
                         "fn" => tokens.push(Token::Fn),
                         "use" => tokens.push(Token::Use),
+                        "print" => tokens.push(Token::Print),
+                        "global" => tokens.push(Token::Global),
+                        "include" => tokens.push(Token::Include),
+                        "include_once" => tokens.push(Token::IncludeOnce),
+                        "require" => tokens.push(Token::Require),
+                        "require_once" => tokens.push(Token::RequireOnce),
                         _ => tokens.push(Token::Identifier(ident)),
                     }
+                }
+                b'^' => {
+                    if self.peek_next() == Some(b'=') {
+                        tokens.push(Token::CaretAssign);
+                        self.pos += 2;
+                    } else {
+                        tokens.push(Token::Caret);
+                        self.pos += 1;
+                    }
+                }
+                b'~' => {
+                    tokens.push(Token::Tilde);
+                    self.pos += 1;
                 }
                 b'\\' => {
                     tokens.push(Token::Backslash);
@@ -517,6 +593,38 @@ impl<'a> Lexer<'a> {
 
     fn read_number(&mut self) -> Result<Token, String> {
         let start = self.pos;
+        // Check for 0x (hex), 0b (binary), 0o (octal) prefixes
+        if self.src[self.pos] == b'0' && self.pos + 1 < self.src.len() {
+            match self.src[self.pos + 1] {
+                b'x' | b'X' => {
+                    self.pos += 2; // skip 0x
+                    let hex_start = self.pos;
+                    while self.pos < self.src.len() && self.src[self.pos].is_ascii_hexdigit() {
+                        self.pos += 1;
+                    }
+                    if self.pos == hex_start {
+                        return Err(format!("Expected hex digits after 0x at position {}", start));
+                    }
+                    let s = std::str::from_utf8(&self.src[hex_start..self.pos]).unwrap();
+                    let n = i64::from_str_radix(s, 16).map_err(|_| format!("Invalid hex literal at position {}", start))?;
+                    return Ok(Token::Integer(n));
+                }
+                b'b' | b'B' => {
+                    self.pos += 2; // skip 0b
+                    let bin_start = self.pos;
+                    while self.pos < self.src.len() && (self.src[self.pos] == b'0' || self.src[self.pos] == b'1') {
+                        self.pos += 1;
+                    }
+                    if self.pos == bin_start {
+                        return Err(format!("Expected binary digits after 0b at position {}", start));
+                    }
+                    let s = std::str::from_utf8(&self.src[bin_start..self.pos]).unwrap();
+                    let n = i64::from_str_radix(s, 2).map_err(|_| format!("Invalid binary literal at position {}", start))?;
+                    return Ok(Token::Integer(n));
+                }
+                _ => {}
+            }
+        }
         while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
             self.pos += 1;
         }
