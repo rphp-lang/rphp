@@ -99,66 +99,99 @@ pub enum VmError {
 }
 
 // ── Slot write API ──
-// Three functions, each with clear ownership semantics:
 //
-// slot_set:        Overwrite any initialized slot. Drops old value. No heap tracking.
-//                  Use for external slots (caller's return_value, globals).
-//
-// frame_slot_set:  Overwrite a CV/TMP slot within `frame`. Drops old value.
-//                  Sets has_heap_slots when writing heap-backed values.
-//                  Use for opcode results, SendVal args, assignment targets.
-//
-// frame_set_this:  Write $this into CV[0] of a method frame. No drop (slot
-//                  was zeroed or is fresh). Cleanup handles $this separately
-//                  so this does NOT set has_heap_slots.
+// slot_set:              Overwrite any initialized slot. Drops old. No frame tracking.
+// frame_slot_set:        Overwrite a frame slot. Skips drop if no heap slots.
+// frame_slot_init:       First write to uninitialized arg slot. No drop.
+// frame_set_this:        Write $this into CV[0].
+// frame_tmp_set:         Write to frame TMP slot. Skips drop if no heap slots. (hot path)
+// frame_tmp_set_long:    Write Long directly to TMP. No Value construction. (hot path)
+// frame_tmp_set_bool:    Write Bool directly to TMP. No Value construction. (hot path)
+// mark_caller_heap_return: Propagate heap flag to caller frame.
 
 /// Overwrite a slot, dropping the old value. No frame heap tracking.
+/// For external targets (return_value, globals) or mixed contexts.
 /// SAFETY: `ptr` must point to a valid, initialized Value.
-#[inline]
+#[inline(always)]
 unsafe fn slot_set(ptr: *mut Value, val: Value) {
     stats::inc_write_val();
     std::ptr::drop_in_place(ptr);
     ptr.write(val);
 }
 
-/// Overwrite a frame slot, dropping the old value. Tracks heap values for cleanup.
-/// SAFETY: `ptr` must point to a slot within `frame`.
-#[inline]
-unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
-    let heap_value = val.needs_cleanup();
-    stats::inc_write_frame_slot(heap_value);
-    if heap_value {
-        (*frame).has_heap_slots = true;
+/// Write to a frame TMP result slot. Skips drop when frame has no heap values.
+/// Use for arithmetic/comparison/cast result opcodes.
+#[inline(always)]
+unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    let heap = val.needs_cleanup();
+    if (*frame).has_heap_slots {
+        std::ptr::drop_in_place(ptr);
     }
-    std::ptr::drop_in_place(ptr);
     ptr.write(val);
+    if heap { (*frame).has_heap_slots = true; }
 }
 
-/// Initialize an unwritten frame slot (arg CV during SendVal/SendRef/SendNamed).
-/// No drop — the slot is uninitialized or contains leftover garbage from
-/// a previous frame's stack memory.  Tracks has_heap_slots.
-/// SAFETY: `ptr` must point to an uninitialized slot within `frame`.
-#[inline]
-unsafe fn frame_slot_init(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
-    let heap_value = val.needs_cleanup();
-    stats::inc_write_frame_slot(heap_value);
-    if heap_value {
-        (*frame).has_heap_slots = true;
+/// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
+/// No Value construction on Rust stack — writes raw i64 + type tag directly.
+#[inline(always)]
+unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
+    if (*frame).has_heap_slots {
+        std::ptr::drop_in_place(ptr);
     }
+    Value::write_long(ptr, v);
+}
+
+/// Write a Bool value directly to a frame TMP slot.
+#[inline(always)]
+unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) {
+    if (*frame).has_heap_slots {
+        std::ptr::drop_in_place(ptr);
+    }
+    Value::write_bool(ptr, v);
+}
+
+/// Overwrite a frame slot. Skips drop when frame has no heap slots (scalar-only fast path).
+#[inline(always)]
+unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    let heap = val.needs_cleanup();
+    stats::inc_write_frame_slot(heap);
+    if (*frame).has_heap_slots {
+        std::ptr::drop_in_place(ptr);
+    }
+    ptr.write(val);
+    if heap { (*frame).has_heap_slots = true; }
+}
+
+/// Init an unwritten frame slot (arg CV during SendVal/SendRef/SendNamed).
+/// No drop — slot is uninitialized. Sets has_heap_slots if needed.
+#[inline(always)]
+unsafe fn frame_slot_init(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    let heap = val.needs_cleanup();
+    stats::inc_write_frame_slot(heap);
+    ptr.write(val);
+    if heap { (*frame).has_heap_slots = true; }
+}
+
+/// Restore a saved CV/TMP slot into a freshly pushed generator frame.
+/// The frame was just allocated by push_call_frame(func, 0) so all slots
+/// are uninitialized. No drop needed — just write + track heap.
+#[inline(always)]
+unsafe fn frame_restore_slot(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    if val.needs_cleanup() { (*frame).has_heap_slots = true; }
     ptr.write(val);
 }
 
 /// Write $this into CV[0] of a method frame.
-/// Cleanup drops $this unconditionally for method frames — no has_heap_slots needed.
-/// SAFETY: `frame` must have CV[0] allocated and uninitialized or zeroed.
-#[inline]
+#[inline(always)]
 unsafe fn frame_set_this(frame: *mut ExecuteData, val: Value) {
+    let heap = val.needs_cleanup();
     let ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     ptr.write(val);
+    if heap { (*frame).has_heap_slots = true; }
 }
 
 /// Propagate heap-backed return values into the caller's cleanup bookkeeping.
-#[inline]
+#[inline(always)]
 unsafe fn mark_caller_heap_return(frame: *mut ExecuteData, val: &Value) {
     if val.needs_cleanup() {
         let prev = (*frame).prev_execute_data;
@@ -188,44 +221,26 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
     false
 }
 
-/// Drop all CV and TMP slot values in a frame before popping it.
-/// Only drops heap-allocated types (String, Array, Object).
+/// Drop all heap-backed slot values in a frame before popping it.
+/// Fast-skips when has_heap_slots is false (scalar-only frames).
 /// After dropping, zeros the slot so reused stack space sees Undef.
-/// Reference/Undef/Null/Bool/Long/Double are no-op drops — skip them entirely.
-/// SAFETY: frame must be a valid ExecuteData pointer with initialized slots.
 #[inline]
 unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     let num_cvs = (*frame).num_cvs as usize;
     let num_temps = (*frame).num_temps as usize;
+    let total = num_cvs + num_temps;
     let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-    let func = &*(*frame).func;
-    let this_offset = func.sig.this_offset as usize;
 
-    // Drop $this (CV[0]) unconditionally for method frames.
-    // $this is written directly (not via frame_slot_set), so it doesn't
-    // set has_heap_slots. We handle it here instead.
-    if this_offset > 0 {
-        let this_ptr = base;
-        if (*this_ptr).needs_cleanup() {
-            std::ptr::drop_in_place(this_ptr);
-            std::ptr::write_bytes(this_ptr as *mut u8, 0, std::mem::size_of::<Value>());
-        }
-    }
-
-    // Fast skip for remaining slots when no heap values were written.
-    let remaining = num_cvs + num_temps - this_offset;
     if !(*frame).has_heap_slots {
-        stats::inc_cleanup_frame(remaining, true);
+        stats::inc_cleanup_frame(total, true);
         return;
     }
-    stats::inc_cleanup_frame(remaining, false);
-    for i in this_offset..(num_cvs + num_temps) {
+    stats::inc_cleanup_frame(total, false);
+    for i in 0..total {
         let ptr = base.add(i);
         match (*ptr).value_type() {
             ValueType::String | ValueType::Array | ValueType::Object => {
                 std::ptr::drop_in_place(ptr);
-                // Zero the slot so the next frame reusing this stack space
-                // sees Undef (safe for drop_in_place) instead of a dangling pointer.
                 std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
             }
             _ => {}
@@ -293,9 +308,10 @@ fn call_magic_method(
         // Write $this directly — cleanup handles it separately.
         frame_set_this(call, obj_val.clone());
         // Set arguments in CV slots starting at 1 (after $this)
+        // These are fresh uninitialized slots (within num_args range), use init.
         for (i, arg) in args.iter().enumerate() {
             let cv = (*call).cv_mut(1 + i as u32);
-            frame_slot_set(call, cv as *mut Value, arg.clone());
+            frame_slot_init(call, cv as *mut Value, arg.clone());
         }
     }
 
@@ -439,10 +455,10 @@ pub fn call_function(
         (*frame).num_args = args.len() as u32;
     }
 
-    // Write args into CV slots
+    // Write args into CV slots — fresh uninitialized slots, use init (no drop).
     for (i, arg) in args.iter().enumerate() {
         let slot = unsafe { (*frame).cv_mut(i as u32) };
-        unsafe { frame_slot_set(frame, slot as *mut Value, arg.clone()) };
+        unsafe { frame_slot_init(frame, slot as *mut Value, arg.clone()) };
     }
 
     let func = unsafe { Function::from_common_ptr(func_ptr) };
@@ -564,11 +580,11 @@ pub fn resume_generator(
                             let gen_data = gen_ref.borrow();
                             for (i, val) in gen_data.cv_values.iter().enumerate() {
                                 let slot = unsafe { (*frame).cv_mut(i as u32) };
-                                unsafe { (slot as *mut Value).write(val.clone()) };
+                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
                             }
                             for (i, val) in gen_data.tmp_values.iter().enumerate() {
                                 let slot = unsafe { (*frame).tmp_mut(i as u32) };
-                                unsafe { (slot as *mut Value).write(val.clone()) };
+                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
                             }
                             unsafe {
                                 (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
@@ -581,7 +597,7 @@ pub fn resume_generator(
                             let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
                             if yield_from_instr.result_type != OpType::Unused {
                                 let slot = unsafe { (*frame).tmp_mut(result_slot) };
-                                unsafe { (slot as *mut Value).write(ret_val) };
+                                unsafe { frame_restore_slot(frame, slot as *mut Value, ret_val) };
                             }
                         }
 
@@ -633,11 +649,11 @@ pub fn resume_generator(
                             let gen_data = gen_ref.borrow();
                             for (i, val) in gen_data.cv_values.iter().enumerate() {
                                 let slot = unsafe { (*frame).cv_mut(i as u32) };
-                                unsafe { (slot as *mut Value).write(val.clone()) };
+                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
                             }
                             for (i, val) in gen_data.tmp_values.iter().enumerate() {
                                 let slot = unsafe { (*frame).tmp_mut(i as u32) };
-                                unsafe { (slot as *mut Value).write(val.clone()) };
+                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
                             }
                             unsafe {
                                 (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
@@ -650,7 +666,7 @@ pub fn resume_generator(
                             let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
                             if yield_from_instr.result_type != OpType::Unused {
                                 let slot = unsafe { (*frame).tmp_mut(result_slot) };
-                                unsafe { (slot as *mut Value).write(Value::null()) };
+                                unsafe { frame_restore_slot(frame, slot as *mut Value, Value::null()) };
                             }
                         }
 
@@ -703,11 +719,11 @@ pub fn resume_generator(
         let gen_data = gen_ref.borrow();
         for (i, val) in gen_data.cv_values.iter().enumerate() {
             let slot = unsafe { (*frame).cv_mut(i as u32) };
-            unsafe { (slot as *mut Value).write(val.clone()) };
+            unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
         }
         for (i, val) in gen_data.tmp_values.iter().enumerate() {
             let slot = unsafe { (*frame).tmp_mut(i as u32) };
-            unsafe { (slot as *mut Value).write(val.clone()) };
+            unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
         }
 
         // Set instruction pointer
@@ -728,7 +744,7 @@ pub fn resume_generator(
                 && yield_instr.result_type != OpType::Unused
             {
                 let tmp_slot = unsafe { (*frame).tmp_mut(yield_instr.result) };
-                unsafe { (tmp_slot as *mut Value).write(send_value.clone()) };
+                unsafe { frame_restore_slot(frame, tmp_slot as *mut Value, send_value.clone()) };
             }
         }
     }
@@ -759,10 +775,20 @@ pub fn resume_generator(
 /// Inner execute loop — equivalent to zend_execute_ex.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
+    let mut op_array = unsafe { (*frame).op_array() };
+    let mut tick: u8 = 255; // First iteration checks immediately (wraps to 0)
 
     'vm: loop {
+        // Batch interrupt check: every 256 opcodes instead of every opcode.
+        // Placed at loop top so all `continue` paths also pass through it.
+        tick = tick.wrapping_add(1);
+        if tick == 0 {
+            if eg.vm_interrupt.load(Ordering::Relaxed) {
+                handle_interrupt(eg)?;
+            }
+        }
+
         let opline = unsafe { &*(*frame).opline };
-        let mut op_array = unsafe { (*frame).op_array() };
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
@@ -883,13 +909,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_add(l2) {
-                        Some(sum) => unsafe { slot_set(result_ptr, Value::long(sum)) },
+                        Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
                         None => unsafe {
-                            slot_set(result_ptr, Value::double(l1 as f64 + l2 as f64))
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
                         },
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { slot_set(result_ptr, Value::double(d1 + d2)) };
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for +".into()));
                 }
@@ -902,13 +928,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_sub(l2) {
-                        Some(diff) => unsafe { slot_set(result_ptr, Value::long(diff)) },
+                        Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
                         None => unsafe {
-                            slot_set(result_ptr, Value::double(l1 as f64 - l2 as f64))
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
                         },
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { slot_set(result_ptr, Value::double(d1 - d2)) };
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for -".into()));
                 }
@@ -921,13 +947,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_mul(l2) {
-                        Some(prod) => unsafe { slot_set(result_ptr, Value::long(prod)) },
+                        Some(prod) => unsafe { frame_tmp_set_long(frame, result_ptr, prod) },
                         None => unsafe {
-                            slot_set(result_ptr, Value::double(l1 as f64 * l2 as f64))
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 * l2 as f64))
                         },
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { slot_set(result_ptr, Value::double(d1 * d2)) };
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 * d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for *".into()));
                 }
@@ -945,12 +971,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // PHP: if both are long and divisible, result is long
                     if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                         if l2 != 0 && l1 % l2 == 0 {
-                            unsafe { slot_set(result_ptr, Value::long(l1 / l2)) };
+                            unsafe { frame_tmp_set_long(frame, result_ptr, l1 / l2) };
                         } else {
-                            unsafe { slot_set(result_ptr, Value::double(d1 / d2)) };
+                            unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
                         }
                     } else {
-                        unsafe { slot_set(result_ptr, Value::double(d1 / d2)) };
+                        unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
                     }
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for /".into()));
@@ -966,7 +992,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if l2 == 0 {
                         return Err(VmError::Fatal("Division by zero".into()));
                     }
-                    unsafe { slot_set(result_ptr, Value::long(l1 % l2)) };
+                    unsafe { frame_tmp_set_long(frame, result_ptr, l1 % l2) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for %".into()));
                 }
@@ -996,7 +1022,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     op2.echo_to_string()
                 };
                 let concatenated = format!("{}{}", s1, s2);
-                unsafe { slot_set(result_ptr, Value::string(concatenated)) };
+                unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
             }
 
             OpCode::Spaceship => {
@@ -1018,7 +1044,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     std::cmp::Ordering::Equal => 0,
                     std::cmp::Ordering::Greater => 1,
                 };
-                unsafe { slot_set(result_ptr, Value::long(val)) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, val) };
             }
 
             OpCode::Pow => {
@@ -1028,12 +1054,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     if l2 >= 0 {
-                        unsafe { slot_set(result_ptr, Value::long(l1.wrapping_pow(l2 as u32))) };
+                        unsafe { frame_tmp_set_long(frame, result_ptr, l1.wrapping_pow(l2 as u32)) };
                     } else {
-                        unsafe { slot_set(result_ptr, Value::double((l1 as f64).powf(l2 as f64))) };
+                        unsafe { frame_tmp_set(frame, result_ptr, Value::double((l1 as f64).powf(l2 as f64))) };
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { slot_set(result_ptr, Value::double(d1.powf(d2))) };
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1.powf(d2))) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for **".into()));
                 }
@@ -1046,7 +1072,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { slot_set(result_ptr, Value::long(l1 & l2)) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, l1 & l2) };
             }
 
             OpCode::BitwiseOr => {
@@ -1056,7 +1082,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { slot_set(result_ptr, Value::long(l1 | l2)) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, l1 | l2) };
             }
 
             OpCode::BitwiseXor => {
@@ -1066,7 +1092,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { slot_set(result_ptr, Value::long(l1 ^ l2)) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, l1 ^ l2) };
             }
 
             OpCode::ShiftLeft => {
@@ -1076,7 +1102,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { slot_set(result_ptr, Value::long(l1.wrapping_shl(l2 as u32))) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, l1.wrapping_shl(l2 as u32)) };
             }
 
             OpCode::ShiftRight => {
@@ -1086,14 +1112,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { slot_set(result_ptr, Value::long(l1.wrapping_shr(l2 as u32))) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, l1.wrapping_shr(l2 as u32)) };
             }
 
             OpCode::BitwiseNot => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
                 let l = val.to_long_val();
-                unsafe { slot_set(result_ptr, Value::long(!l)) };
+                unsafe { frame_tmp_set_long(frame, result_ptr, !l) };
             }
 
             OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual => {
@@ -1129,7 +1155,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
                 };
 
-                unsafe { slot_set(result_ptr, Value::bool(result)) };
+                unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
             }
 
             OpCode::IsIdentical | OpCode::IsNotIdentical => {
@@ -1143,14 +1169,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     OpCode::IsIdentical => identical,
                     _ => !identical,
                 };
-                unsafe { slot_set(result_ptr, Value::bool(result)) };
+                unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
             }
 
             OpCode::Isset => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
                 let is_set = val.value_type() != ValueType::Undef && val.value_type() != ValueType::Null;
-                unsafe { slot_set(result_ptr, Value::bool(is_set)) };
+                unsafe { frame_tmp_set_bool(frame, result_ptr, is_set) };
             }
 
             OpCode::Cast => {
@@ -1184,14 +1210,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     _ => val.clone(),
                 };
-                unsafe { slot_set(result_ptr, casted) };
+                unsafe { frame_tmp_set(frame, result_ptr, casted) };
             }
 
             OpCode::BoolNot => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
                 let negated = !val.is_truthy();
-                unsafe { slot_set(result_ptr, Value::bool(negated)) };
+                unsafe { frame_tmp_set_bool(frame, result_ptr, negated) };
             }
 
             OpCode::Jmp => {
@@ -1547,6 +1573,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         eg.current_execute_data.set(call);
                         frame = call;
+                        op_array = unsafe { (*frame).op_array() };
                         continue;
                     }
                 }
@@ -1757,6 +1784,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                             eg.current_execute_data.set(call);
                             frame = call;
+                            op_array = unsafe { (*frame).op_array() };
                             continue;
                         }
                     }
@@ -2927,6 +2955,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { cleanup_frame_slots(frame) };
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
+                    op_array = unsafe { (*frame).op_array() };
                     // No dirty_globals to re-read (callee had no global vars)
                     continue;
                 }
@@ -3072,6 +3101,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { cleanup_frame_slots(frame) };
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
+                    op_array = unsafe { (*frame).op_array() };
                     continue;
                 }
 
@@ -3095,15 +3125,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe { cleanup_frame_slots(frame) };
                 eg.vm_stack.pop_call_frame(frame);
                 frame = prev;
+                op_array = unsafe { (*frame).op_array() };
                 // After callee returns, selectively re-read globals that the callee modified.
                 // Only update caller CVs for variables the callee wrote back via `global` keyword.
                 // This avoids overwriting by-ref modifications to other variables.
                 if !eg.dirty_globals.is_empty() {
-                    let caller_op_array = unsafe { (*frame).op_array() };
-                    let vars_to_check = if !caller_op_array.main_scope_vars.is_empty() {
-                        &caller_op_array.main_scope_vars
+                    let vars_to_check = if !op_array.main_scope_vars.is_empty() {
+                        &op_array.main_scope_vars
                     } else {
-                        &caller_op_array.global_vars
+                        &op_array.global_vars
                     };
                     for (cv_idx, var_name) in vars_to_check {
                         if eg.dirty_globals.contains(var_name) {
@@ -3188,6 +3218,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe { cleanup_frame_slots(frame) };
                 eg.vm_stack.pop_call_frame(frame);
                 frame = prev;
+                op_array = unsafe { (*frame).op_array() };
                 continue;
             }
 
@@ -3222,7 +3253,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     // Write result to TMP and continue (don't suspend)
                                     if opline.result_type != OpType::Unused {
                                         let slot = unsafe { (*frame).tmp_mut(result_slot) };
-                                        unsafe { (slot as *mut Value).write(ret_val) };
+                                        unsafe { frame_tmp_set(frame, slot as *mut Value, ret_val) };
                                     }
                                     unsafe { (*frame).opline = (*frame).opline.add(1); }
                                     continue;
@@ -3269,6 +3300,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 unsafe { cleanup_frame_slots(frame) };
                                 eg.vm_stack.pop_call_frame(frame);
                                 frame = prev;
+                                op_array = unsafe { (*frame).op_array() };
                                 continue;
                             }
                         }
@@ -3294,7 +3326,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg.active_generator = Some(gen_ref);
                             if opline.result_type != OpType::Unused {
                                 let slot = unsafe { (*frame).tmp_mut(result_slot) };
-                                unsafe { (slot as *mut Value).write(Value::null()) };
+                                unsafe { frame_tmp_set(frame, slot as *mut Value, Value::null()) };
                             }
                             unsafe { (*frame).opline = (*frame).opline.add(1); }
                             continue;
@@ -3340,6 +3372,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         unsafe { cleanup_frame_slots(frame) };
                         eg.vm_stack.pop_call_frame(frame);
                         frame = prev;
+                        op_array = unsafe { (*frame).op_array() };
                         continue;
                     } else {
                         eg.active_generator = Some(gen_ref);
@@ -3646,11 +3679,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             // All opcodes handled — new opcodes must be added above
-        }
-
-        // VM interrupt check
-        if eg.vm_interrupt.load(Ordering::Relaxed) {
-            handle_interrupt(eg)?;
         }
 
         // Advance to next instruction

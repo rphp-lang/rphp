@@ -3,7 +3,7 @@ use std::mem::size_of;
 use crate::value::Value;
 use crate::vm::stats;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, CleanupMode};
+use super::function::FunctionCommon;
 
 const DEFAULT_STACK_PAGE_SIZE: usize = 256 * 1024; // 256 KB
 
@@ -79,10 +79,12 @@ impl VmStack {
             (*frame).num_cvs = effective_cvs as u32;
             (*frame).num_temps = num_temps as u32;
             (*frame).pending_return_after_finally = false;
-            (*frame).has_heap_slots = common.plan.cleanup == CleanupMode::ScanAll;
+            (*frame).has_heap_slots = false;
         }
 
         // Zero-init only CV slots beyond argument count. TMPs NOT zeroed.
+        // Arg slots (0..num_args) are left uninitialized — written by SendVal before DoFcall.
+        // CVs beyond args are set to Undef (zeroed) so BindDefaultParam can check for Undef.
         let zero_start = num_args as usize;
         let zero_end = effective_cvs;
         let zero_count = zero_end.saturating_sub(zero_start);
@@ -94,6 +96,9 @@ impl VmStack {
                 (frame as *mut u8).add((CALL_FRAME_SLOTS + zero_start) * size_of::<Value>())
             };
             unsafe { std::ptr::write_bytes(cv_base, 0, zero_count * size_of::<Value>()) };
+            // Zeroed CVs are NOT marked in init_bitmap. They contain Undef (safe to read)
+            // but are not "passed arguments". Named arg duplicate detection uses is_init
+            // to distinguish "argument was provided" from "slot has default Undef".
         }
 
         frame

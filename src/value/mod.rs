@@ -225,6 +225,51 @@ impl Value {
         }
     }
 
+    // ── In-place scalar writers ─────────────────────────────────────────
+    // Write a scalar value directly into a target slot, avoiding construction
+    // of an intermediate Value on the Rust stack. Used by the slot lifecycle API
+    // for hot-path arithmetic results (Add, Sub, IsSmaller, etc.).
+
+    /// Write a Long value directly into a slot.
+    #[inline(always)]
+    pub unsafe fn write_long(ptr: *mut Value, v: i64) {
+        ptr.write(Self {
+            data: ValueData { long: v },
+            type_info: ValueType::Long as u32,
+            _not_send: PhantomData,
+        });
+    }
+
+    /// Write a Double value directly into a slot.
+    #[inline(always)]
+    pub unsafe fn write_double(ptr: *mut Value, v: f64) {
+        ptr.write(Self {
+            data: ValueData { double: v },
+            type_info: ValueType::Double as u32,
+            _not_send: PhantomData,
+        });
+    }
+
+    /// Write a Bool value directly into a slot.
+    #[inline(always)]
+    pub unsafe fn write_bool(ptr: *mut Value, v: bool) {
+        ptr.write(Self {
+            data: ValueData { long: 0 },
+            type_info: if v { ValueType::True } else { ValueType::False } as u32,
+            _not_send: PhantomData,
+        });
+    }
+
+    /// Write Null directly into a slot.
+    #[inline(always)]
+    pub unsafe fn write_null(ptr: *mut Value) {
+        ptr.write(Self {
+            data: ValueData { long: 0 },
+            type_info: ValueType::Null as u32,
+            _not_send: PhantomData,
+        });
+    }
+
     /// Create a string value. Stores a heap-allocated String (Box).
     /// Temporary approach — will migrate to ZString later.
     #[inline]
@@ -534,6 +579,7 @@ impl Value {
 }
 
 impl Clone for Value {
+    #[inline(always)]
     fn clone(&self) -> Self {
         stats::inc_value_clone(self.value_type() as usize);
         match self.value_type() {
@@ -573,6 +619,7 @@ impl Clone for Value {
 }
 
 impl Drop for Value {
+    #[inline(always)]
     fn drop(&mut self) {
         stats::inc_value_drop(self.value_type() as usize);
         match self.value_type() {

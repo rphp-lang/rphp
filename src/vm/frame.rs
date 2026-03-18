@@ -9,6 +9,73 @@ use super::instruction::{Instruction, OpType};
 pub const CALL_FRAME_SLOTS: usize =
     (size_of::<ExecuteData>() + size_of::<Value>() - 1) / size_of::<Value>();
 
+// ── SlotState ────────────────────────────────────────────────────────────────
+
+/// Slot-state tracking for frame slots (CV + TMP).
+///
+/// Two bitmaps: `init` (which slots are valid) and `heap` (which hold heap values).
+/// Invariant: `heap ⊆ init`.
+///
+/// Covers up to 64 slots (u64). Frames with > 64 slots use fallback
+/// (checked by caller via `num_cvs + num_temps > 64`).
+#[derive(Clone, Copy)]
+pub struct SlotState {
+    pub init: u64,
+    pub heap: u64,
+}
+
+impl SlotState {
+    pub const EMPTY: SlotState = SlotState { init: 0, heap: 0 };
+
+    /// Set init bits for range [start..end).
+    #[inline(always)]
+    pub fn mark_init_range(&mut self, start: u32, end: u32) {
+        if start >= end { return; }
+        let mask = if end >= 64 { !0u64 << start } else { ((1u64 << end) - 1) & !((1u64 << start) - 1) };
+        self.init |= mask;
+    }
+
+    #[inline(always)]
+    pub fn is_init(&self, idx: u32) -> bool {
+        self.init & (1u64 << idx) != 0
+    }
+
+    #[inline(always)]
+    pub fn is_heap(&self, idx: u32) -> bool {
+        self.heap & (1u64 << idx) != 0
+    }
+
+    #[inline(always)]
+    pub fn has_any_heap(&self) -> bool {
+        self.heap != 0
+    }
+
+    /// Iterator over indices of heap slots.
+    #[inline(always)]
+    pub fn heap_iter(&self) -> HeapSlotIter {
+        HeapSlotIter { bits: self.heap }
+    }
+}
+
+/// Iterator over set bits in heap bitmap. Yields slot indices.
+pub struct HeapSlotIter {
+    bits: u64,
+}
+
+impl Iterator for HeapSlotIter {
+    type Item = u32;
+
+    #[inline(always)]
+    fn next(&mut self) -> Option<u32> {
+        if self.bits == 0 { return None; }
+        let idx = self.bits.trailing_zeros();
+        self.bits &= self.bits - 1; // clear lowest set bit
+        Some(idx)
+    }
+}
+
+// ── ExecuteData ──────────────────────────────────────────────────────────────
+
 /// Call frame — equivalent to zend_execute_data.
 /// Allocated on VM stack, layout: [ExecuteData][CV0][CV1]...[TMPn]
 #[repr(C)]
@@ -25,11 +92,20 @@ pub struct ExecuteData {
     /// Per-frame flag: a return is pending after the current finally block completes.
     pub pending_return_after_finally: bool,
     /// Runtime over-approximation: true when any frame slot may hold a heap value.
-    /// False lets cleanup skip the CV/TMP scan entirely.
+    /// Monotonically true — once set, never cleared within frame lifetime.
+    /// Used by cleanup to fast-skip scan and by frame_slot_set to skip drop.
     pub has_heap_slots: bool,
 }
 
 impl ExecuteData {
+    /// Pointer to slot[idx] — unified accessor for both CVs and TMPs.
+    /// CV if idx < num_cvs, TMP if idx >= num_cvs.
+    #[inline(always)]
+    pub unsafe fn slot_ptr(&self, idx: u32) -> *mut Value {
+        let base = (self as *const Self as *mut Value).add(CALL_FRAME_SLOTS);
+        base.add(idx as usize)
+    }
+
     /// Get compiled variable by index (CV slot)
     #[inline]
     pub unsafe fn cv(&self, idx: u32) -> &Value {
@@ -102,10 +178,6 @@ impl ExecuteData {
     /// SAFETY: caller must know this frame is for a user function.
     #[inline]
     pub unsafe fn op_array(&self) -> &OpArray {
-        // Go through raw pointer directly to avoid lifetime issues
-        // with the Function wrapper (which is a local temporary).
-        // self.func points to FunctionCommon which is at offset 0
-        // of UserFunction (#[repr(C)]), so this cast is valid.
         let user = &*(self.func as *const UserFunction);
         &user.op_array
     }
