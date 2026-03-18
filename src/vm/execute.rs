@@ -4,10 +4,11 @@ use std::sync::atomic::Ordering;
 use crate::value::{Value, PhpArray, PhpObject, ArrayKey, ValueType, make_error_value};
 use crate::runtime::ExecutorGlobals;
 use crate::parser::Visibility;
+use crate::vm::stats;
 use super::opcode::OpCode;
-use super::instruction::OpType;
+use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{Function, FunctionCommon, FunctionType, UserFunction};
+use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy};
 
 /// Get the current caller's **lexical** (declaring) class name from the frame.
 /// Uses the `method_declaring_class` map on EG rather than runtime $this,
@@ -97,12 +98,74 @@ pub enum VmError {
     UnimplementedOpcode(OpCode),
 }
 
-/// Write a new Value into a slot, properly dropping the old value first.
+// ── Slot write API ──
+// Three functions, each with clear ownership semantics:
+//
+// slot_set:        Overwrite any initialized slot. Drops old value. No heap tracking.
+//                  Use for external slots (caller's return_value, globals).
+//
+// frame_slot_set:  Overwrite a CV/TMP slot within `frame`. Drops old value.
+//                  Sets has_heap_slots when writing heap-backed values.
+//                  Use for opcode results, SendVal args, assignment targets.
+//
+// frame_set_this:  Write $this into CV[0] of a method frame. No drop (slot
+//                  was zeroed or is fresh). Cleanup handles $this separately
+//                  so this does NOT set has_heap_slots.
+
+/// Overwrite a slot, dropping the old value. No frame heap tracking.
 /// SAFETY: `ptr` must point to a valid, initialized Value.
 #[inline]
-unsafe fn write_val(ptr: *mut Value, val: Value) {
+unsafe fn slot_set(ptr: *mut Value, val: Value) {
+    stats::inc_write_val();
     std::ptr::drop_in_place(ptr);
     ptr.write(val);
+}
+
+/// Overwrite a frame slot, dropping the old value. Tracks heap values for cleanup.
+/// SAFETY: `ptr` must point to a slot within `frame`.
+#[inline]
+unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    let heap_value = val.needs_cleanup();
+    stats::inc_write_frame_slot(heap_value);
+    if heap_value {
+        (*frame).has_heap_slots = true;
+    }
+    std::ptr::drop_in_place(ptr);
+    ptr.write(val);
+}
+
+/// Initialize an unwritten frame slot (arg CV during SendVal/SendRef/SendNamed).
+/// No drop — the slot is uninitialized or contains leftover garbage from
+/// a previous frame's stack memory.  Tracks has_heap_slots.
+/// SAFETY: `ptr` must point to an uninitialized slot within `frame`.
+#[inline]
+unsafe fn frame_slot_init(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    let heap_value = val.needs_cleanup();
+    stats::inc_write_frame_slot(heap_value);
+    if heap_value {
+        (*frame).has_heap_slots = true;
+    }
+    ptr.write(val);
+}
+
+/// Write $this into CV[0] of a method frame.
+/// Cleanup drops $this unconditionally for method frames — no has_heap_slots needed.
+/// SAFETY: `frame` must have CV[0] allocated and uninitialized or zeroed.
+#[inline]
+unsafe fn frame_set_this(frame: *mut ExecuteData, val: Value) {
+    let ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    ptr.write(val);
+}
+
+/// Propagate heap-backed return values into the caller's cleanup bookkeeping.
+#[inline]
+unsafe fn mark_caller_heap_return(frame: *mut ExecuteData, val: &Value) {
+    if val.needs_cleanup() {
+        let prev = (*frame).prev_execute_data;
+        if !prev.is_null() {
+            (*prev).has_heap_slots = true;
+        }
+    }
 }
 
 /// Check if an exception value matches a catch clause's type list.
@@ -127,19 +190,45 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
 
 /// Drop all CV and TMP slot values in a frame before popping it.
 /// Only drops heap-allocated types (String, Array, Object).
+/// After dropping, zeros the slot so reused stack space sees Undef.
 /// Reference/Undef/Null/Bool/Long/Double are no-op drops — skip them entirely.
 /// SAFETY: frame must be a valid ExecuteData pointer with initialized slots.
 #[inline]
 unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
-    let num_slots = (*frame).num_cvs as usize + (*frame).num_temps as usize;
+    let num_cvs = (*frame).num_cvs as usize;
+    let num_temps = (*frame).num_temps as usize;
     let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-    for i in 0..num_slots {
+    let func = &*(*frame).func;
+    let this_offset = func.sig.this_offset as usize;
+
+    // Drop $this (CV[0]) unconditionally for method frames.
+    // $this is written directly (not via frame_slot_set), so it doesn't
+    // set has_heap_slots. We handle it here instead.
+    if this_offset > 0 {
+        let this_ptr = base;
+        if (*this_ptr).needs_cleanup() {
+            std::ptr::drop_in_place(this_ptr);
+            std::ptr::write_bytes(this_ptr as *mut u8, 0, std::mem::size_of::<Value>());
+        }
+    }
+
+    // Fast skip for remaining slots when no heap values were written.
+    let remaining = num_cvs + num_temps - this_offset;
+    if !(*frame).has_heap_slots {
+        stats::inc_cleanup_frame(remaining, true);
+        return;
+    }
+    stats::inc_cleanup_frame(remaining, false);
+    for i in this_offset..(num_cvs + num_temps) {
         let ptr = base.add(i);
         match (*ptr).value_type() {
             ValueType::String | ValueType::Array | ValueType::Object => {
                 std::ptr::drop_in_place(ptr);
+                // Zero the slot so the next frame reusing this stack space
+                // sees Undef (safe for drop_in_place) instead of a dangling pointer.
+                std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
             }
-            _ => {} // Undef, Null, Bool, Long, Double, Reference — no-op
+            _ => {}
         }
     }
 }
@@ -201,13 +290,12 @@ fn call_magic_method(
         (*call).return_value = &mut return_value;
         (*call).prev_execute_data = std::ptr::null_mut();
         (*call).opline = user.op_array.instructions.as_ptr();
-        // Set $this as CV 0
-        let this_ptr = (*call).cv_mut(0);
-        *this_ptr = obj_val.clone();
+        // Write $this directly — cleanup handles it separately.
+        frame_set_this(call, obj_val.clone());
         // Set arguments in CV slots starting at 1 (after $this)
         for (i, arg) in args.iter().enumerate() {
             let cv = (*call).cv_mut(1 + i as u32);
-            *cv = arg.clone();
+            frame_slot_set(call, cv as *mut Value, arg.clone());
         }
     }
 
@@ -268,7 +356,7 @@ fn throw_in_frame<'a>(
                 }
                 let base_ptr = sf_op_array.instructions.as_ptr();
                 let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
-                unsafe { write_val(catch_cv_ptr, thrown.clone()) };
+                unsafe { slot_set(catch_cv_ptr, thrown.clone()) };
                 unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
                 return ThrowResult::Handled(frame, new_op_array);
@@ -354,8 +442,7 @@ pub fn call_function(
     // Write args into CV slots
     for (i, arg) in args.iter().enumerate() {
         let slot = unsafe { (*frame).cv_mut(i as u32) };
-        unsafe { std::ptr::drop_in_place(slot as *mut Value) };
-        unsafe { (slot as *mut Value).write(arg.clone()) };
+        unsafe { frame_slot_set(frame, slot as *mut Value, arg.clone()) };
     }
 
     let func = unsafe { Function::from_common_ptr(func_ptr) };
@@ -676,6 +763,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
     'vm: loop {
         let opline = unsafe { &*(*frame).opline };
         let mut op_array = unsafe { (*frame).op_array() };
+        stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
         let frame_pending = unsafe { (*frame).pending_return_after_finally };
@@ -732,7 +820,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 });
                                 if let Some(catch) = matched_catch {
                                     let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
-                                    unsafe { write_val(catch_cv_ptr, pending.clone()) };
+                                    unsafe { slot_set(catch_cv_ptr, pending.clone()) };
                                     unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                                 } else if entry.finally_start != 0xFFFFFFFF {
                                     eg.exception = Some(pending.clone());
@@ -764,11 +852,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
                 let cloned = val.clone();
                 let dest = unsafe { (*frame).get_op_mut(opline.op1, opline.op1_type) };
-                unsafe { write_val(dest, cloned.clone()) };
+                unsafe { slot_set(dest, cloned.clone()) };
                 // If result is used, write a copy there too
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, cloned) };
+                    unsafe { slot_set(result_ptr, cloned) };
                 }
             }
 
@@ -795,13 +883,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_add(l2) {
-                        Some(sum) => unsafe { write_val(result_ptr, Value::long(sum)) },
+                        Some(sum) => unsafe { slot_set(result_ptr, Value::long(sum)) },
                         None => unsafe {
-                            write_val(result_ptr, Value::double(l1 as f64 + l2 as f64))
+                            slot_set(result_ptr, Value::double(l1 as f64 + l2 as f64))
                         },
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { write_val(result_ptr, Value::double(d1 + d2)) };
+                    unsafe { slot_set(result_ptr, Value::double(d1 + d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for +".into()));
                 }
@@ -814,13 +902,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_sub(l2) {
-                        Some(diff) => unsafe { write_val(result_ptr, Value::long(diff)) },
+                        Some(diff) => unsafe { slot_set(result_ptr, Value::long(diff)) },
                         None => unsafe {
-                            write_val(result_ptr, Value::double(l1 as f64 - l2 as f64))
+                            slot_set(result_ptr, Value::double(l1 as f64 - l2 as f64))
                         },
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { write_val(result_ptr, Value::double(d1 - d2)) };
+                    unsafe { slot_set(result_ptr, Value::double(d1 - d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for -".into()));
                 }
@@ -833,13 +921,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_mul(l2) {
-                        Some(prod) => unsafe { write_val(result_ptr, Value::long(prod)) },
+                        Some(prod) => unsafe { slot_set(result_ptr, Value::long(prod)) },
                         None => unsafe {
-                            write_val(result_ptr, Value::double(l1 as f64 * l2 as f64))
+                            slot_set(result_ptr, Value::double(l1 as f64 * l2 as f64))
                         },
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { write_val(result_ptr, Value::double(d1 * d2)) };
+                    unsafe { slot_set(result_ptr, Value::double(d1 * d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for *".into()));
                 }
@@ -857,12 +945,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // PHP: if both are long and divisible, result is long
                     if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                         if l2 != 0 && l1 % l2 == 0 {
-                            unsafe { write_val(result_ptr, Value::long(l1 / l2)) };
+                            unsafe { slot_set(result_ptr, Value::long(l1 / l2)) };
                         } else {
-                            unsafe { write_val(result_ptr, Value::double(d1 / d2)) };
+                            unsafe { slot_set(result_ptr, Value::double(d1 / d2)) };
                         }
                     } else {
-                        unsafe { write_val(result_ptr, Value::double(d1 / d2)) };
+                        unsafe { slot_set(result_ptr, Value::double(d1 / d2)) };
                     }
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for /".into()));
@@ -878,7 +966,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if l2 == 0 {
                         return Err(VmError::Fatal("Division by zero".into()));
                     }
-                    unsafe { write_val(result_ptr, Value::long(l1 % l2)) };
+                    unsafe { slot_set(result_ptr, Value::long(l1 % l2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for %".into()));
                 }
@@ -908,7 +996,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     op2.echo_to_string()
                 };
                 let concatenated = format!("{}{}", s1, s2);
-                unsafe { write_val(result_ptr, Value::string(concatenated)) };
+                unsafe { slot_set(result_ptr, Value::string(concatenated)) };
             }
 
             OpCode::Spaceship => {
@@ -930,7 +1018,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     std::cmp::Ordering::Equal => 0,
                     std::cmp::Ordering::Greater => 1,
                 };
-                unsafe { write_val(result_ptr, Value::long(val)) };
+                unsafe { slot_set(result_ptr, Value::long(val)) };
             }
 
             OpCode::Pow => {
@@ -940,12 +1028,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     if l2 >= 0 {
-                        unsafe { write_val(result_ptr, Value::long(l1.wrapping_pow(l2 as u32))) };
+                        unsafe { slot_set(result_ptr, Value::long(l1.wrapping_pow(l2 as u32))) };
                     } else {
-                        unsafe { write_val(result_ptr, Value::double((l1 as f64).powf(l2 as f64))) };
+                        unsafe { slot_set(result_ptr, Value::double((l1 as f64).powf(l2 as f64))) };
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
-                    unsafe { write_val(result_ptr, Value::double(d1.powf(d2))) };
+                    unsafe { slot_set(result_ptr, Value::double(d1.powf(d2))) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for **".into()));
                 }
@@ -958,7 +1046,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { write_val(result_ptr, Value::long(l1 & l2)) };
+                unsafe { slot_set(result_ptr, Value::long(l1 & l2)) };
             }
 
             OpCode::BitwiseOr => {
@@ -968,7 +1056,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { write_val(result_ptr, Value::long(l1 | l2)) };
+                unsafe { slot_set(result_ptr, Value::long(l1 | l2)) };
             }
 
             OpCode::BitwiseXor => {
@@ -978,7 +1066,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { write_val(result_ptr, Value::long(l1 ^ l2)) };
+                unsafe { slot_set(result_ptr, Value::long(l1 ^ l2)) };
             }
 
             OpCode::ShiftLeft => {
@@ -988,7 +1076,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { write_val(result_ptr, Value::long(l1.wrapping_shl(l2 as u32))) };
+                unsafe { slot_set(result_ptr, Value::long(l1.wrapping_shl(l2 as u32))) };
             }
 
             OpCode::ShiftRight => {
@@ -998,14 +1086,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
-                unsafe { write_val(result_ptr, Value::long(l1.wrapping_shr(l2 as u32))) };
+                unsafe { slot_set(result_ptr, Value::long(l1.wrapping_shr(l2 as u32))) };
             }
 
             OpCode::BitwiseNot => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
                 let l = val.to_long_val();
-                unsafe { write_val(result_ptr, Value::long(!l)) };
+                unsafe { slot_set(result_ptr, Value::long(!l)) };
             }
 
             OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual => {
@@ -1041,7 +1129,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
                 };
 
-                unsafe { write_val(result_ptr, Value::bool(result)) };
+                unsafe { slot_set(result_ptr, Value::bool(result)) };
             }
 
             OpCode::IsIdentical | OpCode::IsNotIdentical => {
@@ -1055,14 +1143,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     OpCode::IsIdentical => identical,
                     _ => !identical,
                 };
-                unsafe { write_val(result_ptr, Value::bool(result)) };
+                unsafe { slot_set(result_ptr, Value::bool(result)) };
             }
 
             OpCode::Isset => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
                 let is_set = val.value_type() != ValueType::Undef && val.value_type() != ValueType::Null;
-                unsafe { write_val(result_ptr, Value::bool(is_set)) };
+                unsafe { slot_set(result_ptr, Value::bool(is_set)) };
             }
 
             OpCode::Cast => {
@@ -1096,14 +1184,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     _ => val.clone(),
                 };
-                unsafe { write_val(result_ptr, casted) };
+                unsafe { slot_set(result_ptr, casted) };
             }
 
             OpCode::BoolNot => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
                 let negated = !val.is_truthy();
-                unsafe { write_val(result_ptr, Value::bool(negated)) };
+                unsafe { slot_set(result_ptr, Value::bool(negated)) };
             }
 
             OpCode::Jmp => {
@@ -1143,33 +1231,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // op1 = num_args
                 // op2 = CONST index pointing to function name string
                 // extended_value = CONST index of fallback name (for unqualified calls in namespace), 0 = no fallback
-                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let name = name_val.as_str().unwrap_or_else(|| {
-                    panic!("INIT_FCALL: op2 must be a string");
-                });
-                let func_ptr_opt = eg.find_function(name).or_else(|| {
-                    // Try fallback name (unqualified global name) if provided
-                    if opline.extended_value != 0 {
-                        let fallback_val = unsafe { &*(*frame).get_op_ptr(opline.extended_value, OpType::Const, op_array) };
-                        if let Some(fallback_name) = fallback_val.as_str() {
-                            return eg.find_function(fallback_name);
-                        }
-                    }
-                    None
-                });
-                let func_ptr = match func_ptr_opt {
-                    Some(ptr) => ptr,
-                    None => {
-                        let err = make_error_value("Error", &format!("Call to undefined function {}()", name));
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue;
+
+                // Inline cache: if we resolved this function before, reuse the pointer
+                let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+                let cached = op_array.cache[ip].func;
+                let func_ptr = if !cached.is_null() {
+                    cached
+                } else {
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let name = name_val.as_str().unwrap_or_else(|| {
+                        panic!("INIT_FCALL: op2 must be a string");
+                    });
+                    let func_ptr_opt = eg.find_function(name).or_else(|| {
+                        if opline.extended_value != 0 {
+                            let fallback_val = unsafe { &*(*frame).get_op_ptr(opline.extended_value, OpType::Const, op_array) };
+                            if let Some(fallback_name) = fallback_val.as_str() {
+                                return eg.find_function(fallback_name);
                             }
-                            ThrowResult::Unhandled(thrown) => {
-                                eg.exception = Some(thrown);
-                                return Ok(());
+                        }
+                        None
+                    });
+                    match func_ptr_opt {
+                        Some(ptr) => {
+                            // Cache for next time (don't cache failures — function may be defined later via include)
+                            unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = ptr; }
+                            ptr
+                        }
+                        None => {
+                            let err = make_error_value("Error", &format!("Call to undefined function {}()", name_val.as_str().unwrap_or("?")));
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    eg.exception = Some(thrown);
+                                    return Ok(());
+                                }
                             }
                         }
                     }
@@ -1179,9 +1278,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
                 unsafe {
                     (*call).prev_execute_data = frame;
-                    // Save previous pending call in callee's call field (nested call chain)
                     (*call).call = (*frame).call;
-                    // Link as pending call on current frame
                     (*frame).call = call;
                 }
             }
@@ -1195,7 +1292,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 debug_assert!(!call.is_null());
                 // Arguments are stored in CV slots of the callee frame
                 let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
-                *arg_slot = cloned;
+                unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
             }
 
             OpCode::SendRef => {
@@ -1216,9 +1313,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
-                // Drop old undef in the slot, then write Reference
-                unsafe { std::ptr::drop_in_place(arg_slot as *mut Value) };
-                unsafe { (arg_slot as *mut Value).write(Value::reference(caller_cv_ptr)) };
+                unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
             }
 
             OpCode::SendVarEx => {
@@ -1228,7 +1323,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 debug_assert!(!call.is_null());
                 let param_idx = opline.extended_value;
                 let func_common = unsafe { &*(*call).func };
-                let is_ref = func_common.is_param_by_ref(param_idx);
+                let is_ref = func_common.sig.is_param_by_ref(param_idx);
 
                 if is_ref && opline.op1_type == OpType::Cv {
                     // Same logic as SendRef
@@ -1242,14 +1337,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     };
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
-                    unsafe { std::ptr::drop_in_place(arg_slot as *mut Value) };
-                    unsafe { (arg_slot as *mut Value).write(Value::reference(caller_cv_ptr)) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
                 } else {
                     // Same logic as SendVal
                     let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                     let cloned = val.clone();
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
-                    *arg_slot = cloned;
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                 }
             }
 
@@ -1265,7 +1359,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Find the parameter position by name
                 let mut resolved_idx: Option<u32> = None;
-                for (idx, pname) in func_common.param_names.iter().enumerate() {
+                for (idx, pname) in func_common.sig.param_names.iter().enumerate() {
                     if pname == name {
                         resolved_idx = Some(idx as u32);
                         break;
@@ -1274,8 +1368,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Determine if the resolved index targets the variadic parameter itself.
                 // In that case, route to the variadic buffer, not the CV slot.
-                let public_max = func_common.public_arity();
-                let is_variadic_target = func_common.is_variadic && match resolved_idx {
+                let public_max = func_common.sig.public_arity();
+                let is_variadic_target = func_common.sig.is_variadic && match resolved_idx {
                     Some(idx) => idx >= public_max,
                     None => true,
                 };
@@ -1286,7 +1380,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // (b) name not in param_names at all (extra named arg)
                     // Internal (built-in) variadic functions do NOT accept named
                     // variadic extras — only user-defined functions do.
-                    if !func_common.is_variadic
+                    if !func_common.sig.is_variadic
                         || func_common.fn_type == crate::vm::function::FunctionType::Internal
                     {
                         let err = make_error_value("Error", &format!(
@@ -1328,7 +1422,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else {
                     match resolved_idx {
                         Some(idx) => {
-                            let cv_idx = func_common.param_cv_index(idx);
+                            let cv_idx = func_common.sig.param_cv_index(idx);
 
                             // Check for duplicate: if CV slot already has a non-undef value,
                             // the parameter was already passed (positionally or by a prior named arg).
@@ -1343,7 +1437,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                             }
 
-                            let is_ref = func_common.is_param_by_ref(idx);
+                            let is_ref = func_common.sig.is_param_by_ref(idx);
 
                             if is_ref && opline.op1_type == OpType::Cv {
                                 // By-reference: same logic as SendRef
@@ -1357,14 +1451,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     }
                                 };
                                 let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
-                                unsafe { std::ptr::drop_in_place(arg_slot as *mut Value) };
-                                unsafe { (arg_slot as *mut Value).write(Value::reference(caller_cv_ptr)) };
+                                unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
                             } else {
                                 // By-value: same logic as SendVal
                                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                                 let cloned = val.clone();
                                 let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
-                                *arg_slot = cloned;
+                                unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                             }
 
                             // Update num_args to cover this position
@@ -1395,6 +1488,72 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Restore previous pending call from the chain
                 unsafe { (*frame).call = (*call).call };
 
+                // ── Fast path for simple user function calls ──
+                // Single precomputed flag check replaces 5 runtime conditions.
+                // CALL_FAST = no variadics, no param type hints.
+                // Also requires: User function, not generator, no pending invoke/named-variadic.
+                let func_common_fast = unsafe { &*(*call).func };
+                if func_common_fast.fn_type == FunctionType::User
+                    && func_common_fast.plan.call == CallStrategy::Fast
+                    && eg.pending_invoke_this.is_none()
+                    && eg.pending_named_variadic.is_empty()
+                {
+                    let num_args_fast = unsafe { (*call).num_args };
+                    let user = unsafe { &*((*call).func as *const UserFunction) };
+                    // Check for holes in required params (named args can skip positional params).
+                    // This loop is typically 0-2 iterations — cheap for the fast path.
+                    let mut has_required_holes = false;
+                    if func_common_fast.sig.required_num_args > 0 {
+                        for i in 0..func_common_fast.sig.required_num_args {
+                            let cv_idx = func_common_fast.sig.param_cv_index(i);
+                            let val = unsafe { &*(*call).cv(cv_idx) };
+                            if val.is_undef() {
+                                has_required_holes = true;
+                                break;
+                            }
+                        }
+                    }
+                    if !user.op_array.is_generator
+                        && !has_required_holes
+                        && num_args_fast >= func_common_fast.sig.required_num_args
+                        && num_args_fast <= func_common_fast.sig.public_arity()
+                    {
+                        stats::inc_do_fcall_fast();
+                        // Fast path: set up return value, link frames, jump to callee
+                        let return_value_ptr = if opline.result_type != OpType::Unused {
+                            unsafe { (*frame).get_op_mut(opline.result, opline.result_type) }
+                        } else {
+                            std::ptr::null_mut()
+                        };
+                        unsafe { (*call).return_value = return_value_ptr };
+
+                        // Sync caller's scope to globals (only if needed)
+                        let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
+                            &op_array.main_scope_vars
+                        } else {
+                            &op_array.global_vars
+                        };
+                        if !vars_to_sync.is_empty() {
+                            for (cv_idx, var_name) in vars_to_sync {
+                                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                                let val = unsafe { (*cv_ptr).clone() };
+                                eg.globals.insert(var_name.clone(), val);
+                            }
+                        }
+
+                        unsafe {
+                            (*call).opline = user.op_array.instructions.as_ptr();
+                            (*frame).opline = (*frame).opline.add(1);
+                        }
+                        eg.current_execute_data.set(call);
+                        frame = call;
+                        continue;
+                    }
+                }
+
+                // ── Full path (handles all edge cases) ──
+                stats::inc_do_fcall_full();
+
                 // Set up return value in result slot if used
                 let return_value_ptr = if opline.result_type != OpType::Unused {
                     unsafe { (*frame).get_op_mut(opline.result, opline.result_type) }
@@ -1417,11 +1576,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for i in (0..num).rev() {
                         let val = unsafe { (*call).cv(i).clone() };
                         let dst = unsafe { (*call).cv_mut(i + 1) };
-                        *dst = val;
+                        unsafe { frame_slot_set(call, dst as *mut Value, val) };
                     }
                     // Place $this at CV 0
                     let this_slot = unsafe { (*call).cv_mut(0) };
-                    *this_slot = this_val;
+                    unsafe { frame_slot_set(call, this_slot as *mut Value, this_val) };
                     // num_args stays as the public arg count (excluding $this)
                     // — same convention as InitMethodCall
                 }
@@ -1431,14 +1590,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // `public_arity()` = declared param count excluding hidden $this.
                 let func_common = unsafe { &*(*call).func };
                 let num_args = unsafe { (*call).num_args };
-                let public_max = func_common.public_arity();
-                if num_args < func_common.required_num_args {
+                let public_max = func_common.sig.public_arity();
+                if num_args < func_common.sig.required_num_args {
                     return Err(VmError::Fatal(format!(
                         "Too few arguments, {} passed and exactly {} expected",
-                        num_args, func_common.required_num_args
+                        num_args, func_common.sig.required_num_args
                     )));
                 }
-                if !func_common.is_variadic && num_args > public_max {
+                if !func_common.sig.is_variadic && num_args > public_max {
                     return Err(VmError::Fatal(format!(
                         "Too many arguments, {} passed and at most {} expected",
                         num_args, public_max
@@ -1447,14 +1606,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Named args can skip required positional params; verify no holes
                 // in the required range. A required param is one at index < required_num_args.
-                if func_common.required_num_args > 0 {
-                    for i in 0..func_common.required_num_args {
-                        let cv_idx = func_common.param_cv_index(i);
+                if func_common.sig.required_num_args > 0 {
+                    for i in 0..func_common.sig.required_num_args {
+                        let cv_idx = func_common.sig.param_cv_index(i);
                         let val = unsafe { &*(*call).cv(cv_idx) };
                         if val.is_undef() {
                             return Err(VmError::Fatal(format!(
                                 "Too few arguments, {} passed and exactly {} expected",
-                                num_args, func_common.required_num_args
+                                num_args, func_common.sig.required_num_args
                             )));
                         }
                     }
@@ -1465,11 +1624,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let callee_class_ref = callee_class.as_deref();
 
                 // Type-check arguments against declared type hints
-                if !func_common.param_type_hints.is_empty() {
+                if !func_common.sig.param_type_hints.is_empty() {
                     let mut type_error: Option<Value> = None;
-                    for (i, hint) in func_common.param_type_hints.iter().enumerate() {
+                    for (i, hint) in func_common.sig.param_type_hints.iter().enumerate() {
                         if matches!(hint, crate::vm::function::ParamTypeHint::None) { continue; }
-                        let cv_idx = func_common.param_cv_index(i as u32);
+                        let cv_idx = func_common.sig.param_cv_index(i as u32);
                         if (i as u32) >= num_args { break; }
                         let val = unsafe { &*(*call).cv(cv_idx) };
                         if val.is_undef() { continue; }
@@ -1495,10 +1654,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 // Pack extra arguments into variadic parameter array
-                if func_common.is_variadic {
+                if func_common.sig.is_variadic {
                     let extra_count = num_args.saturating_sub(public_max);
                     let mut variadic_arr = crate::value::PhpArray::new();
-                    let cv_start = func_common.variadic_cv_index;
+                    let cv_start = func_common.sig.variadic_cv_index;
                     for i in 0..extra_count {
                         let arg = unsafe { (*call).cv(cv_start + i) }.clone();
                         variadic_arr.push(arg);
@@ -1507,7 +1666,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if let Some(named_extras) = pending_named {
                         // Type-check each named extra against the variadic param's type hint
                         let variadic_hint_idx = public_max as usize; // index in param_type_hints
-                        let variadic_hint = func_common.param_type_hints.get(variadic_hint_idx);
+                        let variadic_hint = func_common.sig.param_type_hints.get(variadic_hint_idx);
                         for (name, val) in named_extras {
                             if let Some(hint) = variadic_hint {
                                 if !matches!(hint, crate::vm::function::ParamTypeHint::None)
@@ -1532,7 +1691,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     // Overwrite the variadic CV slot with the packed array
                     let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
-                    *variadic_slot = crate::value::Value::array(variadic_arr);
+                    unsafe {
+                        frame_slot_set(call, variadic_slot as *mut Value, crate::value::Value::array(variadic_arr));
+                    }
                 }
 
                 // Direct fn_type check — avoids Function wrapper overhead
@@ -1562,6 +1723,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let gen_ref = new_generator_ref(generator);
                             let gen_obj = PhpObject {
                                 class_name: "Generator".to_string(),
+                                class_id: 0,
                                 properties: std::collections::HashMap::new(),
                                 generator: Some(gen_ref),
                             };
@@ -1569,7 +1731,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                             // Write generator object as return value
                             if !return_value_ptr.is_null() {
-                                unsafe { write_val(return_value_ptr, gen_val) };
+                                unsafe { slot_set(return_value_ptr, gen_val) };
                             }
 
                             // Clean up the call frame (we didn't execute it)
@@ -1660,9 +1822,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, new_val.clone()) };
+                    unsafe { slot_set(result_ptr, new_val.clone()) };
                 }
-                unsafe { write_val(cv_ptr, new_val) };
+                unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PreDec => {
@@ -1675,21 +1837,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, new_val.clone()) };
+                        unsafe { slot_set(result_ptr, new_val.clone()) };
                     }
-                    unsafe { write_val(cv_ptr, new_val) };
+                    unsafe { slot_set(cv_ptr, new_val) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, new_val.clone()) };
+                        unsafe { slot_set(result_ptr, new_val.clone()) };
                     }
-                    unsafe { write_val(cv_ptr, new_val) };
+                    unsafe { slot_set(cv_ptr, new_val) };
                 } else {
                     // PHP: null-- has no effect, value stays null
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, Value::null()) };
+                        unsafe { slot_set(result_ptr, Value::null()) };
                     }
                 }
             }
@@ -1711,9 +1873,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, old_val) };
+                    unsafe { slot_set(result_ptr, old_val) };
                 }
-                unsafe { write_val(cv_ptr, new_val) };
+                unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PostDec => {
@@ -1727,28 +1889,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, old_val) };
+                        unsafe { slot_set(result_ptr, old_val) };
                     }
-                    unsafe { write_val(cv_ptr, new_val) };
+                    unsafe { slot_set(cv_ptr, new_val) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, old_val) };
+                        unsafe { slot_set(result_ptr, old_val) };
                     }
-                    unsafe { write_val(cv_ptr, new_val) };
+                    unsafe { slot_set(cv_ptr, new_val) };
                 } else {
                     // PHP: null-- has no effect, value stays null
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, Value::null()) };
+                        unsafe { slot_set(result_ptr, Value::null()) };
                     }
                 }
             }
 
             OpCode::InitArray => {
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                unsafe { write_val(result_ptr, Value::array(PhpArray::new())) };
+                unsafe { slot_set(result_ptr, Value::array(PhpArray::new())) };
             }
 
             OpCode::AddArrayElement => {
@@ -1782,7 +1944,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         ArrayKey::String(k) => arr.get_str(k),
                     };
                     let val = fetched.cloned().unwrap_or(Value::null());
-                    unsafe { write_val(result_ptr, val) };
+                    unsafe { slot_set(result_ptr, val) };
                 } else if let Some(s) = arr_val.as_str() {
                     // String offset access: $s[0] — PHP strings are byte-oriented
                     let bytes = s.as_bytes();
@@ -1800,12 +1962,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             Value::string("")
                         };
-                        unsafe { write_val(result_ptr, val) };
+                        unsafe { slot_set(result_ptr, val) };
                     } else {
-                        unsafe { write_val(result_ptr, Value::null()) };
+                        unsafe { slot_set(result_ptr, Value::null()) };
                     }
                 } else {
-                    unsafe { write_val(result_ptr, Value::null()) };
+                    unsafe { slot_set(result_ptr, Value::null()) };
                 }
             }
 
@@ -1819,7 +1981,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let arr = unsafe { &mut *arr_ptr };
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
-                    unsafe { write_val(arr_ptr, Value::array(PhpArray::new())) };
+                    unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
                     let arr = unsafe { &mut *arr_ptr };
                     arr.as_array_mut().unwrap().set(key, cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
@@ -1837,7 +1999,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let arr = unsafe { &mut *arr_ptr };
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
-                    unsafe { write_val(arr_ptr, Value::array(PhpArray::new())) };
+                    unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
                     let arr = unsafe { &mut *arr_ptr };
                     arr.as_array_mut().unwrap().push(cloned_val);
                 } else if let Some(php_arr) = arr.as_array_mut() {
@@ -1899,10 +2061,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Store generator object in result TMP
                     let cloned = arr_val.clone();
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, cloned) };
+                    unsafe { slot_set(result_ptr, cloned) };
                     // Set position TMP to 0 (0 = first iteration, don't call next)
                     let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-                    unsafe { write_val(pos_ptr, Value::long(0)) };
+                    unsafe { slot_set(pos_ptr, Value::long(0)) };
                 } else {
                     let is_empty = match arr_val.as_array() {
                         Some(arr) => arr.is_empty(),
@@ -1930,10 +2092,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Copy array to result TMP
                     let cloned = arr_val.clone();
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, cloned) };
+                    unsafe { slot_set(result_ptr, cloned) };
                     // Set position TMP to 0
                     let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-                    unsafe { write_val(pos_ptr, Value::long(0)) };
+                    unsafe { slot_set(pos_ptr, Value::long(0)) };
                 }
             }
 
@@ -1970,17 +2132,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if gen_data.state != crate::vm::generator::GeneratorState::Completed {
                         // Write current value to value_cv
                         let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                        unsafe { write_val(val_ptr, gen_data.value.clone()) };
+                        unsafe { slot_set(val_ptr, gen_data.value.clone()) };
                         // Write key if requested
                         if key_encoded > 0 {
                             let key_cv = key_encoded - 1;
                             let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                            unsafe { write_val(key_ptr, gen_data.key.clone()) };
+                            unsafe { slot_set(key_ptr, gen_data.key.clone()) };
                         }
                         drop(gen_data);
                         // Increment position
                         let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
-                        unsafe { write_val(pos_ptr, Value::long(pos + 1)) };
+                        unsafe { slot_set(pos_ptr, Value::long(pos + 1)) };
                         true
                     } else {
                         false
@@ -1994,7 +2156,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if pos < entries.len() {
                             let (ref key, ref val) = entries[pos];
                             let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                            unsafe { write_val(val_ptr, val.clone()) };
+                            unsafe { slot_set(val_ptr, val.clone()) };
                             if key_encoded > 0 {
                                 let key_cv = key_encoded - 1;
                                 let key_val = match key {
@@ -2002,10 +2164,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     ArrayKey::String(k) => Value::string(k.clone()),
                                 };
                                 let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                                unsafe { write_val(key_ptr, key_val) };
+                                unsafe { slot_set(key_ptr, key_val) };
                             }
                             let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
-                            unsafe { write_val(pos_ptr, Value::long((pos + 1) as i64)) };
+                            unsafe { slot_set(pos_ptr, Value::long((pos + 1) as i64)) };
                             true
                         } else {
                             false
@@ -2016,7 +2178,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
 
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                unsafe { write_val(result_ptr, Value::bool(has_more)) };
+                unsafe { slot_set(result_ptr, Value::bool(has_more)) };
             }
 
             OpCode::Throw => {
@@ -2122,10 +2284,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 let obj = PhpObject {
                     class_name: name.to_string(),
+                    class_id: eg.class_id_of(name),
                     properties: props,
                     generator: None,
                 };
-                unsafe { write_val(result_ptr, Value::object(obj)) };
+                unsafe { slot_set(result_ptr, Value::object(obj)) };
 
                 // Check for __construct — set up call frame if it exists
                 let num_args = opline.extended_value;
@@ -2138,10 +2301,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         (*call).prev_execute_data = frame;
                         (*call).call = (*frame).call;
                         (*frame).call = call;
-                        // Set $this as CV 0
-                        let this_ptr = (*call).cv_mut(0);
+                        // Write $this directly — cleanup handles it separately.
                         let obj_ref = &*result_ptr;
-                        *this_ptr = obj_ref.clone();
+                        frame_set_this(call, obj_ref.clone());
                     }
                 } else {
                     // No constructor — skip num_args SendVals + 1 DoFcall.
@@ -2206,13 +2368,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let found_val = obj.properties.get(&key).cloned();
                     drop(obj); // Release borrow before potential magic method call
                     if let Some(val) = found_val {
-                        unsafe { write_val(result_ptr, val) };
+                        unsafe { slot_set(result_ptr, val) };
                     } else {
                         // Property not found — try __get magic method
                         if let Some(result) = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])? {
-                            unsafe { write_val(result_ptr, result) };
+                            unsafe { slot_set(result_ptr, result) };
                         } else {
-                            unsafe { write_val(result_ptr, Value::null()) };
+                            unsafe { slot_set(result_ptr, Value::null()) };
                         }
                     }
                 } else {
@@ -2375,80 +2537,93 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::InitMethodCall => {
                 let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let method = method_name.as_str().unwrap_or("");
 
                 if let Some(obj) = obj_val.as_object() {
-                    let caller_class = get_caller_class(frame, eg);
-                    let target_class = obj.class_name.clone();
+                    let obj_class_id = obj.class_id;
 
-                    // PHP private method early binding: if the caller's class itself
-                    // declares a private method with this name AND the receiver is
-                    // an instance of the caller's class (i.e. in the same inheritance
-                    // hierarchy), dispatch to the caller's version.
-                    // Example: A::callA() calls $this->who() on a B that extends A —
-                    // when A has private who(), resolve to A::who().
-                    // But if the receiver is unrelated (not an instance of the caller's
-                    // class), fall through to normal dispatch + visibility check.
-                    let dispatch_class = if let Some(ref cc) = caller_class {
-                        if let Some((Visibility::Private, ref defining)) = eg.find_method_visibility(cc, method) {
-                            if defining.eq_ignore_ascii_case(cc)
-                                && eg.class_is_a(&target_class, cc)
-                            {
-                                cc.clone()
+                    // Inline cache: if same class_id as last time, reuse resolved func_ptr
+                    // — avoids class_name.clone() and full method resolution on cache hit.
+                    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+                    let ic = &op_array.cache[ip];
+                    let func_ptr = if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
+                        drop(obj); // release borrow — class_name not needed on cache hit
+                        ic.func
+                    } else {
+                        let target_class_name = obj.class_name.clone();
+                        drop(obj); // release borrow before lookup
+                        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                        let method = method_name.as_str().unwrap_or("");
+                        let caller_class = get_caller_class(frame, eg);
+
+                        let dispatch_class = if let Some(ref cc) = caller_class {
+                            if let Some((Visibility::Private, ref defining)) = eg.find_method_visibility(cc, method) {
+                                if defining.eq_ignore_ascii_case(cc)
+                                    && eg.class_is_a(&target_class_name, cc)
+                                {
+                                    cc.clone()
+                                } else {
+                                    target_class_name.clone()
+                                }
                             } else {
-                                target_class.clone()
+                                target_class_name.clone()
                             }
                         } else {
-                            target_class.clone()
-                        }
-                    } else {
-                        target_class.clone()
-                    };
+                            target_class_name.clone()
+                        };
 
-                    let full_name = format!("{}::{}", dispatch_class, method);
-                    let func_ptr = match eg.find_function(&full_name) {
-                        Some(ptr) => ptr,
-                        None => {
-                            let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
-                            match throw_in_frame(eg, frame, err) {
-                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                        let full_name = format!("{}::{}", dispatch_class, method);
+                        let resolved = match eg.find_function(&full_name) {
+                            Some(ptr) => ptr,
+                            None => {
+                                let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
+                                match throw_in_frame(eg, frame, err) {
+                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
+                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                }
+                            }
+                        };
+
+                        // Visibility check
+                        if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
+                            if vis != Visibility::Public {
+                                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                                    let vis_str = match vis {
+                                        Visibility::Protected => "protected",
+                                        Visibility::Private => "private",
+                                        _ => "public",
+                                    };
+                                    return Err(VmError::Fatal(format!(
+                                        "Call to {} method {}::{}() from scope {}",
+                                        vis_str, defining_class, method,
+                                        caller_class.as_deref().unwrap_or("global")
+                                    )));
+                                }
                             }
                         }
-                    };
 
-                    // Visibility check — use defining class for scope
-                    if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
-                        if vis != Visibility::Public {
-                            if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                                let vis_str = match vis {
-                                    Visibility::Protected => "protected",
-                                    Visibility::Private => "private",
-                                    _ => "public",
-                                };
-                                return Err(VmError::Fatal(format!(
-                                    "Call to {} method {}::{}() from scope {}",
-                                    vis_str, defining_class, method,
-                                    caller_class.as_deref().unwrap_or("global")
-                                )));
-                            }
+                        // Cache the resolution (don't cache if class_id is 0 = unknown)
+                        if obj_class_id != 0 {
+                            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+                            ic_mut.func = resolved;
+                            ic_mut.class_id = obj_class_id;
                         }
-                    }
+                        resolved
+                    };
 
                     let num_args = opline.extended_value;
-                    // +1 for $this at CV 0; SendVarEx writes args to CV 1..N
                     let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
                     unsafe {
-                        (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
+                        (*call).num_args = num_args;
                         (*call).prev_execute_data = frame;
                         (*call).call = (*frame).call;
                         (*frame).call = call;
-                        // Set $this as CV 0
-                        let this_ptr = (*call).cv_mut(0);
-                        *this_ptr = obj_val.clone();
+                        // Write $this directly — cleanup_frame_slots handles it
+                        // separately, so don't set has_heap_slots here.
+                        frame_set_this(call, obj_val.clone());
                     }
                 } else {
+                    let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let method = method_name.as_str().unwrap_or("");
                     let err = make_error_value("Error", &format!("Call to member function {}() on non-object", method));
                     match throw_in_frame(eg, frame, err) {
                         ThrowResult::Handled(new_frame, new_op_array) => {
@@ -2465,44 +2640,56 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitStaticCall => {
-                let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let class = class_name.as_str().unwrap_or("");
-                let method = method_name.as_str().unwrap_or("");
+                // Inline cache: static calls have constant class+method — cache resolved func_ptr.
+                // Visibility is checked on first resolve only (same instruction = same caller context).
+                let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+                let cached = op_array.cache[ip].func;
+                let func_ptr = if !cached.is_null() {
+                    cached
+                } else {
+                    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let class = class_name.as_str().unwrap_or("");
+                    let method = method_name.as_str().unwrap_or("");
 
-                let full_name = format!("{}::{}", class, method);
-                let func_ptr = match eg.find_function(&full_name) {
-                    Some(ptr) => ptr,
-                    None => {
-                        let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", class, method));
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue;
+                    let full_name = format!("{}::{}", class, method);
+                    let resolved = match eg.find_function(&full_name) {
+                        Some(ptr) => ptr,
+                        None => {
+                            let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", class, method));
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    eg.exception = Some(thrown);
+                                    return Ok(());
+                                }
                             }
-                            ThrowResult::Unhandled(thrown) => {
-                                eg.exception = Some(thrown);
-                                return Ok(());
+                        }
+                    };
+
+                    // Visibility check on first resolve
+                    if let Some((vis, defining_class)) = eg.find_method_visibility(class, method) {
+                        if vis != Visibility::Public {
+                            let caller_class = get_caller_class(frame, eg);
+                            if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                                let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                                return Err(VmError::Fatal(format!(
+                                    "Call to {} method {}::{}() from scope {}",
+                                    vis_str, defining_class, method,
+                                    caller_class.as_deref().unwrap_or("global")
+                                )));
                             }
                         }
                     }
+
+                    // Cache for subsequent calls
+                    unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = resolved; }
+                    resolved
                 };
-
-                // Visibility check — use defining class for private scope
-                if let Some((vis, defining_class)) = eg.find_method_visibility(class, method) {
-                    if vis != Visibility::Public {
-                        let caller_class = get_caller_class(frame, eg);
-                        if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                            let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                            return Err(VmError::Fatal(format!(
-                                "Call to {} method {}::{}() from scope {}",
-                                vis_str, defining_class, method,
-                                caller_class.as_deref().unwrap_or("global")
-                            )));
-                        }
-                    }
-                }
 
                 let num_args = opline.extended_value;
                 // +1 for $this at CV 0 (compiler allocates $this even for static calls)
@@ -2543,11 +2730,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Copy captured use_vars into CV slots after params
                     // Params are CV 0..num_args-1, use_vars are CV num_args..
                     let func = unsafe { &*func_ptr };
-                    let use_var_offset = func.num_args;
+                    let use_var_offset = func.sig.num_args;
                     for i in 1..entries.len() {
                         let captured_val = entries[i].1.clone();
                         let cv_slot = unsafe { (*call).cv_mut(use_var_offset + (i as u32 - 1)) };
-                        *cv_slot = captured_val;
+                        unsafe { frame_slot_set(call, cv_slot as *mut Value, captured_val) };
                     }
                 } else if let Some(func_name) = callable.as_str() {
                     // Simple string function call: $func = "my_func"; $func()
@@ -2606,7 +2793,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for (pname, default, _vis, _declaring) in &class_def.properties {
                         if pname == prop {
                             if let Some(val) = default {
-                                unsafe { write_val(result_ptr, val.clone()) };
+                                unsafe { slot_set(result_ptr, val.clone()) };
                                 found = true;
                             }
                             break;
@@ -2614,7 +2801,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 }
                 if !found {
-                    unsafe { write_val(result_ptr, Value::null()) };
+                    unsafe { slot_set(result_ptr, Value::null()) };
                 }
             }
 
@@ -2629,7 +2816,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else {
                     false
                 };
-                unsafe { write_val(result_ptr, Value::bool(is_instance)) };
+                unsafe { slot_set(result_ptr, Value::bool(is_instance)) };
             }
 
             OpCode::FetchConst => {
@@ -2648,7 +2835,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         VmError::Fatal(format!("Undefined constant \"{}\"", name))
                     })?;
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, value) };
+                    unsafe { slot_set(result_ptr, value) };
                 }
             }
 
@@ -2673,7 +2860,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let name = name_val.as_str().unwrap_or("").to_string();
                 if let Some(val) = eg.globals.get(&name) {
                     let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
-                    unsafe { write_val(cv_ptr, val.clone()) };
+                    unsafe { slot_set(cv_ptr, val.clone()) };
                 }
                 // If not in globals, CV stays undef/null — that's fine, it will be written back on return
             }
@@ -2688,16 +2875,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
                 if let Some(func_statics) = eg.static_vars.get(&func_name) {
                     if let Some(val) = func_statics.get(&var_name) {
-                        unsafe { write_val(cv_ptr, val.clone()) };
+                        unsafe { slot_set(cv_ptr, val.clone()) };
                     } else {
                         // First call — initialize with default value
                         if opline.result_type != OpType::Unused {
                             let default_val = unsafe {
                                 &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array)
                             };
-                            unsafe { write_val(cv_ptr, default_val.clone()) };
+                            unsafe { slot_set(cv_ptr, default_val.clone()) };
                         } else {
-                            unsafe { write_val(cv_ptr, Value::null()) };
+                            unsafe { slot_set(cv_ptr, Value::null()) };
                         }
                     }
                 } else {
@@ -2706,15 +2893,46 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let default_val = unsafe {
                             &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array)
                         };
-                        unsafe { write_val(cv_ptr, default_val.clone()) };
+                        unsafe { slot_set(cv_ptr, default_val.clone()) };
                     } else {
-                        unsafe { write_val(cv_ptr, Value::null()) };
+                        unsafe { slot_set(cv_ptr, Value::null()) };
                     }
                 }
             }
 
             OpCode::Return => {
-                // ── Write back global and static variables before return ──
+                // ── Fast return path ──
+                // Single precomputed flag check replaces 6 runtime conditions.
+                // ReturnStrategy::Fast = no globals, no statics, no return type, no try/finally, not generator.
+                let func_common_ret = unsafe { &*(*frame).func };
+                if func_common_ret.plan.ret == ReturnStrategy::Fast
+                    && eg.exception.is_none()
+                {
+                    stats::inc_return_fast();
+                    if opline.op1_type != OpType::Unused {
+                        let retval = unsafe {
+                            &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                        };
+                        let return_target = unsafe { (*frame).return_value };
+                        if !return_target.is_null() {
+                            unsafe { mark_caller_heap_return(frame, retval) };
+                            unsafe { slot_set(return_target, retval.clone()) };
+                        }
+                    }
+                    let prev = unsafe { (*frame).prev_execute_data };
+                    if prev.is_null() {
+                        return Ok(());
+                    }
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    frame = prev;
+                    // No dirty_globals to re-read (callee had no global vars)
+                    continue;
+                }
+
+                // ── Full return path ──
+                stats::inc_return_full();
                 eg.dirty_globals.clear();
                 if !op_array.global_vars.is_empty() {
                     for (cv_idx, var_name) in &op_array.global_vars {
@@ -2737,7 +2955,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // ── Return type validation ──
                 let func_common = unsafe { &*(*frame).func };
-                let return_hint = &func_common.return_type_hint;
+                let return_hint = &func_common.sig.return_type_hint;
                 if !matches!(return_hint, crate::vm::function::ParamTypeHint::None) {
                     let has_explicit_value = opline.extended_value == 1;
                     match return_hint {
@@ -2809,7 +3027,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
-                            unsafe { write_val(return_target, retval.clone()) };
+                            unsafe { mark_caller_heap_return(frame, retval) };
+                            unsafe { slot_set(return_target, retval.clone()) };
                         }
                     }
                     // Jump to finally; after finally ends, the pending return
@@ -2862,7 +3081,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     let return_target = unsafe { (*frame).return_value };
                     if !return_target.is_null() {
-                        unsafe { write_val(return_target, retval.clone()) };
+                        unsafe { mark_caller_heap_return(frame, retval) };
+                        unsafe { slot_set(return_target, retval.clone()) };
                     }
                 }
 
@@ -2889,7 +3109,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if eg.dirty_globals.contains(var_name) {
                             if let Some(val) = eg.globals.get(var_name) {
                                 let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                                unsafe { write_val(cv_ptr, val.clone()) };
+                                unsafe { slot_set(cv_ptr, val.clone()) };
                             }
                         }
                     }
@@ -3271,7 +3491,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
                         if let Some(val) = eg.globals.get(var_name) {
                             let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-                            unsafe { write_val(cv_ptr, val.clone()) };
+                            unsafe { slot_set(cv_ptr, val.clone()) };
                         }
                     }
 
@@ -3306,7 +3526,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if var_name == "this" { continue; }
                         if let Some(val) = eg.globals.get(var_name) {
                             let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                            unsafe { write_val(cv_ptr, val.clone()) };
+                            unsafe { slot_set(cv_ptr, val.clone()) };
                         }
                     }
 
@@ -3328,7 +3548,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for (cv_idx, var_name) in &op_array.main_scope_vars {
                         if let Some(val) = eg.globals.get(var_name) {
                             let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                            unsafe { write_val(cv_ptr, val.clone()) };
+                            unsafe { slot_set(cv_ptr, val.clone()) };
                         }
                     }
 
@@ -3370,6 +3590,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let obj = src_val.as_object().unwrap();
                     PhpObject {
                         class_name: obj.class_name.clone(),
+                        class_id: obj.class_id,
                         properties: obj.properties.clone(),
                         generator: None,
                     }
@@ -3386,7 +3607,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 }
 
-                unsafe { write_val(result_ptr, cloned_val) };
+                unsafe { slot_set(result_ptr, cloned_val) };
             }
 
             OpCode::NullSafeCheck => {
@@ -3397,7 +3618,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if is_null {
                     // null ?-> anything  =>  null (short-circuit)
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { write_val(result_ptr, Value::null()) };
+                    unsafe { slot_set(result_ptr, Value::null()) };
                     let target = opline.op2 as usize;
                     unsafe {
                         (*frame).opline = op_array.instructions.as_ptr().add(target);
@@ -3414,7 +3635,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // Property access on scalar: warning + null (like PHP)
                         eg.write_output(b"Warning: Attempt to read property on non-object\n");
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { write_val(result_ptr, Value::null()) };
+                        unsafe { slot_set(result_ptr, Value::null()) };
                         let target = opline.op2 as usize;
                         unsafe {
                             (*frame).opline = op_array.instructions.as_ptr().add(target);
@@ -3493,7 +3714,7 @@ fn values_identical(a: &Value, b: &Value) -> bool {
             // Objects are identical if they are the same instance (same Rc pointer)
             let rc_a = a.as_object_rc().unwrap();
             let rc_b = b.as_object_rc().unwrap();
-            std::rc::Rc::ptr_eq(rc_a, rc_b)
+            std::rc::Rc::ptr_eq(&rc_a, &rc_b)
         }
         _ => false,
     }

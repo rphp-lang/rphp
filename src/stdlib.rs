@@ -363,6 +363,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // Exception implements Throwable
@@ -379,6 +380,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Exception".to_string())],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // Error implements Throwable
@@ -395,6 +397,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Error".to_string())],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // TypeError extends Error
@@ -411,6 +414,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // ArgumentCountError extends Error
@@ -427,6 +431,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // UnhandledMatchError extends Error
@@ -443,6 +448,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // Register __construct and getMessage for each throwable class
@@ -469,6 +475,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         properties: vec![],
         readonly_props: vec![],
         methods: vec![],
+        class_id: 0,
     }).unwrap();
 
     // Generator methods: $this is CV 0
@@ -1981,7 +1988,7 @@ fn json_decode_string(s: &str, assoc: bool) -> Value {
             use crate::value::PhpObject;
             use std::collections::HashMap;
             if inner.is_empty() {
-                return Value::object(PhpObject { class_name: "stdClass".to_string(), properties: HashMap::new(), generator: None });
+                return Value::object(PhpObject { class_name: "stdClass".to_string(), class_id: 0, properties: HashMap::new(), generator: None });
             }
             let mut props = HashMap::new();
             for item in json_split_items(inner) {
@@ -1996,7 +2003,7 @@ fn json_decode_string(s: &str, assoc: bool) -> Value {
                     props.insert(key_str, json_decode_string(val, false));
                 }
             }
-            return Value::object(PhpObject { class_name: "stdClass".to_string(), properties: props, generator: None });
+            return Value::object(PhpObject { class_name: "stdClass".to_string(), class_id: 0, properties: props, generator: None });
         }
     }
     Value::null()

@@ -55,11 +55,36 @@ impl ParamTypeHint {
     }
 }
 
-/// Common header shared by all function types.
-/// MUST be first field in UserFunction and InternalFunction (#[repr(C)]).
-#[repr(C)]
-pub struct FunctionCommon {
-    pub fn_type: FunctionType,
+/// DoFcall dispatch: Fast skips arity validation, type hints, variadic packing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CallStrategy {
+    /// No variadics, no param type hints → skip validation in DoFcall.
+    Fast,
+    /// Full validation: arity check, type hints, variadic packing.
+    Full,
+}
+
+/// Return dispatch: Fast skips global/static sync, return type check, try/finally.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReturnStrategy {
+    /// No globals, no statics, no return type, no try/finally, not generator.
+    Fast,
+    /// Full return: sync globals/statics, check return type, handle finally.
+    Full,
+}
+
+/// Cleanup dispatch: controls whether frame slot scan is needed after return.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CleanupMode {
+    /// Function only produces scalar values → skip heap slot scan.
+    SkipScan,
+    /// May produce heap values → scan all slots for drop.
+    ScanAll,
+}
+
+/// Parameter metadata — types, names, arity, reference passing.
+/// Everything needed for argument validation and named-arg resolution.
+pub struct SignatureInfo {
     /// Total number of CV slots used by this function's parameters.
     /// For internal methods: includes hidden $this (e.g. __construct($msg) = 2).
     /// For user functions: only declared params (op_array.num_cvs handles $this separately).
@@ -85,7 +110,7 @@ pub struct FunctionCommon {
     pub return_type_hint: ParamTypeHint,
 }
 
-impl FunctionCommon {
+impl SignatureInfo {
     /// Number of public (user-visible) parameters, excluding hidden $this.
     #[inline]
     pub fn public_arity(&self) -> u32 {
@@ -103,6 +128,40 @@ impl FunctionCommon {
     pub fn param_cv_index(&self, idx: u32) -> u32 {
         idx + self.this_offset
     }
+}
+
+/// Frame geometry — precomputed slot counts for push_call_frame.
+pub struct FrameLayout {
+    /// Precomputed frame CV count (User: op_array.num_cvs, Internal: num_args + variadic).
+    pub num_cvs: u32,
+    /// Precomputed frame TMP count (User: op_array.num_temps, Internal: 0).
+    pub num_temps: u32,
+    /// Precomputed total slot count for a normal in-arity call frame.
+    /// Equals CALL_FRAME_SLOTS + num_cvs + num_temps.
+    pub total_slots: u32,
+}
+
+/// Precomputed call strategy — controls fast/slow path dispatch.
+/// Set once at construction, avoids repeated runtime checks on hot path.
+pub struct CallPlan {
+    pub call: CallStrategy,
+    pub ret: ReturnStrategy,
+    pub cleanup: CleanupMode,
+}
+
+/// Common header shared by all function types.
+/// MUST be first field in UserFunction and InternalFunction (#[repr(C)]).
+///
+/// Three concerns, cleanly separated:
+/// - `sig`:   parameter metadata (arity, types, names, ref passing)
+/// - `frame`: precomputed frame geometry (slot counts)
+/// - `plan`:  precomputed call strategy (fast/slow path flags)
+#[repr(C)]
+pub struct FunctionCommon {
+    pub fn_type: FunctionType,
+    pub sig: SignatureInfo,
+    pub frame: FrameLayout,
+    pub plan: CallPlan,
 }
 
 /// User-defined PHP function — contains compiled OpArray.

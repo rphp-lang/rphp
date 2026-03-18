@@ -6,6 +6,7 @@ use rphp::vm::execute;
 use rphp::vm::function::FunctionCommon;
 use rphp::runtime::ExecutorGlobals;
 use rphp::stdlib;
+use rphp::vm::stats;
 
 fn parse_cli_args(args: &[String]) -> String {
     let i = 1;
@@ -50,6 +51,10 @@ fn parse_cli_args(args: &[String]) -> String {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
+    stats::configure_from_env();
+    if stats::enabled() {
+        stats::reset();
+    }
     let source = parse_cli_args(&args);
 
     let tokens = Lexer::new(&source).tokenize().unwrap_or_else(|e| {
@@ -88,7 +93,12 @@ fn main() {
         }
     }
 
-    match execute::execute(&mut eg, &main_func) {
+    let exec_result = execute::execute(&mut eg, &main_func);
+    if stats::enabled() {
+        stats::dump_to_stderr();
+    }
+
+    match exec_result {
         Ok(_) => {}
         Err(e) => {
             eprintln!("Fatal error: {:?}", e);

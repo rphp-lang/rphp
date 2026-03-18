@@ -24,6 +24,9 @@ pub struct ExecuteData {
     pub num_temps: u32,
     /// Per-frame flag: a return is pending after the current finally block completes.
     pub pending_return_after_finally: bool,
+    /// Runtime over-approximation: true when any frame slot may hold a heap value.
+    /// False lets cleanup skip the CV/TMP scan entirely.
+    pub has_heap_slots: bool,
 }
 
 impl ExecuteData {

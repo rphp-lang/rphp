@@ -3,12 +3,15 @@ use std::marker::PhantomData;
 use std::rc::Rc;
 use std::cell::RefCell;
 
+use crate::vm::stats;
 use crate::vm::generator::GeneratorRef;
 
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
 pub struct PhpObject {
     pub class_name: String,
+    /// Stable numeric class ID — matches ClassDef.class_id. Used for inline cache keying.
+    pub class_id: u32,
     pub properties: HashMap<String, Value>,
     /// If this object is a Generator, holds the generator state
     pub generator: Option<GeneratorRef>,
@@ -246,22 +249,27 @@ impl Value {
     }
 
     /// Create an object value from a PhpObject (reference-counted).
+    /// Stores Rc pointer directly — no Box wrapper. Clone = Rc increment, Drop = Rc decrement.
     #[inline]
     pub fn object(obj: PhpObject) -> Self {
         let rc = Rc::new(RefCell::new(obj));
-        let boxed = Box::new(rc);
+        let ptr = Rc::into_raw(rc) as *mut u8;
         Self {
-            data: ValueData { ptr: Box::into_raw(boxed) as *mut u8 },
+            data: ValueData { ptr },
             type_info: ValueType::Object as u32,
             _not_send: PhantomData,
         }
     }
 
     /// Get the Rc<RefCell<PhpObject>> for shared access.
+    /// Returns a temporary Rc handle without affecting the refcount.
+    /// The caller must NOT drop the returned Rc (use for borrow/clone only).
     #[inline]
-    pub fn as_object_rc(&self) -> Option<&Rc<RefCell<PhpObject>>> {
+    pub fn as_object_rc(&self) -> Option<std::mem::ManuallyDrop<Rc<RefCell<PhpObject>>>> {
         if self.value_type() == ValueType::Object {
-            Some(unsafe { &*(self.data.ptr as *const Rc<RefCell<PhpObject>>) })
+            Some(unsafe {
+                std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const RefCell<PhpObject>))
+            })
         } else {
             None
         }
@@ -271,8 +279,8 @@ impl Value {
     #[inline]
     pub fn as_object(&self) -> Option<std::cell::Ref<'_, PhpObject>> {
         if self.value_type() == ValueType::Object {
-            let rc = unsafe { &*(self.data.ptr as *const Rc<RefCell<PhpObject>>) };
-            Some(rc.borrow())
+            let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
+            Some(refcell.borrow())
         } else {
             None
         }
@@ -282,8 +290,8 @@ impl Value {
     #[inline]
     pub fn as_object_mut(&self) -> Option<std::cell::RefMut<'_, PhpObject>> {
         if self.value_type() == ValueType::Object {
-            let rc = unsafe { &*(self.data.ptr as *const Rc<RefCell<PhpObject>>) };
-            Some(rc.borrow_mut())
+            let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
+            Some(refcell.borrow_mut())
         } else {
             None
         }
@@ -414,8 +422,8 @@ impl Value {
             }
             ValueType::Array => "Array".to_string(),
             ValueType::Object => {
-                let rc = unsafe { &*(self.data.ptr as *const Rc<RefCell<PhpObject>>) };
-                let obj = rc.borrow();
+                let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
+                let obj = refcell.borrow();
                 format!("{} Object", obj.class_name)
             }
             _ => "<unsupported>".to_string(),
@@ -512,6 +520,11 @@ impl Value {
         self.value_type() == ValueType::Reference
     }
 
+    #[inline]
+    pub fn needs_cleanup(&self) -> bool {
+        matches!(self.value_type(), ValueType::String | ValueType::Array | ValueType::Object)
+    }
+
     /// Get the target pointer of a reference value.
     /// SAFETY: only valid when is_reference() is true.
     #[inline]
@@ -522,6 +535,7 @@ impl Value {
 
 impl Clone for Value {
     fn clone(&self) -> Self {
+        stats::inc_value_clone(self.value_type() as usize);
         match self.value_type() {
             ValueType::String => {
                 let s = unsafe { &*(self.data.ptr as *const String) };
@@ -532,12 +546,12 @@ impl Clone for Value {
                 Value::array(arr.clone())
             }
             ValueType::Object => {
-                // Clone shares the Rc — PHP objects are reference types
-                let rc = unsafe { &*(self.data.ptr as *const Rc<RefCell<PhpObject>>) };
-                let cloned_rc = rc.clone();
-                let boxed = Box::new(cloned_rc);
+                // Clone = Rc increment. No heap allocation.
+                unsafe {
+                    Rc::increment_strong_count(self.data.ptr as *const RefCell<PhpObject>);
+                }
                 Self {
-                    data: ValueData { ptr: Box::into_raw(boxed) as *mut u8 },
+                    data: ValueData { ptr: unsafe { self.data.ptr } },
                     type_info: self.type_info,
                     _not_send: PhantomData,
                 }
@@ -560,6 +574,7 @@ impl Clone for Value {
 
 impl Drop for Value {
     fn drop(&mut self) {
+        stats::inc_value_drop(self.value_type() as usize);
         match self.value_type() {
             ValueType::String => {
                 unsafe { drop(Box::from_raw(self.data.ptr as *mut String)) };
@@ -568,7 +583,8 @@ impl Drop for Value {
                 unsafe { drop(Box::from_raw(self.data.ptr as *mut PhpArray)) };
             }
             ValueType::Object => {
-                unsafe { drop(Box::from_raw(self.data.ptr as *mut Rc<RefCell<PhpObject>>)) };
+                // Drop = Rc decrement. Frees PhpObject when refcount reaches 0.
+                unsafe { Rc::decrement_strong_count(self.data.ptr as *const RefCell<PhpObject>) };
             }
             // Reference doesn't own the target — no-op
             _ => {}
@@ -583,6 +599,7 @@ pub fn make_error_value(class_name: &str, message: &str) -> Value {
     props.insert("message".to_string(), Value::string(message));
     Value::object(PhpObject {
         class_name: class_name.to_string(),
+        class_id: 0, // error objects don't need cache-valid class_id
         properties: props,
         generator: None,
     })
@@ -600,8 +617,8 @@ impl std::fmt::Debug for Value {
             ValueType::String => write!(f, "Value(string={:?})", unsafe { &*(self.data.ptr as *const String) }),
             ValueType::Array => write!(f, "Value(array[{}])", unsafe { &*(self.data.ptr as *const PhpArray) }.len()),
             ValueType::Object => {
-                let rc = unsafe { &*(self.data.ptr as *const Rc<RefCell<PhpObject>>) };
-                let obj = rc.borrow();
+                let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
+                let obj = refcell.borrow();
                 write!(f, "Value(object({}))", obj.class_name)
             }
             ValueType::Reference => write!(f, "Value(ref={:p})", unsafe { self.data.ptr }),

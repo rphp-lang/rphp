@@ -10,7 +10,7 @@ static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 use crate::value::Value;
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
-use crate::vm::instruction::{Instruction, OpType};
+use crate::vm::instruction::{Instruction, InlineCache, OpType};
 use super::OpArray;
 
 use super::{make_user_function_with_args, make_user_function_full, make_user_function_typed};
@@ -67,6 +67,9 @@ pub struct ClassDef {
     pub properties: Vec<(String, Option<Value>, Visibility, String)>,  // (name, default_value, visibility, declaring_class)
     pub readonly_props: Vec<String>,  // names of readonly properties
     pub methods: Vec<(String, Visibility, bool, bool, UserFunction)>, // (name, vis, is_static, is_final, func)
+    /// Stable numeric ID assigned at registration time. Used as inline cache key.
+    /// 0 = not yet assigned (set by ExecutorGlobals::register_class).
+    pub class_id: u32,
 }
 
 /// Tracks loop context for break/continue patching
@@ -190,7 +193,7 @@ impl Compiler {
         // Check user-defined functions in the same compilation unit
         for (fname, uf) in &self.functions {
             if fname == name {
-                return uf.common.ref_args;
+                return uf.common.sig.ref_args;
             }
         }
         // Check inherited known functions (from parent scope)
@@ -206,7 +209,7 @@ impl Compiler {
     fn build_known_ref_args(&self) -> HashMap<String, u64> {
         let mut map = self.known_ref_args.clone();
         for (fname, uf) in &self.functions {
-            map.insert(fname.clone(), uf.common.ref_args);
+            map.insert(fname.clone(), uf.common.sig.ref_args);
         }
         map
     }
@@ -235,6 +238,7 @@ impl Compiler {
         }
         let all_cvs = self.all_cvs();
 
+        let cache = (0..self.instructions.len()).map(|_| InlineCache::empty()).collect();
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
@@ -249,6 +253,7 @@ impl Compiler {
                 name: "<main>".to_string(),
                 main_scope_vars,
                 all_cvs,
+                cache,
             },
             functions: self.functions,
             class_defs: self.class_defs,
@@ -342,6 +347,7 @@ impl Compiler {
 
                 let func_name = func_compiler.current_function_name.clone();
                 let func_all_cvs = func_compiler.all_cvs();
+                let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -355,6 +361,7 @@ impl Compiler {
                     name: func_name,
                     main_scope_vars: vec![],
                     all_cvs: func_all_cvs,
+                    cache,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -1076,6 +1083,7 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1089,11 +1097,12 @@ impl Compiler {
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
                         all_cvs: vec![],
+                        cache,
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
-                    user_func.common.this_offset = 1;
+                    user_func.common.sig.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1140,6 +1149,7 @@ impl Compiler {
                     properties: compiled_props,
                     readonly_props,
                     methods: compiled_methods,
+                    class_id: 0,
                 });
             }
             Stmt::Interface { name, extends, methods } => {
@@ -1161,6 +1171,7 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1174,6 +1185,7 @@ impl Compiler {
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
                         all_cvs: vec![],
+                        cache,
                     };
                     let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     self.functions.extend(func_compiler.functions);
@@ -1196,6 +1208,7 @@ impl Compiler {
                     properties: vec![],
                     readonly_props: vec![],
                     methods: compiled_methods,
+                    class_id: 0,
                 });
             }
             Stmt::Trait { name, properties, methods } => {
@@ -1218,6 +1231,7 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1231,9 +1245,10 @@ impl Compiler {
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
                         all_cvs: vec![],
+                        cache,
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
-                    user_func.common.this_offset = 1;
+                    user_func.common.sig.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1263,6 +1278,7 @@ impl Compiler {
                     properties: compiled_props,
                     readonly_props: vec![],
                     methods: compiled_methods,
+                    class_id: 0,
                 });
             }
             Stmt::Enum { name, backing_type, cases, methods } => {
@@ -1288,6 +1304,7 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
+                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1301,9 +1318,10 @@ impl Compiler {
                         name: func_compiler.current_function_name,
                         main_scope_vars: vec![],
                         all_cvs: vec![],
+                        cache,
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
-                    user_func.common.this_offset = 1;
+                    user_func.common.sig.this_offset = 1;
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1326,6 +1344,7 @@ impl Compiler {
                     }
                     let obj = Value::object(PhpObject {
                         class_name: name.clone(),
+                        class_id: 0, // assigned at runtime registration
                         properties: props,
                         generator: None,
                     });
@@ -1346,6 +1365,7 @@ impl Compiler {
                     properties: compiled_props,
                     readonly_props: vec![],
                     methods: compiled_methods,
+                    class_id: 0,
                 });
             }
         }
@@ -2187,6 +2207,7 @@ impl Compiler {
                 func_compiler.instructions.push(ret);
 
                 let closure_all_cvs = func_compiler.all_cvs();
+                let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -2200,6 +2221,7 @@ impl Compiler {
                     name: func_compiler.current_function_name,
                     main_scope_vars: vec![],
                     all_cvs: closure_all_cvs,
+                    cache,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 

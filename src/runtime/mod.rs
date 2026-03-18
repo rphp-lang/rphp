@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Write;
 
+use crate::vm::stats;
 use crate::vm::stack::VmStack;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
@@ -79,6 +80,8 @@ pub struct ExecutorGlobals {
     pub included_files: std::collections::HashSet<String>,
     /// Owned storage for functions/data from included files (prevents dangling pointers)
     pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
+    /// Monotonically increasing counter for class IDs
+    next_class_id: u32,
 }
 
 impl ExecutorGlobals {
@@ -103,6 +106,7 @@ impl ExecutorGlobals {
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
             included_functions: Vec::new(),
+            next_class_id: 1,
         }
     }
 
@@ -128,6 +132,7 @@ impl ExecutorGlobals {
             pending_invoke_this: None,
             included_files: std::collections::HashSet::new(),
             included_functions: Vec::new(),
+            next_class_id: 1,
         }
     }
 
@@ -136,6 +141,10 @@ impl ExecutorGlobals {
     /// For non-interface, non-abstract classes: validates interface contracts.
     pub fn register_class(&mut self, mut class_def: ClassDef) -> Result<(), String> {
         let class_name = class_def.name.clone();
+        // Assign stable class ID
+        let id = self.next_class_id;
+        self.next_class_id += 1;
+        class_def.class_id = id;
 
         // Check if parent is final — cannot extend a final class
         if let Some(parent_name) = &class_def.parent {
@@ -363,6 +372,12 @@ impl ExecutorGlobals {
         false
     }
 
+    /// Get the class_id for a given class name. Returns 0 if not found.
+    #[inline]
+    pub fn class_id_of(&self, class_name: &str) -> u32 {
+        self.class_table.get(class_name).map_or(0, |cd| cd.class_id)
+    }
+
     /// Get the declaring class for a function pointer.
     pub fn declaring_class_of(&self, func_ptr: *const FunctionCommon) -> Option<&str> {
         self.method_declaring_class.get(&func_ptr).map(|s| s.as_str())
@@ -377,12 +392,12 @@ impl ExecutorGlobals {
                 result.push((
                     method_name.to_lowercase(),
                     *vis,
-                    func.common.num_args,
-                    func.common.required_num_args,
+                    func.common.sig.num_args,
+                    func.common.sig.required_num_args,
                     *is_static,
                     iface_name.to_string(),
-                    func.common.return_type_hint.clone(),
-                    func.common.param_type_hints.clone(),
+                    func.common.sig.return_type_hint.clone(),
+                    func.common.sig.param_type_hints.clone(),
                 ));
             }
             // Recurse into parent interfaces
@@ -459,10 +474,10 @@ impl ExecutorGlobals {
                 if let Some(func_ptr) = self.function_table.get(&full) {
                     let impl_common = unsafe { &**func_ptr };
                     let iface_public = iface_nargs; // interface stubs don't have this_offset
-                    let impl_public = impl_common.num_args - impl_common.this_offset;
+                    let impl_public = impl_common.sig.num_args - impl_common.sig.this_offset;
                     // required_num_args is NOT adjusted for this_offset in the compiler,
                     // so it already represents the public required parameter count.
-                    let impl_required = impl_common.required_num_args;
+                    let impl_required = impl_common.sig.required_num_args;
                     // Implementation must accept at least as many params as the interface
                     if impl_public < iface_public {
                         errors.push((declaring_iface.clone(), format!(
@@ -484,10 +499,10 @@ impl ExecutorGlobals {
                     // Interface param A => implementation must accept A or a supertype of A.
                     // For simplicity, we require exact match or widening (impl accepts more).
                     use crate::vm::function::ParamTypeHint;
-                    let check_count = iface_param_hints.len().max(impl_common.param_type_hints.len());
+                    let check_count = iface_param_hints.len().max(impl_common.sig.param_type_hints.len());
                     for i in 0..check_count {
                         let iface_param = iface_param_hints.get(i);
-                        let impl_param = impl_common.param_type_hints.get(i);
+                        let impl_param = impl_common.sig.param_type_hints.get(i);
                         match (impl_param, iface_param) {
                             // Both untyped or both absent — ok
                             (None | Some(ParamTypeHint::None), None | Some(ParamTypeHint::None)) => {}
@@ -520,7 +535,7 @@ impl ExecutorGlobals {
                     // Check return type compatibility: if the interface declares a return type,
                     // the implementation must declare the same or a covariant return type.
                     if !matches!(iface_return_hint, ParamTypeHint::None) {
-                        let impl_return = &impl_common.return_type_hint;
+                        let impl_return = &impl_common.sig.return_type_hint;
                         if !self.is_return_type_compatible(impl_return, &iface_return_hint) {
                             errors.push((declaring_iface.clone(), format!(
                                 "{} (return type must be compatible with {}, got {})",
@@ -628,13 +643,21 @@ impl ExecutorGlobals {
     pub fn find_function(&self, name: &str) -> Option<*const FunctionCommon> {
         // Fast path: direct lookup (works when name is already lowercase)
         if let Some(&ptr) = self.function_table.get(name) {
+            stats::inc_find_function_exact_hit();
             return Some(ptr);
         }
         // Slow path: allocate lowercase string
         let lower = name.to_lowercase();
         if lower != name {
-            self.function_table.get(&lower).copied()
+            let found = self.function_table.get(&lower).copied();
+            if found.is_some() {
+                stats::inc_find_function_lower_hit();
+            } else {
+                stats::inc_find_function_miss();
+            }
+            found
         } else {
+            stats::inc_find_function_miss();
             None
         }
     }

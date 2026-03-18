@@ -1,8 +1,9 @@
 use std::mem::size_of;
 
 use crate::value::Value;
+use crate::vm::stats;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType};
+use super::function::{FunctionCommon, CleanupMode};
 
 const DEFAULT_STACK_PAGE_SIZE: usize = 256 * 1024; // 256 KB
 
@@ -45,21 +46,17 @@ impl VmStack {
         num_args: u32,
     ) -> *mut ExecuteData {
         let common = unsafe { &*func };
-        let (num_cvs, num_temps) = match common.fn_type {
-            FunctionType::User => {
-                // Direct cast — avoids Function wrapper + dispatch overhead
-                let user = unsafe { &*(func as *const super::function::UserFunction) };
-                (user.op_array.num_cvs as usize, user.op_array.num_temps as usize)
-            }
-            _ => {
-                let base = common.num_args as usize;
-                let extra = if common.is_variadic { 1 } else { 0 };
-                (base + extra, 0usize)
-            }
+        let declared_cvs = common.frame.num_cvs as usize;
+        let num_temps = common.frame.num_temps as usize;
+
+        // Compute frame geometry: effective CV count and total slot count.
+        // The common case is num_args <= declared CVs. The wider frame is
+        // only needed for extra-arg error paths.
+        let effective_cvs = if (num_args as usize) <= declared_cvs {
+            declared_cvs
+        } else {
+            num_args as usize
         };
-        // Allocate max(num_args, num_cvs) so that extra arguments
-        // don't write past the frame before DoFcall validates the count.
-        let effective_cvs = std::cmp::max(num_args as usize, num_cvs);
         let total_slots = CALL_FRAME_SLOTS + effective_cvs + num_temps;
         let needed = total_slots * size_of::<Value>();
 
@@ -71,7 +68,7 @@ impl VmStack {
         let frame = self.top as *mut ExecuteData;
         self.top = unsafe { self.top.add(total_slots) };
 
-        // Initialize frame header
+        // Initialize frame header.
         unsafe {
             (*frame).func = func;
             (*frame).opline = std::ptr::null();
@@ -82,14 +79,21 @@ impl VmStack {
             (*frame).num_cvs = effective_cvs as u32;
             (*frame).num_temps = num_temps as u32;
             (*frame).pending_return_after_finally = false;
+            (*frame).has_heap_slots = common.plan.cleanup == CleanupMode::ScanAll;
         }
 
-        // Zero-init all CV+TMP slots to UNDEF — Value::undef() is all-zero bytes.
-        // Using write_bytes is faster than per-slot loop for frames with many slots.
-        let slot_count = effective_cvs + num_temps;
-        if slot_count > 0 {
-            let cv_base = unsafe { (frame as *mut u8).add(CALL_FRAME_SLOTS * size_of::<Value>()) };
-            unsafe { std::ptr::write_bytes(cv_base, 0, slot_count * size_of::<Value>()) };
+        // Zero-init only CV slots beyond argument count. TMPs NOT zeroed.
+        let zero_start = num_args as usize;
+        let zero_end = effective_cvs;
+        let zero_count = zero_end.saturating_sub(zero_start);
+
+        stats::inc_push_call_frame(zero_count, zero_count * size_of::<Value>());
+
+        if zero_count > 0 {
+            let cv_base = unsafe {
+                (frame as *mut u8).add((CALL_FRAME_SLOTS + zero_start) * size_of::<Value>())
+            };
+            unsafe { std::ptr::write_bytes(cv_base, 0, zero_count * size_of::<Value>()) };
         }
 
         frame

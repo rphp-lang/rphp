@@ -53,6 +53,7 @@ fn test_echo_int() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -86,6 +87,7 @@ fn test_echo_negative() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -128,6 +130,7 @@ fn test_add_and_echo() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -164,6 +167,7 @@ fn test_overflow_to_float() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -197,6 +201,7 @@ fn test_timeout_interrupt() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -252,6 +257,7 @@ fn test_assign_and_echo_cv() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -310,6 +316,7 @@ fn test_assign_add_echo() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -382,6 +389,7 @@ fn test_internal_function_call() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -424,6 +432,7 @@ fn test_user_function_call() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let add_one_func = make_user_function_with_args(fn_op_array, 1);
@@ -470,6 +479,7 @@ fn test_user_function_call() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(main_op_array);
@@ -507,6 +517,7 @@ fn test_undefined_function_error() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     };
 
     let main_func = make_user_function(op_array);
@@ -568,6 +579,7 @@ fn test_nested_calls() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     }, 1);
 
     // --- main script ---
@@ -641,6 +653,7 @@ fn test_nested_calls() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -689,6 +702,7 @@ fn test_recursive_countdown() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     // f2: return f1()
@@ -718,6 +732,7 @@ fn test_recursive_countdown() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     // f3: return f2()
@@ -747,6 +762,7 @@ fn test_recursive_countdown() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     // main: echo f3()
@@ -780,6 +796,7 @@ fn test_recursive_countdown() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -819,6 +836,7 @@ fn test_interrupt_during_deep_call() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     // main: init_fcall f1, do_fcall, echo "2", return
@@ -851,6 +869,7 @@ fn test_interrupt_during_deep_call() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
@@ -913,6 +932,7 @@ fn test_assign_result_used() {
         name: String::new(),
         main_scope_vars: vec![],
         all_cvs: vec![],
+        cache: vec![],
     });
 
     let (mut eg, buf) = make_eg_with_capture();

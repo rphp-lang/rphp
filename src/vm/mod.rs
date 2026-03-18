@@ -5,3 +5,4 @@ pub mod frame;
 pub mod stack;
 pub mod execute;
 pub mod generator;
+pub mod stats;
