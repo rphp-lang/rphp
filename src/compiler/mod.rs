@@ -47,6 +47,74 @@ impl OpArray {
         &self.literals
     }
 
+    /// Rewrite Tmp/Var operand indices from relative (0-based tmp index) to
+    /// absolute slot offset (num_cvs + tmp_index). After this pass, runtime
+    /// can access Tmp slots as `frame_base.add(operand)` without loading num_cvs.
+    pub fn resolve_tmp_offsets(&mut self) {
+        use crate::vm::instruction::OpType;
+        use crate::vm::opcode::OpCode;
+        let offset = self.num_cvs;
+        for instr in &mut self.instructions {
+            if instr.op1_type == OpType::Tmp || instr.op1_type == OpType::Var {
+                instr.op1 += offset;
+            }
+            if instr.op2_type == OpType::Tmp || instr.op2_type == OpType::Var {
+                instr.op2 += offset;
+            }
+            if instr.result_type == OpType::Tmp || instr.result_type == OpType::Var {
+                instr.result += offset;
+            }
+            // ForeachInit stores pos_tmp in extended_value as a TMP index.
+            if instr.opcode == OpCode::ForeachInit {
+                instr.extended_value += offset;
+            }
+        }
+    }
+
+    /// Specialize opcodes for common operand-type patterns.
+    /// Must be called AFTER resolve_tmp_offsets (operands are absolute).
+    pub fn specialize_opcodes(&mut self) {
+        self.specialize_opcodes_with_hints(&[]);
+    }
+
+    /// Specialize opcodes, with knowledge of parameter type hints.
+    /// When all params are Int and Const operands are int literals,
+    /// emits Int-guaranteed opcodes that skip runtime type checks.
+    pub fn specialize_opcodes_with_hints(&mut self, param_type_hints: &[ParamTypeHint]) {
+        use crate::vm::instruction::OpType;
+        use crate::vm::opcode::OpCode;
+
+        for instr in &mut self.instructions {
+            match instr.opcode {
+                OpCode::Add => {
+                    if instr.op1_type == OpType::Tmp && instr.op2_type == OpType::Tmp {
+                        instr.opcode = OpCode::Add_TmpTmp;
+                    } else if instr.op1_type == OpType::Cv && instr.op2_type == OpType::Tmp {
+                        instr.opcode = OpCode::Add_CvTmp;
+                    }
+                }
+                OpCode::Sub => {
+                    if instr.op1_type == OpType::Cv && instr.op2_type == OpType::Const {
+                        instr.opcode = OpCode::Sub_CvConst;
+                    } else if instr.op1_type == OpType::Tmp && instr.op2_type == OpType::Tmp {
+                        instr.opcode = OpCode::Sub_TmpTmp;
+                    }
+                }
+                OpCode::IsSmaller => {
+                    if instr.op1_type == OpType::Cv && instr.op2_type == OpType::Const {
+                        instr.opcode = OpCode::IsSmaller_CvConst;
+                    }
+                }
+                OpCode::IsSmallerOrEqual => {
+                    if instr.op1_type == OpType::Cv && instr.op2_type == OpType::Const {
+                        instr.opcode = OpCode::IsSmallerOrEqual_CvConst;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
     /// Initialize the inline cache side table to match instruction count.
     /// Called once after instructions are finalized.
     pub fn init_cache(&mut self) {
@@ -106,6 +174,13 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::JmpNZ
                 | OpCode::NullSafeCheck
                 | OpCode::Instanceof
+                // Specialized opcodes (same scalar semantics as originals)
+                | OpCode::Add_TmpTmp
+                | OpCode::Add_CvTmp
+                | OpCode::Sub_CvConst
+                | OpCode::Sub_TmpTmp
+                | OpCode::IsSmaller_CvConst
+                | OpCode::IsSmallerOrEqual_CvConst
         )
     })
 }
@@ -127,6 +202,8 @@ pub fn make_user_function_with_defaults(op_array: OpArray, num_args: u32, requir
 
 /// Full constructor with all options.
 pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool, variadic_cv_index: u32, ref_args: u64) -> UserFunction {
+    op_array.resolve_tmp_offsets();
+    op_array.specialize_opcodes();
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
@@ -173,10 +250,17 @@ pub fn make_user_function_typed(
     param_names: Vec<String>,
     return_type_hint: ParamTypeHint,
 ) -> UserFunction {
+    op_array.resolve_tmp_offsets();
+    op_array.specialize_opcodes_with_hints(&param_type_hints);
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
-    let call = if !is_variadic && param_type_hints.iter().all(|h| matches!(h, ParamTypeHint::None)) {
+    // Fast path is allowed when: not variadic AND all param hints are either None or simple scalar
+    // (Int, Float, String, Bool, Mixed). Complex hints (Callable, ClassName, Union, etc.) use Full.
+    let call = if !is_variadic && param_type_hints.iter().all(|h| matches!(h,
+        ParamTypeHint::None | ParamTypeHint::Int | ParamTypeHint::Float
+        | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed
+    )) {
         CallStrategy::Fast
     } else {
         CallStrategy::Full
@@ -186,7 +270,8 @@ pub fn make_user_function_typed(
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.is_generator
-        && matches!(return_type_hint, ParamTypeHint::None)
+        && matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Int
+            | ParamTypeHint::Float | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed)
     { ReturnStrategy::Fast } else { ReturnStrategy::Full };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;

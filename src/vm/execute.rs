@@ -8,7 +8,7 @@ use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy};
+use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint};
 
 /// Get the current caller's **lexical** (declaring) class name from the frame.
 /// Uses the `method_declaring_class` map on EG rather than runtime $this,
@@ -596,7 +596,7 @@ pub fn resume_generator(
                             let result_slot = gen_ref.borrow().yield_from_result_slot;
                             let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
                             if yield_from_instr.result_type != OpType::Unused {
-                                let slot = unsafe { (*frame).tmp_mut(result_slot) };
+                                let slot = unsafe { (*frame).slot_mut(result_slot) };
                                 unsafe { frame_restore_slot(frame, slot as *mut Value, ret_val) };
                             }
                         }
@@ -665,7 +665,7 @@ pub fn resume_generator(
                             let result_slot = gen_ref.borrow().yield_from_result_slot;
                             let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
                             if yield_from_instr.result_type != OpType::Unused {
-                                let slot = unsafe { (*frame).tmp_mut(result_slot) };
+                                let slot = unsafe { (*frame).slot_mut(result_slot) };
                                 unsafe { frame_restore_slot(frame, slot as *mut Value, Value::null()) };
                             }
                         }
@@ -743,7 +743,7 @@ pub fn resume_generator(
             if yield_instr.opcode == crate::vm::opcode::OpCode::Yield
                 && yield_instr.result_type != OpType::Unused
             {
-                let tmp_slot = unsafe { (*frame).tmp_mut(yield_instr.result) };
+                let tmp_slot = unsafe { (*frame).slot_mut(yield_instr.result) };
                 unsafe { frame_restore_slot(frame, tmp_slot as *mut Value, send_value.clone()) };
             }
         }
@@ -770,6 +770,1446 @@ pub fn resume_generator(
     }
 
     result
+}
+
+// ── Cold opcode helpers ──────────────────────────────────────────────
+// Extracted from execute_ex to reduce icache pressure on the hot dispatch loop.
+// Each helper is #[inline(never)] so LLVM keeps their code out of the jump table.
+
+/// Returns true if the caller should `continue` (skip opline advance).
+#[inline(never)]
+fn op_include(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+) -> Result<bool, VmError> {
+    let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let path_str = path_val.echo_to_string();
+    let is_require = (opline.extended_value & 1) != 0;
+    let is_once = (opline.extended_value & 2) != 0;
+
+    let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
+        path_str.clone()
+    } else {
+        let base_dir = {
+            let op_name = &op_array.name;
+            let p = std::path::Path::new(op_name);
+            if p.is_file() {
+                p.parent().map(|d| d.to_path_buf())
+            } else {
+                None
+            }
+        }.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        base_dir.join(&path_str).to_string_lossy().to_string()
+    };
+
+    let canonical = std::fs::canonicalize(&resolved_path)
+        .map(|p| p.to_string_lossy().to_string())
+        .unwrap_or_else(|_| resolved_path.clone());
+
+    if is_once && eg.included_files.contains(&canonical) {
+        return Ok(false);
+    }
+
+    let source = match std::fs::read_to_string(&resolved_path) {
+        Ok(s) => s,
+        Err(e) => {
+            if is_require {
+                return Err(VmError::Fatal(format!(
+                    "require({}): Failed opening required '{}' ({})",
+                    path_str, resolved_path, e
+                )));
+            } else {
+                let warning = format!(
+                    "Warning: include({}): Failed opening '{}' for inclusion ({})\n",
+                    path_str, resolved_path, e
+                );
+                eg.write_output(warning.as_bytes());
+                unsafe { (*frame).opline = (*frame).opline.add(1); }
+                return Ok(true); // continue
+            }
+        }
+    };
+
+    if is_once {
+        eg.included_files.insert(canonical);
+    }
+
+    let tokens = crate::lexer::Lexer::new(&source).tokenize()
+        .map_err(|e| VmError::Fatal(format!("Syntax error in {}: {}", resolved_path, e)))?;
+    let stmts = crate::parser::Parser::new(tokens).parse()
+        .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
+    let compile_result = crate::compiler::compile::Compiler::new().compile(&stmts)
+        .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
+
+    for (name, func) in compile_result.functions {
+        let boxed = Box::new(func);
+        let ptr = &boxed.common as *const FunctionCommon;
+        eg.included_functions.push(boxed);
+        let _ = eg.register_function(&name, ptr);
+    }
+    for class_def in compile_result.class_defs {
+        eg.register_class(class_def).map_err(|e| VmError::Fatal(e))?;
+    }
+
+    let mut inc_op_array_main = compile_result.main;
+    inc_op_array_main.name = resolved_path.clone();
+    let main_func_boxed = Box::new(crate::compiler::make_user_function(inc_op_array_main));
+    eg.included_functions.push(main_func_boxed);
+    let main_func: &UserFunction = unsafe {
+        &*(&**eg.included_functions.last().unwrap() as *const UserFunction)
+    };
+
+    let scope_vars: Vec<(u32, String)> = if !op_array.all_cvs.is_empty() {
+        op_array.all_cvs.clone()
+    } else {
+        op_array.main_scope_vars.clone()
+    };
+    for (cv_idx, var_name) in &scope_vars {
+        if var_name == "this" { continue; }
+        let cv_ptr = unsafe { (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array) };
+        let val = unsafe { (*cv_ptr).clone() };
+        eg.globals.insert(var_name.clone(), val);
+    }
+
+    let inc_func_ptr = &main_func.common as *const FunctionCommon;
+    let mut inc_return_value = Value::null();
+    let inc_frame = eg.vm_stack.push_call_frame(inc_func_ptr, 0);
+    unsafe {
+        (*inc_frame).return_value = &mut inc_return_value;
+        (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
+        (*inc_frame).prev_execute_data = std::ptr::null_mut();
+    }
+    for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
+        if let Some(val) = eg.globals.get(var_name) {
+            let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
+            unsafe { slot_set(cv_ptr, val.clone()) };
+        }
+    }
+
+    let prev_ed = eg.current_execute_data.get();
+    eg.current_execute_data.set(inc_frame);
+    let inc_result = execute_ex(eg, inc_frame);
+
+    let inc_op_array = unsafe { (*inc_frame).op_array() };
+    let inc_scope = if !inc_op_array.all_cvs.is_empty() {
+        &inc_op_array.all_cvs
+    } else {
+        &inc_op_array.main_scope_vars
+    };
+    for (cv_idx, var_name) in inc_scope {
+        let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
+        let val = unsafe { (*cv_ptr).clone() };
+        eg.globals.insert(var_name.clone(), val);
+    }
+
+    eg.current_execute_data.set(prev_ed);
+    unsafe { cleanup_frame_slots(inc_frame) };
+    eg.vm_stack.pop_call_frame(inc_frame);
+
+    for (cv_idx, var_name) in &scope_vars {
+        if var_name == "this" { continue; }
+        if let Some(val) = eg.globals.get(var_name) {
+            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+            unsafe { slot_set(cv_ptr, val.clone()) };
+        }
+    }
+
+    if let Some(exc) = eg.exception.take() {
+        let (class_name, message) = if let Some(obj) = exc.as_object() {
+            let cls = obj.class_name.clone();
+            let msg = obj.properties.get("message")
+                .map(|v| v.echo_to_string())
+                .unwrap_or_default();
+            (cls, msg)
+        } else {
+            ("Exception".to_string(), exc.echo_to_string())
+        };
+        return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
+    }
+
+    let new_op_array = unsafe { (*frame).op_array() };
+    for (cv_idx, var_name) in &new_op_array.main_scope_vars {
+        if let Some(val) = eg.globals.get(var_name) {
+            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+            unsafe { slot_set(cv_ptr, val.clone()) };
+        }
+    }
+
+    inc_result?;
+    Ok(false)
+}
+
+/// Result type for cold opcode helpers that may change the VM frame (e.g. via throw_in_frame).
+enum ColdResult<'a> {
+    /// Normal completion — advance opline as usual.
+    Done,
+    /// Skip opline advance (already advanced or jumped).
+    Continue,
+    /// Frame changed (exception was caught by a handler in a different frame).
+    NewFrame(*mut ExecuteData, &'a crate::compiler::OpArray),
+    /// Unhandled exception — propagate via eg.exception and return from execute_ex.
+    Unhandled(Value),
+    /// Generator suspend / return — execute_ex should return Ok(()).
+    Return,
+}
+
+// ── Additional cold opcode helpers ─────────────────────────────────────
+
+#[inline(never)]
+fn op_throw<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    // PHP 8: only Throwable objects can be thrown
+    if val.as_object().is_none() || {
+        let obj = val.as_object().unwrap();
+        !eg.class_is_a(&obj.class_name, "Throwable")
+    } {
+        let type_name = match val.value_type() {
+            ValueType::Long => "int",
+            ValueType::Double => "float",
+            ValueType::String => "string",
+            ValueType::True | ValueType::False => "bool",
+            ValueType::Null | ValueType::Undef => "null",
+            ValueType::Array => "array",
+            ValueType::Object => {
+                // Object but not Throwable
+                let obj = val.as_object().unwrap();
+                return Err(VmError::Fatal(format!(
+                    "Cannot throw objects that do not implement Throwable (class {})", obj.class_name
+                )));
+            }
+            _ => "unknown",
+        };
+        return Err(VmError::Fatal(format!(
+            "Can only throw objects implementing Throwable, {} given", type_name
+        )));
+    }
+    let thrown = val.clone();
+
+    match throw_in_frame(eg, frame, thrown) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            Ok(ColdResult::NewFrame(new_frame, new_op_array))
+        }
+        ThrowResult::Unhandled(exc) => {
+            Ok(ColdResult::Unhandled(exc))
+        }
+    }
+}
+
+#[inline(never)]
+fn op_new_obj<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let name = class_name.as_str().unwrap_or("");
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+    // Reject instantiation of interfaces, abstract classes, and internal-only classes
+    if name == "Generator" {
+        return Err(VmError::Fatal(
+            "The \"Generator\" class is reserved for internal use and cannot be manually instantiated".into()
+        ));
+    }
+    if let Some(class_def) = eg.class_table.get(name) {
+        if class_def.is_interface {
+            return Err(VmError::Fatal(format!(
+                "Cannot instantiate interface {}",
+                name
+            )));
+        }
+        if class_def.is_abstract {
+            return Err(VmError::Fatal(format!(
+                "Cannot instantiate abstract class {}",
+                name
+            )));
+        }
+        if class_def.is_enum {
+            let err = make_error_value("Error", &format!(
+                "Cannot instantiate enum {}",
+                name
+            ));
+            match throw_in_frame(eg, frame, err) {
+                ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+            }
+        }
+    }
+
+    // Create new object with default properties from class definition.
+    // Private properties are stored under a mangled key (ClassName\0prop)
+    // so that parent and child private properties with the same name
+    // occupy separate slots, matching PHP semantics.
+    let mut props = std::collections::HashMap::new();
+    if let Some(class_def) = eg.class_table.get(name) {
+        for (prop_name, default_val, vis, declaring) in &class_def.properties {
+            let is_readonly = eg.class_table.get(name)
+                .map(|cd| cd.readonly_props.contains(prop_name))
+                .unwrap_or(false);
+            let val = default_val.as_ref()
+                .map(|v| v.clone())
+                .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
+            let key = if *vis == Visibility::Private {
+                crate::runtime::mangle_private_prop(declaring, prop_name)
+            } else {
+                prop_name.clone()
+            };
+            props.insert(key, val);
+        }
+    }
+
+    let obj = PhpObject {
+        class_name: name.to_string(),
+        class_id: eg.class_id_of(name),
+        properties: props,
+        generator: None,
+    };
+    unsafe { slot_set(result_ptr, Value::object(obj)) };
+
+    // Check for __construct — set up call frame if it exists
+    let num_args = opline.extended_value;
+    let construct_name = format!("{}::__construct", name);
+    if let Some(func_ptr) = eg.find_function(&construct_name) {
+        // +1 for $this at CV 0; SendVal writes args to CV 1..N
+        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+        unsafe {
+            (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
+            (*call).prev_execute_data = frame;
+            (*call).call = (*frame).call;
+            (*frame).call = call;
+            // Write $this directly — cleanup handles it separately.
+            let obj_ref = &*result_ptr;
+            frame_set_this(call, obj_ref.clone());
+        }
+    } else {
+        // No constructor — skip num_args SendVals + 1 DoFcall.
+        // Arg expressions were compiled before NewObj so side effects
+        // have already executed; we just discard the values.
+        let skip = num_args + 1; // SendVals + DoFcall
+        let base_ptr = op_array.instructions.as_ptr();
+        let current_ip = unsafe { (*frame).opline.offset_from(base_ptr) } as usize;
+        unsafe { (*frame).opline = base_ptr.add(current_ip + 1 + skip as usize) };
+        return Ok(ColdResult::Continue);
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_fetch_obj_r(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+    if let Some(obj) = obj_val.as_object() {
+        let name = prop_name.as_str().unwrap_or("");
+        let caller_class = get_caller_class(frame, eg);
+
+        // Private property early binding is only valid when the receiver
+        // is in the same inheritance hierarchy as the caller.  When
+        // accessing an unrelated object, the caller's private property
+        // must NOT leak — use target-only key resolution.
+        let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
+            eg.class_is_a(&obj.class_name, cc)
+        });
+        let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
+
+        // Resolve storage key (mangled for private properties)
+        let key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
+        // Visibility check
+        if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
+            if vis != Visibility::Public {
+                // Skip check if the caller owns the defining class AND
+                // the receiver is in that scope (same hierarchy).
+                let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                    vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
+                });
+                // Also skip if caller's class declares its own private
+                // with same name AND the receiver is in scope.
+                let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                    if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, name) {
+                        dc.eq_ignore_ascii_case(cc)
+                    } else {
+                        false
+                    }
+                });
+                if !own_private && !caller_has_own {
+                    if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                        let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                        return Err(VmError::Fatal(format!(
+                            "Cannot access {} property {}::${}",
+                            vis_str, defining_class, name
+                        )));
+                    }
+                }
+            }
+        }
+        let found_val = obj.properties.get(&key).cloned();
+        drop(obj); // Release borrow before potential magic method call
+        if let Some(val) = found_val {
+            unsafe { slot_set(result_ptr, val) };
+        } else {
+            // Property not found — try __get magic method
+            if let Some(result) = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])? {
+                unsafe { slot_set(result_ptr, result) };
+            } else {
+                unsafe { slot_set(result_ptr, Value::null()) };
+            }
+        }
+    } else {
+        return Err(VmError::Fatal("Attempt to read property on non-object".into()));
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn op_assign_obj_prop<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+    let val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
+    let cloned = val.clone();
+    let name = prop_name.as_str().unwrap_or("").to_string();
+    let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let obj = unsafe { &*obj_ptr };
+
+    if let Some(mut php_obj) = obj.as_object_mut() {
+        let caller_class = get_caller_class(frame, eg);
+
+        // Same receiver-in-scope guard as FetchObjR — only allow
+        // private bypass when the receiver is in the caller's hierarchy.
+        let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
+            eg.class_is_a(&php_obj.class_name, cc)
+        });
+        let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
+
+        // Visibility check — use declaring class, not receiver class
+        if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
+            if vis != Visibility::Public {
+                let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                    vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
+                });
+                let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
+                    if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, &name) {
+                        dc.eq_ignore_ascii_case(cc)
+                    } else {
+                        false
+                    }
+                });
+                if !own_private && !caller_has_own {
+                    if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                        let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                        return Err(VmError::Fatal(format!(
+                            "Cannot access {} property {}::${}",
+                            vis_str, defining_class, name
+                        )));
+                    }
+                }
+            }
+        }
+        // Enum guard: enum cases are sealed — no property writes allowed
+        if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
+            if class_def.is_enum {
+                let err = make_error_value("Error", &format!(
+                    "Cannot modify readonly property {}::${}",
+                    php_obj.class_name, name
+                ));
+                drop(php_obj);
+                match throw_in_frame(eg, frame, err) {
+                    ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                    ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                }
+            }
+        }
+        // Readonly property check
+        if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
+            if class_def.readonly_props.contains(&name) {
+                let key_check = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
+                let already_init = php_obj.properties.get(&key_check)
+                    .map_or(false, |v| !v.is_undef());
+                if already_init {
+                    // Already initialized — always error
+                    let err = make_error_value("Error", &format!(
+                        "Cannot modify readonly property {}::${}",
+                        php_obj.class_name, name
+                    ));
+                    drop(php_obj);
+                    match throw_in_frame(eg, frame, err) {
+                        ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                        ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                    }
+                } else {
+                    // First initialization — only allowed from declaring class scope
+                    let in_declaring_scope = caller_class.as_ref().map_or(false, |cc| {
+                        cc.eq_ignore_ascii_case(&php_obj.class_name)
+                    });
+                    if !in_declaring_scope {
+                        let err = make_error_value("Error", &format!(
+                            "Cannot initialize readonly property {}::${} from {}",
+                            php_obj.class_name, name,
+                            caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
+                        ));
+                        drop(php_obj);
+                        match throw_in_frame(eg, frame, err) {
+                            ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                            ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                        }
+                    }
+                }
+            }
+        }
+        // Resolve storage key (mangled for private properties)
+        let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
+        let prop_exists = php_obj.properties.contains_key(&key);
+        if prop_exists {
+            php_obj.properties.insert(key, cloned);
+        } else {
+            drop(php_obj); // Release borrow before potential magic method call
+            // Property not found — try __set magic method
+            if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), cloned.clone()])?.is_none() {
+                // No __set — fall back to direct insert
+                if let Some(mut php_obj) = obj.as_object_mut() {
+                    php_obj.properties.insert(key, cloned);
+                }
+            }
+        }
+    } else {
+        return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_init_method_call<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+
+    if let Some(obj) = obj_val.as_object() {
+        let obj_class_id = obj.class_id;
+
+        // Inline cache: if same class_id as last time, reuse resolved func_ptr
+        // — avoids class_name.clone() and full method resolution on cache hit.
+        let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+        let ic = &op_array.cache[ip];
+        let func_ptr = if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
+            drop(obj); // release borrow — class_name not needed on cache hit
+            ic.func
+        } else {
+            let target_class_name = obj.class_name.clone();
+            drop(obj); // release borrow before lookup
+            let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+            let method = method_name.as_str().unwrap_or("");
+            let caller_class = get_caller_class(frame, eg);
+
+            let dispatch_class = if let Some(ref cc) = caller_class {
+                if let Some((Visibility::Private, ref defining)) = eg.find_method_visibility(cc, method) {
+                    if defining.eq_ignore_ascii_case(cc)
+                        && eg.class_is_a(&target_class_name, cc)
+                    {
+                        cc.clone()
+                    } else {
+                        target_class_name.clone()
+                    }
+                } else {
+                    target_class_name.clone()
+                }
+            } else {
+                target_class_name.clone()
+            };
+
+            let full_name = format!("{}::{}", dispatch_class, method);
+            let resolved = match eg.find_function(&full_name) {
+                Some(ptr) => ptr,
+                None => {
+                    let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
+                    match throw_in_frame(eg, frame, err) {
+                        ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                        ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                    }
+                }
+            };
+
+            // Visibility check
+            if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
+                if vis != Visibility::Public {
+                    if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                        let vis_str = match vis {
+                            Visibility::Protected => "protected",
+                            Visibility::Private => "private",
+                            _ => "public",
+                        };
+                        return Err(VmError::Fatal(format!(
+                            "Call to {} method {}::{}() from scope {}",
+                            vis_str, defining_class, method,
+                            caller_class.as_deref().unwrap_or("global")
+                        )));
+                    }
+                }
+            }
+
+            // Cache the resolution (don't cache if class_id is 0 = unknown)
+            if obj_class_id != 0 {
+                let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+                ic_mut.func = resolved;
+                ic_mut.class_id = obj_class_id;
+            }
+            resolved
+        };
+
+        let num_args = opline.extended_value;
+        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+        unsafe {
+            (*call).num_args = num_args;
+            (*call).prev_execute_data = frame;
+            (*call).call = (*frame).call;
+            (*frame).call = call;
+            // Write $this directly — cleanup_frame_slots handles it
+            // separately, so don't set has_heap_slots here.
+            frame_set_this(call, obj_val.clone());
+        }
+    } else {
+        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let method = method_name.as_str().unwrap_or("");
+        let err = make_error_value("Error", &format!("Call to member function {}() on non-object", method));
+        match throw_in_frame(eg, frame, err) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                return Ok(ColdResult::NewFrame(new_frame, new_op_array));
+            }
+            ThrowResult::Unhandled(thrown) => {
+                return Ok(ColdResult::Unhandled(thrown));
+            }
+        }
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_init_static_call<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // Inline cache: static calls have constant class+method — cache resolved func_ptr.
+    // Visibility is checked on first resolve only (same instruction = same caller context).
+    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+    let cached = op_array.cache[ip].func;
+    let func_ptr = if !cached.is_null() {
+        cached
+    } else {
+        let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let class = class_name.as_str().unwrap_or("");
+        let method = method_name.as_str().unwrap_or("");
+
+        let full_name = format!("{}::{}", class, method);
+        let resolved = match eg.find_function(&full_name) {
+            Some(ptr) => ptr,
+            None => {
+                let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", class, method));
+                match throw_in_frame(eg, frame, err) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        return Ok(ColdResult::NewFrame(new_frame, new_op_array));
+                    }
+                    ThrowResult::Unhandled(thrown) => {
+                        return Ok(ColdResult::Unhandled(thrown));
+                    }
+                }
+            }
+        };
+
+        // Visibility check on first resolve
+        if let Some((vis, defining_class)) = eg.find_method_visibility(class, method) {
+            if vis != Visibility::Public {
+                let caller_class = get_caller_class(frame, eg);
+                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
+                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                    return Err(VmError::Fatal(format!(
+                        "Call to {} method {}::{}() from scope {}",
+                        vis_str, defining_class, method,
+                        caller_class.as_deref().unwrap_or("global")
+                    )));
+                }
+            }
+        }
+
+        // Cache for subsequent calls
+        unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = resolved; }
+        resolved
+    };
+
+    let num_args = opline.extended_value;
+    // +1 for $this at CV 0 (compiler allocates $this even for static calls)
+    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+    unsafe {
+        (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
+        (*call).prev_execute_data = frame;
+        (*call).call = (*frame).call;
+        (*frame).call = call;
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_init_dynamic_call(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let callable = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+
+    if let Some(arr) = callable.as_array() {
+        // Closure call: array is [function_name, use_val1, use_val2, ...]
+        let entries = arr.entries();
+        if entries.is_empty() {
+            return Err(VmError::Fatal("Array is not callable".into()));
+        }
+        let func_name = entries[0].1.as_str().ok_or_else(|| {
+            VmError::Fatal("Closure descriptor must start with function name".into())
+        })?;
+
+        let func_ptr = eg.find_function(func_name).ok_or_else(|| {
+            VmError::Fatal(format!("Call to undefined function {}()", func_name))
+        })?;
+
+        let num_args = opline.extended_value;
+        let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+        unsafe {
+            (*call).prev_execute_data = frame;
+            (*call).call = (*frame).call;
+            (*frame).call = call;
+        }
+
+        // Copy captured use_vars into CV slots after params
+        // Params are CV 0..num_args-1, use_vars are CV num_args..
+        let func = unsafe { &*func_ptr };
+        let use_var_offset = func.sig.num_args;
+        for i in 1..entries.len() {
+            let captured_val = entries[i].1.clone();
+            let cv_slot = unsafe { (*call).cv_mut(use_var_offset + (i as u32 - 1)) };
+            unsafe { frame_slot_set(call, cv_slot as *mut Value, captured_val) };
+        }
+    } else if let Some(func_name) = callable.as_str() {
+        // Simple string function call: $func = "my_func"; $func()
+        let func_ptr = eg.find_function(func_name).ok_or_else(|| {
+            VmError::Fatal(format!("Call to undefined function {}()", func_name))
+        })?;
+
+        let num_args = opline.extended_value;
+        let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+        unsafe {
+            (*call).prev_execute_data = frame;
+            (*call).call = (*frame).call;
+            (*frame).call = call;
+        }
+    } else if callable.value_type() == ValueType::Object {
+        // Object with __invoke: set up as method call to __invoke
+        let obj = callable.as_object().unwrap();
+        let class_name = obj.class_name.clone();
+        drop(obj);
+        let full_name = format!("{}::__invoke", class_name.to_lowercase());
+        let func_ptr = match eg.find_function(&full_name) {
+            Some(ptr) => ptr,
+            None => return Err(VmError::Fatal(format!("Call to undefined method {}::__invoke()", class_name))),
+        };
+
+        let num_args = opline.extended_value;
+        // +1 for $this at CV 0; but don't write $this yet because
+        // SendVal will write args to CV 0..N-1 (compiler doesn't know
+        // it's a method call). We'll shift args in DoFcall.
+        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+        unsafe {
+            (*call).num_args = num_args;
+            (*call).num_cvs = num_args + 1; // track total CVs needed
+            (*call).prev_execute_data = frame;
+            (*call).call = (*frame).call;
+            (*frame).call = call;
+        }
+        // Stash $this object for injection in DoFcall
+        eg.pending_invoke_this = Some(callable.clone());
+    } else {
+        return Err(VmError::Fatal(format!("Value of type {:?} is not callable", callable.value_type())));
+    }
+    Ok(())
+}
+
+#[inline(never)]
+fn op_foreach_init(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<bool, VmError> {
+    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+
+    // Check for Generator object
+    let is_generator = if let Some(obj) = arr_val.as_object() {
+        obj.class_name == "Generator" && arr_val.as_object_rc().map_or(false, |rc| rc.borrow().generator.is_some())
+    } else {
+        false
+    };
+
+    if is_generator {
+        // Start the generator (rewind)
+        let gen_ref = arr_val.as_object_rc().unwrap().borrow().generator.clone().unwrap();
+        {
+            let state = gen_ref.borrow().state;
+            if state == crate::vm::generator::GeneratorState::Created {
+                resume_generator(eg, &gen_ref, Value::null())?;
+            }
+        }
+        let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
+        if !is_valid {
+            let target = opline.op2 as usize;
+            let base_ptr = op_array.instructions.as_ptr();
+            unsafe { (*frame).opline = base_ptr.add(target) };
+            return Ok(true); // continue
+        }
+        // Store generator object in result TMP
+        let cloned = arr_val.clone();
+        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+        unsafe { slot_set(result_ptr, cloned) };
+        // Set position TMP to 0 (0 = first iteration, don't call next)
+        let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
+        unsafe { slot_set(pos_ptr, Value::long(0)) };
+    } else {
+        let is_empty = match arr_val.as_array() {
+            Some(arr) => arr.is_empty(),
+            None => {
+                eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
+                let type_name = match arr_val.value_type() {
+                    ValueType::Null => "null",
+                    ValueType::True | ValueType::False => "bool",
+                    ValueType::Long => "int",
+                    ValueType::Double => "float",
+                    ValueType::String => "string",
+                    _ => "unknown",
+                };
+                eg.write_output(type_name.as_bytes());
+                eg.write_output(b" given\n");
+                true
+            }
+        };
+        if is_empty {
+            let target = opline.op2 as usize;
+            let base_ptr = op_array.instructions.as_ptr();
+            unsafe { (*frame).opline = base_ptr.add(target) };
+            return Ok(true); // continue
+        }
+        // Copy array to result TMP
+        let cloned = arr_val.clone();
+        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+        unsafe { slot_set(result_ptr, cloned) };
+        // Set position TMP to 0
+        let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
+        unsafe { slot_set(pos_ptr, Value::long(0)) };
+    }
+    Ok(false)
+}
+
+#[inline(never)]
+fn op_foreach_next(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let val_cv = (opline.extended_value & 0xFFFF) as u32;
+    let key_encoded = (opline.extended_value >> 16) as u32;
+
+    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+
+    // Check for Generator object
+    let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
+        if obj.class_name == "Generator" {
+            arr_val.as_object_rc().and_then(|rc| rc.borrow().generator.clone())
+        } else { None }
+    } else { None };
+
+    let has_more = if let Some(gen_ref) = gen_ref_opt {
+        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let pos = pos_val.as_long().unwrap_or(0);
+
+        // On first iteration (pos=0), generator is already started by ForeachInit
+        // On subsequent iterations, call next()
+        if pos > 0 {
+            let state = gen_ref.borrow().state;
+            if state == crate::vm::generator::GeneratorState::Suspended {
+                resume_generator(eg, &gen_ref, Value::null())?;
+            }
+        }
+
+        let gen_data = gen_ref.borrow();
+        if gen_data.state != crate::vm::generator::GeneratorState::Completed {
+            // Write current value to value_cv
+            let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
+            unsafe { slot_set(val_ptr, gen_data.value.clone()) };
+            // Write key if requested
+            if key_encoded > 0 {
+                let key_cv = key_encoded - 1;
+                let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
+                unsafe { slot_set(key_ptr, gen_data.key.clone()) };
+            }
+            drop(gen_data);
+            // Increment position
+            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
+            unsafe { slot_set(pos_ptr, Value::long(pos + 1)) };
+            true
+        } else {
+            false
+        }
+    } else {
+        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let pos = pos_val.as_long().unwrap_or(0) as usize;
+
+        if let Some(arr) = arr_val.as_array() {
+            let entries = arr.entries();
+            if pos < entries.len() {
+                let (ref key, ref val) = entries[pos];
+                let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
+                unsafe { slot_set(val_ptr, val.clone()) };
+                if key_encoded > 0 {
+                    let key_cv = key_encoded - 1;
+                    let key_val = match key {
+                        ArrayKey::Int(k) => Value::long(*k),
+                        ArrayKey::String(k) => Value::string(k.clone()),
+                    };
+                    let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
+                    unsafe { slot_set(key_ptr, key_val) };
+                }
+                let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
+                unsafe { slot_set(pos_ptr, Value::long((pos + 1) as i64)) };
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+    unsafe { slot_set(result_ptr, Value::bool(has_more)) };
+    Ok(())
+}
+
+#[inline(never)]
+fn op_yield<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    use crate::vm::generator::GeneratorState;
+
+    let yielded_value = if opline.op1_type != OpType::Unused {
+        unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone()
+    } else {
+        Value::null()
+    };
+
+    let yielded_key = if opline.op2_type != OpType::Unused {
+        Some(unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) }.clone())
+    } else {
+        None
+    };
+
+    if let Some(gen_ref) = eg.active_generator.take() {
+        let mut gen_data = gen_ref.borrow_mut();
+
+        // Set yielded value/key
+        gen_data.value = yielded_value;
+        if let Some(key) = yielded_key {
+            gen_data.key = key;
+        } else {
+            gen_data.key = Value::long(gen_data.implicit_key);
+            gen_data.implicit_key += 1;
+        }
+
+        // Save frame state back to generator
+        let num_cvs = unsafe { (*frame).num_cvs } as usize;
+        let num_temps = unsafe { (*frame).num_temps } as usize;
+        gen_data.cv_values.clear();
+        for i in 0..num_cvs {
+            gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+        }
+        gen_data.tmp_values.clear();
+        for i in 0..num_temps {
+            gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+        }
+
+        // Save instruction pointer (advance past yield for resume)
+        let base = op_array.instructions.as_ptr();
+        gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize + 1 };
+        gen_data.state = GeneratorState::Suspended;
+
+        gen_data.send_value = Value::null();
+
+        drop(gen_data);
+        eg.active_generator = Some(gen_ref);
+    }
+
+    // Return from generator frame (like OpCode::Return)
+    let prev = unsafe { (*frame).prev_execute_data };
+    if prev.is_null() {
+        return Ok(ColdResult::Return);
+    }
+    eg.current_execute_data.set(prev);
+    unsafe { cleanup_frame_slots(frame) };
+    eg.vm_stack.pop_call_frame(frame);
+    Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }))
+}
+
+#[inline(never)]
+fn op_yield_from<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+    let source_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone();
+
+    if let Some(gen_ref) = eg.active_generator.take() {
+        let result_slot = opline.result;
+
+        // Determine delegate type
+        if let Some(obj_data) = source_val.as_object() {
+            if obj_data.class_name == "Generator" {
+                if let Some(inner_gen_ref) = obj_data.generator.clone() {
+                    drop(obj_data);
+                    // Start inner generator if needed
+                    {
+                        let inner_state: GeneratorState = inner_gen_ref.borrow().state;
+                        if inner_state == GeneratorState::Created {
+                            eg.active_generator = Some(gen_ref.clone());
+                            drop(eg.active_generator.take());
+                            resume_generator(eg, &inner_gen_ref, Value::null())?;
+                        }
+                    }
+
+                    let inner_state: GeneratorState = inner_gen_ref.borrow().state;
+                    if inner_state == GeneratorState::Completed {
+                        // Sub-generator already done, write return value to result
+                        let ret_val = inner_gen_ref.borrow().return_value.clone();
+                        eg.active_generator = Some(gen_ref);
+                        // Write result to TMP and continue (don't suspend)
+                        if opline.result_type != OpType::Unused {
+                            let slot = unsafe { (*frame).slot_mut(result_slot) };
+                            unsafe { frame_tmp_set(frame, slot as *mut Value, ret_val) };
+                        }
+                        unsafe { (*frame).opline = (*frame).opline.add(1); }
+                        return Ok(ColdResult::Continue);
+                    }
+
+                    // Set up delegation
+                    {
+                        let mut gen_data = gen_ref.borrow_mut();
+                        gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref.clone()));
+                        gen_data.yield_from_result_slot = result_slot;
+
+                        // Copy inner generator's current value/key to outer
+                        let inner = inner_gen_ref.borrow();
+                        gen_data.value = inner.value.clone();
+                        gen_data.key = inner.key.clone();
+
+                        // Save frame state
+                        let num_cvs = unsafe { (*frame).num_cvs } as usize;
+                        let num_temps = unsafe { (*frame).num_temps } as usize;
+                        gen_data.cv_values.clear();
+                        for i in 0..num_cvs {
+                            gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                        }
+                        gen_data.tmp_values.clear();
+                        for i in 0..num_temps {
+                            gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                        }
+                        let base = op_array.instructions.as_ptr();
+                        gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
+                        gen_data.state = GeneratorState::Suspended;
+                    }
+
+                    eg.active_generator = Some(gen_ref);
+
+                    // Pop frame like Yield
+                    let prev = unsafe { (*frame).prev_execute_data };
+                    if prev.is_null() {
+                        return Ok(ColdResult::Return);
+                    }
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
+                }
+            }
+            drop(obj_data);
+            eg.active_generator = Some(gen_ref);
+            let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
+            match throw_in_frame(eg, frame, err) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    return Ok(ColdResult::NewFrame(new_frame, new_op_array));
+                }
+                ThrowResult::Unhandled(exc) => {
+                    return Ok(ColdResult::Unhandled(exc));
+                }
+            }
+        } else if let Some(arr) = source_val.as_array() {
+            let entries: Vec<(crate::value::ArrayKey, Value)> = arr.entries().iter().map(|(k, v): &(crate::value::ArrayKey, Value)| (k.clone(), v.clone())).collect();
+
+            if entries.is_empty() {
+                // Empty array — result is null, continue
+                eg.active_generator = Some(gen_ref);
+                if opline.result_type != OpType::Unused {
+                    let slot = unsafe { (*frame).slot_mut(result_slot) };
+                    unsafe { frame_tmp_set(frame, slot as *mut Value, Value::null()) };
+                }
+                unsafe { (*frame).opline = (*frame).opline.add(1); }
+                return Ok(ColdResult::Continue);
+            }
+
+            // Set up array delegation
+            {
+                let mut gen_data = gen_ref.borrow_mut();
+                // Yield first element
+                let (ref key, ref val) = entries[0];
+                gen_data.value = val.clone();
+                gen_data.key = match key {
+                    crate::value::ArrayKey::Int(i) => Value::long(*i),
+                    crate::value::ArrayKey::String(s) => Value::string(s.clone()),
+                };
+                gen_data.delegate = Some(YieldFromDelegate::Array(entries, 1)); // position after first
+                gen_data.yield_from_result_slot = result_slot;
+
+                // Save frame state
+                let num_cvs = unsafe { (*frame).num_cvs } as usize;
+                let num_temps = unsafe { (*frame).num_temps } as usize;
+                gen_data.cv_values.clear();
+                for i in 0..num_cvs {
+                    gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
+                }
+                gen_data.tmp_values.clear();
+                for i in 0..num_temps {
+                    gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
+                }
+                let base = op_array.instructions.as_ptr();
+                gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
+                gen_data.state = GeneratorState::Suspended;
+            }
+
+            eg.active_generator = Some(gen_ref);
+
+            // Pop frame like Yield
+            let prev = unsafe { (*frame).prev_execute_data };
+            if prev.is_null() {
+                return Ok(ColdResult::Return);
+            }
+            eg.current_execute_data.set(prev);
+            unsafe { cleanup_frame_slots(frame) };
+            eg.vm_stack.pop_call_frame(frame);
+            return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
+        } else {
+            eg.active_generator = Some(gen_ref);
+            let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
+            match throw_in_frame(eg, frame, err) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    return Ok(ColdResult::NewFrame(new_frame, new_op_array));
+                }
+                ThrowResult::Unhandled(exc) => {
+                    return Ok(ColdResult::Unhandled(exc));
+                }
+            }
+        }
+    } else {
+        return Err(VmError::Fatal("yield from outside generator".into()));
+    }
+}
+
+#[inline(never)]
+fn op_send_named<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // Named argument: op1=value, op2=CONST name string
+    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+    let name = name_val.as_str().unwrap_or("");
+    let call = unsafe { (*frame).call };
+    debug_assert!(!call.is_null());
+    let func_common = unsafe { &*(*call).func };
+
+    // Find the parameter position by name
+    let mut resolved_idx: Option<u32> = None;
+    for (idx, pname) in func_common.sig.param_names.iter().enumerate() {
+        if pname == name {
+            resolved_idx = Some(idx as u32);
+            break;
+        }
+    }
+
+    // Determine if the resolved index targets the variadic parameter itself.
+    let public_max = func_common.sig.public_arity();
+    let is_variadic_target = func_common.sig.is_variadic && match resolved_idx {
+        Some(idx) => idx >= public_max,
+        None => true,
+    };
+
+    if is_variadic_target {
+        if !func_common.sig.is_variadic
+            || func_common.fn_type == crate::vm::function::FunctionType::Internal
+        {
+            let err = make_error_value("Error", &format!(
+                "Unknown named parameter ${}", name
+            ));
+            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+            }
+        }
+
+        // Duplicate check: scan the pending buffer for this name
+        let call_key = call as usize;
+        if let Some(existing) = eg.pending_named_variadic.get(&call_key) {
+            if existing.iter().any(|(n, _)| n == name) {
+                let err = make_error_value("Error", &format!(
+                    "Named parameter ${} overwrites previous argument", name
+                ));
+                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                    ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                    ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                }
+            }
+        }
+
+        let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+        let cloned = val.clone();
+        eg.pending_named_variadic
+            .entry(call_key)
+            .or_insert_with(Vec::new)
+            .push((name.to_string(), cloned));
+        // This named arg doesn't occupy a CV slot, so decrement
+        // num_args so DoFcall's positional variadic count is correct.
+        unsafe {
+            if (*call).num_args > 0 {
+                (*call).num_args -= 1;
+            }
+        }
+    } else {
+        match resolved_idx {
+            Some(idx) => {
+                let cv_idx = func_common.sig.param_cv_index(idx);
+
+                // Check for duplicate: if CV slot already has a non-undef value,
+                // the parameter was already passed (positionally or by a prior named arg).
+                let existing = unsafe { &*(*call).cv(cv_idx) };
+                if !existing.is_undef() {
+                    let err = make_error_value("Error", &format!(
+                        "Named parameter ${} overwrites previous argument", name
+                    ));
+                    match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                        ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                        ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                    }
+                }
+
+                let is_ref = func_common.sig.is_param_by_ref(idx);
+
+                if is_ref && opline.op1_type == OpType::Cv {
+                    // By-reference: same logic as SendRef
+                    let caller_cv_ptr = unsafe {
+                        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                        let raw_ptr = base.add(opline.op1 as usize);
+                        if (*raw_ptr).is_reference() {
+                            (*raw_ptr).as_ref_ptr()
+                        } else {
+                            raw_ptr
+                        }
+                    };
+                    let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
+                } else {
+                    // By-value: same logic as SendVal
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let cloned = val.clone();
+                    let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
+                }
+
+                // Update num_args to cover this position
+                let public_pos = idx + 1; // 1-based count
+                unsafe {
+                    if (*call).num_args < public_pos {
+                        (*call).num_args = public_pos;
+                    }
+                }
+            }
+            None => {
+                let err = make_error_value("Error", &format!(
+                    "Unknown named parameter ${}", name
+                ));
+                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                    ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                    ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                }
+            }
+        }
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_nullsafe_check(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<bool, VmError> {
+    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let is_null = val.value_type() == ValueType::Null;
+    let is_non_object = !is_null && val.as_object().is_none();
+
+    if is_null {
+        // null ?-> anything  =>  null (short-circuit)
+        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+        unsafe { slot_set(result_ptr, Value::null()) };
+        let target = opline.op2 as usize;
+        unsafe {
+            (*frame).opline = op_array.instructions.as_ptr().add(target);
+        }
+        return Ok(true); // continue
+    } else if is_non_object {
+        // extended_value: 0 = property access (warning + null), 1 = method call (fatal)
+        if opline.extended_value == 1 {
+            // Method call on scalar: fatal error (like PHP)
+            return Err(VmError::Fatal(
+                "Call to a member function on a non-object".into()
+            ));
+        } else {
+            // Property access on scalar: warning + null (like PHP)
+            eg.write_output(b"Warning: Attempt to read property on non-object\n");
+            let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+            unsafe { slot_set(result_ptr, Value::null()) };
+            let target = opline.op2 as usize;
+            unsafe {
+                (*frame).opline = op_array.instructions.as_ptr().add(target);
+            }
+            return Ok(true); // continue
+        }
+    }
+    Ok(false)
+}
+
+#[inline(never)]
+fn op_clone_obj<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let src_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+    if src_val.value_type() != ValueType::Object {
+        return Err(VmError::Fatal(
+            "__clone method called on non-object".into()
+        ));
+    }
+
+    // Enum cases are singletons — cloning is forbidden
+    {
+        let obj = src_val.as_object().unwrap();
+        if let Some(class_def) = eg.class_table.get(&obj.class_name) {
+            if class_def.is_enum {
+                let err = make_error_value("Error", &format!(
+                    "Trying to clone an uncloneable object of class {}", obj.class_name
+                ));
+                drop(obj);
+                match throw_in_frame(eg, frame, err) {
+                    ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                    ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                }
+            }
+        }
+    }
+
+    let cloned_obj = {
+        let obj = src_val.as_object().unwrap();
+        PhpObject {
+            class_name: obj.class_name.clone(),
+            class_id: obj.class_id,
+            properties: obj.properties.clone(),
+            generator: None,
+        }
+    };
+    let cloned_val = Value::object(cloned_obj);
+
+    let _ = call_magic_method(eg, &cloned_val, "__clone", &[])?;
+
+    // If __clone threw an exception, propagate it
+    if let Some(exc) = eg.exception.take() {
+        match throw_in_frame(eg, frame, exc) {
+            ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+            ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+        }
+    }
+
+    unsafe { slot_set(result_ptr, cloned_val) };
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_concat(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+
+    let s1 = if op1.value_type() == ValueType::Object {
+        if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
+            result.echo_to_string()
+        } else {
+            op1.echo_to_string()
+        }
+    } else {
+        op1.echo_to_string()
+    };
+    let s2 = if op2.value_type() == ValueType::Object {
+        if let Some(result) = call_magic_method(eg, op2, "__tostring", &[])? {
+            result.echo_to_string()
+        } else {
+            op2.echo_to_string()
+        }
+    } else {
+        op2.echo_to_string()
+    };
+    let concatenated = format!("{}{}", s1, s2);
+    unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+    Ok(())
 }
 
 /// Inner execute loop — equivalent to zend_execute_ex.
@@ -902,6 +2342,119 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            // ── Specialized arithmetic opcodes ──────────────────────────
+            // Inline operand access: no get_op_ptr match, no ref check.
+            // Fall through to general handler on non-Long operands.
+
+            OpCode::Add_TmpTmp => {
+                let base = frame as *const Value;
+                let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
+                let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    match l1.checked_add(l2) {
+                        Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
+                        None => unsafe {
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
+                        },
+                    }
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for +".into()));
+                }
+            }
+
+            OpCode::Add_CvTmp => {
+                let base = frame as *const Value;
+                let cv_ptr = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
+                let op1 = if cv_ptr.is_reference() { unsafe { &*cv_ptr.as_ref_ptr() } } else { cv_ptr };
+                let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    match l1.checked_add(l2) {
+                        Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
+                        None => unsafe {
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
+                        },
+                    }
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for +".into()));
+                }
+            }
+
+            OpCode::Sub_CvConst => {
+                let op1_cv = unsafe { (*frame).cv(opline.op1) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    match l1.checked_sub(l2) {
+                        Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
+                        None => unsafe {
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
+                        },
+                    }
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for -".into()));
+                }
+            }
+
+            OpCode::Sub_TmpTmp => {
+                let base = frame as *const Value;
+                let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
+                let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    match l1.checked_sub(l2) {
+                        Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
+                        None => unsafe {
+                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
+                        },
+                    }
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for -".into()));
+                }
+            }
+
+            OpCode::IsSmaller_CvConst => {
+                let op1_cv = unsafe { (*frame).cv(opline.op1) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, l1 < l2) };
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, d1 < d2) };
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, s1 < s2) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                }
+            }
+
+            OpCode::IsSmallerOrEqual_CvConst => {
+                let op1_cv = unsafe { (*frame).cv(opline.op1) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, l1 <= l2) };
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, d1 <= d2) };
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, s1 <= s2) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                }
+            }
+
             OpCode::Add => {
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
@@ -999,30 +2552,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Concat => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-
-                let s1 = if op1.value_type() == ValueType::Object {
-                    if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
-                        result.echo_to_string()
-                    } else {
-                        op1.echo_to_string()
-                    }
-                } else {
-                    op1.echo_to_string()
-                };
-                let s2 = if op2.value_type() == ValueType::Object {
-                    if let Some(result) = call_magic_method(eg, op2, "__tostring", &[])? {
-                        result.echo_to_string()
-                    } else {
-                        op2.echo_to_string()
-                    }
-                } else {
-                    op2.echo_to_string()
-                };
-                let concatenated = format!("{}{}", s1, s2);
-                unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+                op_concat(eg, frame, op_array, opline)?;
             }
 
             OpCode::Spaceship => {
@@ -1374,136 +2904,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::SendNamed => {
-                // Named argument: op1=value, op2=CONST name string
-                // Resolve param name → position using callee's param_names,
-                // then use ref-aware semantics like SendRef/SendVarEx.
-                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let name = name_val.as_str().unwrap_or("");
-                let call = unsafe { (*frame).call };
-                debug_assert!(!call.is_null());
-                let func_common = unsafe { &*(*call).func };
-
-                // Find the parameter position by name
-                let mut resolved_idx: Option<u32> = None;
-                for (idx, pname) in func_common.sig.param_names.iter().enumerate() {
-                    if pname == name {
-                        resolved_idx = Some(idx as u32);
-                        break;
-                    }
-                }
-
-                // Determine if the resolved index targets the variadic parameter itself.
-                // In that case, route to the variadic buffer, not the CV slot.
-                let public_max = func_common.sig.public_arity();
-                let is_variadic_target = func_common.sig.is_variadic && match resolved_idx {
-                    Some(idx) => idx >= public_max,
-                    None => true,
-                };
-
-                if is_variadic_target {
-                    // Route to variadic named buffer — covers both:
-                    // (a) name matches the variadic param itself (e.g. rest: 1)
-                    // (b) name not in param_names at all (extra named arg)
-                    // Internal (built-in) variadic functions do NOT accept named
-                    // variadic extras — only user-defined functions do.
-                    if !func_common.sig.is_variadic
-                        || func_common.fn_type == crate::vm::function::FunctionType::Internal
-                    {
-                        let err = make_error_value("Error", &format!(
-                            "Unknown named parameter ${}", name
-                        ));
-                        match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
-                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                        }
-                    }
-
-                    // Duplicate check: scan the pending buffer for this name
-                    let call_key = call as usize;
-                    if let Some(existing) = eg.pending_named_variadic.get(&call_key) {
-                        if existing.iter().any(|(n, _)| n == name) {
-                            let err = make_error_value("Error", &format!(
-                                "Named parameter ${} overwrites previous argument", name
-                            ));
-                            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
-                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                            }
-                        }
-                    }
-
-                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                    let cloned = val.clone();
-                    eg.pending_named_variadic
-                        .entry(call_key)
-                        .or_insert_with(Vec::new)
-                        .push((name.to_string(), cloned));
-                    // This named arg doesn't occupy a CV slot, so decrement
-                    // num_args so DoFcall's positional variadic count is correct.
-                    unsafe {
-                        if (*call).num_args > 0 {
-                            (*call).num_args -= 1;
-                        }
-                    }
-                } else {
-                    match resolved_idx {
-                        Some(idx) => {
-                            let cv_idx = func_common.sig.param_cv_index(idx);
-
-                            // Check for duplicate: if CV slot already has a non-undef value,
-                            // the parameter was already passed (positionally or by a prior named arg).
-                            let existing = unsafe { &*(*call).cv(cv_idx) };
-                            if !existing.is_undef() {
-                                let err = make_error_value("Error", &format!(
-                                    "Named parameter ${} overwrites previous argument", name
-                                ));
-                                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
-                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                }
-                            }
-
-                            let is_ref = func_common.sig.is_param_by_ref(idx);
-
-                            if is_ref && opline.op1_type == OpType::Cv {
-                                // By-reference: same logic as SendRef
-                                let caller_cv_ptr = unsafe {
-                                    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                                    let raw_ptr = base.add(opline.op1 as usize);
-                                    if (*raw_ptr).is_reference() {
-                                        (*raw_ptr).as_ref_ptr()
-                                    } else {
-                                        raw_ptr
-                                    }
-                                };
-                                let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
-                                unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
-                            } else {
-                                // By-value: same logic as SendVal
-                                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                                let cloned = val.clone();
-                                let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
-                                unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
-                            }
-
-                            // Update num_args to cover this position
-                            let public_pos = idx + 1; // 1-based count
-                            unsafe {
-                                if (*call).num_args < public_pos {
-                                    (*call).num_args = public_pos;
-                                }
-                            }
-                        }
-                        None => {
-                            let err = make_error_value("Error", &format!(
-                                "Unknown named parameter ${}", name
-                            ));
-                            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
-                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                            }
-                        }
-                    }
+                match op_send_named(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
             }
 
@@ -1544,22 +2948,62 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && num_args_fast >= func_common_fast.sig.required_num_args
                         && num_args_fast <= func_common_fast.sig.public_arity()
                     {
-                        stats::inc_do_fcall_fast();
-                        // Fast path: set up return value, link frames, jump to callee
-                        let return_value_ptr = if opline.result_type != OpType::Unused {
-                            unsafe { (*frame).get_op_mut(opline.result, opline.result_type) }
+                        // Inline scalar type validation for Fast path.
+                        // Only checks hints that are not None (mixed/untyped skip check).
+                        // strict_types uses full path for proper coercion semantics.
+                        let mut type_ok = true;
+                        let hints = &func_common_fast.sig.param_type_hints;
+                        let caller_strict = op_array.strict_types;
+                        // strict_types with typed params → fall through to full path
+                        let has_typed_params = !hints.is_empty() && hints.iter().any(|h| !matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed));
+                        if caller_strict && has_typed_params {
+                            type_ok = false; // force full path
+                        } else if !hints.is_empty() {
+                            let check_count = std::cmp::min(num_args_fast as usize, hints.len());
+                            for i in 0..check_count {
+                                let hint = &hints[i];
+                                if matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed) {
+                                    continue;
+                                }
+                                let cv_idx = func_common_fast.sig.param_cv_index(i as u32);
+                                let val = unsafe { &*(*call).cv(cv_idx) };
+                                // Strict scalar type check — no implicit coercion.
+                                // Non-strict coercion falls through to full path.
+                                let ok = match hint {
+                                    ParamTypeHint::Int => val.as_long().is_some(),
+                                    ParamTypeHint::Float => val.value_type() == ValueType::Double || val.as_long().is_some(),
+                                    ParamTypeHint::Bool => val.value_type() == ValueType::True || val.value_type() == ValueType::False,
+                                    ParamTypeHint::String => val.as_str().is_some(),
+                                    _ => true,
+                                };
+                                if !ok {
+                                    type_ok = false;
+                                    break;
+                                }
+                            }
+                        }
+                        if !type_ok {
+                            // Fall through to full path for proper TypeError
                         } else {
-                            std::ptr::null_mut()
+                        stats::inc_do_fcall_fast();
+                        // Fast path: inline return_value_ptr for Tmp result (most common).
+                        let return_value_ptr = match opline.result_type {
+                            OpType::Tmp | OpType::Var => unsafe {
+                                // Absolute slot offset — no get_op_mut match needed.
+                                (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                            },
+                            OpType::Unused => std::ptr::null_mut(),
+                            _ => unsafe { (*frame).get_op_mut(opline.result, opline.result_type) },
                         };
                         unsafe { (*call).return_value = return_value_ptr };
 
                         // Sync caller's scope to globals (only if needed)
-                        let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
-                            &op_array.main_scope_vars
-                        } else {
-                            &op_array.global_vars
-                        };
-                        if !vars_to_sync.is_empty() {
+                        if !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty() {
+                            let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
+                                &op_array.main_scope_vars
+                            } else {
+                                &op_array.global_vars
+                            };
                             for (cv_idx, var_name) in vars_to_sync {
                                 let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
                                 let val = unsafe { (*cv_ptr).clone() };
@@ -1575,7 +3019,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         frame = call;
                         op_array = unsafe { (*frame).op_array() };
                         continue;
-                    }
+                    } // else: type_ok
+                    } // if arity/generator ok
                 }
 
                 // ── Full path (handles all edge cases) ──
@@ -2059,467 +3504,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ForeachInit => {
-                // Copy array/generator from op1 to result TMP, set position to 0
-                // If empty or not iterable, jump to op2
-                let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-
-                // Check for Generator object
-                let is_generator = if let Some(obj) = arr_val.as_object() {
-                    obj.class_name == "Generator" && arr_val.as_object_rc().map_or(false, |rc| rc.borrow().generator.is_some())
-                } else {
-                    false
-                };
-
-                if is_generator {
-                    // Start the generator (rewind)
-                    let gen_ref = arr_val.as_object_rc().unwrap().borrow().generator.clone().unwrap();
-                    {
-                        let state = gen_ref.borrow().state;
-                        if state == crate::vm::generator::GeneratorState::Created {
-                            resume_generator(eg, &gen_ref, Value::null())?;
-                        }
-                    }
-                    let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
-                    if !is_valid {
-                        let target = opline.op2 as usize;
-                        let base_ptr = op_array.instructions.as_ptr();
-                        unsafe { (*frame).opline = base_ptr.add(target) };
-                        continue;
-                    }
-                    // Store generator object in result TMP
-                    let cloned = arr_val.clone();
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { slot_set(result_ptr, cloned) };
-                    // Set position TMP to 0 (0 = first iteration, don't call next)
-                    let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-                    unsafe { slot_set(pos_ptr, Value::long(0)) };
-                } else {
-                    let is_empty = match arr_val.as_array() {
-                        Some(arr) => arr.is_empty(),
-                        None => {
-                            eg.write_output(b"\nWarning: foreach() argument must be of type array|object, ");
-                            let type_name = match arr_val.value_type() {
-                                ValueType::Null => "null",
-                                ValueType::True | ValueType::False => "bool",
-                                ValueType::Long => "int",
-                                ValueType::Double => "float",
-                                ValueType::String => "string",
-                                _ => "unknown",
-                            };
-                            eg.write_output(type_name.as_bytes());
-                            eg.write_output(b" given\n");
-                            true
-                        }
-                    };
-                    if is_empty {
-                        let target = opline.op2 as usize;
-                        let base_ptr = op_array.instructions.as_ptr();
-                        unsafe { (*frame).opline = base_ptr.add(target) };
-                        continue;
-                    }
-                    // Copy array to result TMP
-                    let cloned = arr_val.clone();
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { slot_set(result_ptr, cloned) };
-                    // Set position TMP to 0
-                    let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-                    unsafe { slot_set(pos_ptr, Value::long(0)) };
-                }
-            }
-
-            OpCode::ForeachNext => {
-                // op1 = array/generator copy TMP, op2 = position TMP
-                // result = has_more TMP (bool: true if entry fetched, false if done)
-                // extended_value: low 16 bits = value_cv, high 16 bits = key_cv + 1 (0 = no key)
-                let val_cv = (opline.extended_value & 0xFFFF) as u32;
-                let key_encoded = (opline.extended_value >> 16) as u32;
-
-                let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-
-                // Check for Generator object
-                let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
-                    if obj.class_name == "Generator" {
-                        arr_val.as_object_rc().and_then(|rc| rc.borrow().generator.clone())
-                    } else { None }
-                } else { None };
-
-                let has_more = if let Some(gen_ref) = gen_ref_opt {
-                    let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                    let pos = pos_val.as_long().unwrap_or(0);
-
-                    // On first iteration (pos=0), generator is already started by ForeachInit
-                    // On subsequent iterations, call next()
-                    if pos > 0 {
-                        let state = gen_ref.borrow().state;
-                        if state == crate::vm::generator::GeneratorState::Suspended {
-                            resume_generator(eg, &gen_ref, Value::null())?;
-                        }
-                    }
-
-                    let gen_data = gen_ref.borrow();
-                    if gen_data.state != crate::vm::generator::GeneratorState::Completed {
-                        // Write current value to value_cv
-                        let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                        unsafe { slot_set(val_ptr, gen_data.value.clone()) };
-                        // Write key if requested
-                        if key_encoded > 0 {
-                            let key_cv = key_encoded - 1;
-                            let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                            unsafe { slot_set(key_ptr, gen_data.key.clone()) };
-                        }
-                        drop(gen_data);
-                        // Increment position
-                        let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
-                        unsafe { slot_set(pos_ptr, Value::long(pos + 1)) };
-                        true
-                    } else {
-                        false
-                    }
-                } else {
-                    let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                    let pos = pos_val.as_long().unwrap_or(0) as usize;
-
-                    if let Some(arr) = arr_val.as_array() {
-                        let entries = arr.entries();
-                        if pos < entries.len() {
-                            let (ref key, ref val) = entries[pos];
-                            let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                            unsafe { slot_set(val_ptr, val.clone()) };
-                            if key_encoded > 0 {
-                                let key_cv = key_encoded - 1;
-                                let key_val = match key {
-                                    ArrayKey::Int(k) => Value::long(*k),
-                                    ArrayKey::String(k) => Value::string(k.clone()),
-                                };
-                                let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                                unsafe { slot_set(key_ptr, key_val) };
-                            }
-                            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
-                            unsafe { slot_set(pos_ptr, Value::long((pos + 1) as i64)) };
-                            true
-                        } else {
-                            false
-                        }
-                    } else {
-                        false
-                    }
-                };
-
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                unsafe { slot_set(result_ptr, Value::bool(has_more)) };
-            }
-
-            OpCode::Throw => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                // PHP 8: only Throwable objects can be thrown
-                if val.as_object().is_none() || {
-                    let obj = val.as_object().unwrap();
-                    !eg.class_is_a(&obj.class_name, "Throwable")
-                } {
-                    let type_name = match val.value_type() {
-                        ValueType::Long => "int",
-                        ValueType::Double => "float",
-                        ValueType::String => "string",
-                        ValueType::True | ValueType::False => "bool",
-                        ValueType::Null | ValueType::Undef => "null",
-                        ValueType::Array => "array",
-                        ValueType::Object => {
-                            // Object but not Throwable
-                            let obj = val.as_object().unwrap();
-                            return Err(VmError::Fatal(format!(
-                                "Cannot throw objects that do not implement Throwable (class {})", obj.class_name
-                            )));
-                        }
-                        _ => "unknown",
-                    };
-                    return Err(VmError::Fatal(format!(
-                        "Can only throw objects implementing Throwable, {} given", type_name
-                    )));
-                }
-                let thrown = val.clone();
-
-                match throw_in_frame(eg, frame, thrown) {
-                    ThrowResult::Handled(new_frame, new_op_array) => {
-                        frame = new_frame;
-                        op_array = new_op_array;
-                        continue;
-                    }
-                    ThrowResult::Unhandled(exc) => {
-                        // Propagate via eg.exception through re-entry boundaries
-                        eg.exception = Some(exc);
-                        return Ok(());
-                    }
-                }
-            }
-
-            OpCode::NewObj => {
-                let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let name = class_name.as_str().unwrap_or("");
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-
-                // Reject instantiation of interfaces, abstract classes, and internal-only classes
-                if name == "Generator" {
-                    return Err(VmError::Fatal(
-                        "The \"Generator\" class is reserved for internal use and cannot be manually instantiated".into()
-                    ));
-                }
-                if let Some(class_def) = eg.class_table.get(name) {
-                    if class_def.is_interface {
-                        return Err(VmError::Fatal(format!(
-                            "Cannot instantiate interface {}",
-                            name
-                        )));
-                    }
-                    if class_def.is_abstract {
-                        return Err(VmError::Fatal(format!(
-                            "Cannot instantiate abstract class {}",
-                            name
-                        )));
-                    }
-                    if class_def.is_enum {
-                        let err = make_error_value("Error", &format!(
-                            "Cannot instantiate enum {}",
-                            name
-                        ));
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                        }
-                    }
-                }
-
-                // Create new object with default properties from class definition.
-                // Private properties are stored under a mangled key (ClassName\0prop)
-                // so that parent and child private properties with the same name
-                // occupy separate slots, matching PHP semantics.
-                let mut props = std::collections::HashMap::new();
-                if let Some(class_def) = eg.class_table.get(name) {
-                    for (prop_name, default_val, vis, declaring) in &class_def.properties {
-                        let is_readonly = eg.class_table.get(name)
-                            .map(|cd| cd.readonly_props.contains(prop_name))
-                            .unwrap_or(false);
-                        let val = default_val.as_ref()
-                            .map(|v| v.clone())
-                            .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
-                        let key = if *vis == Visibility::Private {
-                            crate::runtime::mangle_private_prop(declaring, prop_name)
-                        } else {
-                            prop_name.clone()
-                        };
-                        props.insert(key, val);
-                    }
-                }
-
-                let obj = PhpObject {
-                    class_name: name.to_string(),
-                    class_id: eg.class_id_of(name),
-                    properties: props,
-                    generator: None,
-                };
-                unsafe { slot_set(result_ptr, Value::object(obj)) };
-
-                // Check for __construct — set up call frame if it exists
-                let num_args = opline.extended_value;
-                let construct_name = format!("{}::__construct", name);
-                if let Some(func_ptr) = eg.find_function(&construct_name) {
-                    // +1 for $this at CV 0; SendVal writes args to CV 1..N
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
-                    unsafe {
-                        (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
-                        (*call).prev_execute_data = frame;
-                        (*call).call = (*frame).call;
-                        (*frame).call = call;
-                        // Write $this directly — cleanup handles it separately.
-                        let obj_ref = &*result_ptr;
-                        frame_set_this(call, obj_ref.clone());
-                    }
-                } else {
-                    // No constructor — skip num_args SendVals + 1 DoFcall.
-                    // Arg expressions were compiled before NewObj so side effects
-                    // have already executed; we just discard the values.
-                    let skip = num_args + 1; // SendVals + DoFcall
-                    let base_ptr = op_array.instructions.as_ptr();
-                    let current_ip = unsafe { (*frame).opline.offset_from(base_ptr) } as usize;
-                    unsafe { (*frame).opline = base_ptr.add(current_ip + 1 + skip as usize) };
+                if op_foreach_init(eg, frame, op_array, opline)? {
                     continue;
                 }
             }
 
-            OpCode::FetchObjR => {
-                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+            OpCode::ForeachNext => {
+                op_foreach_next(eg, frame, op_array, opline)?;
+            }
 
-                if let Some(obj) = obj_val.as_object() {
-                    let name = prop_name.as_str().unwrap_or("");
-                    let caller_class = get_caller_class(frame, eg);
-
-                    // Private property early binding is only valid when the receiver
-                    // is in the same inheritance hierarchy as the caller.  When
-                    // accessing an unrelated object, the caller's private property
-                    // must NOT leak — use target-only key resolution.
-                    let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
-                        eg.class_is_a(&obj.class_name, cc)
-                    });
-                    let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
-
-                    // Resolve storage key (mangled for private properties)
-                    let key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
-                    // Visibility check
-                    if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
-                        if vis != Visibility::Public {
-                            // Skip check if the caller owns the defining class AND
-                            // the receiver is in that scope (same hierarchy).
-                            let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
-                                vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
-                            });
-                            // Also skip if caller's class declares its own private
-                            // with same name AND the receiver is in scope.
-                            let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
-                                if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, name) {
-                                    dc.eq_ignore_ascii_case(cc)
-                                } else {
-                                    false
-                                }
-                            });
-                            if !own_private && !caller_has_own {
-                                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                                    return Err(VmError::Fatal(format!(
-                                        "Cannot access {} property {}::${}",
-                                        vis_str, defining_class, name
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                    let found_val = obj.properties.get(&key).cloned();
-                    drop(obj); // Release borrow before potential magic method call
-                    if let Some(val) = found_val {
-                        unsafe { slot_set(result_ptr, val) };
-                    } else {
-                        // Property not found — try __get magic method
-                        if let Some(result) = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])? {
-                            unsafe { slot_set(result_ptr, result) };
-                        } else {
-                            unsafe { slot_set(result_ptr, Value::null()) };
-                        }
-                    }
-                } else {
-                    return Err(VmError::Fatal("Attempt to read property on non-object".into()));
+            OpCode::Throw => {
+                match op_throw(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
             }
 
+            OpCode::NewObj => {
+                match op_new_obj(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => { continue; }
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
+                }
+            }
+
+            OpCode::FetchObjR => {
+                op_fetch_obj_r(eg, frame, op_array, opline)?;
+            }
+
             OpCode::AssignObjProp => {
-                let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
-                let cloned = val.clone();
-                let name = prop_name.as_str().unwrap_or("").to_string();
-                let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let obj = unsafe { &*obj_ptr };
-
-                if let Some(mut php_obj) = obj.as_object_mut() {
-                    let caller_class = get_caller_class(frame, eg);
-
-                    // Same receiver-in-scope guard as FetchObjR — only allow
-                    // private bypass when the receiver is in the caller's hierarchy.
-                    let receiver_in_scope = caller_class.as_ref().map_or(false, |cc| {
-                        eg.class_is_a(&php_obj.class_name, cc)
-                    });
-                    let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
-
-                    // Visibility check — use declaring class, not receiver class
-                    if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
-                        if vis != Visibility::Public {
-                            let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
-                                vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
-                            });
-                            let caller_has_own = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
-                                if let Some((Visibility::Private, ref dc)) = eg.find_property_visibility(cc, &name) {
-                                    dc.eq_ignore_ascii_case(cc)
-                                } else {
-                                    false
-                                }
-                            });
-                            if !own_private && !caller_has_own {
-                                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                                    return Err(VmError::Fatal(format!(
-                                        "Cannot access {} property {}::${}",
-                                        vis_str, defining_class, name
-                                    )));
-                                }
-                            }
-                        }
-                    }
-                    // Enum guard: enum cases are sealed — no property writes allowed
-                    if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
-                        if class_def.is_enum {
-                            let err = make_error_value("Error", &format!(
-                                "Cannot modify readonly property {}::${}",
-                                php_obj.class_name, name
-                            ));
-                            drop(php_obj);
-                            match throw_in_frame(eg, frame, err) {
-                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                            }
-                        }
-                    }
-                    // Readonly property check
-                    if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
-                        if class_def.readonly_props.contains(&name) {
-                            let key_check = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
-                            let already_init = php_obj.properties.get(&key_check)
-                                .map_or(false, |v| !v.is_undef());
-                            if already_init {
-                                // Already initialized — always error
-                                let err = make_error_value("Error", &format!(
-                                    "Cannot modify readonly property {}::${}",
-                                    php_obj.class_name, name
-                                ));
-                                drop(php_obj);
-                                match throw_in_frame(eg, frame, err) {
-                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                }
-                            } else {
-                                // First initialization — only allowed from declaring class scope
-                                let in_declaring_scope = caller_class.as_ref().map_or(false, |cc| {
-                                    cc.eq_ignore_ascii_case(&php_obj.class_name)
-                                });
-                                if !in_declaring_scope {
-                                    let err = make_error_value("Error", &format!(
-                                        "Cannot initialize readonly property {}::${} from {}",
-                                        php_obj.class_name, name,
-                                        caller_class.as_deref().map_or("global scope".to_string(), |c| format!("scope {}", c))
-                                    ));
-                                    drop(php_obj);
-                                    match throw_in_frame(eg, frame, err) {
-                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    // Resolve storage key (mangled for private properties)
-                    let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
-                    let prop_exists = php_obj.properties.contains_key(&key);
-                    if prop_exists {
-                        php_obj.properties.insert(key, cloned);
-                    } else {
-                        drop(php_obj); // Release borrow before potential magic method call
-                        // Property not found — try __set magic method
-                        if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), cloned.clone()])?.is_none() {
-                            // No __set — fall back to direct insert
-                            if let Some(mut php_obj) = obj.as_object_mut() {
-                                php_obj.properties.insert(key, cloned);
-                            }
-                        }
-                    }
-                } else {
-                    return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
+                match op_assign_obj_prop(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
             }
 
@@ -2564,247 +3583,23 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitMethodCall => {
-                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-
-                if let Some(obj) = obj_val.as_object() {
-                    let obj_class_id = obj.class_id;
-
-                    // Inline cache: if same class_id as last time, reuse resolved func_ptr
-                    // — avoids class_name.clone() and full method resolution on cache hit.
-                    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-                    let ic = &op_array.cache[ip];
-                    let func_ptr = if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
-                        drop(obj); // release borrow — class_name not needed on cache hit
-                        ic.func
-                    } else {
-                        let target_class_name = obj.class_name.clone();
-                        drop(obj); // release borrow before lookup
-                        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                        let method = method_name.as_str().unwrap_or("");
-                        let caller_class = get_caller_class(frame, eg);
-
-                        let dispatch_class = if let Some(ref cc) = caller_class {
-                            if let Some((Visibility::Private, ref defining)) = eg.find_method_visibility(cc, method) {
-                                if defining.eq_ignore_ascii_case(cc)
-                                    && eg.class_is_a(&target_class_name, cc)
-                                {
-                                    cc.clone()
-                                } else {
-                                    target_class_name.clone()
-                                }
-                            } else {
-                                target_class_name.clone()
-                            }
-                        } else {
-                            target_class_name.clone()
-                        };
-
-                        let full_name = format!("{}::{}", dispatch_class, method);
-                        let resolved = match eg.find_function(&full_name) {
-                            Some(ptr) => ptr,
-                            None => {
-                                let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", dispatch_class, method));
-                                match throw_in_frame(eg, frame, err) {
-                                    ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                                    ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                }
-                            }
-                        };
-
-                        // Visibility check
-                        if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
-                            if vis != Visibility::Public {
-                                if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                                    let vis_str = match vis {
-                                        Visibility::Protected => "protected",
-                                        Visibility::Private => "private",
-                                        _ => "public",
-                                    };
-                                    return Err(VmError::Fatal(format!(
-                                        "Call to {} method {}::{}() from scope {}",
-                                        vis_str, defining_class, method,
-                                        caller_class.as_deref().unwrap_or("global")
-                                    )));
-                                }
-                            }
-                        }
-
-                        // Cache the resolution (don't cache if class_id is 0 = unknown)
-                        if obj_class_id != 0 {
-                            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-                            ic_mut.func = resolved;
-                            ic_mut.class_id = obj_class_id;
-                        }
-                        resolved
-                    };
-
-                    let num_args = opline.extended_value;
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
-                    unsafe {
-                        (*call).num_args = num_args;
-                        (*call).prev_execute_data = frame;
-                        (*call).call = (*frame).call;
-                        (*frame).call = call;
-                        // Write $this directly — cleanup_frame_slots handles it
-                        // separately, so don't set has_heap_slots here.
-                        frame_set_this(call, obj_val.clone());
-                    }
-                } else {
-                    let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                    let method = method_name.as_str().unwrap_or("");
-                    let err = make_error_value("Error", &format!("Call to member function {}() on non-object", method));
-                    match throw_in_frame(eg, frame, err) {
-                        ThrowResult::Handled(new_frame, new_op_array) => {
-                            frame = new_frame;
-                            op_array = new_op_array;
-                            continue;
-                        }
-                        ThrowResult::Unhandled(thrown) => {
-                            eg.exception = Some(thrown);
-                            return Ok(());
-                        }
-                    }
+                match op_init_method_call(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
             }
 
             OpCode::InitStaticCall => {
-                // Inline cache: static calls have constant class+method — cache resolved func_ptr.
-                // Visibility is checked on first resolve only (same instruction = same caller context).
-                let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-                let cached = op_array.cache[ip].func;
-                let func_ptr = if !cached.is_null() {
-                    cached
-                } else {
-                    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                    let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                    let class = class_name.as_str().unwrap_or("");
-                    let method = method_name.as_str().unwrap_or("");
-
-                    let full_name = format!("{}::{}", class, method);
-                    let resolved = match eg.find_function(&full_name) {
-                        Some(ptr) => ptr,
-                        None => {
-                            let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", class, method));
-                            match throw_in_frame(eg, frame, err) {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    frame = new_frame;
-                                    op_array = new_op_array;
-                                    continue;
-                                }
-                                ThrowResult::Unhandled(thrown) => {
-                                    eg.exception = Some(thrown);
-                                    return Ok(());
-                                }
-                            }
-                        }
-                    };
-
-                    // Visibility check on first resolve
-                    if let Some((vis, defining_class)) = eg.find_method_visibility(class, method) {
-                        if vis != Visibility::Public {
-                            let caller_class = get_caller_class(frame, eg);
-                            if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
-                                let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
-                                return Err(VmError::Fatal(format!(
-                                    "Call to {} method {}::{}() from scope {}",
-                                    vis_str, defining_class, method,
-                                    caller_class.as_deref().unwrap_or("global")
-                                )));
-                            }
-                        }
-                    }
-
-                    // Cache for subsequent calls
-                    unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = resolved; }
-                    resolved
-                };
-
-                let num_args = opline.extended_value;
-                // +1 for $this at CV 0 (compiler allocates $this even for static calls)
-                let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
-                unsafe {
-                    (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
-                    (*call).prev_execute_data = frame;
-                    (*call).call = (*frame).call;
-                    (*frame).call = call;
+                match op_init_static_call(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
             }
 
             OpCode::InitDynamicCall => {
-                let callable = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-
-                if let Some(arr) = callable.as_array() {
-                    // Closure call: array is [function_name, use_val1, use_val2, ...]
-                    let entries = arr.entries();
-                    if entries.is_empty() {
-                        return Err(VmError::Fatal("Array is not callable".into()));
-                    }
-                    let func_name = entries[0].1.as_str().ok_or_else(|| {
-                        VmError::Fatal("Closure descriptor must start with function name".into())
-                    })?;
-
-                    let func_ptr = eg.find_function(func_name).ok_or_else(|| {
-                        VmError::Fatal(format!("Call to undefined function {}()", func_name))
-                    })?;
-
-                    let num_args = opline.extended_value;
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
-                    unsafe {
-                        (*call).prev_execute_data = frame;
-                        (*call).call = (*frame).call;
-                        (*frame).call = call;
-                    }
-
-                    // Copy captured use_vars into CV slots after params
-                    // Params are CV 0..num_args-1, use_vars are CV num_args..
-                    let func = unsafe { &*func_ptr };
-                    let use_var_offset = func.sig.num_args;
-                    for i in 1..entries.len() {
-                        let captured_val = entries[i].1.clone();
-                        let cv_slot = unsafe { (*call).cv_mut(use_var_offset + (i as u32 - 1)) };
-                        unsafe { frame_slot_set(call, cv_slot as *mut Value, captured_val) };
-                    }
-                } else if let Some(func_name) = callable.as_str() {
-                    // Simple string function call: $func = "my_func"; $func()
-                    let func_ptr = eg.find_function(func_name).ok_or_else(|| {
-                        VmError::Fatal(format!("Call to undefined function {}()", func_name))
-                    })?;
-
-                    let num_args = opline.extended_value;
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
-                    unsafe {
-                        (*call).prev_execute_data = frame;
-                        (*call).call = (*frame).call;
-                        (*frame).call = call;
-                    }
-                } else if callable.value_type() == ValueType::Object {
-                    // Object with __invoke: set up as method call to __invoke
-                    let obj = callable.as_object().unwrap();
-                    let class_name = obj.class_name.clone();
-                    drop(obj);
-                    let full_name = format!("{}::__invoke", class_name.to_lowercase());
-                    let func_ptr = match eg.find_function(&full_name) {
-                        Some(ptr) => ptr,
-                        None => return Err(VmError::Fatal(format!("Call to undefined method {}::__invoke()", class_name))),
-                    };
-
-                    let num_args = opline.extended_value;
-                    // +1 for $this at CV 0; but don't write $this yet because
-                    // SendVal will write args to CV 0..N-1 (compiler doesn't know
-                    // it's a method call). We'll shift args in DoFcall.
-                    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
-                    unsafe {
-                        (*call).num_args = num_args;
-                        (*call).num_cvs = num_args + 1; // track total CVs needed
-                        (*call).prev_execute_data = frame;
-                        (*call).call = (*frame).call;
-                        (*frame).call = call;
-                    }
-                    // Stash $this object for injection in DoFcall
-                    eg.pending_invoke_this = Some(callable.clone());
-                } else {
-                    return Err(VmError::Fatal(format!("Value of type {:?} is not callable", callable.value_type())));
-                }
+                op_init_dynamic_call(eg, frame, op_array, opline)?;
             }
 
             OpCode::FetchStaticProp => {
@@ -2936,6 +3731,37 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if func_common_ret.plan.ret == ReturnStrategy::Fast
                     && eg.exception.is_none()
                 {
+                    // Inline return type validation for scalar hints.
+                    // strict_types callers fall through to full path.
+                    let ret_hint = &func_common_ret.sig.return_type_hint;
+                    let has_return_type = !matches!(ret_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+                    // strict_types with return type → use full path for proper enforcement.
+                    if has_return_type && op_array.strict_types {
+                        // Fall through to full return path.
+                    } else {
+                    if has_return_type && opline.op1_type != OpType::Unused {
+                        let retval = unsafe {
+                            &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                        };
+                        let type_ok = match ret_hint {
+                            ParamTypeHint::Int => retval.as_long().is_some(),
+                            ParamTypeHint::Float => retval.to_double().is_some(),
+                            ParamTypeHint::Bool => retval.value_type() == ValueType::True || retval.value_type() == ValueType::False,
+                            ParamTypeHint::String => retval.as_str().is_some(),
+                            _ => true,
+                        };
+                        if !type_ok {
+                            let err = make_error_value("TypeError", &format!(
+                                "Return value must be of type {}, {} returned",
+                                ret_hint.display_name(),
+                                retval.type_name()
+                            ));
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
+                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                            }
+                        }
+                    }
                     stats::inc_return_fast();
                     if opline.op1_type != OpType::Unused {
                         let retval = unsafe {
@@ -2956,8 +3782,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
-                    // No dirty_globals to re-read (callee had no global vars)
                     continue;
+                    } // else: not strict with return type
                 }
 
                 // ── Full return path ──
@@ -3148,249 +3974,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Yield => {
-                // Yield: suspend generator execution
-                // op1 = yielded value, op2 = key (optional), result = received value slot
-                use crate::vm::generator::GeneratorState;
-
-                let yielded_value = if opline.op1_type != OpType::Unused {
-                    unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone()
-                } else {
-                    Value::null()
-                };
-
-                let yielded_key = if opline.op2_type != OpType::Unused {
-                    Some(unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) }.clone())
-                } else {
-                    None
-                };
-
-                // result TMP index is stored in the instruction itself
-                // resume_generator reads it from yield_instr.result when resuming
-
-                // Find the generator object for this frame by walking up to the
-                // resume_generator caller's context via eg.generator_context
-                if let Some(gen_ref) = eg.active_generator.take() {
-                    let mut gen_data = gen_ref.borrow_mut();
-
-                    // Set yielded value/key
-                    gen_data.value = yielded_value;
-                    if let Some(key) = yielded_key {
-                        gen_data.key = key;
-                    } else {
-                        gen_data.key = Value::long(gen_data.implicit_key);
-                        gen_data.implicit_key += 1;
-                    }
-
-                    // Save frame state back to generator
-                    let num_cvs = unsafe { (*frame).num_cvs } as usize;
-                    let num_temps = unsafe { (*frame).num_temps } as usize;
-                    gen_data.cv_values.clear();
-                    for i in 0..num_cvs {
-                        gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
-                    }
-                    gen_data.tmp_values.clear();
-                    for i in 0..num_temps {
-                        gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
-                    }
-
-                    // Save instruction pointer (advance past yield for resume)
-                    let base = op_array.instructions.as_ptr();
-                    gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize + 1 };
-                    gen_data.state = GeneratorState::Suspended;
-
-                    // Remember where to write send() value on resume
-                    gen_data.send_value = Value::null();
-                    // Store result slot info in ip_offset's associated data
-                    // We'll use a simpler approach: resume_generator will write send_value
-                    // to the result TMP before continuing
-
-                    drop(gen_data);
-                    // Put gen_ref back so resume_generator can retrieve it
-                    eg.active_generator = Some(gen_ref);
+                match op_yield(eg, frame, op_array, opline)? {
+                    ColdResult::Return => { return Ok(()); }
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    _ => {}
                 }
-
-                // Return from generator frame (like OpCode::Return)
-                let prev = unsafe { (*frame).prev_execute_data };
-                if prev.is_null() {
-                    return Ok(());
-                }
-                eg.current_execute_data.set(prev);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                frame = prev;
-                op_array = unsafe { (*frame).op_array() };
-                continue;
             }
 
             OpCode::YieldFrom => {
-                use crate::vm::generator::{GeneratorState, YieldFromDelegate};
-
-                let source_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone();
-
-                if let Some(gen_ref) = eg.active_generator.take() {
-                    let result_slot = opline.result;
-
-                    // Determine delegate type
-                    if let Some(obj_data) = source_val.as_object() {
-                        if obj_data.class_name == "Generator" {
-                            if let Some(inner_gen_ref) = obj_data.generator.clone() {
-                                drop(obj_data);
-                                // Start inner generator if needed
-                                {
-                                    let inner_state: GeneratorState = inner_gen_ref.borrow().state;
-                                    if inner_state == GeneratorState::Created {
-                                        eg.active_generator = Some(gen_ref.clone());
-                                        drop(eg.active_generator.take());
-                                        resume_generator(eg, &inner_gen_ref, Value::null())?;
-                                    }
-                                }
-
-                                let inner_state: GeneratorState = inner_gen_ref.borrow().state;
-                                if inner_state == GeneratorState::Completed {
-                                    // Sub-generator already done, write return value to result
-                                    let ret_val = inner_gen_ref.borrow().return_value.clone();
-                                    eg.active_generator = Some(gen_ref);
-                                    // Write result to TMP and continue (don't suspend)
-                                    if opline.result_type != OpType::Unused {
-                                        let slot = unsafe { (*frame).tmp_mut(result_slot) };
-                                        unsafe { frame_tmp_set(frame, slot as *mut Value, ret_val) };
-                                    }
-                                    unsafe { (*frame).opline = (*frame).opline.add(1); }
-                                    continue;
-                                }
-
-                                // Set up delegation
-                                {
-                                    let mut gen_data = gen_ref.borrow_mut();
-                                    gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref.clone()));
-                                    gen_data.yield_from_result_slot = result_slot;
-
-                                    // Copy inner generator's current value/key to outer
-                                    let inner = inner_gen_ref.borrow();
-                                    gen_data.value = inner.value.clone();
-                                    gen_data.key = inner.key.clone();
-
-                                    // Save frame state
-                                    let num_cvs = unsafe { (*frame).num_cvs } as usize;
-                                    let num_temps = unsafe { (*frame).num_temps } as usize;
-                                    gen_data.cv_values.clear();
-                                    for i in 0..num_cvs {
-                                        gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
-                                    }
-                                    gen_data.tmp_values.clear();
-                                    for i in 0..num_temps {
-                                        gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
-                                    }
-                                    let base = op_array.instructions.as_ptr();
-                                    // Stay at same instruction — resume will re-enter YieldFrom
-                                    // Actually, save ip at current instruction so when delegate
-                                    // finishes we come back to this YieldFrom and advance past it
-                                    gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
-                                    gen_data.state = GeneratorState::Suspended;
-                                }
-
-                                eg.active_generator = Some(gen_ref);
-
-                                // Pop frame like Yield
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                if prev.is_null() {
-                                    return Ok(());
-                                }
-                                eg.current_execute_data.set(prev);
-                                unsafe { cleanup_frame_slots(frame) };
-                                eg.vm_stack.pop_call_frame(frame);
-                                frame = prev;
-                                op_array = unsafe { (*frame).op_array() };
-                                continue;
-                            }
-                        }
-                        drop(obj_data);
-                        eg.active_generator = Some(gen_ref);
-                        let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue;
-                            }
-                            ThrowResult::Unhandled(exc) => {
-                                eg.exception = Some(exc);
-                                return Ok(());
-                            }
-                        }
-                    } else if let Some(arr) = source_val.as_array() {
-                        let entries: Vec<(crate::value::ArrayKey, Value)> = arr.entries().iter().map(|(k, v): &(crate::value::ArrayKey, Value)| (k.clone(), v.clone())).collect();
-
-                        if entries.is_empty() {
-                            // Empty array — result is null, continue
-                            eg.active_generator = Some(gen_ref);
-                            if opline.result_type != OpType::Unused {
-                                let slot = unsafe { (*frame).tmp_mut(result_slot) };
-                                unsafe { frame_tmp_set(frame, slot as *mut Value, Value::null()) };
-                            }
-                            unsafe { (*frame).opline = (*frame).opline.add(1); }
-                            continue;
-                        }
-
-                        // Set up array delegation
-                        {
-                            let mut gen_data = gen_ref.borrow_mut();
-                            // Yield first element
-                            let (ref key, ref val) = entries[0];
-                            gen_data.value = val.clone();
-                            gen_data.key = match key {
-                                crate::value::ArrayKey::Int(i) => Value::long(*i),
-                                crate::value::ArrayKey::String(s) => Value::string(s.clone()),
-                            };
-                            gen_data.delegate = Some(YieldFromDelegate::Array(entries, 1)); // position after first
-                            gen_data.yield_from_result_slot = result_slot;
-
-                            // Save frame state
-                            let num_cvs = unsafe { (*frame).num_cvs } as usize;
-                            let num_temps = unsafe { (*frame).num_temps } as usize;
-                            gen_data.cv_values.clear();
-                            for i in 0..num_cvs {
-                                gen_data.cv_values.push(unsafe { (*frame).cv(i as u32) }.clone());
-                            }
-                            gen_data.tmp_values.clear();
-                            for i in 0..num_temps {
-                                gen_data.tmp_values.push(unsafe { (*frame).tmp(i as u32) }.clone());
-                            }
-                            let base = op_array.instructions.as_ptr();
-                            gen_data.ip_offset = unsafe { (*frame).opline.offset_from(base) as usize };
-                            gen_data.state = GeneratorState::Suspended;
-                        }
-
-                        eg.active_generator = Some(gen_ref);
-
-                        // Pop frame like Yield
-                        let prev = unsafe { (*frame).prev_execute_data };
-                        if prev.is_null() {
-                            return Ok(());
-                        }
-                        eg.current_execute_data.set(prev);
-                        unsafe { cleanup_frame_slots(frame) };
-                        eg.vm_stack.pop_call_frame(frame);
-                        frame = prev;
-                        op_array = unsafe { (*frame).op_array() };
-                        continue;
-                    } else {
-                        eg.active_generator = Some(gen_ref);
-                        let err = make_error_value("Error", "Can use \"yield from\" only with arrays and Traversables");
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue;
-                            }
-                            ThrowResult::Unhandled(exc) => {
-                                eg.exception = Some(exc);
-                                return Ok(());
-                            }
-                        }
-                    }
-                } else {
-                    return Err(VmError::Fatal("yield from outside generator".into()));
+                match op_yield_from(eg, frame, op_array, opline)? {
+                    ColdResult::Return => { return Ok(()); }
+                    ColdResult::Continue => { continue; }
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    ColdResult::Done => {}
                 }
             }
 
@@ -3399,282 +3996,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Include => {
-                let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let path_str = path_val.echo_to_string();
-                let is_require = (opline.extended_value & 1) != 0;
-                let is_once = (opline.extended_value & 2) != 0;
-
-                // Resolve path: if relative, resolve relative to the directory of the
-                // currently executing file (not CWD). Fall back to CWD if no file context.
-                let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
-                    path_str.clone()
-                } else {
-                    // Try to get the directory of the including file from its op_array name
-                    let base_dir = {
-                        let op_name = &op_array.name;
-                        let p = std::path::Path::new(op_name);
-                        if p.is_file() {
-                            p.parent().map(|d| d.to_path_buf())
-                        } else {
-                            // Check included_files for the most recent file
-                            None
-                        }
-                    }.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
-                    base_dir.join(&path_str).to_string_lossy().to_string()
-                };
-
-                // Canonicalize for _once dedup (best effort)
-                let canonical = std::fs::canonicalize(&resolved_path)
-                    .map(|p| p.to_string_lossy().to_string())
-                    .unwrap_or_else(|_| resolved_path.clone());
-
-                // _once check: skip if already included
-                if is_once && eg.included_files.contains(&canonical) {
-                    // Already included, skip
-                } else {
-                    // Read the file
-                    let source = match std::fs::read_to_string(&resolved_path) {
-                        Ok(s) => s,
-                        Err(e) => {
-                            if is_require {
-                                return Err(VmError::Fatal(format!(
-                                    "require({}): Failed opening required '{}' ({})",
-                                    path_str, resolved_path, e
-                                )));
-                            } else {
-                                // include: emit warning and continue
-                                let warning = format!(
-                                    "Warning: include({}): Failed opening '{}' for inclusion ({})\n",
-                                    path_str, resolved_path, e
-                                );
-                                eg.write_output(warning.as_bytes());
-                                // Don't return error — continue to next instruction
-                                unsafe { (*frame).opline = (*frame).opline.add(1); }
-                                continue;
-                            }
-                        }
-                    };
-
-                    // Mark as included for _once
-                    if is_once {
-                        eg.included_files.insert(canonical);
-                    }
-
-                    // Lex, parse, compile the included file
-                    let tokens = crate::lexer::Lexer::new(&source).tokenize()
-                        .map_err(|e| VmError::Fatal(format!("Syntax error in {}: {}", resolved_path, e)))?;
-                    let stmts = crate::parser::Parser::new(tokens).parse()
-                        .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
-                    let compile_result = crate::compiler::compile::Compiler::new().compile(&stmts)
-                        .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
-
-                    // Register functions and classes from included file.
-                    // Functions must be boxed and stored in eg.included_functions to keep
-                    // stable pointers (the function_table stores raw pointers).
-                    for (name, func) in compile_result.functions {
-                        let boxed = Box::new(func);
-                        let ptr = &boxed.common as *const FunctionCommon;
-                        eg.included_functions.push(boxed);
-                        let _ = eg.register_function(&name, ptr);
-                    }
-                    for class_def in compile_result.class_defs {
-                        eg.register_class(class_def).map_err(|e| VmError::Fatal(e))?;
-                    }
-
-                    // Execute the included file's main code.
-                    // Set the op_array name to the file path so nested includes
-                    // can resolve relative paths against this file's directory.
-                    let mut inc_op_array_main = compile_result.main;
-                    inc_op_array_main.name = resolved_path.clone();
-                    let main_func_boxed = Box::new(crate::compiler::make_user_function(inc_op_array_main));
-                    eg.included_functions.push(main_func_boxed);
-                    // Get a raw pointer to avoid holding a borrow on eg
-                    let main_func: &UserFunction = unsafe {
-                        &*(&**eg.included_functions.last().unwrap() as *const UserFunction)
-                    };
-
-                    // Copy current frame CVs to eg.globals so included code can access them.
-                    // Use all_cvs to share the full scope (not just main_scope_vars which
-                    // is empty for function-scoped includes).
-                    let scope_vars: Vec<(u32, String)> = if !op_array.all_cvs.is_empty() {
-                        op_array.all_cvs.clone()
-                    } else {
-                        op_array.main_scope_vars.clone()
-                    };
-                    for (cv_idx, var_name) in &scope_vars {
-                        if var_name == "this" { continue; } // don't leak $this to included file
-                        let cv_ptr = unsafe { (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array) };
-                        let val = unsafe { (*cv_ptr).clone() };
-                        eg.globals.insert(var_name.clone(), val);
-                    }
-
-                    // Execute the included file inline.
-                    // We set up a new frame with prev_execute_data = null so that
-                    // execute_ex returns when the included file's Return fires.
-                    let inc_func_ptr = &main_func.common as *const FunctionCommon;
-                    let mut inc_return_value = Value::null();
-                    let inc_frame = eg.vm_stack.push_call_frame(inc_func_ptr, 0);
-                    unsafe {
-                        (*inc_frame).return_value = &mut inc_return_value;
-                        (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
-                        (*inc_frame).prev_execute_data = std::ptr::null_mut();
-                    }
-                    // Initialize included file's CVs from eg.globals
-                    // so variables from the outer scope are visible.
-                    for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
-                        if let Some(val) = eg.globals.get(var_name) {
-                            let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-                            unsafe { slot_set(cv_ptr, val.clone()) };
-                        }
-                    }
-
-                    let prev_ed = eg.current_execute_data.get();
-                    eg.current_execute_data.set(inc_frame);
-
-                    let inc_result = execute_ex(eg, inc_frame);
-
-                    // Sync included file's CVs back to eg.globals before cleanup.
-                    let inc_op_array = unsafe { (*inc_frame).op_array() };
-                    let inc_scope = if !inc_op_array.all_cvs.is_empty() {
-                        &inc_op_array.all_cvs
-                    } else {
-                        &inc_op_array.main_scope_vars
-                    };
-                    for (cv_idx, var_name) in inc_scope {
-                        let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
-                        let val = unsafe { (*cv_ptr).clone() };
-                        eg.globals.insert(var_name.clone(), val);
-                    }
-
-                    eg.current_execute_data.set(prev_ed);
-                    unsafe { cleanup_frame_slots(inc_frame) };
-                    eg.vm_stack.pop_call_frame(inc_frame);
-
-                    // Refresh op_array since we resumed the outer frame
-                    op_array = unsafe { (*frame).op_array() };
-
-                    // Sync globals back to the caller's local scope
-                    // (included file may have modified variables)
-                    for (cv_idx, var_name) in &scope_vars {
-                        if var_name == "this" { continue; }
-                        if let Some(val) = eg.globals.get(var_name) {
-                            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                            unsafe { slot_set(cv_ptr, val.clone()) };
-                        }
-                    }
-
-                    // Check for uncaught exception from included file
-                    if let Some(exc) = eg.exception.take() {
-                        let (class_name, message) = if let Some(obj) = exc.as_object() {
-                            let cls = obj.class_name.clone();
-                            let msg = obj.properties.get("message")
-                                .map(|v| v.echo_to_string())
-                                .unwrap_or_default();
-                            (cls, msg)
-                        } else {
-                            ("Exception".to_string(), exc.echo_to_string())
-                        };
-                        return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
-                    }
-
-                    // Copy back changed globals to current frame CVs
-                    for (cv_idx, var_name) in &op_array.main_scope_vars {
-                        if let Some(val) = eg.globals.get(var_name) {
-                            let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                            unsafe { slot_set(cv_ptr, val.clone()) };
-                        }
-                    }
-
-                    match inc_result {
-                        Ok(_) => {}
-                        Err(e) => return Err(e),
-                    }
+                if op_include(eg, frame, op_array, opline)? {
+                    continue;
                 }
+                // Refresh op_array — include may have changed frame context.
+                op_array = unsafe { (*frame).op_array() };
             }
 
             OpCode::CloneObj => {
-                let src_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-
-                if src_val.value_type() != ValueType::Object {
-                    return Err(VmError::Fatal(
-                        "__clone method called on non-object".into()
-                    ));
+                match op_clone_obj(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
-
-                // Enum cases are singletons — cloning is forbidden
-                {
-                    let obj = src_val.as_object().unwrap();
-                    if let Some(class_def) = eg.class_table.get(&obj.class_name) {
-                        if class_def.is_enum {
-                            let err = make_error_value("Error", &format!(
-                                "Trying to clone an uncloneable object of class {}", obj.class_name
-                            ));
-                            drop(obj);
-                            match throw_in_frame(eg, frame, err) {
-                                ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                            }
-                        }
-                    }
-                }
-
-                let cloned_obj = {
-                    let obj = src_val.as_object().unwrap();
-                    PhpObject {
-                        class_name: obj.class_name.clone(),
-                        class_id: obj.class_id,
-                        properties: obj.properties.clone(),
-                        generator: None,
-                    }
-                };
-                let cloned_val = Value::object(cloned_obj);
-
-                let _ = call_magic_method(eg, &cloned_val, "__clone", &[])?;
-
-                // If __clone threw an exception, propagate it
-                if let Some(exc) = eg.exception.take() {
-                    match throw_in_frame(eg, frame, exc) {
-                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                    }
-                }
-
-                unsafe { slot_set(result_ptr, cloned_val) };
             }
 
             OpCode::NullSafeCheck => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let is_null = val.value_type() == ValueType::Null;
-                let is_non_object = !is_null && val.as_object().is_none();
-
-                if is_null {
-                    // null ?-> anything  =>  null (short-circuit)
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                    unsafe { slot_set(result_ptr, Value::null()) };
-                    let target = opline.op2 as usize;
-                    unsafe {
-                        (*frame).opline = op_array.instructions.as_ptr().add(target);
-                    }
+                if op_nullsafe_check(eg, frame, op_array, opline)? {
                     continue;
-                } else if is_non_object {
-                    // extended_value: 0 = property access (warning + null), 1 = method call (fatal)
-                    if opline.extended_value == 1 {
-                        // Method call on scalar: fatal error (like PHP)
-                        return Err(VmError::Fatal(
-                            "Call to a member function on a non-object".into()
-                        ));
-                    } else {
-                        // Property access on scalar: warning + null (like PHP)
-                        eg.write_output(b"Warning: Attempt to read property on non-object\n");
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
-                        unsafe { slot_set(result_ptr, Value::null()) };
-                        let target = opline.op2 as usize;
-                        unsafe {
-                            (*frame).opline = op_array.instructions.as_ptr().add(target);
-                        }
-                        continue;
-                    }
                 }
             }
 

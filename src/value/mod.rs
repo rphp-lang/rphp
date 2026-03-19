@@ -403,6 +403,12 @@ impl Value {
         }
     }
 
+    /// Read the raw i64 without type check. SAFETY: caller must guarantee value is Long.
+    #[inline(always)]
+    pub unsafe fn raw_long(&self) -> i64 {
+        self.data.long
+    }
+
     #[inline]
     pub fn as_double(&self) -> Option<f64> {
         if self.value_type() == ValueType::Double {

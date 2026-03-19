@@ -101,4 +101,23 @@ pub enum OpCode {
     Include = 125,         // Include/require file: op1=path (CONST/TMP/CV), extended_value flags: bit0=require, bit1=once
     NullSafeCheck = 126,   // If op1 is null, store null in result and jump to op2; otherwise no-op
     CloneObj = 127,        // Clone object: op1=source object, result=new cloned object
+
+    // ── Specialized opcodes ──────────────────────────────────────────
+    // Compiler emits these for common operand-type patterns.
+    // Each inlines operand fetch — no runtime OpType match needed.
+    // Falls back to general handler on type mismatch (overflow, float, etc).
+
+    /// Add Tmp + Tmp → Tmp (Long fast path)
+    Add_TmpTmp = 200,
+    /// Sub CV - Const → Tmp (Long fast path)
+    Sub_CvConst = 201,
+    /// IsSmaller CV < Const → Tmp (Long fast path)
+    IsSmaller_CvConst = 202,
+    /// IsSmallerOrEqual CV <= Const → Tmp (Long fast path)
+    IsSmallerOrEqual_CvConst = 203,
+    /// Add CV + Tmp → Tmp (Long fast path)
+    Add_CvTmp = 204,
+    /// Sub Tmp - Tmp → Tmp (Long fast path)
+    Sub_TmpTmp = 205,
+
 }

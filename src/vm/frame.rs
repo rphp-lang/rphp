@@ -99,11 +99,26 @@ pub struct ExecuteData {
 
 impl ExecuteData {
     /// Pointer to slot[idx] — unified accessor for both CVs and TMPs.
-    /// CV if idx < num_cvs, TMP if idx >= num_cvs.
+    /// idx is absolute slot offset: CV if idx < num_cvs, TMP if idx >= num_cvs.
     #[inline(always)]
     pub unsafe fn slot_ptr(&self, idx: u32) -> *mut Value {
         let base = (self as *const Self as *mut Value).add(CALL_FRAME_SLOTS);
         base.add(idx as usize)
+    }
+
+    /// Reference to slot[idx] — absolute offset from slot base.
+    /// Use for resolved Tmp operands (after resolve_tmp_offsets).
+    #[inline(always)]
+    pub unsafe fn slot(&self, idx: u32) -> &Value {
+        let base = (self as *const Self as *const Value).add(CALL_FRAME_SLOTS);
+        &*base.add(idx as usize)
+    }
+
+    /// Mutable reference to slot[idx] — absolute offset from slot base.
+    #[inline(always)]
+    pub unsafe fn slot_mut(&mut self, idx: u32) -> &mut Value {
+        let base = (self as *mut Self as *mut Value).add(CALL_FRAME_SLOTS);
+        &mut *base.add(idx as usize)
     }
 
     /// Get compiled variable by index (CV slot)
@@ -155,7 +170,12 @@ impl ExecuteData {
                 let ptr = self.cv(operand) as *const Value;
                 if (*ptr).is_reference() { (*ptr).as_ref_ptr() as *const Value } else { ptr }
             }
-            OpType::Tmp | OpType::Var => self.tmp(operand) as *const Value,
+            // Tmp/Var operands already contain absolute slot offset (num_cvs + tmp_idx)
+            // after resolve_tmp_offsets(), so just index from slot base.
+            OpType::Tmp | OpType::Var => {
+                let base = (self as *const Self as *const Value).add(CALL_FRAME_SLOTS);
+                base.add(operand as usize)
+            }
             OpType::Unused => panic!("get_op on unused operand"),
         }
     }
@@ -169,7 +189,11 @@ impl ExecuteData {
                 let ptr = self.cv_mut(operand) as *mut Value;
                 if (*ptr).is_reference() { (*ptr).as_ref_ptr() } else { ptr }
             }
-            OpType::Tmp | OpType::Var => self.tmp_mut(operand) as *mut Value,
+            // Tmp/Var operands already contain absolute slot offset.
+            OpType::Tmp | OpType::Var => {
+                let base = (self as *mut Self as *mut Value).add(CALL_FRAME_SLOTS);
+                base.add(operand as usize)
+            }
             _ => panic!("get_op_mut on const/unused operand"),
         }
     }
