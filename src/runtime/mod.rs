@@ -674,7 +674,11 @@ impl ExecutorGlobals {
 
     /// Look up a constant by name (case-sensitive).
     pub fn find_constant(&self, name: &str) -> Option<crate::value::Value> {
-        self.constant_table.borrow().get(name).cloned()
+        if let Some(val) = self.constant_table.borrow().get(name).cloned() {
+            return Some(val);
+        }
+        // Built-in PHP constants (shared source of truth)
+        crate::builtin_constant(name)
     }
 
     /// Check if an implementation's return type is compatible with (covariant to) an interface's

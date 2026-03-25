@@ -522,21 +522,19 @@ class C { public $x = strlen("hi"); }
 }
 
 // ============================================================================
-// Regression: P2 — constant in class property default must error, not silently null
+// Constant in class property default resolves correctly
 // ============================================================================
 
 #[test]
-fn test_const_in_class_property_default_is_compile_error() {
-    // Named constants cannot be resolved at compile time for property defaults.
-    // This must be a compile error, NOT a silent null.
-    let tokens = rphp::lexer::Lexer::new(r#"<?php
+fn test_const_in_class_property_default_resolves() {
+    // User-defined constants from the same file are available in property defaults.
+    let result = run_php(r#"<?php
 const FOO = 42;
 class C { public $x = FOO; }
-"#).tokenize().unwrap();
-    let stmts = rphp::parser::Parser::new(tokens).parse().unwrap();
-    let result = rphp::compiler::compile::Compiler::new().compile(&stmts);
-    let err = result.err().expect("Expected compile error for constant in property default");
-    assert!(err.contains("not a compile-time constant"), "Error should mention compile-time constant, got: {}", err);
+$c = new C();
+echo $c->x;
+"#);
+    assert_eq!(result, "42");
 }
 
 // ============================================================================

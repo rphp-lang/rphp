@@ -10,6 +10,8 @@ pub enum OpCode {
     Div = 4,
     Mod = 5,
     Concat = 8,
+    /// In-place string concat: op1(CV) .= op2 — mutates string in place, no TMP alloc.
+    AssignConcat = 9,
 
     // Variable access
     AssignCv = 10,

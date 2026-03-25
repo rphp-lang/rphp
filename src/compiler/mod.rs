@@ -54,15 +54,16 @@ impl OpArray {
         use crate::vm::instruction::OpType;
         use crate::vm::opcode::OpCode;
         let offset = self.num_cvs;
+        let offset16 = offset as u16;
         for instr in &mut self.instructions {
             if instr.op1_type == OpType::Tmp || instr.op1_type == OpType::Var {
-                instr.op1 += offset;
+                instr.op1 += offset16;
             }
             if instr.op2_type == OpType::Tmp || instr.op2_type == OpType::Var {
-                instr.op2 += offset;
+                instr.op2 += offset16;
             }
             if instr.result_type == OpType::Tmp || instr.result_type == OpType::Var {
-                instr.result += offset;
+                instr.result += offset16;
             }
             // ForeachInit stores pos_tmp in extended_value as a TMP index.
             if instr.opcode == OpCode::ForeachInit {
@@ -207,7 +208,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
-    let call = if !is_variadic { CallStrategy::Fast } else { CallStrategy::Full };
+    let call = if !is_variadic && !op_array.is_generator { CallStrategy::Fast } else { CallStrategy::Full };
     let cleanup = if op_array_supports_cleanup_fast(&op_array) { CleanupMode::SkipScan } else { CleanupMode::ScanAll };
     let ret = if op_array.global_vars.is_empty()
         && op_array.static_vars.is_empty()
@@ -257,7 +258,7 @@ pub fn make_user_function_typed(
     }
     // Fast path is allowed when: not variadic AND all param hints are either None or simple scalar
     // (Int, Float, String, Bool, Mixed). Complex hints (Callable, ClassName, Union, etc.) use Full.
-    let call = if !is_variadic && param_type_hints.iter().all(|h| matches!(h,
+    let call = if !is_variadic && !op_array.is_generator && param_type_hints.iter().all(|h| matches!(h,
         ParamTypeHint::None | ParamTypeHint::Int | ParamTypeHint::Float
         | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed
     )) {

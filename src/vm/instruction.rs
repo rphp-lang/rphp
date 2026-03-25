@@ -12,11 +12,11 @@ pub enum OpType {
     Cv = 4,      // compiled variable ($a, $b, ...)
 }
 
-/// Single VM instruction — compact, no cache fields.
+/// Single VM instruction — compact, 16 bytes.
 ///
-/// Inline cache lives in OpArray's side table (`cache: Vec<InlineCache>`),
-/// indexed by instruction position. This keeps Instruction small (~20 bytes)
-/// so more opcodes fit per cache line.
+/// Operand indices are u16 (max 65535 CVs/TMPs/literals/instructions per function).
+/// Inline cache lives in OpArray's side table, indexed by instruction position.
+/// 16 bytes = 4 instructions per 64-byte cache line (was 20B = 3.2/line).
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Instruction {
@@ -24,10 +24,12 @@ pub struct Instruction {
     pub op1_type: OpType,
     pub op2_type: OpType,
     pub result_type: OpType,
-    pub op1: u32,
-    pub op2: u32,
-    pub result: u32,
-    /// Extended value (opcode-specific extra data)
+    pub op1: u16,
+    pub op2: u16,
+    pub result: u16,
+    // 2 bytes padding to align extended_value to 4
+    _pad: u16,
+    /// Extended value (opcode-specific extra data, u32 for ForeachNext key encoding etc.)
     pub extended_value: u32,
 }
 
@@ -41,6 +43,7 @@ impl Instruction {
             op1: 0,
             op2: 0,
             result: 0,
+            _pad: 0,
             extended_value: 0,
         }
     }

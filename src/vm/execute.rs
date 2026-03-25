@@ -743,7 +743,7 @@ pub fn resume_generator(
             if yield_instr.opcode == crate::vm::opcode::OpCode::Yield
                 && yield_instr.result_type != OpType::Unused
             {
-                let tmp_slot = unsafe { (*frame).slot_mut(yield_instr.result) };
+                let tmp_slot = unsafe { (*frame).slot_mut(yield_instr.result as u32) };
                 unsafe { frame_restore_slot(frame, tmp_slot as *mut Value, send_value.clone()) };
             }
         }
@@ -784,7 +784,7 @@ fn op_include(
     op_array: &crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
 ) -> Result<bool, VmError> {
-    let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let path_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let path_str = path_val.echo_to_string();
     let is_require = (opline.extended_value & 1) != 0;
     let is_once = (opline.extended_value & 2) != 0;
@@ -964,7 +964,7 @@ fn op_throw<'a>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     // PHP 8: only Throwable objects can be thrown
     if val.as_object().is_none() || {
         let obj = val.as_object().unwrap();
@@ -1009,9 +1009,9 @@ fn op_new_obj<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let name = class_name.as_str().unwrap_or("");
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
     // Reject instantiation of interfaces, abstract classes, and internal-only classes
     if name == "Generator" {
@@ -1109,9 +1109,9 @@ fn op_fetch_obj_r(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<(), VmError> {
-    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
     if let Some(obj) = obj_val.as_object() {
         let name = prop_name.as_str().unwrap_or("");
@@ -1181,11 +1181,11 @@ fn op_assign_obj_prop<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-    let val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
+    let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
     let cloned = val.clone();
     let name = prop_name.as_str().unwrap_or("").to_string();
-    let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let obj = unsafe { &*obj_ptr };
 
     if let Some(mut php_obj) = obj.as_object_mut() {
@@ -1301,7 +1301,7 @@ fn op_init_method_call<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     if let Some(obj) = obj_val.as_object() {
         let obj_class_id = obj.class_id;
@@ -1316,7 +1316,7 @@ fn op_init_method_call<'a>(
         } else {
             let target_class_name = obj.class_name.clone();
             drop(obj); // release borrow before lookup
-            let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+            let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
             let method = method_name.as_str().unwrap_or("");
             let caller_class = get_caller_class(frame, eg);
 
@@ -1387,7 +1387,7 @@ fn op_init_method_call<'a>(
             frame_set_this(call, obj_val.clone());
         }
     } else {
-        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
         let method = method_name.as_str().unwrap_or("");
         let err = make_error_value("Error", &format!("Call to member function {}() on non-object", method));
         match throw_in_frame(eg, frame, err) {
@@ -1416,8 +1416,8 @@ fn op_init_static_call<'a>(
     let func_ptr = if !cached.is_null() {
         cached
     } else {
-        let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
         let class = class_name.as_str().unwrap_or("");
         let method = method_name.as_str().unwrap_or("");
 
@@ -1476,7 +1476,7 @@ fn op_init_dynamic_call(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<(), VmError> {
-    let callable = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let callable = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     if let Some(arr) = callable.as_array() {
         // Closure call: array is [function_name, use_val1, use_val2, ...]
@@ -1560,7 +1560,7 @@ fn op_foreach_init(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<bool, VmError> {
-    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     // Check for Generator object
     let is_generator = if let Some(obj) = arr_val.as_object() {
@@ -1587,7 +1587,7 @@ fn op_foreach_init(
         }
         // Store generator object in result TMP
         let cloned = arr_val.clone();
-        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { slot_set(result_ptr, cloned) };
         // Set position TMP to 0 (0 = first iteration, don't call next)
         let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
@@ -1618,7 +1618,7 @@ fn op_foreach_init(
         }
         // Copy array to result TMP
         let cloned = arr_val.clone();
-        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { slot_set(result_ptr, cloned) };
         // Set position TMP to 0
         let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
@@ -1637,7 +1637,7 @@ fn op_foreach_next(
     let val_cv = (opline.extended_value & 0xFFFF) as u32;
     let key_encoded = (opline.extended_value >> 16) as u32;
 
-    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     // Check for Generator object
     let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
@@ -1647,7 +1647,7 @@ fn op_foreach_next(
     } else { None };
 
     let has_more = if let Some(gen_ref) = gen_ref_opt {
-        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
         let pos = pos_val.as_long().unwrap_or(0);
 
         // On first iteration (pos=0), generator is already started by ForeachInit
@@ -1672,14 +1672,14 @@ fn op_foreach_next(
             }
             drop(gen_data);
             // Increment position
-            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
+            let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
             unsafe { slot_set(pos_ptr, Value::long(pos + 1)) };
             true
         } else {
             false
         }
     } else {
-        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+        let pos_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
         let pos = pos_val.as_long().unwrap_or(0) as usize;
 
         if let Some(arr) = arr_val.as_array() {
@@ -1697,7 +1697,7 @@ fn op_foreach_next(
                     let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
                     unsafe { slot_set(key_ptr, key_val) };
                 }
-                let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2, opline.op2_type) };
+                let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
                 unsafe { slot_set(pos_ptr, Value::long((pos + 1) as i64)) };
                 true
             } else {
@@ -1708,7 +1708,7 @@ fn op_foreach_next(
         }
     };
 
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     unsafe { slot_set(result_ptr, Value::bool(has_more)) };
     Ok(())
 }
@@ -1723,13 +1723,13 @@ fn op_yield<'a>(
     use crate::vm::generator::GeneratorState;
 
     let yielded_value = if opline.op1_type != OpType::Unused {
-        unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone()
+        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }.clone()
     } else {
         Value::null()
     };
 
     let yielded_key = if opline.op2_type != OpType::Unused {
-        Some(unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) }.clone())
+        Some(unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) }.clone())
     } else {
         None
     };
@@ -1789,10 +1789,10 @@ fn op_yield_from<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     use crate::vm::generator::{GeneratorState, YieldFromDelegate};
 
-    let source_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) }.clone();
+    let source_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }.clone();
 
     if let Some(gen_ref) = eg.active_generator.take() {
-        let result_slot = opline.result;
+        let result_slot = opline.result as u32;
 
         // Determine delegate type
         if let Some(obj_data) = source_val.as_object() {
@@ -1953,7 +1953,7 @@ fn op_send_named<'a>(
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     // Named argument: op1=value, op2=CONST name string
-    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let name = name_val.as_str().unwrap_or("");
     let call = unsafe { (*frame).call };
     debug_assert!(!call.is_null());
@@ -2002,7 +2002,7 @@ fn op_send_named<'a>(
             }
         }
 
-        let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+        let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
         let cloned = val.clone();
         eg.pending_named_variadic
             .entry(call_key)
@@ -2050,7 +2050,7 @@ fn op_send_named<'a>(
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
                 } else {
                     // By-value: same logic as SendVal
-                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                     let cloned = val.clone();
                     let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
@@ -2085,13 +2085,13 @@ fn op_nullsafe_check(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<bool, VmError> {
-    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let is_null = val.value_type() == ValueType::Null;
     let is_non_object = !is_null && val.as_object().is_none();
 
     if is_null {
         // null ?-> anything  =>  null (short-circuit)
-        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
         unsafe { slot_set(result_ptr, Value::null()) };
         let target = opline.op2 as usize;
         unsafe {
@@ -2108,7 +2108,7 @@ fn op_nullsafe_check(
         } else {
             // Property access on scalar: warning + null (like PHP)
             eg.write_output(b"Warning: Attempt to read property on non-object\n");
-            let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+            let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
             unsafe { slot_set(result_ptr, Value::null()) };
             let target = opline.op2 as usize;
             unsafe {
@@ -2127,8 +2127,8 @@ fn op_clone_obj<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let src_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+    let src_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
     if src_val.value_type() != ValueType::Object {
         return Err(VmError::Fatal(
@@ -2185,9 +2185,9 @@ fn op_concat(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<(), VmError> {
-    let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-    let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+    let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
     let s1 = if op1.value_type() == ValueType::Object {
         if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
@@ -2315,19 +2315,37 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         match opline.opcode {
             OpCode::AssignCv => {
                 // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let cloned = val.clone();
-                let dest = unsafe { (*frame).get_op_mut(opline.op1, opline.op1_type) };
+                let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 unsafe { slot_set(dest, cloned.clone()) };
                 // If result is used, write a copy there too
                 if opline.result_type != OpType::Unused {
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, cloned) };
                 }
             }
 
+            OpCode::AssignConcat => {
+                // $x .= expr: in-place string append
+                let rhs = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let rhs_str = rhs.echo_to_string();
+                let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
+                let dest_ref = unsafe { &mut *dest };
+                if let Some(s) = dest_ref.as_str() {
+                    let mut new_s = s.to_string();
+                    new_s.push_str(&rhs_str);
+                    unsafe { slot_set(dest, Value::string(new_s)) };
+                } else {
+                    let lhs_str = dest_ref.echo_to_string();
+                    let mut new_s = lhs_str;
+                    new_s.push_str(&rhs_str);
+                    unsafe { slot_set(dest, Value::string(new_s)) };
+                }
+            }
+
             OpCode::Echo => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 if val.value_type() == ValueType::Object {
                     if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
                         let output = result.echo_to_string();
@@ -2386,7 +2404,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Sub_CvConst => {
-                let op1_cv = unsafe { (*frame).cv(opline.op1) };
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
                 let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
@@ -2424,7 +2442,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::IsSmaller_CvConst => {
-                let op1_cv = unsafe { (*frame).cv(opline.op1) };
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
                 let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
@@ -2440,7 +2458,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::IsSmallerOrEqual_CvConst => {
-                let op1_cv = unsafe { (*frame).cv(opline.op1) };
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
                 let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
@@ -2456,9 +2474,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Add => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_add(l2) {
@@ -2475,9 +2493,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Sub => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_sub(l2) {
@@ -2494,9 +2512,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Mul => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match l1.checked_mul(l2) {
@@ -2513,9 +2531,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Div => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     if d2 == 0.0 {
@@ -2537,9 +2555,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Mod => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     if l2 == 0 {
@@ -2556,9 +2574,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Spaceship => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let cmp = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     l1.cmp(&l2)
@@ -2578,9 +2596,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Pow => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     if l2 >= 0 {
@@ -2596,9 +2614,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BitwiseAnd => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
@@ -2606,9 +2624,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BitwiseOr => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
@@ -2616,9 +2634,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BitwiseXor => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
@@ -2626,9 +2644,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ShiftLeft => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
@@ -2636,9 +2654,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ShiftRight => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let l1 = op1.to_long_val();
                 let l2 = op2.to_long_val();
@@ -2646,16 +2664,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BitwiseNot => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let l = val.to_long_val();
                 unsafe { frame_tmp_set_long(frame, result_ptr, !l) };
             }
 
             OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     match opline.opcode {
@@ -2689,9 +2707,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::IsIdentical | OpCode::IsNotIdentical => {
-                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let identical = values_identical(op1, op2);
 
@@ -2703,15 +2721,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Isset => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let is_set = val.value_type() != ValueType::Undef && val.value_type() != ValueType::Null;
                 unsafe { frame_tmp_set_bool(frame, result_ptr, is_set) };
             }
 
             OpCode::Cast => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let casted = match opline.extended_value {
                     0 => Value::long(val.to_long_val()),    // (int)
                     1 => Value::double(val.to_float_val()), // (float)
@@ -2744,8 +2762,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::BoolNot => {
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 let negated = !val.is_truthy();
                 unsafe { frame_tmp_set_bool(frame, result_ptr, negated) };
             }
@@ -2761,7 +2779,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::JmpZ => {
                 // op1 = value to test, op2 = absolute jump target
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 if !val.is_truthy() {
                     let target = opline.op2 as usize;
                     unsafe {
@@ -2773,7 +2791,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::JmpNZ => {
                 // op1 = value to test, op2 = absolute jump target
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 if val.is_truthy() {
                     let target = opline.op2 as usize;
                     unsafe {
@@ -2794,7 +2812,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let func_ptr = if !cached.is_null() {
                     cached
                 } else {
-                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                     let name = name_val.as_str().unwrap_or_else(|| {
                         panic!("INIT_FCALL: op2 must be a string");
                     });
@@ -2830,7 +2848,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 };
 
-                let num_args = opline.op1;
+                let num_args = opline.op1 as u32;
                 let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
                 unsafe {
                     (*call).prev_execute_data = frame;
@@ -2842,12 +2860,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::SendVal => {
                 // Send value to pending call frame
                 // op1 = value to send, op2 = argument number (0-based)
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let cloned = val.clone();
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 // Arguments are stored in CV slots of the callee frame
-                let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
                 unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
             }
 
@@ -2868,7 +2886,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
-                let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
                 unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
             }
 
@@ -2892,13 +2910,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             raw_ptr
                         }
                     };
-                    let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                    let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
                 } else {
                     // Same logic as SendVal
-                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                     let cloned = val.clone();
-                    let arg_slot = unsafe { (*call).cv_mut(opline.op2) };
+                    let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                 }
             }
@@ -2993,7 +3011,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
                             },
                             OpType::Unused => std::ptr::null_mut(),
-                            _ => unsafe { (*frame).get_op_mut(opline.result, opline.result_type) },
+                            _ => unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) },
                         };
                         unsafe { (*call).return_value = return_value_ptr };
 
@@ -3028,7 +3046,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // Set up return value in result slot if used
                 let return_value_ptr = if opline.result_type != OpType::Unused {
-                    unsafe { (*frame).get_op_mut(opline.result, opline.result_type) }
+                    unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) }
                 } else {
                     std::ptr::null_mut()
                 };
@@ -3281,7 +3299,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::PreInc => {
                 // ++$var: increment CV in place, result = new value
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let old = unsafe { &*cv_ptr };
                 let new_val = if let Some(n) = old.as_long() {
                     match n.checked_add(1) {
@@ -3294,14 +3312,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     Value::long(1) // PHP: null++ = 1
                 };
                 if opline.result_type != OpType::Unused {
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, new_val.clone()) };
                 }
                 unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PreDec => {
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let old = unsafe { &*cv_ptr };
                 if let Some(n) = old.as_long() {
                     let new_val = match n.checked_sub(1) {
@@ -3309,21 +3327,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         None => Value::double(n as f64 - 1.0),
                     };
                     if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, new_val.clone()) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, new_val.clone()) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else {
                     // PHP: null-- has no effect, value stays null
                     if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, Value::null()) };
                     }
                 }
@@ -3331,7 +3349,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::PostInc => {
                 // $var++: increment CV in place, result = old value
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let old = unsafe { &*cv_ptr };
                 let old_val = old.clone();
                 let new_val = if let Some(n) = old.as_long() {
@@ -3345,14 +3363,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     Value::long(1)
                 };
                 if opline.result_type != OpType::Unused {
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, old_val) };
                 }
                 unsafe { slot_set(cv_ptr, new_val) };
             }
 
             OpCode::PostDec => {
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let old = unsafe { &*cv_ptr };
                 let old_val = old.clone();
                 if let Some(n) = old.as_long() {
@@ -3361,42 +3379,42 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         None => Value::double(n as f64 - 1.0),
                     };
                     if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, old_val) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, old_val) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else {
                     // PHP: null-- has no effect, value stays null
                     if opline.result_type != OpType::Unused {
-                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                        let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                         unsafe { slot_set(result_ptr, Value::null()) };
                     }
                 }
             }
 
             OpCode::InitArray => {
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 unsafe { slot_set(result_ptr, Value::array(PhpArray::new())) };
             }
 
             OpCode::AddArrayElement => {
                 // op1 = array TMP, op2 = value, result = key (or Unused for auto-key)
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let cloned_val = val.clone();
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1, opline.op1_type) };
+                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 let php_arr = arr.as_array_mut().ok_or_else(|| {
                     VmError::Fatal("AddArrayElement: operand is not an array".into())
                 })?;
                 if opline.result_type != OpType::Unused {
-                    let key_val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
+                    let key_val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                     let key = value_to_array_key(key_val)?;
                     php_arr.set(key, cloned_val);
                 } else {
@@ -3406,9 +3424,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::FetchDimR => {
                 // result = op1[op2]
-                let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let Some(arr) = arr_val.as_array() {
                     let key = value_to_array_key(idx_val)?;
@@ -3446,11 +3464,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::AssignDim => {
                 // op1[op2] = result (value source encoded in result/result_type)
-                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let key = value_to_array_key(idx_val)?;
-                let val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                 let cloned_val = val.clone();
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1, opline.op1_type) };
+                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
@@ -3466,9 +3484,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::ArrayPushOp => {
                 // op1[] = op2
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let cloned_val = val.clone();
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1, opline.op1_type) };
+                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 // Auto-create array if variable is null/undef
                 if arr.value_type() == ValueType::Null || arr.value_type() == ValueType::Undef {
@@ -3484,9 +3502,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::UnsetDim => {
                 // Remove key op2 from array op1
-                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let key = value_to_array_key(idx_val)?;
-                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1, opline.op1_type) };
+                let arr_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let arr = unsafe { &mut *arr_ptr };
                 match arr.value_type() {
                     ValueType::Array => {
@@ -3544,9 +3562,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::AssignObjDim => {
                 // $obj->prop[$key] = val
-                let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let key_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let val = unsafe { &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array) };
+                let obj_ptr = unsafe { (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let key_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                 let prop_name_val = &op_array.literals[opline.extended_value as usize];
                 let prop_name = prop_name_val.as_str().unwrap_or("").to_string();
                 let key = key_val.clone();
@@ -3604,9 +3622,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::FetchStaticProp => {
                 // Look up static property from class definition (used for enum cases)
-                let class_name_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let prop_name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let class_name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let prop_name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let cls = class_name_val.as_str().unwrap_or("");
                 let prop = prop_name_val.as_str().unwrap_or("");
@@ -3629,10 +3647,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Instanceof => {
-                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let target = class_name.as_str().unwrap_or("");
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 let is_instance = if let Some(obj) = obj_val.as_object() {
                     eg.class_is_a(&obj.class_name, target)
@@ -3645,26 +3663,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::FetchConst => {
                 if opline.extended_value == 1 {
                     // Define mode: const FOO = value;
-                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
-                    let value_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                    let value_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                     let name = name_val.as_str().unwrap_or("").to_string();
                     let value = value_val.clone();
                     eg.define_constant(&name, value).map_err(|e| VmError::Fatal(e))?;
                 } else {
                     // Read mode: fetch constant value
-                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array) };
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                     let name = name_val.as_str().unwrap_or("");
                     let value = eg.find_constant(name).ok_or_else(|| {
                         VmError::Fatal(format!("Undefined constant \"{}\"", name))
                     })?;
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result, opline.result_type) };
+                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, value) };
                 }
             }
 
             OpCode::BindDefaultParam => {
                 // If CV slot is NOT undef (arg was passed), skip default init
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let is_undef = unsafe { (*cv_ptr).is_undef() };
                 if !is_undef {
                     // Jump past the default expr computation + AssignCv
@@ -3679,10 +3697,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::BindGlobal => {
                 // Bind a CV to a global variable: copy eg.globals[name] into CV
-                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let name = name_val.as_str().unwrap_or("").to_string();
                 if let Some(val) = eg.globals.get(&name) {
-                    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                     unsafe { slot_set(cv_ptr, val.clone()) };
                 }
                 // If not in globals, CV stays undef/null — that's fine, it will be written back on return
@@ -3690,12 +3708,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::BindStatic => {
                 // Bind a CV to a static variable
-                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2, opline.op2_type, op_array) };
+                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let var_name = name_val.as_str().unwrap_or("").to_string();
                 let func_name_val = &op_array.literals[opline.extended_value as usize];
                 let func_name = func_name_val.as_str().unwrap_or("").to_string();
 
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1, OpType::Cv) };
+                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 if let Some(func_statics) = eg.static_vars.get(&func_name) {
                     if let Some(val) = func_statics.get(&var_name) {
                         unsafe { slot_set(cv_ptr, val.clone()) };
@@ -3703,7 +3721,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // First call — initialize with default value
                         if opline.result_type != OpType::Unused {
                             let default_val = unsafe {
-                                &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array)
+                                &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
                             };
                             unsafe { slot_set(cv_ptr, default_val.clone()) };
                         } else {
@@ -3714,7 +3732,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // First call — no statics for this function yet, use default
                     if opline.result_type != OpType::Unused {
                         let default_val = unsafe {
-                            &*(*frame).get_op_ptr(opline.result, opline.result_type, op_array)
+                            &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
                         };
                         unsafe { slot_set(cv_ptr, default_val.clone()) };
                     } else {
@@ -3741,7 +3759,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                     if has_return_type && opline.op1_type != OpType::Unused {
                         let retval = unsafe {
-                            &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
                         let type_ok = match ret_hint {
                             ParamTypeHint::Int => retval.as_long().is_some(),
@@ -3765,7 +3783,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     stats::inc_return_fast();
                     if opline.op1_type != OpType::Unused {
                         let retval = unsafe {
-                            &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
@@ -3839,7 +3857,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         hint => {
                             if opline.op1_type != OpType::Unused {
                                 let retval = unsafe {
-                                    &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
                                 let ret_callee_class = eg.declaring_class_of(unsafe { (*frame).func });
                                 if !check_type_hint(retval, hint, eg, op_array.strict_types, ret_callee_class) {
@@ -3878,7 +3896,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // Write return value now (so it's available after finally)
                     if opline.op1_type != OpType::Unused {
                         let retval = unsafe {
-                            &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
@@ -3908,7 +3926,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let mut gen_data = gen_ref.borrow_mut();
                         if opline.op1_type != OpType::Unused {
                             let retval = unsafe {
-                                &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                                &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                             };
                             gen_data.return_value = retval.clone();
                         }
@@ -3933,7 +3951,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 if opline.op1_type != OpType::Unused {
                     let retval = unsafe {
-                        &*(*frame).get_op_ptr(opline.op1, opline.op1_type, op_array)
+                        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                     };
                     let return_target = unsafe { (*frame).return_value };
                     if !return_target.is_null() {

@@ -288,6 +288,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_var!("call_user_func", fn_call_user_func, 1, "callback");
     reg!("is_callable", fn_is_callable, 1, 1, "value");
 
+    // --- Time functions ---
+    reg!("microtime", fn_microtime, 1, 0, "as_float");
+    reg!("hrtime", fn_hrtime, 1, 0, "as_nanoseconds");
+    reg!("time", fn_time, 0, 0);
+
     funcs
 }
 
@@ -1885,167 +1890,116 @@ fn var_export_value(val: &Value) -> String {
 }
 
 /// Simple JSON encoder
-fn json_encode_value(val: &Value) -> String {
+/// Convert a PHP Value to serde_json::Value for encoding.
+fn value_to_json(val: &Value) -> serde_json::Value {
     match val.value_type() {
-        ValueType::Null | ValueType::Undef => "null".to_string(),
-        ValueType::True => "true".to_string(),
-        ValueType::False => "false".to_string(),
-        ValueType::Long => val.as_long().unwrap().to_string(),
+        ValueType::Null | ValueType::Undef => serde_json::Value::Null,
+        ValueType::True => serde_json::Value::Bool(true),
+        ValueType::False => serde_json::Value::Bool(false),
+        ValueType::Long => serde_json::Value::Number(
+            serde_json::Number::from(val.as_long().unwrap())
+        ),
         ValueType::Double => {
             let d = val.as_double().unwrap();
-            if d.is_infinite() || d.is_nan() { "null".to_string() } else { format!("{}", d) }
-        }
-        ValueType::String => {
-            let s = val.as_str().unwrap();
-            let mut out = String::with_capacity(s.len() + 2);
-            out.push('"');
-            for c in s.chars() {
-                match c {
-                    '"' => out.push_str("\\\""),
-                    '\\' => out.push_str("\\\\"),
-                    '\n' => out.push_str("\\n"),
-                    '\r' => out.push_str("\\r"),
-                    '\t' => out.push_str("\\t"),
-                    c if c < '\x20' => out.push_str(&format!("\\u{:04x}", c as u32)),
-                    c => out.push(c),
-                }
+            if d.is_finite() {
+                serde_json::Number::from_f64(d)
+                    .map(serde_json::Value::Number)
+                    .unwrap_or(serde_json::Value::Null)
+            } else {
+                serde_json::Value::Null
             }
-            out.push('"');
-            out
         }
+        ValueType::String => serde_json::Value::String(val.as_str().unwrap().to_string()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
-            // Check if sequential integer keys starting from 0
             let is_list = arr.entries().iter().enumerate().all(|(i, (k, _))| {
                 matches!(k, ArrayKey::Int(n) if *n == i as i64)
             });
             if is_list {
-                let items: Vec<String> = arr.entries().iter().map(|(_, v)| json_encode_value(v)).collect();
-                format!("[{}]", items.join(","))
+                serde_json::Value::Array(
+                    arr.entries().iter().map(|(_, v)| value_to_json(v)).collect()
+                )
             } else {
-                let items: Vec<String> = arr.entries().iter().map(|(k, v)| {
+                let mut map = serde_json::Map::new();
+                for (k, v) in arr.entries() {
                     let key = match k {
-                        ArrayKey::Int(n) => format!("\"{}\"", n),
-                        ArrayKey::String(s) => format!("\"{}\"", s.replace('"', "\\\"")),
+                        ArrayKey::Int(n) => n.to_string(),
+                        ArrayKey::String(s) => s.clone(),
                     };
-                    format!("{}:{}", key, json_encode_value(v))
-                }).collect();
-                format!("{{{}}}", items.join(","))
+                    map.insert(key, value_to_json(v));
+                }
+                serde_json::Value::Object(map)
             }
         }
-        _ => "null".to_string(),
+        ValueType::Object => {
+            if let Some(obj) = val.as_object() {
+                let mut map = serde_json::Map::new();
+                for (k, v) in &obj.properties {
+                    map.insert(k.clone(), value_to_json(v));
+                }
+                serde_json::Value::Object(map)
+            } else {
+                serde_json::Value::Null
+            }
+        }
+        _ => serde_json::Value::Null,
     }
 }
 
-/// Simple JSON decoder — handles basic JSON types
-fn json_decode_string(s: &str, assoc: bool) -> Value {
-    let s = s.trim();
-    if s == "null" { return Value::null(); }
-    if s == "true" { return Value::bool(true); }
-    if s == "false" { return Value::bool(false); }
-    // Number
-    if let Ok(n) = s.parse::<i64>() { return Value::long(n); }
-    if let Ok(n) = s.parse::<f64>() { return Value::double(n); }
-    // String
-    if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 {
-        let inner = &s[1..s.len()-1];
-        let unescaped = inner.replace("\\\"", "\"").replace("\\\\", "\\")
-            .replace("\\n", "\n").replace("\\r", "\r").replace("\\t", "\t");
-        return Value::string(unescaped);
-    }
-    // Array
-    if s.starts_with('[') && s.ends_with(']') {
-        let inner = s[1..s.len()-1].trim();
-        if inner.is_empty() { return Value::array(PhpArray::new()); }
-        let mut arr = PhpArray::new();
-        for item in json_split_items(inner) {
-            arr.push(json_decode_string(item.trim(), assoc));
+fn json_encode_value(val: &Value) -> String {
+    serde_json::to_string(&value_to_json(val)).unwrap_or_else(|_| "null".to_string())
+}
+
+/// Convert serde_json::Value to PHP Value.
+fn json_to_value(jv: serde_json::Value, assoc: bool) -> Value {
+    match jv {
+        serde_json::Value::Null => Value::null(),
+        serde_json::Value::Bool(b) => Value::bool(b),
+        serde_json::Value::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::long(i)
+            } else {
+                Value::double(n.as_f64().unwrap_or(0.0))
+            }
         }
-        return Value::array(arr);
-    }
-    // Object — assoc=true returns array, assoc=false returns stdClass object
-    if s.starts_with('{') && s.ends_with('}') {
-        let inner = s[1..s.len()-1].trim();
-        if assoc {
-            // Return associative array
-            if inner.is_empty() { return Value::array(PhpArray::new()); }
+        serde_json::Value::String(s) => Value::string(s),
+        serde_json::Value::Array(items) => {
             let mut arr = PhpArray::new();
-            for item in json_split_items(inner) {
-                if let Some(colon) = find_json_colon(item) {
-                    let key = item[..colon].trim();
-                    let val = item[colon+1..].trim();
-                    let key_str = if key.starts_with('"') && key.ends_with('"') {
-                        &key[1..key.len()-1]
-                    } else {
-                        key
-                    };
-                    arr.set_str(key_str, json_decode_string(val, assoc));
+            for item in items {
+                arr.push(json_to_value(item, assoc));
+            }
+            Value::array(arr)
+        }
+        serde_json::Value::Object(map) => {
+            if assoc {
+                let mut arr = PhpArray::new();
+                for (k, v) in map {
+                    arr.set_str(&k, json_to_value(v, assoc));
                 }
-            }
-            return Value::array(arr);
-        } else {
-            // Return stdClass object
-            use crate::value::PhpObject;
-            use std::collections::HashMap;
-            if inner.is_empty() {
-                return Value::object(PhpObject { class_name: "stdClass".to_string(), class_id: 0, properties: HashMap::new(), generator: None });
-            }
-            let mut props = HashMap::new();
-            for item in json_split_items(inner) {
-                if let Some(colon) = find_json_colon(item) {
-                    let key = item[..colon].trim();
-                    let val = item[colon+1..].trim();
-                    let key_str = if key.starts_with('"') && key.ends_with('"') {
-                        key[1..key.len()-1].to_string()
-                    } else {
-                        key.to_string()
-                    };
-                    props.insert(key_str, json_decode_string(val, false));
+                Value::array(arr)
+            } else {
+                use crate::value::PhpObject;
+                use std::collections::HashMap;
+                let mut props = HashMap::new();
+                for (k, v) in map {
+                    props.insert(k, json_to_value(v, false));
                 }
+                Value::object(PhpObject {
+                    class_name: "stdClass".to_string(),
+                    class_id: 0,
+                    properties: props,
+                    generator: None,
+                })
             }
-            return Value::object(PhpObject { class_name: "stdClass".to_string(), class_id: 0, properties: props, generator: None });
         }
     }
-    Value::null()
 }
 
-/// Split JSON items by comma, respecting nesting
-fn json_split_items(s: &str) -> Vec<&str> {
-    let mut items = Vec::new();
-    let mut depth = 0i32;
-    let mut in_str = false;
-    let mut escape = false;
-    let mut start = 0;
-    for (i, c) in s.char_indices() {
-        if escape { escape = false; continue; }
-        if c == '\\' && in_str { escape = true; continue; }
-        if c == '"' { in_str = !in_str; continue; }
-        if in_str { continue; }
-        match c {
-            '[' | '{' => depth += 1,
-            ']' | '}' => depth -= 1,
-            ',' if depth == 0 => {
-                items.push(&s[start..i]);
-                start = i + 1;
-            }
-            _ => {}
-        }
+fn json_decode_string(s: &str, assoc: bool) -> Value {
+    match serde_json::from_str::<serde_json::Value>(s) {
+        Ok(jv) => json_to_value(jv, assoc),
+        Err(_) => Value::null(),
     }
-    if start < s.len() { items.push(&s[start..]); }
-    items
-}
-
-/// Find the colon in a JSON key:value pair, respecting strings
-fn find_json_colon(s: &str) -> Option<usize> {
-    let mut in_str = false;
-    let mut escape = false;
-    for (i, c) in s.char_indices() {
-        if escape { escape = false; continue; }
-        if c == '\\' && in_str { escape = true; continue; }
-        if c == '"' { in_str = !in_str; continue; }
-        if !in_str && c == ':' { return Some(i); }
-    }
-    None
 }
 
 // ============================================================================
@@ -2485,4 +2439,54 @@ fn fn_is_callable(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals
     let caller_class = get_calling_scope_class(ed, eg);
     let callable = resolve_callback(val, eg, caller_class.as_deref()).is_some();
     ret!(rv, Value::bool(callable));
+}
+
+// ============================================================================
+// Time functions
+// ============================================================================
+
+/// microtime(bool $as_float = false): string|float
+/// Returns current Unix timestamp with microsecond precision.
+fn fn_microtime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let as_float = arg_opt!(ed, 0).map(|v| v.is_truthy()).unwrap_or(false);
+    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    if as_float {
+        let secs = dur.as_secs() as f64 + dur.subsec_nanos() as f64 / 1_000_000_000.0;
+        ret!(rv, Value::double(secs));
+    } else {
+        let usec = dur.subsec_micros();
+        let sec = dur.as_secs();
+        ret!(rv, Value::string(format!("0.{:06} {}", usec, sec)));
+    }
+}
+
+/// hrtime(bool $as_nanoseconds = false): array|int
+/// Returns high-resolution monotonic time.
+/// hrtime(true) → int nanoseconds
+/// hrtime(false) → [seconds, nanoseconds]
+fn fn_hrtime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use std::time::Instant;
+    // Use a lazy-initialized epoch for monotonic timing
+    use std::sync::OnceLock;
+    static EPOCH: OnceLock<Instant> = OnceLock::new();
+    let epoch = EPOCH.get_or_init(Instant::now);
+    let elapsed = epoch.elapsed();
+
+    let as_ns = arg_opt!(ed, 0).map(|v| v.is_truthy()).unwrap_or(false);
+    if as_ns {
+        ret!(rv, Value::long(elapsed.as_nanos() as i64));
+    } else {
+        let mut arr = crate::value::PhpArray::new();
+        arr.push(Value::long(elapsed.as_secs() as i64));
+        arr.push(Value::long(elapsed.subsec_nanos() as i64));
+        ret!(rv, Value::array(arr));
+    }
+}
+
+/// time(): int — current Unix timestamp
+fn fn_time(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    ret!(rv, Value::long(secs as i64));
 }

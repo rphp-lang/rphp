@@ -118,6 +118,9 @@ pub struct Compiler {
     static_vars: Vec<(u32, String)>,
     /// Current function name (for static variable keying)
     current_function_name: String,
+    /// Constants known at compile time (from `const FOO = 42;` in the same file).
+    /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
+    known_constants: HashMap<String, Value>,
 }
 
 /// Get ref_args bitmask for built-in stdlib functions.
@@ -155,6 +158,32 @@ impl Compiler {
             global_vars: Vec::new(),
             static_vars: Vec::new(),
             current_function_name: String::new(),
+            known_constants: HashMap::new(),
+        }
+    }
+
+    /// Pre-scan top-level `const` declarations to populate known_constants.
+    /// This allows property defaults to reference constants declared later in the file.
+    /// Two passes: first collect all simple constants, then re-evaluate those that
+    /// reference other constants (handles `const A = 1; const B = A;`).
+    fn prescan_constants(&mut self, stmts: &[Stmt]) {
+        // Pass 1: collect directly evaluable constants
+        for stmt in stmts {
+            if let Stmt::Const { name, value } = stmt {
+                if let Ok(val) = Self::eval_const_expr_with_constants(value, &self.known_constants) {
+                    self.known_constants.insert(name.clone(), val);
+                }
+            }
+        }
+        // Pass 2: retry with the now-larger table (handles forward refs like const B = A)
+        for stmt in stmts {
+            if let Stmt::Const { name, value } = stmt {
+                if !self.known_constants.contains_key(name) {
+                    if let Ok(val) = Self::eval_const_expr_with_constants(value, &self.known_constants) {
+                        self.known_constants.insert(name.clone(), val);
+                    }
+                }
+            }
         }
     }
 
@@ -215,6 +244,10 @@ impl Compiler {
     }
 
     pub fn compile(mut self, stmts: &[Stmt]) -> Result<CompileResult, String> {
+        // Pre-scan: collect compile-time constants from the entire file so that
+        // property defaults can reference constants declared later (forward refs).
+        self.prescan_constants(stmts);
+
         for stmt in stmts {
             self.compile_stmt(stmt)?;
         }
@@ -274,14 +307,49 @@ impl Compiler {
                 self.instructions.push(echo);
             }
             Stmt::Assign { var, expr } => {
-                let (operand, op_type) = self.compile_expr(expr);
-                let cv_idx = self.resolve_cv(var);
-                let mut assign = Instruction::new(OpCode::AssignCv);
-                assign.op1_type = OpType::Cv;
-                assign.op1 = cv_idx;
-                assign.op2_type = op_type;
-                assign.op2 = operand;
-                self.instructions.push(assign);
+                // Detect $x .= expr pattern → emit AssignConcat (in-place string append)
+                if let Expr::BinaryOp { op: crate::parser::BinOp::Concat, left, right } = expr {
+                    if let Expr::Variable(ref lhs_var) = **left {
+                        if lhs_var == var {
+                            let (rhs_op, rhs_type) = self.compile_expr(right);
+                            let cv_idx = self.resolve_cv(var);
+                            let mut instr = Instruction::new(OpCode::AssignConcat);
+                            instr.op1_type = OpType::Cv;
+                            instr.op1 = cv_idx;
+                            instr.op2_type = rhs_type;
+                            instr.op2 = rhs_op;
+                            self.instructions.push(instr);
+                            // Early return from this match arm
+                        } else {
+                            let (operand, op_type) = self.compile_expr(expr);
+                            let cv_idx = self.resolve_cv(var);
+                            let mut assign = Instruction::new(OpCode::AssignCv);
+                            assign.op1_type = OpType::Cv;
+                            assign.op1 = cv_idx;
+                            assign.op2_type = op_type;
+                            assign.op2 = operand;
+                            self.instructions.push(assign);
+                        }
+                    } else {
+                        let (operand, op_type) = self.compile_expr(expr);
+                        let cv_idx = self.resolve_cv(var);
+                        let mut assign = Instruction::new(OpCode::AssignCv);
+                        assign.op1_type = OpType::Cv;
+                        assign.op1 = cv_idx;
+                        assign.op2_type = op_type;
+                        assign.op2 = operand;
+                        self.instructions.push(assign);
+                    }
+                } else {
+                    let (operand, op_type) = self.compile_expr(expr);
+                    let cv_idx = self.resolve_cv(var);
+                    let mut assign = Instruction::new(OpCode::AssignCv);
+                    assign.op1_type = OpType::Cv;
+                    assign.op1 = cv_idx;
+                    assign.op2_type = op_type;
+                    assign.op2 = operand;
+                    self.instructions.push(assign);
+                }
             }
             Stmt::If {
                 condition,
@@ -306,7 +374,7 @@ impl Compiler {
 
                 if else_body.is_empty() {
                     // Patch JmpZ to jump past then body
-                    let after_then = self.instructions.len() as u32;
+                    let after_then = self.instructions.len() as u16;
                     self.instructions[jmpz_idx].op2 = after_then;
                 } else {
                     // Jmp <after_else> (skip else body when then completes)
@@ -316,7 +384,7 @@ impl Compiler {
                     self.instructions.push(jmp);
 
                     // Patch JmpZ to jump to else body
-                    let else_start = self.instructions.len() as u32;
+                    let else_start = self.instructions.len() as u16;
                     self.instructions[jmpz_idx].op2 = else_start;
 
                     // Compile else body
@@ -325,7 +393,7 @@ impl Compiler {
                     }
 
                     // Patch Jmp to jump past else body
-                    let after_else = self.instructions.len() as u32;
+                    let after_else = self.instructions.len() as u16;
                     self.instructions[jmp_idx].op1 = after_else;
                 }
             }
@@ -417,11 +485,11 @@ impl Compiler {
 
                 // Jmp back to loop start
                 let mut jmp_back = Instruction::new(OpCode::Jmp);
-                jmp_back.op1 = loop_start as u32;
+                jmp_back.op1 = loop_start as u16;
                 self.instructions.push(jmp_back);
 
                 // Patch JmpZ, break and continue jumps
-                let after_loop = self.instructions.len() as u32;
+                let after_loop = self.instructions.len() as u16;
                 self.instructions[jmpz_idx].op2 = after_loop;
                 let ctx = self.loop_stack.pop().unwrap();
                 for patch_idx in ctx.break_patches {
@@ -456,17 +524,17 @@ impl Compiler {
                 let mut jmpnz = Instruction::new(OpCode::JmpNZ);
                 jmpnz.op1 = cond_op;
                 jmpnz.op1_type = cond_type;
-                jmpnz.op2 = loop_start as u32;
+                jmpnz.op2 = loop_start as u16;
                 self.instructions.push(jmpnz);
 
                 // Patch break and continue jumps
-                let after_loop = self.instructions.len() as u32;
+                let after_loop = self.instructions.len() as u16;
                 let ctx = self.loop_stack.pop().unwrap();
                 for patch_idx in ctx.break_patches {
                     self.instructions[patch_idx].op1 = after_loop;
                 }
                 for patch_idx in ctx.continue_patches {
-                    self.instructions[patch_idx].op1 = cond_pos as u32;
+                    self.instructions[patch_idx].op1 = cond_pos as u16;
                 }
             }
             Stmt::For { init, condition, update, body } => {
@@ -517,11 +585,11 @@ impl Compiler {
 
                 // Jmp back to loop start
                 let mut jmp_back = Instruction::new(OpCode::Jmp);
-                jmp_back.op1 = loop_start as u32;
+                jmp_back.op1 = loop_start as u16;
                 self.instructions.push(jmp_back);
 
                 // Patch JmpZ, break and continue jumps
-                let after_loop = self.instructions.len() as u32;
+                let after_loop = self.instructions.len() as u16;
                 if let Some(idx) = jmpz_idx {
                     self.instructions[idx].op2 = after_loop;
                 }
@@ -530,7 +598,7 @@ impl Compiler {
                     self.instructions[patch_idx].op1 = after_loop;
                 }
                 for patch_idx in ctx.continue_patches {
-                    self.instructions[patch_idx].op1 = update_pos as u32;
+                    self.instructions[patch_idx].op1 = update_pos as u16;
                 }
             }
             Stmt::Break(level) => {
@@ -569,7 +637,7 @@ impl Compiler {
                     let jmp_idx = self.instructions.len();
                     let mut jmp = Instruction::new(OpCode::Jmp);
                     if let Some(target) = ctx.continue_target {
-                        jmp.op1 = target as u32;
+                        jmp.op1 = target as u16;
                     } else {
                         jmp.op1 = 0; // placeholder — patched when target is known
                         ctx.continue_patches.push(jmp_idx);
@@ -630,7 +698,7 @@ impl Compiler {
                         case_body_patches.push(jmp_idx);
 
                         // Patch JmpZ to next comparison (which is the next instruction)
-                        let next = self.instructions.len() as u32;
+                        let next = self.instructions.len() as u16;
                         self.instructions[jmpz_idx].op2 = next;
                     }
                     // default is skipped here — handled after all comparisons
@@ -647,9 +715,9 @@ impl Compiler {
 
                 // Phase 2: emit case bodies with fall-through
                 let mut body_idx = 0;
-                let mut default_body_start: Option<u32> = None;
+                let mut default_body_start: Option<u16> = None;
                 for case in cases.iter() {
-                    let body_start = self.instructions.len() as u32;
+                    let body_start = self.instructions.len() as u16;
                     if case.value.is_some() {
                         // Patch the Jmp from phase 1 to point here
                         self.instructions[case_body_patches[body_idx]].op1 = body_start;
@@ -663,7 +731,7 @@ impl Compiler {
                     }
                 }
 
-                let after_switch = self.instructions.len() as u32;
+                let after_switch = self.instructions.len() as u16;
 
                 // Patch the default/end jump
                 if let Some(def_start) = default_body_start {
@@ -716,7 +784,7 @@ impl Compiler {
                 init.op1 = arr_op;
                 init.result_type = OpType::Tmp;
                 init.result = arr_copy_tmp;
-                init.extended_value = pos_tmp;
+                init.extended_value = pos_tmp as u32;
                 init.op2 = 0; // placeholder: jump target if empty
                 self.instructions.push(init);
 
@@ -735,11 +803,11 @@ impl Compiler {
                 next.result = done_tmp;         // 0 if done, 1 if has entry
                 // Encode value_cv and key_cv in extended_value
                 // Low 16 bits = value_cv, high 16 bits = key_cv + 1 (0 = no key)
-                let key_encoded = match key_cv {
-                    Some(k) => (k + 1) << 16,
+                let key_encoded: u32 = match key_cv {
+                    Some(k) => ((k as u32) + 1) << 16,
                     None => 0,
                 };
-                next.extended_value = key_encoded | val_cv;
+                next.extended_value = key_encoded | (val_cv as u32);
                 self.instructions.push(next);
 
                 // JmpZ done_tmp → after_loop
@@ -765,11 +833,11 @@ impl Compiler {
 
                 // Jmp back to loop start (ForeachNext)
                 let mut jmp_back = Instruction::new(OpCode::Jmp);
-                jmp_back.op1 = loop_start as u32;
+                jmp_back.op1 = loop_start as u16;
                 self.instructions.push(jmp_back);
 
                 // Patch jumps
-                let after_loop = self.instructions.len() as u32;
+                let after_loop = self.instructions.len() as u16;
                 self.instructions[foreach_init_idx].op2 = after_loop; // empty array jump
                 self.instructions[jmpz_idx].op2 = after_loop;
                 let ctx = self.loop_stack.pop().unwrap();
@@ -835,7 +903,7 @@ impl Compiler {
                 let mut catch_end_jumps = Vec::new();
                 for catch in catches {
                     let catch_start = self.instructions.len() as u32;
-                    let catch_cv = self.resolve_cv(&catch.var);
+                    let catch_cv = self.resolve_cv(&catch.var) as u32;
 
                     let resolved_types: Vec<String> = catch.types.iter().map(|t| self.resolve_name(t)).collect();
                     catch_entries.push(CatchEntry {
@@ -866,27 +934,27 @@ impl Compiler {
                     None
                 };
 
-                let after_all = self.instructions.len() as u32;
+                let after_all = self.instructions.len();
 
                 // Patch all jumps to after_all
                 self.instructions[jmp_past_catch].op1 = if let Some(fs) = finally_start {
-                    fs as u32
+                    fs as u16
                 } else {
-                    after_all
+                    after_all as u16
                 };
 
                 // Patch catch-end jumps
                 for jmp_idx in &catch_end_jumps {
                     self.instructions[*jmp_idx].op1 = if let Some(fs) = finally_start {
-                        fs as u32
+                        fs as u16
                     } else {
-                        after_all
+                        after_all as u16
                     };
                 }
 
                 // Build TryEntry with catch entries and finally info
                 let (entry_finally_start, entry_finally_end) = if let Some(fs) = finally_start {
-                    (fs as u32, after_all)
+                    (fs as u32, after_all as u32)
                 } else {
                     (0xFFFFFFFF, 0)
                 };
@@ -932,7 +1000,7 @@ impl Compiler {
                 instr.op2_type = idx_type;
                 instr.result = val_op;
                 instr.result_type = val_type;
-                instr.extended_value = prop_idx;
+                instr.extended_value = prop_idx as u32;
                 self.instructions.push(instr);
             }
             Stmt::Include { path, is_require, is_once } => {
@@ -975,6 +1043,10 @@ impl Compiler {
             Stmt::Const { name, value } => {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
+                // Also record known compile-time constants for property default resolution.
+                if let Ok(ct_val) = Self::eval_const_expr_with_constants(value, &self.known_constants) {
+                    self.known_constants.insert(name.clone(), ct_val);
+                }
                 let (val_op, val_type) = self.compile_expr(value);
                 let name_idx = self.add_literal(Value::string(name.clone()));
                 let mut instr = Instruction::new(OpCode::FetchConst);
@@ -1010,7 +1082,7 @@ impl Compiler {
                     instr.op2_type = OpType::Const;
                     instr.op2 = name_idx;
                     self.instructions.push(instr);
-                    self.global_vars.push((cv_idx, var_name.clone()));
+                    self.global_vars.push((cv_idx as u32, var_name.clone()));
                 }
             }
             Stmt::StaticVar { vars } => {
@@ -1026,7 +1098,7 @@ impl Compiler {
                     instr.op1 = cv_idx;
                     instr.op2_type = OpType::Const;
                     instr.op2 = name_idx;
-                    instr.extended_value = func_name_idx;
+                    instr.extended_value = func_name_idx as u32;
                     if let Some(def_expr) = default {
                         let (def_op, def_type) = self.compile_expr(def_expr);
                         instr.result_type = def_type;
@@ -1035,7 +1107,7 @@ impl Compiler {
                         instr.result_type = OpType::Unused;
                     }
                     self.instructions.push(instr);
-                    self.static_vars.push((cv_idx, var_name.clone()));
+                    self.static_vars.push((cv_idx as u32, var_name.clone()));
                 }
             }
             Stmt::Class { name, parent, implements, is_abstract, is_final, uses, properties, methods } => {
@@ -1059,7 +1131,7 @@ impl Compiler {
                             if let Some((vis, is_ro)) = &param.promotion {
                                 promoted_props.push((param.name.clone(), *vis, *is_ro));
                                 // Generate: $this->paramName = $paramName;
-                                let this_cv = 0u32; // $this is always CV 0
+                                let this_cv = 0u16; // $this is always CV 0
                                 let param_cv = func_compiler.resolve_cv(&param.name);
                                 let prop_name_idx = func_compiler.add_literal(Value::string(param.name.clone()));
                                 let mut assign = Instruction::new(OpCode::AssignObjProp);
@@ -1112,7 +1184,7 @@ impl Compiler {
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
-                        Some(expr) => Some(Self::eval_const_expr(expr).map_err(|e| {
+                        Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -1256,7 +1328,7 @@ impl Compiler {
                 let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
-                        Some(expr) => Some(Self::eval_const_expr(expr).map_err(|e| {
+                        Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for trait property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -1336,7 +1408,7 @@ impl Compiler {
                     props.insert("name".to_string(), Value::string(case_name.clone()));
                     if is_backed {
                         if let Some(expr) = case_value {
-                            let val = Self::eval_const_expr(expr).map_err(|e| {
+                            let val = Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
                                 format!("Cannot use non-constant expression as enum case value for {}::{}: {}", name, case_name, e)
                             })?;
                             props.insert("value".to_string(), val);
@@ -1375,12 +1447,32 @@ impl Compiler {
     /// Evaluate a constant expression at compile time (for property defaults).
     /// Returns Err for expressions that cannot be resolved at compile time.
     fn eval_const_expr(expr: &Expr) -> Result<Value, String> {
+        Self::eval_const_expr_with_constants(expr, &HashMap::new())
+    }
+
+    /// Evaluate a constant expression with access to known compile-time constants.
+    fn eval_const_expr_with_constants(expr: &Expr, known: &HashMap<String, Value>) -> Result<Value, String> {
         match expr {
             Expr::Integer(n) => Ok(Value::long(*n)),
             Expr::Float(f) => Ok(Value::double(*f)),
             Expr::StringLiteral(s) => Ok(Value::string(s.clone())),
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
+            Expr::Constant(name) => {
+                // Check user-defined constants from the same compilation unit
+                if let Some(val) = known.get(name) {
+                    return Ok(val.clone());
+                }
+                // PHP built-in constants (shared source of truth with runtime)
+                if let Some(val) = crate::builtin_constant(name) {
+                    return Ok(val);
+                }
+                // Stream constants cannot be used in constant expressions
+                match name.as_str() {
+                    "STDIN" | "STDOUT" | "STDERR" => Err(format!("{} is not available in constant expressions", name)),
+                    _ => Err(format!("expression Constant(\"{}\") is not a compile-time constant", name)),
+                }
+            }
             Expr::UnaryMinus(inner) => {
                 match inner.as_ref() {
                     Expr::Integer(n) => Ok(Value::long(-n)),
@@ -1391,9 +1483,9 @@ impl Compiler {
             Expr::ArrayLiteral(elements) => {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
-                    let val = Self::eval_const_expr(&elem.value)?;
+                    let val = Self::eval_const_expr_with_constants(&elem.value, known)?;
                     if let Some(key_expr) = &elem.key {
-                        let key = Self::eval_const_expr(key_expr)?;
+                        let key = Self::eval_const_expr_with_constants(key_expr, known)?;
                         if let Some(n) = key.as_long() {
                             arr.set_int(n, val);
                         } else if let Some(s) = key.as_str() {
@@ -1436,7 +1528,7 @@ impl Compiler {
                     return Err(format!("Variadic parameter ${} must be last in {}", param.name, context));
                 }
                 is_variadic = true;
-                variadic_cv_index = func_compiler.resolve_cv(&param.name);
+                variadic_cv_index = func_compiler.resolve_cv(&param.name) as u32;
                 // No default emit for variadic — VM packs extra args into array
             } else {
                 let cv_idx = func_compiler.resolve_cv(&param.name);
@@ -1497,7 +1589,7 @@ impl Compiler {
 
     /// Emit default parameter initialization for a single param.
     /// Pattern: BindDefaultParam (skip if arg passed) → compute default → AssignCv → label
-    fn emit_default_param(compiler: &mut Compiler, cv_idx: u32, default_expr: &Expr) {
+    fn emit_default_param(compiler: &mut Compiler, cv_idx: u16, default_expr: &Expr) {
         // BindDefaultParam: if CV is NOT undef, jump to skip_label (op2 = target, patched later)
         let bind_idx = compiler.instructions.len();
         let mut bind = Instruction::new(OpCode::BindDefaultParam);
@@ -1518,12 +1610,12 @@ impl Compiler {
         compiler.instructions.push(assign);
 
         // Patch BindDefaultParam to skip past the assign
-        let skip_label = compiler.instructions.len() as u32;
+        let skip_label = compiler.instructions.len() as u16;
         compiler.instructions[bind_idx].op2 = skip_label;
     }
 
     /// Compile expression. Returns (operand_index, OpType).
-    fn compile_expr(&mut self, expr: &Expr) -> (u32, OpType) {
+    fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
             Expr::Integer(n) => {
                 let idx = self.add_literal(Value::long(*n));
@@ -1589,7 +1681,7 @@ impl Compiler {
                         self.instructions.push(jmp);
 
                         // false_label
-                        let false_label = self.instructions.len() as u32;
+                        let false_label = self.instructions.len() as u16;
                         let false_lit = self.add_literal(Value::bool(false));
                         let mut set_false = Instruction::new(OpCode::AssignCv);
                         set_false.op1_type = OpType::Tmp;
@@ -1598,7 +1690,7 @@ impl Compiler {
                         set_false.op2 = false_lit;
                         self.instructions.push(set_false);
 
-                        let end_label = self.instructions.len() as u32;
+                        let end_label = self.instructions.len() as u16;
                         self.instructions[jmpz_left].op2 = false_label;
                         self.instructions[jmpz_right].op2 = false_label;
                         self.instructions[jmp_end].op1 = end_label;
@@ -1645,7 +1737,7 @@ impl Compiler {
                         self.instructions.push(jmp_end);
 
                         // true_label: result = true
-                        let true_label = self.instructions.len() as u32;
+                        let true_label = self.instructions.len() as u16;
                         let true_lit = self.add_literal(Value::bool(true));
                         let mut set_true = Instruction::new(OpCode::AssignCv);
                         set_true.op1_type = OpType::Tmp;
@@ -1654,7 +1746,7 @@ impl Compiler {
                         set_true.op2 = true_lit;
                         self.instructions.push(set_true);
 
-                        let end_label = self.instructions.len() as u32;
+                        let end_label = self.instructions.len() as u16;
 
                         // Patch jumps
                         self.instructions[jmpnz_idx].op2 = true_label;
@@ -1785,7 +1877,7 @@ impl Compiler {
                 self.instructions.push(jmp);
 
                 // Else branch
-                let else_label = self.instructions.len() as u32;
+                let else_label = self.instructions.len() as u16;
                 let (else_op, else_type) = self.compile_expr(else_expr);
                 let mut set_else = Instruction::new(OpCode::AssignCv);
                 set_else.op1_type = OpType::Tmp;
@@ -1794,7 +1886,7 @@ impl Compiler {
                 set_else.op2 = else_op;
                 self.instructions.push(set_else);
 
-                let end_label = self.instructions.len() as u32;
+                let end_label = self.instructions.len() as u16;
                 self.instructions[jmpz_idx].op2 = else_label;
                 self.instructions[jmp_end_idx].op1 = end_label;
 
@@ -1828,7 +1920,7 @@ impl Compiler {
                 assign_right.op2 = right_op;
                 self.instructions.push(assign_right);
 
-                let end_label = self.instructions.len() as u32;
+                let end_label = self.instructions.len() as u16;
                 self.instructions[jmpnz_idx].op2 = end_label;
 
                 (tmp, OpType::Tmp)
@@ -1881,10 +1973,10 @@ impl Compiler {
                 };
 
                 let mut init = Instruction::new(OpCode::InitFcall);
-                init.op1 = args.len() as u32;
+                init.op1 = args.len() as u16;
                 init.op2_type = OpType::Const;
                 init.op2 = name_idx;
-                init.extended_value = fallback_idx;
+                init.extended_value = fallback_idx as u32;
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 0, ref_args, false, false);
@@ -2010,7 +2102,7 @@ impl Compiler {
                     assign.op2_type = OpType::Tmp;
                     assign.op2 = tmp2;
                     self.instructions.push(assign);
-                    let end = self.instructions.len() as u32;
+                    let end = self.instructions.len() as u16;
                     self.instructions[jmpz_idx].op2 = end;
                 }
                 (tmp, OpType::Tmp)
@@ -2063,7 +2155,7 @@ impl Compiler {
                 self.instructions.push(jmp);
 
                 // Else: eval right
-                let else_label = self.instructions.len() as u32;
+                let else_label = self.instructions.len() as u16;
                 let (r_op, r_type) = self.compile_expr(right);
                 let mut set_right = Instruction::new(OpCode::AssignCv);
                 set_right.op1_type = OpType::Tmp;
@@ -2072,7 +2164,7 @@ impl Compiler {
                 set_right.op2 = r_op;
                 self.instructions.push(set_right);
 
-                let end_label = self.instructions.len() as u32;
+                let end_label = self.instructions.len() as u16;
                 self.instructions[jmpz_idx].op2 = else_label;
                 self.instructions[jmp_end_idx].op1 = end_label;
 
@@ -2121,7 +2213,7 @@ impl Compiler {
                                 self.instructions.push(jmpz);
 
                                 // Patch JmpNZ's to here (body start)
-                                let body_start = self.instructions.len() as u32;
+                                let body_start = self.instructions.len() as u16;
                                 for patch in &body_patches {
                                     self.instructions[*patch].op2 = body_start;
                                 }
@@ -2142,7 +2234,7 @@ impl Compiler {
                                 end_patches.push(jmp_end);
 
                                 // Patch JmpZ to next arm
-                                let next = self.instructions.len() as u32;
+                                let next = self.instructions.len() as u16;
                                 self.instructions[jmpz_idx].op2 = next;
                             }
                         }
@@ -2170,7 +2262,7 @@ impl Compiler {
                     self.instructions.push(throw);
                 }
 
-                let end_label = self.instructions.len() as u32;
+                let end_label = self.instructions.len() as u16;
                 for patch in end_patches {
                     self.instructions[patch].op1 = end_label;
                 }
@@ -2268,7 +2360,7 @@ impl Compiler {
                 // Pre-compile arg expressions BEFORE NewObj so side effects
                 // always execute, even when the class has no __construct.
                 // Compile args, tracking which are named for SendNamed emission
-                let compiled_args: Vec<(u32, OpType, Option<u32>)> = args.iter()
+                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args.iter()
                     .map(|arg| match arg {
                         CallArg::Positional(expr) => {
                             let (op, op_type) = self.compile_expr(expr);
@@ -2335,7 +2427,7 @@ impl Compiler {
                 self.instructions.push(fetch);
 
                 if let Some(idx) = nullsafe_patch {
-                    self.instructions[idx].op2 = self.instructions.len() as u32;
+                    self.instructions[idx].op2 = self.instructions.len() as u16;
                 }
 
                 (tmp, OpType::Tmp)
@@ -2377,7 +2469,7 @@ impl Compiler {
                 self.instructions.push(do_fcall);
 
                 if let Some(idx) = nullsafe_patch {
-                    self.instructions[idx].op2 = self.instructions.len() as u32;
+                    self.instructions[idx].op2 = self.instructions.len() as u16;
                 }
 
                 (tmp, OpType::Tmp)
@@ -2548,20 +2640,20 @@ impl Compiler {
         }
     }
 
-    fn add_literal(&mut self, val: Value) -> u32 {
-        let idx = self.literals.len() as u32;
+    fn add_literal(&mut self, val: Value) -> u16 {
+        let idx = self.literals.len() as u16;
         self.literals.push(val);
         idx
     }
 
-    fn resolve_cv(&mut self, name: &str) -> u32 {
+    fn resolve_cv(&mut self, name: &str) -> u16 {
         if let Some(&idx) = self.cv_table.get(name) {
-            idx
+            idx as u16
         } else {
             let idx = self.next_cv;
             self.next_cv += 1;
             self.cv_table.insert(name.to_string(), idx);
-            idx
+            idx as u16
         }
     }
 
@@ -2609,7 +2701,7 @@ impl Compiler {
                     let mut send = Instruction::new(opcode);
                     send.op1 = op;
                     send.op1_type = op_type;
-                    send.op2 = i as u32 + cv_offset;
+                    send.op2 = (i as u32 + cv_offset) as u16;
                     if set_extended_value {
                         send.extended_value = i as u32;
                     }
@@ -2634,7 +2726,7 @@ impl Compiler {
     /// Each tuple: (operand, op_type, Option<name_literal_idx>).
     fn emit_precompiled_call_args(
         &mut self,
-        compiled_args: &[(u32, OpType, Option<u32>)],
+        compiled_args: &[(u16, OpType, Option<u16>)],
         cv_offset: u32,
     ) {
         for (i, (op, op_type, named_idx)) in compiled_args.iter().enumerate() {
@@ -2649,20 +2741,20 @@ impl Compiler {
                 let mut send = Instruction::new(OpCode::SendVal);
                 send.op1 = *op;
                 send.op1_type = *op_type;
-                send.op2 = i as u32 + cv_offset;
+                send.op2 = (i as u32 + cv_offset) as u16;
                 self.instructions.push(send);
             }
         }
     }
 
-    fn alloc_tmp(&mut self) -> u32 {
+    fn alloc_tmp(&mut self) -> u16 {
         let idx = self.next_tmp;
         self.next_tmp += 1;
-        idx
+        idx as u16
     }
 
     /// Compile list destructuring targets. Each target gets a FetchDimR + AssignCv.
-    fn compile_list_targets(&mut self, targets: &[crate::parser::ListTarget], array_tmp: u32, start_index: usize) -> Result<(), String> {
+    fn compile_list_targets(&mut self, targets: &[crate::parser::ListTarget], array_tmp: u16, start_index: usize) -> Result<(), String> {
         use crate::parser::ListTarget;
         let mut idx = start_index;
         for target in targets {

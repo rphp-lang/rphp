@@ -24,9 +24,13 @@ pub struct PhpObject {
 pub struct PhpArray {
     /// Insertion-ordered entries
     entries: Vec<(ArrayKey, Value)>,
-    /// Key → index into entries for O(1) lookup
-    index: HashMap<ArrayKey, usize>,
+    /// Key → index into entries for O(1) lookup.
+    /// Lazily allocated — None while array is in packed mode.
+    index: Option<HashMap<ArrayKey, usize>>,
     next_int_key: i64,
+    /// True when keys are exactly 0..N-1 (sequential push only).
+    /// Packed arrays skip HashMap entirely — direct Vec index.
+    packed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -39,30 +43,72 @@ impl PhpArray {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            index: HashMap::new(),
+            index: None,
             next_int_key: 0,
+            packed: true,
+        }
+    }
+
+    /// Ensure the HashMap index exists (transition from packed to hash mode).
+    fn ensure_index(&mut self) {
+        if self.index.is_none() {
+            let mut map = HashMap::with_capacity(self.entries.len());
+            for (i, (k, _)) in self.entries.iter().enumerate() {
+                map.insert(k.clone(), i);
+            }
+            self.index = Some(map);
+        }
+    }
+
+    /// Transition out of packed mode.
+    fn unpack(&mut self) {
+        if self.packed {
+            self.packed = false;
+            self.ensure_index();
         }
     }
 
     /// Append with auto-incrementing key ($a[] = val)
+    #[inline]
     pub fn push(&mut self, val: Value) {
         let key = self.next_int_key;
         self.next_int_key = key + 1;
-        let ak = ArrayKey::Int(key);
-        let idx = self.entries.len();
-        self.entries.push((ak.clone(), val));
-        self.index.insert(ak, idx);
+        if self.packed {
+            // Packed: key == entries.len(), just push to Vec
+            self.entries.push((ArrayKey::Int(key), val));
+        } else {
+            let ak = ArrayKey::Int(key);
+            let idx = self.entries.len();
+            self.entries.push((ak.clone(), val));
+            self.index.as_mut().unwrap().insert(ak, idx);
+        }
     }
 
     /// Set by integer key
     pub fn set_int(&mut self, key: i64, val: Value) {
+        if self.packed {
+            // Can stay packed if key == next sequential
+            if key == self.next_int_key {
+                self.next_int_key = key + 1;
+                self.entries.push((ArrayKey::Int(key), val));
+                return;
+            }
+            // Overwrite existing packed slot?
+            if key >= 0 && (key as usize) < self.entries.len() {
+                self.entries[key as usize].1 = val;
+                return;
+            }
+            // Non-sequential → unpack
+            self.unpack();
+        }
         let ak = ArrayKey::Int(key);
-        if let Some(&idx) = self.index.get(&ak) {
+        let index = self.index.as_mut().unwrap();
+        if let Some(&idx) = index.get(&ak) {
             self.entries[idx].1 = val;
         } else {
             let idx = self.entries.len();
             self.entries.push((ak.clone(), val));
-            self.index.insert(ak, idx);
+            index.insert(ak, idx);
             if key >= self.next_int_key {
                 self.next_int_key = key + 1;
             }
@@ -71,13 +117,15 @@ impl PhpArray {
 
     /// Set by string key
     pub fn set_str(&mut self, key: &str, val: Value) {
+        self.unpack(); // String key → always hash mode
         let ak = ArrayKey::String(key.to_string());
-        if let Some(&idx) = self.index.get(&ak) {
+        let index = self.index.as_mut().unwrap();
+        if let Some(&idx) = index.get(&ak) {
             self.entries[idx].1 = val;
         } else {
             let idx = self.entries.len();
             self.entries.push((ak.clone(), val));
-            self.index.insert(ak, idx);
+            index.insert(ak, idx);
         }
     }
 
@@ -90,15 +138,26 @@ impl PhpArray {
     }
 
     /// Get by integer key — O(1)
+    #[inline]
     pub fn get_int(&self, key: i64) -> Option<&Value> {
-        let ak = ArrayKey::Int(key);
-        self.index.get(&ak).map(|&idx| &self.entries[idx].1)
+        if self.packed && key >= 0 {
+            // Direct Vec index — no hash, no alloc
+            self.entries.get(key as usize).map(|(_, v)| v)
+        } else {
+            let index = self.index.as_ref()?;
+            let ak = ArrayKey::Int(key);
+            index.get(&ak).map(|&idx| &self.entries[idx].1)
+        }
     }
 
     /// Get by string key — O(1)
     pub fn get_str(&self, key: &str) -> Option<&Value> {
+        let index = self.index.as_ref()?;
+        // Lookup without allocating a new String
+        // HashMap<ArrayKey, usize> needs ArrayKey for lookup, but we can use
+        // the raw_entry API... For now, allocate. TODO: use hashbrown raw_entry.
         let ak = ArrayKey::String(key.to_string());
-        self.index.get(&ak).map(|&idx| &self.entries[idx].1)
+        index.get(&ak).map(|&idx| &self.entries[idx].1)
     }
 
     pub fn len(&self) -> usize {
@@ -115,13 +174,15 @@ impl PhpArray {
 
     /// Remove element by key
     pub fn remove(&mut self, key: &ArrayKey) -> bool {
-        if let Some(&idx) = self.index.get(key) {
+        self.unpack(); // remove breaks packed invariant
+        let index = self.index.as_mut().unwrap();
+        if let Some(&idx) = index.get(key) {
             self.entries.remove(idx);
-            self.index.remove(key);
+            index.remove(key);
             // Re-index entries after removed position
             for (i, (k, _)) in self.entries.iter().enumerate() {
                 if i >= idx {
-                    self.index.insert(k.clone(), i);
+                    index.insert(k.clone(), i);
                 }
             }
             true
@@ -133,7 +194,9 @@ impl PhpArray {
     /// Remove and return last element
     pub fn pop(&mut self) -> Option<Value> {
         if let Some((key, val)) = self.entries.pop() {
-            self.index.remove(&key);
+            if let Some(ref mut index) = self.index {
+                index.remove(&key);
+            }
             Some(val)
         } else {
             None
@@ -145,11 +208,13 @@ impl PhpArray {
         if self.entries.is_empty() {
             None
         } else {
+            self.unpack(); // shift breaks packed invariant
             let (key, val) = self.entries.remove(0);
-            self.index.remove(&key);
+            let index = self.index.as_mut().unwrap();
+            index.remove(&key);
             // Re-index all entries since indices shifted
             for (i, (k, _)) in self.entries.iter().enumerate() {
-                self.index.insert(k.clone(), i);
+                index.insert(k.clone(), i);
             }
             Some(val)
         }
@@ -347,6 +412,17 @@ impl Value {
     pub fn as_str(&self) -> Option<&str> {
         if self.value_type() == ValueType::String {
             Some(unsafe { &*(self.data.ptr as *const String) })
+        } else {
+            None
+        }
+    }
+
+    /// Get mutable string reference for in-place operations like `.=`.
+    /// SAFETY: caller must ensure no other references exist to this string.
+    #[inline]
+    pub unsafe fn as_string_mut(&mut self) -> Option<&mut String> {
+        if self.value_type() == ValueType::String {
+            Some(&mut *(self.data.ptr as *mut String))
         } else {
             None
         }
