@@ -287,7 +287,7 @@ impl Compiler {
                 main_scope_vars,
                 all_cvs,
                 cache,
-                needs_globals_sync: false, // main script is entry point, never a callee
+                may_access_globals: false, // main script is entry point, never a callee
             },
             functions: self.functions,
             class_defs: self.class_defs,
@@ -417,7 +417,11 @@ impl Compiler {
                 let func_name = func_compiler.current_function_name.clone();
                 let func_all_cvs = func_compiler.all_cvs();
                 let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
-                let needs_globals_sync = !func_compiler.global_vars.is_empty();
+                let may_access_globals = !func_compiler.global_vars.is_empty()
+                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
+                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        | OpCode::InitMethodCall | OpCode::InitStaticCall
+                        | OpCode::Include));
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -432,7 +436,7 @@ impl Compiler {
                     main_scope_vars: vec![],
                     all_cvs: func_all_cvs,
                     cache,
-                    needs_globals_sync,
+                    may_access_globals,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -1159,7 +1163,11 @@ impl Compiler {
                     func_compiler.instructions.push(ret);
 
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
-                    let needs_globals_sync = !func_compiler.global_vars.is_empty();
+                    let may_access_globals = !func_compiler.global_vars.is_empty()
+                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
+                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        | OpCode::InitMethodCall | OpCode::InitStaticCall
+                        | OpCode::Include));
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1174,7 +1182,7 @@ impl Compiler {
                         main_scope_vars: vec![],
                         all_cvs: vec![],
                         cache,
-                        needs_globals_sync,
+                        may_access_globals,
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
@@ -1249,7 +1257,11 @@ impl Compiler {
                     func_compiler.instructions.push(ret);
 
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
-                    let needs_globals_sync = !func_compiler.global_vars.is_empty();
+                    let may_access_globals = !func_compiler.global_vars.is_empty()
+                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
+                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        | OpCode::InitMethodCall | OpCode::InitStaticCall
+                        | OpCode::Include));
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1264,7 +1276,7 @@ impl Compiler {
                         main_scope_vars: vec![],
                         all_cvs: vec![],
                         cache,
-                        needs_globals_sync,
+                        may_access_globals,
                     };
                     let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     self.functions.extend(func_compiler.functions);
@@ -1311,7 +1323,11 @@ impl Compiler {
                     func_compiler.instructions.push(ret);
 
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
-                    let needs_globals_sync = !func_compiler.global_vars.is_empty();
+                    let may_access_globals = !func_compiler.global_vars.is_empty()
+                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
+                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        | OpCode::InitMethodCall | OpCode::InitStaticCall
+                        | OpCode::Include));
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1326,7 +1342,7 @@ impl Compiler {
                         main_scope_vars: vec![],
                         all_cvs: vec![],
                         cache,
-                        needs_globals_sync,
+                        may_access_globals,
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.sig.this_offset = 1;
@@ -1386,7 +1402,11 @@ impl Compiler {
                     func_compiler.instructions.push(ret);
 
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
-                    let needs_globals_sync = !func_compiler.global_vars.is_empty();
+                    let may_access_globals = !func_compiler.global_vars.is_empty()
+                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
+                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        | OpCode::InitMethodCall | OpCode::InitStaticCall
+                        | OpCode::Include));
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -1401,7 +1421,7 @@ impl Compiler {
                         main_scope_vars: vec![],
                         all_cvs: vec![],
                         cache,
-                        needs_globals_sync,
+                        may_access_globals,
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.sig.this_offset = 1;
@@ -2311,7 +2331,11 @@ impl Compiler {
 
                 let closure_all_cvs = func_compiler.all_cvs();
                 let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
-                let needs_globals_sync = !func_compiler.global_vars.is_empty();
+                let may_access_globals = !func_compiler.global_vars.is_empty()
+                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
+                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        | OpCode::InitMethodCall | OpCode::InitStaticCall
+                        | OpCode::Include));
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -2326,7 +2350,7 @@ impl Compiler {
                     main_scope_vars: vec![],
                     all_cvs: closure_all_cvs,
                     cache,
-                    needs_globals_sync,
+                    may_access_globals,
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 

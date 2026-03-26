@@ -3105,9 +3105,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         unsafe { (*call).return_value = return_value_ptr };
 
-                        // Sync caller's scope to globals — only when callee actually reads globals.
-                        // Skip entirely for functions without `global $x;` declarations (vast majority).
-                        if user.op_array.needs_globals_sync
+                        // Sync caller's scope to globals — only when callee may reach globals.
+                        // Skip for leaf functions that never call other user functions
+                        // and have no `global` bindings (e.g. `add($a, $b)`).
+                        if user.op_array.may_access_globals
                             && (!op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty())
                         {
                             let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
@@ -3321,8 +3322,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             unsafe { cleanup_frame_slots(call) };
                             eg.vm_stack.pop_call_frame(call);
                         } else {
-                            // Sync caller's scope vars to eg.globals — only when callee needs globals.
-                            if user.op_array.needs_globals_sync {
+                            // Sync caller's scope vars to eg.globals — only when callee may reach globals.
+                            if user.op_array.may_access_globals {
                                 let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
                                     &op_array.main_scope_vars
                                 } else {
@@ -3947,13 +3948,36 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
+                    // Fast-return functions don't sync globals themselves, but a deeper
+                    // callee (via full return) may have left dirty entries that need to
+                    // propagate up to the main scope or a function with `global` bindings.
+                    if !eg.dirty_globals.is_empty()
+                        && (!op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty())
+                    {
+                        let vars_to_check = if !op_array.main_scope_vars.is_empty() {
+                            &op_array.main_scope_vars
+                        } else {
+                            &op_array.global_vars
+                        };
+                        for (cv_idx, var_name) in vars_to_check {
+                            if eg.dirty_globals.contains(var_name) {
+                                if let Some(val) = eg.globals.get(var_name) {
+                                    let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                                    unsafe { slot_set(cv_ptr, val.clone()) };
+                                }
+                            }
+                        }
+                        eg.dirty_globals.clear();
+                    }
                     continue;
                     } // else: not strict with return type
                 }
 
                 // ── Full return path ──
                 stats::inc_return_full();
-                eg.dirty_globals.clear();
+                // Note: don't clear dirty_globals here — deeper callees may have set entries
+                // that need to propagate up to the main scope. Clearing happens in the
+                // caller's "after return" handler when it actually consumes the dirty set.
                 if !op_array.global_vars.is_empty() {
                     for (cv_idx, var_name) in &op_array.global_vars {
                         let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
@@ -4133,6 +4157,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 unsafe { slot_set(cv_ptr, val.clone()) };
                             }
                         }
+                    }
+                    // Clear dirty set once consumed by a scope that tracks globals.
+                    // Intermediate frames without main_scope_vars/global_vars leave
+                    // dirty_globals intact so changes propagate up to main scope.
+                    if !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty() {
+                        eg.dirty_globals.clear();
                     }
                 }
                 continue;

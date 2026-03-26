@@ -36,11 +36,13 @@ pub struct OpArray {
     /// Inline cache side table — one entry per instruction.
     /// Only InitFcall/InitMethodCall/InitStaticCall use their entries.
     pub cache: Vec<InlineCache>,
-    /// True if this function may read from eg.globals (has `global $x;` bindings).
-    /// Used by DoFcall to skip caller→globals sync when callee doesn't need globals.
-    /// Currently derived from `!global_vars.is_empty()`.
-    /// Extend later for `$GLOBALS` superglobal or other dynamic global access.
-    pub needs_globals_sync: bool,
+    /// True if this function or any transitive callee may read/write eg.globals.
+    /// Used by DoFcall to skip caller→globals sync when callee can't reach globals.
+    /// Computed conservatively:
+    ///   - true if function has `global $x;` bindings
+    ///   - true if function calls any user function (may transitively reach `global`)
+    ///   - false only for leaf functions with no calls and no global bindings
+    pub may_access_globals: bool,
 }
 
 impl OpArray {

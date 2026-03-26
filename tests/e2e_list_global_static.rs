@@ -79,6 +79,112 @@ echo "$a $b";
 "#), "2 1");
 }
 
+// Transitive global access tests — A calls B, B uses `global`
+// These verify that the `needs_globals_sync` guard correctly syncs
+// caller scope even when the immediate callee doesn't use `global`.
+
+#[test]
+fn test_global_transitive_one_level() {
+    // A() has no `global`, A() calls B(), B() has `global $x`
+    assert_eq!(run_php(r#"<?php
+$x = 42;
+function A() {
+    B();
+}
+function B() {
+    global $x;
+    echo $x;
+}
+A();
+"#), "42");
+}
+
+#[test]
+fn test_global_transitive_two_levels() {
+    // A() calls B(), B() calls C(), C() has `global $x`
+    assert_eq!(run_php(r#"<?php
+$x = 99;
+function A() {
+    B();
+}
+function B() {
+    C();
+}
+function C() {
+    global $x;
+    echo $x;
+}
+A();
+"#), "99");
+}
+
+#[test]
+fn test_global_transitive_write() {
+    // A() calls B(), B() writes `global $x`, verify main scope sees the change
+    assert_eq!(run_php(r#"<?php
+$x = 1;
+function A() {
+    B();
+}
+function B() {
+    global $x;
+    $x = 200;
+}
+A();
+echo $x;
+"#), "200");
+}
+
+#[test]
+fn test_global_transitive_closure() {
+    // Closure calls a function that uses `global`
+    assert_eq!(run_php(r#"<?php
+$x = 77;
+function reader() {
+    global $x;
+    return $x;
+}
+$f = function() {
+    return reader();
+};
+echo $f();
+"#), "77");
+}
+
+#[test]
+fn test_global_transitive_method() {
+    // Method calls a function that uses `global`
+    assert_eq!(run_php(r#"<?php
+$x = 55;
+function get_global_x() {
+    global $x;
+    return $x;
+}
+class Foo {
+    function bar() {
+        return get_global_x();
+    }
+}
+$obj = new Foo();
+echo $obj->bar();
+"#), "55");
+}
+
+#[test]
+fn test_global_after_modification_transitive() {
+    // Modify $x in main scope, then A() → B() reads it
+    assert_eq!(run_php(r#"<?php
+$x = 1;
+function A() { B(); }
+function B() { global $x; echo $x . " "; }
+A();
+$x = 2;
+A();
+$x = 3;
+A();
+"#), "1 2 3 ");
+}
+
 // static variable tests
 
 #[test]
