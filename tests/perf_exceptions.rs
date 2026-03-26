@@ -213,6 +213,45 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + $m->compute($i);
 }}
 "#));
+
+    bench("method empty body (10k)", &format!(r#"<?php
+class Noop {{
+    public function run() {{
+        return 0;
+    }}
+}}
+$n = new Noop();
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + $n->run();
+}}
+"#));
+
+    bench("method reads $this prop (10k)", &format!(r#"<?php
+class Counter {{
+    public $val = 1;
+    public function get() {{
+        return $this->val;
+    }}
+}}
+$c = new Counter();
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + $c->get();
+}}
+"#));
+
+    bench("static method call (10k)", &format!(r#"<?php
+class SMath {{
+    public static function compute($x) {{
+        return $x + 1;
+    }}
+}}
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + SMath::compute($i);
+}}
+"#));
 }
 
 #[test]

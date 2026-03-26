@@ -1115,6 +1115,25 @@ fn op_fetch_obj_r(
 
     if let Some(obj) = obj_val.as_object() {
         let name = prop_name.as_str().unwrap_or("");
+
+        // ── Property cache fast path ──
+        // On cache hit (same class_id, public property): skip visibility/mangling entirely.
+        let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+        let ic = &op_array.cache[ip];
+        if ic.prop_flags == 1 && ic.class_id == obj.class_id && obj.class_id != 0 {
+            // Cache hit: public property, key == literal name
+            let found_val = obj.properties.get(name).cloned();
+            drop(obj);
+            if let Some(val) = found_val {
+                unsafe { slot_set(result_ptr, val) };
+            } else {
+                // Property disappeared (shouldn't happen for cached public) — fall through
+                unsafe { slot_set(result_ptr, Value::null()) };
+            }
+            return Ok(());
+        }
+
+        // ── Full resolution (cache miss or private/protected) ──
         let caller_class = get_caller_class(frame, eg);
 
         // Private property early binding is only valid when the receiver
@@ -1128,9 +1147,13 @@ fn op_fetch_obj_r(
 
         // Resolve storage key (mangled for private properties)
         let key = crate::runtime::resolve_property_key(eg, &obj.class_name, name, effective_caller);
+
+        // Determine if property is public (for caching)
+        let mut is_public = true;
         // Visibility check
         if let Some((vis, defining_class)) = eg.find_property_visibility(&obj.class_name, name) {
             if vis != Visibility::Public {
+                is_public = false;
                 // Skip check if the caller owns the defining class AND
                 // the receiver is in that scope (same hierarchy).
                 let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
@@ -1156,6 +1179,14 @@ fn op_fetch_obj_r(
                 }
             }
         }
+
+        // Cache: if public property and key == name (no mangling), mark for fast path
+        if is_public && key == name && obj.class_id != 0 {
+            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+            ic_mut.class_id = obj.class_id;
+            ic_mut.prop_flags = 1;
+        }
+
         let found_val = obj.properties.get(&key).cloned();
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
@@ -3621,10 +3652,40 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitMethodCall => {
-                match op_init_method_call(eg, frame, op_array, opline)? {
-                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
-                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
-                    _ => {}
+                // ── Cache-hit fast path (inlined) ──
+                // Most method calls hit the monomorphic inline cache.
+                // Bypass the #[inline(never)] helper entirely on cache hit.
+                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                if obj_val.value_type() == ValueType::Object {
+                    let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
+                    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+                    let ic = &op_array.cache[ip];
+                    if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
+                        let func_ptr = ic.func;
+                        let num_args = opline.extended_value;
+                        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+                        unsafe {
+                            (*call).num_args = num_args;
+                            (*call).prev_execute_data = frame;
+                            (*call).call = (*frame).call;
+                            (*frame).call = call;
+                            frame_set_this(call, obj_val.clone());
+                        }
+                    } else {
+                        // Cache miss — full resolution in cold helper
+                        match op_init_method_call(eg, frame, op_array, opline)? {
+                            ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                            ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    // Non-object — cold path (error or __invoke)
+                    match op_init_method_call(eg, frame, op_array, opline)? {
+                        ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                        ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                        _ => {}
+                    }
                 }
             }
 

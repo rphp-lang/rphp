@@ -59,6 +59,10 @@ pub struct InlineCache {
     pub func: *const FunctionCommon,
     /// class_id that `func` was resolved for (methods only; 0 = function call).
     pub class_id: u32,
+    /// Property access cache flags (used by FetchObjR/AssignObjProp):
+    /// 0 = not cached
+    /// 1 = public property, key == literal name (skip visibility + mangling)
+    pub prop_flags: u32,
 }
 
 // SAFETY: InlineCache is only written from the single VM execution thread.
@@ -70,6 +74,7 @@ impl InlineCache {
         Self {
             func: std::ptr::null(),
             class_id: 0,
+            prop_flags: 0,
         }
     }
 }

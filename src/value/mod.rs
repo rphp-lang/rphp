@@ -467,6 +467,16 @@ impl Value {
         }
     }
 
+    /// Read class_id for Object values without RefCell borrow check.
+    /// Single-threaded VM guarantees no concurrent mutations during dispatch.
+    /// SAFETY: Only valid when value_type() == ValueType::Object.
+    #[inline(always)]
+    pub unsafe fn object_class_id_unchecked(&self) -> u32 {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        (*refcell.as_ptr()).class_id
+    }
+
     /// Get string reference. Only valid for String values.
     #[inline]
     pub fn as_str(&self) -> Option<&str> {
