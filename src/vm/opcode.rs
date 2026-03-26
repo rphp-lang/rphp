@@ -103,6 +103,11 @@ pub enum OpCode {
     Include = 125,         // Include/require file: op1=path (CONST/TMP/CV), extended_value flags: bit0=require, bit1=once
     NullSafeCheck = 126,   // If op1 is null, store null in result and jump to op2; otherwise no-op
     CloneObj = 127,        // Clone object: op1=source object, result=new cloned object
+    /// Create closure value: op1=CONST function name, result=TMP(closure).
+    /// Resolves function pointer via inline cache. Captures added by ClosureUseVar.
+    CreateClosure = 128,
+    /// Push captured value into closure: op1=TMP(closure), op2=CV(captured var).
+    ClosureUseVar = 129,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

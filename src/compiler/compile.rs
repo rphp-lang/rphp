@@ -2322,36 +2322,28 @@ impl Compiler {
                 self.functions.extend(func_compiler.functions);
                 self.functions.push((closure_name.clone(), user_func));
 
-                // Build closure as array: [function_name, use_val1, use_val2, ...]
-                // At call time, InitDynamicCall unpacks this.
+                // Build closure value with direct function pointer + captured values.
+                // CreateClosure resolves the function pointer at creation time (not call time).
+                // ClosureUseVar pushes each captured value into the closure.
                 let name_idx = self.add_literal(Value::string(closure_name));
                 let tmp = self.alloc_tmp();
 
-                // InitArray for closure descriptor
-                let mut init_arr = Instruction::new(OpCode::InitArray);
-                init_arr.result = tmp;
-                init_arr.result_type = OpType::Tmp;
-                self.instructions.push(init_arr);
-
-                // First element: function name
-                let mut add_name = Instruction::new(OpCode::AddArrayElement);
-                add_name.op1 = tmp;
-                add_name.op1_type = OpType::Tmp;
-                add_name.op2 = name_idx;
-                add_name.op2_type = OpType::Const;
-                add_name.result_type = OpType::Unused; // auto-index
-                self.instructions.push(add_name);
+                let mut create = Instruction::new(OpCode::CreateClosure);
+                create.op1 = name_idx;
+                create.op1_type = OpType::Const;
+                create.result = tmp;
+                create.result_type = OpType::Tmp;
+                self.instructions.push(create);
 
                 // Add captured use_var values
                 for v in use_vars {
                     let cv = self.resolve_cv(v);
-                    let mut add_use = Instruction::new(OpCode::AddArrayElement);
-                    add_use.op1 = tmp;
-                    add_use.op1_type = OpType::Tmp;
-                    add_use.op2 = cv;
-                    add_use.op2_type = OpType::Cv;
-                    add_use.result_type = OpType::Unused;
-                    self.instructions.push(add_use);
+                    let mut use_var = Instruction::new(OpCode::ClosureUseVar);
+                    use_var.op1 = tmp;
+                    use_var.op1_type = OpType::Tmp;
+                    use_var.op2 = cv;
+                    use_var.op2_type = OpType::Cv;
+                    self.instructions.push(use_var);
                 }
 
                 (tmp, OpType::Tmp)

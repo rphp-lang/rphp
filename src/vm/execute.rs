@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
-use crate::value::{Value, PhpArray, PhpObject, ArrayKey, ValueType, make_error_value};
+use crate::value::{Value, PhpArray, PhpClosure, PhpObject, ArrayKey, ValueType, make_error_value};
 use crate::runtime::ExecutorGlobals;
 use crate::parser::Visibility;
 use crate::vm::stats;
@@ -1478,8 +1478,26 @@ fn op_init_dynamic_call(
 ) -> Result<(), VmError> {
     let callable = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
-    if let Some(arr) = callable.as_array() {
-        // Closure call: array is [function_name, use_val1, use_val2, ...]
+    if let Some(closure) = callable.as_closure() {
+        // Fast path: Closure value — direct function pointer, no string lookup.
+        let func_ptr = closure.func;
+        let num_args = opline.extended_value;
+        let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+        unsafe {
+            (*call).prev_execute_data = frame;
+            (*call).call = (*frame).call;
+            (*frame).call = call;
+        }
+
+        // Copy captured use_vars into CV slots after declared params
+        let func = unsafe { &*func_ptr };
+        let use_var_offset = func.sig.num_args;
+        for (i, captured) in closure.captures.iter().enumerate() {
+            let cv_slot = unsafe { (*call).cv_mut(use_var_offset + i as u32) };
+            unsafe { frame_slot_set(call, cv_slot as *mut Value, captured.clone()) };
+        }
+    } else if let Some(arr) = callable.as_array() {
+        // Legacy array callable: [class_or_object, method_name]
         let entries = arr.entries();
         if entries.is_empty() {
             return Err(VmError::Fatal("Array is not callable".into()));
@@ -1501,7 +1519,6 @@ fn op_init_dynamic_call(
         }
 
         // Copy captured use_vars into CV slots after params
-        // Params are CV 0..num_args-1, use_vars are CV num_args..
         let func = unsafe { &*func_ptr };
         let use_var_offset = func.sig.num_args;
         for i in 1..entries.len() {
@@ -4027,6 +4044,41 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
                     _ => {}
                 }
+            }
+
+            OpCode::CreateClosure => {
+                // op1 = CONST function name, result = TMP(closure value)
+                // Resolve function pointer via inline cache (first call does string lookup,
+                // subsequent calls use cached pointer).
+                let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+                let cached = op_array.cache[ip].func;
+                let func_ptr = if !cached.is_null() {
+                    cached
+                } else {
+                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                    let name = name_val.as_str().unwrap_or_else(|| {
+                        panic!("CreateClosure: op1 must be a function name string");
+                    });
+                    let ptr = eg.find_function(name).unwrap_or_else(|| {
+                        panic!("CreateClosure: closure function {} not found", name);
+                    });
+                    // Cache for next time (closures in loops)
+                    unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = ptr; }
+                    ptr
+                };
+                let closure = PhpClosure { func: func_ptr, captures: Vec::new() };
+                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+                unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
+            }
+
+            OpCode::ClosureUseVar => {
+                // op1 = TMP(closure), op2 = CV(captured variable)
+                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                let cloned_val = val.clone();
+                let closure_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
+                let closure_val = unsafe { &mut *closure_ptr };
+                let php_closure = closure_val.as_closure_mut().expect("ClosureUseVar: op1 must be a closure");
+                php_closure.captures.push(cloned_val);
             }
 
             OpCode::NullSafeCheck => {

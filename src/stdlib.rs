@@ -2270,6 +2270,14 @@ fn get_calling_scope_class(ed: *mut crate::vm::frame::ExecuteData, eg: &Executor
 /// private/protected method callbacks when called from the declaring class.
 fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str>) -> Option<ResolvedCallback> {
     match val.value_type() {
+        ValueType::Closure => {
+            let closure = val.as_closure().unwrap();
+            Some(ResolvedCallback {
+                func_ptr: closure.func,
+                prepend_args: vec![],
+                use_vars: closure.captures.clone(),
+            })
+        }
         ValueType::String => {
             let name = val.as_str().unwrap();
             eg.find_function(name).map(|ptr| ResolvedCallback {

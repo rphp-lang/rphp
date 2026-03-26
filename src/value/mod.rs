@@ -5,6 +5,7 @@ use std::cell::RefCell;
 
 use crate::vm::stats;
 use crate::vm::generator::GeneratorRef;
+use crate::vm::function::FunctionCommon;
 
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
@@ -221,6 +222,33 @@ impl PhpArray {
     }
 }
 
+/// PHP closure — function pointer + captured values.
+/// Stored behind Box in Value, like String and Array.
+pub struct PhpClosure {
+    /// Direct pointer to the resolved function. No string lookup needed at call time.
+    pub func: *const FunctionCommon,
+    /// Captured `use` variable values, in declaration order.
+    pub captures: Vec<Value>,
+}
+
+impl Clone for PhpClosure {
+    fn clone(&self) -> Self {
+        Self {
+            func: self.func,
+            captures: self.captures.clone(),
+        }
+    }
+}
+
+impl std::fmt::Debug for PhpClosure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PhpClosure")
+            .field("func", &self.func)
+            .field("captures", &self.captures.len())
+            .finish()
+    }
+}
+
 /// PHP Value — tagged union, 16 bytes.
 /// Layout matches zend_value + type_info.
 #[repr(C)]
@@ -251,6 +279,7 @@ pub enum ValueType {
     Object = 8,
     Resource = 9,
     Reference = 10,
+    Closure = 11,
 }
 
 impl Value {
@@ -371,6 +400,37 @@ impl Value {
         }
     }
 
+    /// Create a closure value from a PhpClosure.
+    #[inline]
+    pub fn closure(c: PhpClosure) -> Self {
+        let boxed = Box::new(c);
+        Self {
+            data: ValueData { ptr: Box::into_raw(boxed) as *mut u8 },
+            type_info: ValueType::Closure as u32,
+            _not_send: PhantomData,
+        }
+    }
+
+    /// Get closure reference. Only valid for Closure values.
+    #[inline]
+    pub fn as_closure(&self) -> Option<&PhpClosure> {
+        if self.value_type() == ValueType::Closure {
+            Some(unsafe { &*(self.data.ptr as *const PhpClosure) })
+        } else {
+            None
+        }
+    }
+
+    /// Get mutable closure reference. Only valid for Closure values.
+    #[inline]
+    pub fn as_closure_mut(&mut self) -> Option<&mut PhpClosure> {
+        if self.value_type() == ValueType::Closure {
+            Some(unsafe { &mut *(self.data.ptr as *mut PhpClosure) })
+        } else {
+            None
+        }
+    }
+
     /// Get the Rc<RefCell<PhpObject>> for shared access.
     /// Returns a temporary Rc handle without affecting the refcount.
     /// The caller must NOT drop the returned Rc (use for borrow/clone only).
@@ -467,6 +527,7 @@ impl Value {
             ValueType::Object => "object",
             ValueType::Resource => "resource",
             ValueType::Reference => "reference",
+            ValueType::Closure => "Closure",
         }
     }
 
@@ -649,7 +710,7 @@ impl Value {
 
     #[inline]
     pub fn needs_cleanup(&self) -> bool {
-        matches!(self.value_type(), ValueType::String | ValueType::Array | ValueType::Object)
+        matches!(self.value_type(), ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure)
     }
 
     /// Get the target pointer of a reference value.
@@ -684,6 +745,10 @@ impl Clone for Value {
                     _not_send: PhantomData,
                 }
             }
+            ValueType::Closure => {
+                let c = unsafe { &*(self.data.ptr as *const PhpClosure) };
+                Value::closure(c.clone())
+            }
             ValueType::Reference => {
                 // Clone a reference: clone the TARGET value (dereference + deep clone)
                 let target = unsafe { &*(self.data.ptr as *const Value) };
@@ -714,6 +779,9 @@ impl Drop for Value {
             ValueType::Object => {
                 // Drop = Rc decrement. Frees PhpObject when refcount reaches 0.
                 unsafe { Rc::decrement_strong_count(self.data.ptr as *const RefCell<PhpObject>) };
+            }
+            ValueType::Closure => {
+                unsafe { drop(Box::from_raw(self.data.ptr as *mut PhpClosure)) };
             }
             // Reference doesn't own the target — no-op
             _ => {}
@@ -751,6 +819,7 @@ impl std::fmt::Debug for Value {
                 write!(f, "Value(object({}))", obj.class_name)
             }
             ValueType::Reference => write!(f, "Value(ref={:p})", unsafe { self.data.ptr }),
+            ValueType::Closure => write!(f, "Value(Closure)"),
             _ => write!(f, "Value({:?})", self.value_type()),
         }
     }
