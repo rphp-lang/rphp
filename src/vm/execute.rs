@@ -239,7 +239,7 @@ unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     for i in 0..total {
         let ptr = base.add(i);
         match (*ptr).value_type() {
-            ValueType::String | ValueType::Array | ValueType::Object => {
+            ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure => {
                 std::ptr::drop_in_place(ptr);
                 std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
             }
@@ -2335,11 +2335,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let cloned = val.clone();
                 let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
-                unsafe { slot_set(dest, cloned.clone()) };
-                // If result is used, write a copy there too
                 if opline.result_type != OpType::Unused {
+                    // Need two copies: one for dest, one for result
+                    unsafe { slot_set(dest, cloned.clone()) };
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                     unsafe { slot_set(result_ptr, cloned) };
+                } else {
+                    // Common path: just move the single clone into dest
+                    unsafe { slot_set(dest, cloned) };
                 }
             }
 
