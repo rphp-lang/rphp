@@ -3105,8 +3105,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         unsafe { (*call).return_value = return_value_ptr };
 
-                        // Sync caller's scope to globals (only if needed)
-                        if !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty() {
+                        // Sync caller's scope to globals — only when callee actually reads globals.
+                        // Skip entirely for functions without `global $x;` declarations (vast majority).
+                        if user.op_array.needs_globals_sync
+                            && (!op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty())
+                        {
                             let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
                                 &op_array.main_scope_vars
                             } else {
@@ -3318,18 +3321,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             unsafe { cleanup_frame_slots(call) };
                             eg.vm_stack.pop_call_frame(call);
                         } else {
-                            // Sync caller's scope vars to eg.globals before entering callee.
-                            // For main script: sync all top-level CVs (main_scope_vars).
-                            // For functions: sync only explicit `global $x;` bindings.
-                            let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
-                                &op_array.main_scope_vars
-                            } else {
-                                &op_array.global_vars
-                            };
-                            for (cv_idx, var_name) in vars_to_sync {
-                                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                                let val = unsafe { (*cv_ptr).clone() };
-                                eg.globals.insert(var_name.clone(), val);
+                            // Sync caller's scope vars to eg.globals — only when callee needs globals.
+                            if user.op_array.needs_globals_sync {
+                                let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
+                                    &op_array.main_scope_vars
+                                } else {
+                                    &op_array.global_vars
+                                };
+                                for (cv_idx, var_name) in vars_to_sync {
+                                    let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                                    let val = unsafe { (*cv_ptr).clone() };
+                                    eg.globals.insert(var_name.clone(), val);
+                                }
                             }
                             unsafe {
                                 (*call).opline = user.op_array.instructions.as_ptr();

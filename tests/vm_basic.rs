@@ -54,6 +54,7 @@ fn test_echo_int() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -88,6 +89,7 @@ fn test_echo_negative() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -131,6 +133,7 @@ fn test_add_and_echo() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -168,6 +171,7 @@ fn test_overflow_to_float() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -202,6 +206,7 @@ fn test_timeout_interrupt() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -258,6 +263,7 @@ fn test_assign_and_echo_cv() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -317,6 +323,7 @@ fn test_assign_add_echo() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -390,6 +397,7 @@ fn test_internal_function_call() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -433,6 +441,7 @@ fn test_user_function_call() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let add_one_func = make_user_function_with_args(fn_op_array, 1);
@@ -480,6 +489,7 @@ fn test_user_function_call() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(main_op_array);
@@ -518,6 +528,7 @@ fn test_undefined_function_error() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     };
 
     let main_func = make_user_function(op_array);
@@ -580,6 +591,7 @@ fn test_nested_calls() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     }, 1);
 
     // --- main script ---
@@ -654,6 +666,7 @@ fn test_nested_calls() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -703,6 +716,7 @@ fn test_recursive_countdown() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     // f2: return f1()
@@ -733,6 +747,7 @@ fn test_recursive_countdown() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     // f3: return f2()
@@ -763,6 +778,7 @@ fn test_recursive_countdown() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     // main: echo f3()
@@ -797,6 +813,7 @@ fn test_recursive_countdown() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -837,6 +854,7 @@ fn test_interrupt_during_deep_call() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     // main: init_fcall f1, do_fcall, echo "2", return
@@ -870,6 +888,7 @@ fn test_interrupt_during_deep_call() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
@@ -933,6 +952,7 @@ fn test_assign_result_used() {
         main_scope_vars: vec![],
         all_cvs: vec![],
         cache: vec![],
+        needs_globals_sync: false,
     });
 
     let (mut eg, buf) = make_eg_with_capture();

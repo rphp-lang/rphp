@@ -258,6 +258,64 @@ bench_closure_3int();
 
 #[test]
 #[ignore]
+fn perf_main_scope_tax() {
+    eprintln!("\n=== Main-scope Tax: top-level vs wrapper (runtime-only) ===\n");
+
+    // Top-level: calls from main scope — measures globals sync overhead.
+    bench_rt("top-level: function (10k)", &format!(r#"<?php
+function add($a, $b) {{
+    return $a + $b;
+}}
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + add($i, 1);
+}}
+"#));
+
+    // Wrapper: same code but hot loop inside a function — no globals sync.
+    bench_rt("wrapper: function (10k)", &format!(r#"<?php
+function add($a, $b) {{
+    return $a + $b;
+}}
+function bench_it() {{
+    $sum = 0;
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        $sum = $sum + add($i, 1);
+    }}
+    return $sum;
+}}
+bench_it();
+"#));
+
+    bench_rt("top-level: closure use int (10k)", &format!(r#"<?php
+$base = 100;
+$add = function($x) use ($base) {{
+    return $base + $x;
+}};
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + $add($i);
+}}
+"#));
+
+    bench_rt("wrapper: closure use int (10k)", &format!(r#"<?php
+function bench_it() {{
+    $base = 100;
+    $add = function($x) use ($base) {{
+        return $base + $x;
+    }};
+    $sum = 0;
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        $sum = $sum + $add($i);
+    }}
+    return $sum;
+}}
+bench_it();
+"#));
+}
+
+#[test]
+#[ignore]
 fn perf_method_call() {
     eprintln!("\n=== Method Call vs Function Call (runtime-only) ===\n");
 
