@@ -20,14 +20,17 @@ pub struct PhpObject {
 
 /// PHP array — ordered hash map with integer and string keys.
 /// Preserves insertion order, supports auto-incrementing integer keys.
-/// Uses HashMap index for O(1) key lookup + Vec for insertion order.
+/// Uses split HashMap indexes for O(1) key lookup + Vec for insertion order.
+/// String lookups use `HashMap<String, usize>` which supports `&str` via `Borrow` — zero allocation.
 #[derive(Debug, Clone)]
 pub struct PhpArray {
     /// Insertion-ordered entries
     entries: Vec<(ArrayKey, Value)>,
-    /// Key → index into entries for O(1) lookup.
-    /// Lazily allocated — None while array is in packed mode.
-    index: Option<HashMap<ArrayKey, usize>>,
+    /// String key → index into entries. Lazily allocated (None while packed).
+    /// `HashMap<String, usize>` supports `get(&str)` via `Borrow<str>` — no allocation on lookup.
+    str_index: Option<HashMap<String, usize>>,
+    /// Int key → index into entries. Lazily allocated (None while packed).
+    int_index: Option<HashMap<i64, usize>>,
     next_int_key: i64,
     /// True when keys are exactly 0..N-1 (sequential push only).
     /// Packed arrays skip HashMap entirely — direct Vec index.
@@ -44,20 +47,26 @@ impl PhpArray {
     pub fn new() -> Self {
         Self {
             entries: Vec::new(),
-            index: None,
+            str_index: None,
+            int_index: None,
             next_int_key: 0,
             packed: true,
         }
     }
 
-    /// Ensure the HashMap index exists (transition from packed to hash mode).
+    /// Ensure the split index maps exist (transition from packed to hash mode).
     fn ensure_index(&mut self) {
-        if self.index.is_none() {
-            let mut map = HashMap::with_capacity(self.entries.len());
+        if self.str_index.is_none() {
+            let mut str_map = HashMap::new();
+            let mut int_map = HashMap::with_capacity(self.entries.len());
             for (i, (k, _)) in self.entries.iter().enumerate() {
-                map.insert(k.clone(), i);
+                match k {
+                    ArrayKey::Int(n) => { int_map.insert(*n, i); }
+                    ArrayKey::String(s) => { str_map.insert(s.clone(), i); }
+                }
             }
-            self.index = Some(map);
+            self.str_index = Some(str_map);
+            self.int_index = Some(int_map);
         }
     }
 
@@ -78,10 +87,9 @@ impl PhpArray {
             // Packed: key == entries.len(), just push to Vec
             self.entries.push((ArrayKey::Int(key), val));
         } else {
-            let ak = ArrayKey::Int(key);
             let idx = self.entries.len();
-            self.entries.push((ak.clone(), val));
-            self.index.as_mut().unwrap().insert(ak, idx);
+            self.entries.push((ArrayKey::Int(key), val));
+            self.int_index.as_mut().unwrap().insert(key, idx);
         }
     }
 
@@ -102,14 +110,13 @@ impl PhpArray {
             // Non-sequential → unpack
             self.unpack();
         }
-        let ak = ArrayKey::Int(key);
-        let index = self.index.as_mut().unwrap();
-        if let Some(&idx) = index.get(&ak) {
+        let int_index = self.int_index.as_mut().unwrap();
+        if let Some(&idx) = int_index.get(&key) {
             self.entries[idx].1 = val;
         } else {
             let idx = self.entries.len();
-            self.entries.push((ak.clone(), val));
-            index.insert(ak, idx);
+            self.entries.push((ArrayKey::Int(key), val));
+            int_index.insert(key, idx);
             if key >= self.next_int_key {
                 self.next_int_key = key + 1;
             }
@@ -119,14 +126,16 @@ impl PhpArray {
     /// Set by string key
     pub fn set_str(&mut self, key: &str, val: Value) {
         self.unpack(); // String key → always hash mode
-        let ak = ArrayKey::String(key.to_string());
-        let index = self.index.as_mut().unwrap();
-        if let Some(&idx) = index.get(&ak) {
+        let str_index = self.str_index.as_mut().unwrap();
+        if let Some(&idx) = str_index.get(key) {
+            // Key exists — overwrite value, no allocation for key
             self.entries[idx].1 = val;
         } else {
+            // New key — allocate once for both entry and index
+            let owned = key.to_string();
             let idx = self.entries.len();
-            self.entries.push((ak.clone(), val));
-            index.insert(ak, idx);
+            self.entries.push((ArrayKey::String(owned.clone()), val));
+            str_index.insert(owned, idx);
         }
     }
 
@@ -145,20 +154,17 @@ impl PhpArray {
             // Direct Vec index — no hash, no alloc
             self.entries.get(key as usize).map(|(_, v)| v)
         } else {
-            let index = self.index.as_ref()?;
-            let ak = ArrayKey::Int(key);
-            index.get(&ak).map(|&idx| &self.entries[idx].1)
+            let int_index = self.int_index.as_ref()?;
+            int_index.get(&key).map(|&idx| &self.entries[idx].1)
         }
     }
 
-    /// Get by string key — O(1)
+    /// Get by string key — O(1), zero allocation.
+    /// Uses `HashMap<String, usize>::get(&str)` via `Borrow<str>` trait.
+    #[inline]
     pub fn get_str(&self, key: &str) -> Option<&Value> {
-        let index = self.index.as_ref()?;
-        // Lookup without allocating a new String
-        // HashMap<ArrayKey, usize> needs ArrayKey for lookup, but we can use
-        // the raw_entry API... For now, allocate. TODO: use hashbrown raw_entry.
-        let ak = ArrayKey::String(key.to_string());
-        index.get(&ak).map(|&idx| &self.entries[idx].1)
+        let str_index = self.str_index.as_ref()?;
+        str_index.get(key).map(|&idx| &self.entries[idx].1)
     }
 
     pub fn len(&self) -> usize {
@@ -176,16 +182,19 @@ impl PhpArray {
     /// Remove element by key
     pub fn remove(&mut self, key: &ArrayKey) -> bool {
         self.unpack(); // remove breaks packed invariant
-        let index = self.index.as_mut().unwrap();
-        if let Some(&idx) = index.get(key) {
+        let found_idx = match key {
+            ArrayKey::Int(n) => self.int_index.as_ref().unwrap().get(n).copied(),
+            ArrayKey::String(s) => self.str_index.as_ref().unwrap().get(s.as_str()).copied(),
+        };
+        if let Some(idx) = found_idx {
             self.entries.remove(idx);
-            index.remove(key);
-            // Re-index entries after removed position
-            for (i, (k, _)) in self.entries.iter().enumerate() {
-                if i >= idx {
-                    index.insert(k.clone(), i);
-                }
+            // Remove the key from its index
+            match key {
+                ArrayKey::Int(n) => { self.int_index.as_mut().unwrap().remove(n); }
+                ArrayKey::String(s) => { self.str_index.as_mut().unwrap().remove(s.as_str()); }
             }
+            // Re-index entries after removed position
+            self.reindex_from(idx);
             true
         } else {
             false
@@ -195,8 +204,9 @@ impl PhpArray {
     /// Remove and return last element
     pub fn pop(&mut self) -> Option<Value> {
         if let Some((key, val)) = self.entries.pop() {
-            if let Some(ref mut index) = self.index {
-                index.remove(&key);
+            match &key {
+                ArrayKey::Int(n) => { if let Some(ref mut m) = self.int_index { m.remove(n); } }
+                ArrayKey::String(s) => { if let Some(ref mut m) = self.str_index { m.remove(s.as_str()); } }
             }
             Some(val)
         } else {
@@ -211,13 +221,27 @@ impl PhpArray {
         } else {
             self.unpack(); // shift breaks packed invariant
             let (key, val) = self.entries.remove(0);
-            let index = self.index.as_mut().unwrap();
-            index.remove(&key);
-            // Re-index all entries since indices shifted
-            for (i, (k, _)) in self.entries.iter().enumerate() {
-                index.insert(k.clone(), i);
+            match &key {
+                ArrayKey::Int(n) => { self.int_index.as_mut().unwrap().remove(n); }
+                ArrayKey::String(s) => { self.str_index.as_mut().unwrap().remove(s.as_str()); }
             }
+            // Re-index all entries since indices shifted
+            self.reindex_from(0);
             Some(val)
+        }
+    }
+
+    /// Rebuild index entries from position `from` onward (after remove/shift).
+    fn reindex_from(&mut self, from: usize) {
+        let int_index = self.int_index.as_mut().unwrap();
+        let str_index = self.str_index.as_mut().unwrap();
+        for (i, (k, _)) in self.entries.iter().enumerate() {
+            if i >= from {
+                match k {
+                    ArrayKey::Int(n) => { int_index.insert(*n, i); }
+                    ArrayKey::String(s) => { str_index.insert(s.clone(), i); }
+                }
+            }
         }
     }
 }

@@ -316,6 +316,47 @@ bench_it();
 
 #[test]
 #[ignore]
+fn perf_array_access() {
+    eprintln!("\n=== Array Access (runtime-only) ===\n");
+
+    bench_rt("int-key array read (10k)", &format!(r#"<?php
+function bench_int_read() {{
+    $arr = [10, 20, 30, 40, 50];
+    $sum = 0;
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        $sum = $sum + $arr[2];
+    }}
+    return $sum;
+}}
+bench_int_read();
+"#));
+
+    bench_rt("string-key array read (10k)", &format!(r#"<?php
+function bench_str_read() {{
+    $arr = ["name" => "John", "age" => 30, "city" => "Prague", "score" => 100];
+    $sum = 0;
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        $sum = $sum + $arr["score"];
+    }}
+    return $sum;
+}}
+bench_str_read();
+"#));
+
+    bench_rt("string-key array write (10k)", &format!(r#"<?php
+function bench_str_write() {{
+    $arr = ["x" => 0];
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        $arr["x"] = $i;
+    }}
+    return $arr["x"];
+}}
+bench_str_write();
+"#));
+}
+
+#[test]
+#[ignore]
 fn perf_method_call() {
     eprintln!("\n=== Method Call vs Function Call (runtime-only) ===\n");
 
