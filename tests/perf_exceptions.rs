@@ -3,7 +3,7 @@
 ///
 /// Run with: cargo test --test perf_exceptions -- --nocapture --ignored
 mod common;
-use common::run_php_silent;
+use common::{run_php_silent, PreparedPhp};
 use std::time::Instant;
 
 const WARMUP: u32 = 3;
@@ -20,6 +20,29 @@ fn bench(label: &str, source: &str) -> f64 {
         let start = Instant::now();
         run_php_silent(source);
         times.push(start.elapsed().as_secs_f64() * 1000.0); // ms
+    }
+    times.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let median = times[times.len() / 2];
+    let min = times[0];
+    let max = times[times.len() - 1];
+    eprintln!("  {:<45} median={:.3}ms  min={:.3}ms  max={:.3}ms", label, median, min, max);
+    median
+}
+
+/// Runtime-only benchmark: compile once, execute many.
+/// Eliminates lex/parse/compile noise. Inline caches stay warm (steady-state).
+fn bench_rt(label: &str, source: &str) -> f64 {
+    let mut prepared = PreparedPhp::new(source);
+    // Warmup (also warms inline caches)
+    for _ in 0..WARMUP {
+        prepared.execute_silent();
+    }
+    // Measure
+    let mut times = Vec::with_capacity(ITERATIONS as usize);
+    for _ in 0..ITERATIONS {
+        let start = Instant::now();
+        prepared.execute_silent();
+        times.push(start.elapsed().as_secs_f64() * 1000.0);
     }
     times.sort_by(|a, b| a.partial_cmp(b).unwrap());
     let median = times[times.len() / 2];
@@ -152,9 +175,9 @@ for ($i = 0; $i < 1000; $i = $i + 1) {
 #[test]
 #[ignore]
 fn perf_closure_vs_function() {
-    eprintln!("\n=== Closure vs Named Function ===\n");
+    eprintln!("\n=== Closure vs Named Function (runtime-only) ===\n");
 
-    bench("named function call (10k)", &format!(r#"<?php
+    bench_rt("named function call (10k)", &format!(r#"<?php
 function add($a, $b) {{
     return $a + $b;
 }}
@@ -164,7 +187,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 }}
 "#));
 
-    bench("closure call (10k)", &format!(r#"<?php
+    bench_rt("closure call (10k)", &format!(r#"<?php
 $add = function($a, $b) {{
     return $a + $b;
 }};
@@ -174,7 +197,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 }}
 "#));
 
-    bench("closure with use var (10k)", &format!(r#"<?php
+    bench_rt("closure use int (10k)", &format!(r#"<?php
 $base = 100;
 $add = function($x) use ($base) {{
     return $base + $x;
@@ -184,14 +207,38 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + $add($i);
 }}
 "#));
+
+    bench_rt("closure use string (10k)", &format!(r#"<?php
+$prefix = "hello";
+$f = function($x) use ($prefix) {{
+    return $x;
+}};
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + $f($i);
+}}
+"#));
+
+    bench_rt("closure use 3 ints (10k)", &format!(r#"<?php
+$a = 1;
+$b = 2;
+$c = 3;
+$f = function($x) use ($a, $b, $c) {{
+    return $a + $b + $c + $x;
+}};
+$sum = 0;
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $sum = $sum + $f($i);
+}}
+"#));
 }
 
 #[test]
 #[ignore]
 fn perf_method_call() {
-    eprintln!("\n=== Method Call vs Function Call ===\n");
+    eprintln!("\n=== Method Call vs Function Call (runtime-only) ===\n");
 
-    bench("function call (10k)", &format!(r#"<?php
+    bench_rt("function call (10k)", &format!(r#"<?php
 function compute($x) {{
     return $x + 1;
 }}
@@ -201,7 +248,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 }}
 "#));
 
-    bench("method call (10k)", &format!(r#"<?php
+    bench_rt("method call (10k)", &format!(r#"<?php
 class Math {{
     public function compute($x) {{
         return $x + 1;
@@ -214,7 +261,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 }}
 "#));
 
-    bench("method empty body (10k)", &format!(r#"<?php
+    bench_rt("method empty body (10k)", &format!(r#"<?php
 class Noop {{
     public function run() {{
         return 0;
@@ -227,7 +274,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 }}
 "#));
 
-    bench("method reads $this prop (10k)", &format!(r#"<?php
+    bench_rt("method reads $this prop (10k)", &format!(r#"<?php
 class Counter {{
     public $val = 1;
     public function get() {{
@@ -241,7 +288,7 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 }}
 "#));
 
-    bench("static method call (10k)", &format!(r#"<?php
+    bench_rt("static method call (10k)", &format!(r#"<?php
 class SMath {{
     public static function compute($x) {{
         return $x + 1;
@@ -250,6 +297,29 @@ class SMath {{
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + SMath::compute($i);
+}}
+"#));
+
+    bench_rt("property write (10k)", &format!(r#"<?php
+class Box {{
+    public $val = 0;
+}}
+$b = new Box();
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $b->val = $i;
+}}
+"#));
+
+    bench_rt("property read+write (10k)", &format!(r#"<?php
+class Acc {{
+    public $sum = 0;
+    public function add($x) {{
+        $this->sum = $this->sum + $x;
+    }}
+}}
+$a = new Acc();
+for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+    $a->add($i);
 }}
 "#));
 }

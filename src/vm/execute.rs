@@ -1118,9 +1118,10 @@ fn op_fetch_obj_r(
 
         // ── Property cache fast path ──
         // On cache hit (same class_id, public property): skip visibility/mangling entirely.
+        // prop_flags bit 0 = public+unmangled (read-safe), bit 1 = not enum/readonly (write-safe).
         let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
         let ic = &op_array.cache[ip];
-        if ic.prop_flags == 1 && ic.class_id == obj.class_id && obj.class_id != 0 {
+        if ic.prop_flags & 1 != 0 && ic.class_id == obj.class_id && obj.class_id != 0 {
             // Cache hit: public property, key == literal name
             let found_val = obj.properties.get(name).cloned();
             drop(obj);
@@ -1180,11 +1181,19 @@ fn op_fetch_obj_r(
             }
         }
 
-        // Cache: if public property and key == name (no mangling), mark for fast path
+        // Cache: if public property and key == name (no mangling), mark for fast path.
+        // prop_flags bit 0 = read-safe (public + unmangled).
+        // prop_flags bit 1 = write-safe (not enum, not readonly).
         if is_public && key == name && obj.class_id != 0 {
             let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
             ic_mut.class_id = obj.class_id;
-            ic_mut.prop_flags = 1;
+            let mut flags: u32 = 1; // read-safe
+            // Check if also write-safe (not enum, not readonly)
+            let writable = eg.class_table.get(&obj.class_name).map_or(true, |cd| {
+                !cd.is_enum && !cd.readonly_props.contains(&name.to_string())
+            });
+            if writable { flags |= 2; }
+            ic_mut.prop_flags = flags;
         }
 
         let found_val = obj.properties.get(&key).cloned();
@@ -1230,8 +1239,10 @@ fn op_assign_obj_prop<'a>(
         let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
 
         // Visibility check — use declaring class, not receiver class
+        let mut prop_is_public = true;
         if let Some((vis, defining_class)) = eg.find_property_visibility(&php_obj.class_name, &name) {
             if vis != Visibility::Public {
+                prop_is_public = false;
                 let own_private = receiver_in_scope && caller_class.as_ref().map_or(false, |cc| {
                     vis == Visibility::Private && defining_class.eq_ignore_ascii_case(cc)
                 });
@@ -1254,8 +1265,11 @@ fn op_assign_obj_prop<'a>(
             }
         }
         // Enum guard: enum cases are sealed — no property writes allowed
+        // Track writability for cache population — enum/readonly are not cacheable for writes.
+        let mut prop_is_writable = true;
         if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
             if class_def.is_enum {
+                prop_is_writable = false;
                 let err = make_error_value("Error", &format!(
                     "Cannot modify readonly property {}::${}",
                     php_obj.class_name, name
@@ -1270,6 +1284,7 @@ fn op_assign_obj_prop<'a>(
         // Readonly property check
         if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
             if class_def.readonly_props.contains(&name) {
+                prop_is_writable = false;
                 let key_check = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
                 let already_init = php_obj.properties.get(&key_check)
                     .map_or(false, |v| !v.is_undef());
@@ -1306,6 +1321,15 @@ fn op_assign_obj_prop<'a>(
         }
         // Resolve storage key (mangled for private properties)
         let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
+
+        // Cache: if public, not enum, not readonly, key == name → mark for write fast path.
+        if prop_is_public && prop_is_writable && key == name && php_obj.class_id != 0 {
+            let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+            ic_mut.class_id = php_obj.class_id;
+            ic_mut.prop_flags = 3; // bit 0: read-safe, bit 1: write-safe
+        }
+
         let prop_exists = php_obj.properties.contains_key(&key);
         if prop_exists {
             php_obj.properties.insert(key, cloned);
@@ -1523,9 +1547,24 @@ fn op_init_dynamic_call(
         // Copy captured use_vars into CV slots after declared params
         let func = unsafe { &*func_ptr };
         let use_var_offset = func.sig.num_args;
-        for (i, captured) in closure.captures.iter().enumerate() {
-            let cv_slot = unsafe { (*call).cv_mut(use_var_offset + i as u32) };
-            unsafe { frame_slot_set(call, cv_slot as *mut Value, captured.clone()) };
+        let n_captures = closure.captures.len();
+        if n_captures > 0 {
+            if !closure.has_heap_captures {
+                // Scalar-only fast path: all captures are Long/Double/Bool/Null.
+                // Raw memcpy — no clone overhead, no needs_cleanup checks.
+                unsafe {
+                    let src = closure.captures.as_ptr();
+                    let dst = (*call).cv_mut(use_var_offset) as *mut Value;
+                    std::ptr::copy_nonoverlapping(src, dst, n_captures);
+                }
+                // No heap flag needed — all scalars.
+            } else {
+                // General path: at least one heap capture, clone each.
+                for (i, captured) in closure.captures.iter().enumerate() {
+                    let cv_slot = unsafe { (*call).cv_mut(use_var_offset + i as u32) };
+                    unsafe { frame_slot_init(call, cv_slot as *mut Value, captured.clone()) };
+                }
+            }
         }
     } else if let Some(arr) = callable.as_array() {
         // Legacy array callable: [class_or_object, method_name]
@@ -3604,10 +3643,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::AssignObjProp => {
-                match op_assign_obj_prop(eg, frame, op_array, opline)? {
-                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
-                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
-                    _ => {}
+                // ── Cache-hit fast path for public, non-enum, non-readonly properties ──
+                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                if obj_val.value_type() == ValueType::Object {
+                    let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
+                    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+                    let ic = &op_array.cache[ip];
+                    // prop_flags == 3: bit 0 (public+unmangled) + bit 1 (not enum/readonly)
+                    if ic.prop_flags == 3 && ic.class_id == obj_class_id && obj_class_id != 0 {
+                        let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                        let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
+                        let cloned = val.clone();
+                        let name = prop_name.as_str().unwrap_or("");
+                        if let Some(mut php_obj) = obj_val.as_object_mut() {
+                            php_obj.properties.insert(name.to_string(), cloned);
+                        }
+                    } else {
+                        match op_assign_obj_prop(eg, frame, op_array, opline)? {
+                            ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                            ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                            _ => {}
+                        }
+                    }
+                } else {
+                    match op_assign_obj_prop(eg, frame, op_array, opline)? {
+                        ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                        ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                        _ => {}
+                    }
                 }
             }
 
@@ -4130,7 +4193,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = ptr; }
                     ptr
                 };
-                let closure = PhpClosure { func: func_ptr, captures: Vec::new() };
+                let num_captures = opline.extended_value as usize;
+                let closure = PhpClosure {
+                    func: func_ptr,
+                    captures: Vec::with_capacity(num_captures),
+                    has_heap_captures: false,
+                };
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
                 unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
             }
@@ -4142,6 +4210,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let closure_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let closure_val = unsafe { &mut *closure_ptr };
                 let php_closure = closure_val.as_closure_mut().expect("ClosureUseVar: op1 must be a closure");
+                if cloned_val.needs_cleanup() {
+                    php_closure.has_heap_captures = true;
+                }
                 php_closure.captures.push(cloned_val);
             }
 

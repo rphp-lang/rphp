@@ -2333,6 +2333,7 @@ impl Compiler {
                 create.op1_type = OpType::Const;
                 create.result = tmp;
                 create.result_type = OpType::Tmp;
+                create.extended_value = use_vars.len() as u32;
                 self.instructions.push(create);
 
                 // Add captured use_var values

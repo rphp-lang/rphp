@@ -229,6 +229,9 @@ pub struct PhpClosure {
     pub func: *const FunctionCommon,
     /// Captured `use` variable values, in declaration order.
     pub captures: Vec<Value>,
+    /// True if any captured value needs_cleanup (String/Array/Object/Closure).
+    /// When false, captures are all scalars — clone is a cheap memcpy.
+    pub has_heap_captures: bool,
 }
 
 impl Clone for PhpClosure {
@@ -236,6 +239,7 @@ impl Clone for PhpClosure {
         Self {
             func: self.func,
             captures: self.captures.clone(),
+            has_heap_captures: self.has_heap_captures,
         }
     }
 }

@@ -82,6 +82,52 @@ pub fn run_php_silent(source: &str) {
     execute::execute(&mut eg, &main_func).unwrap();
 }
 
+/// Prepared PHP script — compiled once, executable many times.
+/// Compile + register happens once. Each `execute_silent()` re-runs the
+/// main script on the same EG — inline caches stay warm (steady-state).
+/// Eliminates lex/parse/compile noise from benchmark measurements.
+#[allow(dead_code)]
+pub struct PreparedPhp {
+    main_func: rphp::vm::function::UserFunction,
+    // Keep functions alive (register_function stores raw pointers)
+    _functions: Vec<(String, rphp::vm::function::UserFunction)>,
+    // Keep stdlib alive (register_stdlib stores raw pointers)
+    _stdlib: Vec<Box<rphp::vm::function::InternalFunction>>,
+    eg: ExecutorGlobals,
+    _buf: std::sync::Arc<std::sync::Mutex<Vec<u8>>>,
+}
+
+#[allow(dead_code)]
+impl PreparedPhp {
+    /// Compile PHP source and set up runtime. Panics on error.
+    pub fn new(source: &str) -> Self {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        let stmts = Parser::new(tokens).parse().unwrap();
+        let result = Compiler::new().compile(&stmts).unwrap();
+        let main_func = make_user_function(result.main);
+        let (mut eg, buf) = make_eg_with_capture();
+        let stdlib = stdlib::register_stdlib(&mut eg);
+        for (name, func) in &result.functions {
+            eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
+        }
+        for class_def in result.class_defs {
+            eg.register_class(class_def).unwrap();
+        }
+        Self {
+            main_func,
+            _functions: result.functions,
+            _stdlib: stdlib,
+            eg,
+            _buf: buf,
+        }
+    }
+
+    /// Execute the main script. Re-uses the same EG (inline caches warm).
+    pub fn execute_silent(&mut self) {
+        execute::execute(&mut self.eg, &self.main_func).unwrap();
+    }
+}
+
 /// Like run_php but returns the VmError instead of panicking.
 /// Catches errors from any stage: lexing, parsing, compilation, class registration, or execution.
 #[allow(dead_code)]
