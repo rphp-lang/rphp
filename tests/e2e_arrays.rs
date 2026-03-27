@@ -397,3 +397,109 @@ fn test_e2e_function_builds_array() {
         "357"
     );
 }
+
+// ── COW array aliasing regression tests ───────────────────────────
+
+#[test]
+fn test_e2e_array_cow_assign_then_push() {
+    // $b = $a shares Rc. $b[] = must COW-detach, not mutate $a.
+    assert_eq!(run_php("<?php
+$a = [1, 2, 3];
+$b = $a;
+$b[] = 4;
+echo count($a) . '|' . count($b);
+"), "3|4");
+}
+
+#[test]
+fn test_e2e_array_cow_function_arg() {
+    // Function arg is a clone (Rc bump). Push inside must not affect caller.
+    assert_eq!(run_php("<?php
+function add_elem($arr) { $arr[] = 99; return count($arr); }
+$x = [10, 20];
+$y = add_elem($x);
+echo count($x) . '|' . $y;
+"), "2|3");
+}
+
+#[test]
+fn test_e2e_array_cow_multiple_clones() {
+    // Multiple clones from same source — each mutation independent.
+    assert_eq!(run_php("<?php
+$s = [1];
+$c1 = $s;
+$c2 = $s;
+$c1[] = 2;
+$c2[] = 3;
+echo count($s) . '|' . count($c1) . '|' . count($c2);
+"), "1|2|2");
+}
+
+#[test]
+fn test_e2e_array_cow_sole_owner_inplace() {
+    // Sole owner push should mutate in place (no COW detach).
+    assert_eq!(run_php("<?php
+$z = [1, 2];
+$z[] = 3;
+echo count($z);
+"), "3");
+}
+
+#[test]
+fn test_e2e_array_cow_string_key_mutation() {
+    // String-keyed array — copy + add new key must not affect original.
+    assert_eq!(run_php("<?php
+$m = ['a' => 1, 'b' => 2];
+$n = $m;
+$n['c'] = 3;
+echo count($m) . '|' . count($n) . '|' . $n['c'];
+"), "2|3|3");
+}
+
+#[test]
+fn test_e2e_array_cow_overwrite_existing_key() {
+    // Overwrite existing key on a shared copy — original unaffected.
+    assert_eq!(run_php("<?php
+$a = ['x' => 10, 'y' => 20];
+$b = $a;
+$b['x'] = 999;
+echo $a['x'] . '|' . $b['x'];
+"), "10|999");
+}
+
+#[test]
+fn test_e2e_array_cow_nested_function() {
+    // Array passed through two function calls, mutated at end.
+    assert_eq!(run_php("<?php
+function inner($arr) { $arr[] = 3; return $arr; }
+function outer($arr) { return inner($arr); }
+$x = [1, 2];
+$y = outer($x);
+echo count($x) . '|' . count($y);
+"), "2|3");
+}
+
+#[test]
+fn test_e2e_array_cow_foreach_isolation() {
+    // Foreach iterates over a COW copy — mutation of original during loop.
+    assert_eq!(run_php("<?php
+$arr = [1, 2, 3];
+$sum = 0;
+foreach ($arr as $v) {
+    $sum = $sum + $v;
+}
+$arr[] = 4;
+echo $sum . '|' . count($arr);
+"), "6|4");
+}
+
+#[test]
+fn test_e2e_array_cow_value_independence() {
+    // Values inside array are independent after copy (string values).
+    assert_eq!(run_php("<?php
+$a = ['hello', 'world'];
+$b = $a;
+$b[0] = 'changed';
+echo $a[0] . '|' . $b[0];
+"), "hello|changed");
+}

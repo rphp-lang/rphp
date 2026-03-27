@@ -2276,6 +2276,17 @@ fn op_concat(
     let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
+    // Fast path: both operands are strings — avoid echo_to_string() heap allocation.
+    if op1.value_type() == ValueType::String && op2.value_type() == ValueType::String {
+        let s1 = op1.as_str().unwrap();
+        let s2 = op2.as_str().unwrap();
+        let mut concatenated = String::with_capacity(s1.len() + s2.len());
+        concatenated.push_str(s1);
+        concatenated.push_str(s2);
+        unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+        return Ok(());
+    }
+
     let s1 = if op1.value_type() == ValueType::Object {
         if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
             result.echo_to_string()
@@ -2418,14 +2429,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::AssignConcat => {
                 // $x .= expr: in-place string append
+                // COW: if dest is sole owner, push_str in place (no allocation).
+                // If shared, as_string_mut() detaches first.
                 let rhs = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 let rhs_str = rhs.echo_to_string();
                 let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let dest_ref = unsafe { &mut *dest };
-                if let Some(s) = dest_ref.as_str() {
-                    let mut new_s = s.to_string();
-                    new_s.push_str(&rhs_str);
-                    unsafe { slot_set(dest, Value::string(new_s)) };
+                if dest_ref.value_type() == ValueType::String {
+                    // COW in-place append
+                    let s = unsafe { dest_ref.as_string_mut().unwrap_unchecked() };
+                    s.push_str(&rhs_str);
                 } else {
                     let lhs_str = dest_ref.echo_to_string();
                     let mut new_s = lhs_str;
@@ -2436,7 +2449,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Echo => {
                 let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                if val.value_type() == ValueType::Object {
+                if val.value_type() == ValueType::String {
+                    // Fast path: string → write bytes directly, no allocation
+                    eg.write_output(val.as_str().unwrap().as_bytes());
+                } else if val.value_type() == ValueType::Object {
                     if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
                         let output = result.echo_to_string();
                         eg.write_output(output.as_bytes());

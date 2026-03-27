@@ -392,24 +392,27 @@ impl Value {
         });
     }
 
-    /// Create a string value. Stores a heap-allocated String (Box).
-    /// Temporary approach — will migrate to ZString later.
+    /// Create a string value. Stores a reference-counted String (Rc).
+    /// Clone = Rc refcount bump (no heap allocation). Drop = Rc decrement.
+    /// Mutation (.=) uses COW: detach if shared, mutate in place if sole owner.
     #[inline]
     pub fn string(s: impl Into<String>) -> Self {
-        let boxed = Box::new(s.into());
+        let rc = Rc::new(s.into());
         Self {
-            data: ValueData { ptr: Box::into_raw(boxed) as *mut u8 },
+            data: ValueData { ptr: Rc::into_raw(rc) as *mut u8 },
             type_info: ValueType::String as u32,
             _not_send: PhantomData,
         }
     }
 
-    /// Create an array value from a PhpArray.
+    /// Create an array value from a PhpArray (reference-counted).
+    /// Clone = Rc refcount bump (no deep copy). Drop = Rc decrement.
+    /// Mutation uses COW: detach if shared, mutate in place if sole owner.
     #[inline]
     pub fn array(arr: PhpArray) -> Self {
-        let boxed = Box::new(arr);
+        let rc = Rc::new(arr);
         Self {
-            data: ValueData { ptr: Box::into_raw(boxed) as *mut u8 },
+            data: ValueData { ptr: Rc::into_raw(rc) as *mut u8 },
             type_info: ValueType::Array as u32,
             _not_send: PhantomData,
         }
@@ -515,14 +518,30 @@ impl Value {
         }
     }
 
-    /// Get mutable string reference for in-place operations like `.=`.
-    /// SAFETY: caller must ensure no other references exist to this string.
+    /// Get mutable string reference with COW semantics.
+    /// If sole owner (refcount == 1): returns mutable reference in place (no allocation).
+    /// If shared (refcount > 1): detaches — clones the String into a new Rc, updates pointer.
+    /// SAFETY: caller must ensure no outstanding borrows of this string exist.
     #[inline]
     pub unsafe fn as_string_mut(&mut self) -> Option<&mut String> {
-        if self.value_type() == ValueType::String {
-            Some(&mut *(self.data.ptr as *mut String))
+        if self.value_type() != ValueType::String {
+            return None;
+        }
+        let rc_ptr = self.data.ptr as *mut String;
+        // Reconstruct Rc without consuming it (ManuallyDrop prevents decrement)
+        let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+        if Rc::strong_count(&rc) == 1 {
+            // Sole owner — mutate in place. No allocation, no Rc overhead.
+            Some(&mut *rc_ptr)
         } else {
-            None
+            // Shared — COW detach: clone String, create new sole-owner Rc
+            let cloned = (*rc_ptr).clone();
+            // Drop the ManuallyDrop wrapper and then the actual from_raw:
+            // we need to decrement our old reference
+            Rc::decrement_strong_count(rc_ptr as *const String);
+            let new_rc = Rc::new(cloned);
+            self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
+            Some(&mut *(self.data.ptr as *mut String))
         }
     }
 
@@ -536,13 +555,28 @@ impl Value {
         }
     }
 
-    /// Get mutable array reference. Only valid for Array values.
+    /// Get mutable array reference with COW semantics.
+    /// If sole owner (refcount == 1): returns mutable reference in place (no copy).
+    /// If shared (refcount > 1): detaches — clones the PhpArray into a new Rc, updates pointer.
     #[inline]
     pub fn as_array_mut(&mut self) -> Option<&mut PhpArray> {
-        if self.value_type() == ValueType::Array {
-            Some(unsafe { &mut *(self.data.ptr as *mut PhpArray) })
-        } else {
-            None
+        if self.value_type() != ValueType::Array {
+            return None;
+        }
+        unsafe {
+            let rc_ptr = self.data.ptr as *mut PhpArray;
+            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+            if Rc::strong_count(&rc) == 1 {
+                // Sole owner — mutate in place. No copy.
+                Some(&mut *rc_ptr)
+            } else {
+                // Shared — COW detach: deep clone PhpArray, create new sole-owner Rc
+                let cloned = (*rc_ptr).clone();
+                Rc::decrement_strong_count(rc_ptr as *const PhpArray);
+                let new_rc = Rc::new(cloned);
+                self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
+                Some(&mut *(self.data.ptr as *mut PhpArray))
+            }
         }
     }
 
@@ -765,12 +799,26 @@ impl Clone for Value {
         stats::inc_value_clone(self.value_type() as usize);
         match self.value_type() {
             ValueType::String => {
-                let s = unsafe { &*(self.data.ptr as *const String) };
-                Value::string(s.clone())
+                // Clone = Rc refcount bump. No heap allocation.
+                unsafe {
+                    Rc::increment_strong_count(self.data.ptr as *const String);
+                }
+                Self {
+                    data: ValueData { ptr: unsafe { self.data.ptr } },
+                    type_info: self.type_info,
+                    _not_send: PhantomData,
+                }
             }
             ValueType::Array => {
-                let arr = unsafe { &*(self.data.ptr as *const PhpArray) };
-                Value::array(arr.clone())
+                // Clone = Rc refcount bump. No deep copy.
+                unsafe {
+                    Rc::increment_strong_count(self.data.ptr as *const PhpArray);
+                }
+                Self {
+                    data: ValueData { ptr: unsafe { self.data.ptr } },
+                    type_info: self.type_info,
+                    _not_send: PhantomData,
+                }
             }
             ValueType::Object => {
                 // Clone = Rc increment. No heap allocation.
@@ -809,10 +857,12 @@ impl Drop for Value {
         stats::inc_value_drop(self.value_type() as usize);
         match self.value_type() {
             ValueType::String => {
-                unsafe { drop(Box::from_raw(self.data.ptr as *mut String)) };
+                // Drop = Rc decrement. Frees String when refcount reaches 0.
+                unsafe { Rc::decrement_strong_count(self.data.ptr as *const String) };
             }
             ValueType::Array => {
-                unsafe { drop(Box::from_raw(self.data.ptr as *mut PhpArray)) };
+                // Drop = Rc decrement. Frees PhpArray when refcount reaches 0.
+                unsafe { Rc::decrement_strong_count(self.data.ptr as *const PhpArray) };
             }
             ValueType::Object => {
                 // Drop = Rc decrement. Frees PhpObject when refcount reaches 0.
