@@ -88,7 +88,7 @@ impl OpArray {
     /// Specialize opcodes, with knowledge of parameter type hints.
     /// When all params are Int and Const operands are int literals,
     /// emits Int-guaranteed opcodes that skip runtime type checks.
-    pub fn specialize_opcodes_with_hints(&mut self, param_type_hints: &[ParamTypeHint]) {
+    pub fn specialize_opcodes_with_hints(&mut self, _param_type_hints: &[ParamTypeHint]) {
         use crate::vm::instruction::OpType;
         use crate::vm::opcode::OpCode;
 

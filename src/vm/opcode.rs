@@ -2,6 +2,7 @@
 /// Full set will have ~200 opcodes.
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(non_camel_case_types)]
 pub enum OpCode {
     // Arithmetic
     Add = 1,

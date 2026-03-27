@@ -1477,6 +1477,7 @@ impl Compiler {
 
     /// Evaluate a constant expression at compile time (for property defaults).
     /// Returns Err for expressions that cannot be resolved at compile time.
+    #[allow(dead_code)]
     fn eval_const_expr(expr: &Expr) -> Result<Value, String> {
         Self::eval_const_expr_with_constants(expr, &HashMap::new())
     }

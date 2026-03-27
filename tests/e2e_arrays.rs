@@ -503,3 +503,93 @@ $b[0] = 'changed';
 echo $a[0] . '|' . $b[0];
 "), "hello|changed");
 }
+
+#[test]
+fn test_e2e_array_cow_closure_capture_mutate() {
+    // Array captured by closure, mutated inside — outer unchanged.
+    assert_eq!(run_php("<?php
+$arr = [1, 2, 3];
+$fn = function() use ($arr) {
+    $arr[] = 4;
+    return count($arr);
+};
+echo count($arr) . '|' . $fn();
+"), "3|4");
+}
+
+#[test]
+fn test_e2e_array_cow_string_in_array_mutate() {
+    // String stored in array, clone array, mutate string in clone — original string intact.
+    assert_eq!(run_php("<?php
+$a = ['s' => 'hello'];
+$b = $a;
+$b['s'] = $b['s'] . ' world';
+echo $a['s'] . '|' . $b['s'];
+"), "hello|hello world");
+}
+
+#[test]
+fn test_e2e_array_cow_large_array() {
+    // 100-element array copy + mutate — COW detach scales correctly.
+    assert_eq!(run_php("<?php
+$a = [];
+for ($i = 0; $i < 100; $i = $i + 1) { $a[] = $i; }
+$b = $a;
+$b[50] = 999;
+echo $a[50] . '|' . $b[50] . '|' . count($a) . '|' . count($b);
+"), "50|999|100|100");
+}
+
+#[test]
+fn test_e2e_array_cow_repeated_clone_mutate() {
+    // Clone+mutate in a loop — each iteration gets a fresh COW detach.
+    assert_eq!(run_php("<?php
+$base = [1, 2, 3];
+$results = '';
+for ($i = 0; $i < 3; $i = $i + 1) {
+    $copy = $base;
+    $copy[] = $i;
+    $results .= count($copy) . ',';
+}
+echo count($base) . '|' . $results;
+"), "3|4,4,4,");
+}
+
+#[test]
+fn test_e2e_string_cow_in_closure_and_array() {
+    // String shared via array AND closure capture — both paths independent.
+    assert_eq!(run_php("<?php
+$s = 'shared';
+$arr = ['v' => $s];
+$fn = function() use ($s) { return $s . '!'; };
+$s .= '_mutated';
+echo $arr['v'] . '|' . $fn() . '|' . $s;
+"), "shared|shared!|shared_mutated");
+}
+
+#[test]
+fn test_e2e_string_cow_multiple_append() {
+    // Multiple .= on same string — all sole-owner after initial detach.
+    assert_eq!(run_php("<?php
+$s = 'a';
+$s .= 'b';
+$s .= 'c';
+$s .= 'd';
+$s .= 'e';
+echo $s;
+"), "abcde");
+}
+
+#[test]
+fn test_e2e_array_cow_associative_large() {
+    // Large associative array copy + string key mutation.
+    assert_eq!(run_php("<?php
+$a = [];
+for ($i = 0; $i < 50; $i = $i + 1) {
+    $a['k' . $i] = 'v' . $i;
+}
+$b = $a;
+$b['k25'] = 'changed';
+echo $a['k25'] . '|' . $b['k25'] . '|' . count($b);
+"), "v25|changed|50");
+}

@@ -1269,7 +1269,6 @@ fn op_assign_obj_prop<'a>(
         let mut prop_is_writable = true;
         if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
             if class_def.is_enum {
-                prop_is_writable = false;
                 let err = make_error_value("Error", &format!(
                     "Cannot modify readonly property {}::${}",
                     php_obj.class_name, name
