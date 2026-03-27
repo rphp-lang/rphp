@@ -555,3 +555,34 @@ connect(3000);
 "#);
     assert_eq!(out, "8080 3000");
 }
+
+// ── Namespace constant resolution ────────────────────────────────
+
+#[test]
+fn test_const_in_namespace_prescan() {
+    // Constants defined inside a namespace block should be pre-scanned
+    // and available for property defaults / forward references.
+    let out = run_php(r#"<?php
+namespace App\Config;
+const VERSION = 42;
+echo VERSION;
+"#);
+    assert_eq!(out, "42");
+}
+
+#[test]
+fn test_const_in_namespace_used_by_class() {
+    // Constant inside namespace pre-scanned so class property default can reference it.
+    let out = run_php(r#"<?php
+namespace App;
+const MAX = 100;
+
+class Config {
+    public $limit = MAX;
+}
+
+$c = new Config();
+echo $c->limit;
+"#);
+    assert_eq!(out, "100");
+}

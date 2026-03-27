@@ -2286,6 +2286,30 @@ fn op_concat(
         return Ok(());
     }
 
+    // Fast path: string . int — avoids echo_to_string heap alloc for the int.
+    if op1.value_type() == ValueType::String && op2.value_type() == ValueType::Long {
+        let s1 = op1.as_str().unwrap();
+        use std::fmt::Write;
+        let mut concatenated = String::with_capacity(s1.len() + 20);
+        concatenated.push_str(s1);
+        write!(concatenated, "{}", unsafe { op2.raw_long() }).unwrap();
+        unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+        return Ok(());
+    }
+
+    // Fast path: int . string
+    if op1.value_type() == ValueType::Long && op2.value_type() == ValueType::String {
+        let s2 = op2.as_str().unwrap();
+        use std::fmt::Write;
+        let mut concatenated = String::with_capacity(20 + s2.len());
+        write!(concatenated, "{}", unsafe { op1.raw_long() }).unwrap();
+        concatenated.push_str(s2);
+        unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
+        return Ok(());
+    }
+
+    // Slow path: at least one operand is non-string/non-int (object, float, etc).
+    // Stringify each, then concatenate with pre-allocated capacity.
     let s1 = if op1.value_type() == ValueType::Object {
         if let Some(result) = call_magic_method(eg, op1, "__tostring", &[])? {
             result.echo_to_string()
@@ -2304,7 +2328,9 @@ fn op_concat(
     } else {
         op2.echo_to_string()
     };
-    let concatenated = format!("{}{}", s1, s2);
+    let mut concatenated = String::with_capacity(s1.len() + s2.len());
+    concatenated.push_str(&s1);
+    concatenated.push_str(&s2);
     unsafe { frame_tmp_set(frame, result_ptr, Value::string(concatenated)) };
     Ok(())
 }
@@ -2431,15 +2457,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // COW: if dest is sole owner, push_str in place (no allocation).
                 // If shared, as_string_mut() detaches first.
                 let rhs = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let rhs_str = rhs.echo_to_string();
                 let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
                 let dest_ref = unsafe { &mut *dest };
                 if dest_ref.value_type() == ValueType::String {
-                    // COW in-place append
-                    let s = unsafe { dest_ref.as_string_mut().unwrap_unchecked() };
-                    s.push_str(&rhs_str);
+                    // Fast path: avoid echo_to_string() allocation when RHS is string
+                    if rhs.value_type() == ValueType::String {
+                        let rhs_s = rhs.as_str().unwrap();
+                        let s = unsafe { dest_ref.as_string_mut().unwrap_unchecked() };
+                        s.push_str(rhs_s);
+                    } else {
+                        let rhs_str = rhs.echo_to_string();
+                        let s = unsafe { dest_ref.as_string_mut().unwrap_unchecked() };
+                        s.push_str(&rhs_str);
+                    }
                 } else {
                     let lhs_str = dest_ref.echo_to_string();
+                    let rhs_str = if rhs.value_type() == ValueType::String {
+                        rhs.as_str().unwrap().to_string()
+                    } else {
+                        rhs.echo_to_string()
+                    };
                     let mut new_s = lhs_str;
                     new_s.push_str(&rhs_str);
                     unsafe { slot_set(dest, Value::string(new_s)) };
@@ -2451,6 +2488,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if val.value_type() == ValueType::String {
                     // Fast path: string → write bytes directly, no allocation
                     eg.write_output(val.as_str().unwrap().as_bytes());
+                } else if val.value_type() == ValueType::Long {
+                    // Fast path: integer → stack-local write, no heap allocation
+                    use std::io::Write;
+                    let mut buf = [0u8; 20]; // i64 max is 19 digits + sign
+                    let s = {
+                        let mut cursor = std::io::Cursor::new(&mut buf[..]);
+                        write!(cursor, "{}", unsafe { val.raw_long() }).unwrap();
+                        cursor.position() as usize
+                    };
+                    eg.write_output(&buf[..s]);
                 } else if val.value_type() == ValueType::Object {
                     if let Some(result) = call_magic_method(eg, val, "__tostring", &[])? {
                         let output = result.echo_to_string();

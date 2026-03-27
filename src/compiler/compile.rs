@@ -167,22 +167,38 @@ impl Compiler {
     /// Two passes: first collect all simple constants, then re-evaluate those that
     /// reference other constants (handles `const A = 1; const B = A;`).
     fn prescan_constants(&mut self, stmts: &[Stmt]) {
+        // Two passes over the full statement tree (including namespace bodies).
         // Pass 1: collect directly evaluable constants
-        for stmt in stmts {
-            if let Stmt::Const { name, value } = stmt {
-                if let Ok(val) = Self::eval_const_expr_with_constants(value, &self.known_constants) {
-                    self.known_constants.insert(name.clone(), val);
-                }
-            }
-        }
+        Self::prescan_constants_pass(stmts, None, &mut self.known_constants);
         // Pass 2: retry with the now-larger table (handles forward refs like const B = A)
+        Self::prescan_constants_pass(stmts, None, &mut self.known_constants);
+    }
+
+    /// Single pass over statements, recursing into namespace bodies.
+    /// `ns` is the current namespace prefix (None = top-level).
+    fn prescan_constants_pass(
+        stmts: &[Stmt],
+        ns: Option<&str>,
+        known: &mut HashMap<String, Value>,
+    ) {
         for stmt in stmts {
-            if let Stmt::Const { name, value } = stmt {
-                if !self.known_constants.contains_key(name) {
-                    if let Ok(val) = Self::eval_const_expr_with_constants(value, &self.known_constants) {
-                        self.known_constants.insert(name.clone(), val);
+            match stmt {
+                Stmt::Const { name, value } => {
+                    // Qualify constant name with namespace prefix
+                    let fqn = match ns {
+                        Some(prefix) => format!("{}\\{}", prefix, name),
+                        None => name.clone(),
+                    };
+                    if !known.contains_key(&fqn) {
+                        if let Ok(val) = Self::eval_const_expr_with_constants(value, known) {
+                            known.insert(fqn, val);
+                        }
                     }
                 }
+                Stmt::Namespace { name, body } => {
+                    Self::prescan_constants_pass(body, Some(name), known);
+                }
+                _ => {}
             }
         }
     }

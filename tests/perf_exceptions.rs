@@ -576,6 +576,28 @@ function bench_str_echo() {{
 }}
 bench_str_echo();
 "#));
+
+    bench_rt("string . int concat (10k)", &format!(r#"<?php
+function bench_str_int_concat() {{
+    $s = "val:";
+    $sum = 0;
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        $c = $s . $i;
+        $sum = $sum + 1;
+    }}
+    return $sum;
+}}
+bench_str_int_concat();
+"#));
+
+    bench_rt("echo int (10k)", &format!(r#"<?php
+function bench_echo_int() {{
+    for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
+        echo $i;
+    }}
+}}
+bench_echo_int();
+"#));
 }
 
 #[test]
