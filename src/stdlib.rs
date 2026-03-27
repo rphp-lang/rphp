@@ -546,8 +546,8 @@ fn fn_array_unshift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
         // Rebuild with val at front
         let mut new = PhpArray::new();
         new.push(val);
-        for (key, v) in a.entries().iter() {
-            match key {
+        for (key, v) in a.iter() {
+            match &key {
                 ArrayKey::Int(_) => new.push(v.clone()),
                 ArrayKey::String(k) => new.set_str(k, v.clone()),
             }
@@ -578,7 +578,7 @@ fn fn_in_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) 
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
     let found = haystack.as_array()
-        .map(|a| a.entries().iter().any(|(_, v)| values_equal(needle, v)))
+        .map(|a| a.iter().any(|(_, v)| values_equal(needle, v)))
         .unwrap_or(false);
     ret!(rv, Value::bool(found));
 }
@@ -587,8 +587,9 @@ fn fn_array_reverse(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut new = PhpArray::new();
-        for (key, val) in arr.entries().iter().rev() {
-            match key {
+        let collected: Vec<(ArrayKey, &Value)> = arr.iter().collect();
+        for (key, val) in collected.into_iter().rev() {
+            match &key {
                 ArrayKey::Int(_) => new.push(val.clone()),
                 ArrayKey::String(k) => new.set_str(k, val.clone()),
             }
@@ -604,14 +605,14 @@ fn fn_array_merge(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
     let a2 = arg!(ed, 1);
     if let (Some(a1), Some(a2)) = (a1.as_array(), a2.as_array()) {
         let mut merged = PhpArray::new();
-        for (key, val) in a1.entries() {
-            match key {
+        for (key, val) in a1.iter() {
+            match &key {
                 ArrayKey::Int(_) => merged.push(val.clone()),
                 ArrayKey::String(k) => merged.set_str(k, val.clone()),
             }
         }
-        for (key, val) in a2.entries() {
-            match key {
+        for (key, val) in a2.iter() {
+            match &key {
                 ArrayKey::Int(_) => merged.push(val.clone()),
                 ArrayKey::String(k) => merged.set_str(k, val.clone()),
             }
@@ -626,10 +627,10 @@ fn fn_array_keys(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
-        for (key, _) in arr.entries() {
+        for (key, _) in arr.iter() {
             match key {
-                ArrayKey::Int(k) => result.push(Value::long(*k)),
-                ArrayKey::String(k) => result.push(Value::string(k.clone())),
+                ArrayKey::Int(k) => result.push(Value::long(k)),
+                ArrayKey::String(k) => result.push(Value::string(k)),
             }
         }
         ret!(rv, Value::array(result));
@@ -642,7 +643,7 @@ fn fn_array_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
-        for (_, val) in arr.entries() {
+        for (_, val) in arr.iter() {
             result.push(val.clone());
         }
         ret!(rv, Value::array(result));
@@ -665,7 +666,7 @@ fn fn_array_slice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
             None => arr.len(),
         };
         let mut result = PhpArray::new();
-        for (_, val) in arr.entries().iter().skip(start).take(end.saturating_sub(start)) {
+        for (_, val) in arr.iter().skip(start).take(end.saturating_sub(start)) {
             result.push(val.clone());
         }
         ret!(rv, Value::array(result));
@@ -679,11 +680,11 @@ fn fn_array_unique(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
         let mut seen: Vec<String> = Vec::with_capacity(arr.len());
-        for (key, val) in arr.entries() {
+        for (key, val) in arr.iter() {
             let s = val.echo_to_string();
             if !seen.contains(&s) {
                 seen.push(s);
-                result.set(key.clone(), val.clone());
+                result.set(key, val.clone());
             }
         }
         ret!(rv, Value::array(result));
@@ -696,15 +697,15 @@ fn fn_array_flip(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
-        for (key, val) in arr.entries() {
+        for (key, val) in arr.iter() {
             let new_key = match val.value_type() {
                 ValueType::Long => ArrayKey::Int(val.as_long().unwrap()),
                 ValueType::String => ArrayKey::String(val.as_str().unwrap().to_string()),
                 _ => continue,
             };
             let new_val = match key {
-                ArrayKey::Int(k) => Value::long(*k),
-                ArrayKey::String(k) => Value::string(k.clone()),
+                ArrayKey::Int(k) => Value::long(k),
+                ArrayKey::String(k) => Value::string(k),
             };
             result.set(new_key, new_val);
         }
@@ -719,12 +720,12 @@ fn fn_array_combine(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
     let vals_arg = arg!(ed, 1);
     if let (Some(keys), Some(vals)) = (keys_arg.as_array(), vals_arg.as_array()) {
         let mut result = PhpArray::new();
-        for (k, v) in keys.entries().iter().zip(vals.entries().iter()) {
-            let key = match &k.1 {
+        for ((_, kv), (_, vv)) in keys.iter().zip(vals.iter()) {
+            let key = match kv {
                 val if val.as_str().is_some() => ArrayKey::String(val.as_str().unwrap().to_string()),
                 val => ArrayKey::Int(val.as_long().unwrap_or(0)),
             };
-            result.set(key, v.1.clone());
+            result.set(key, vv.clone());
         }
         ret!(rv, Value::array(result));
     } else {
@@ -738,7 +739,7 @@ fn fn_array_sum(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         let mut has_float = false;
         let mut sum_int: i64 = 0;
         let mut sum_float: f64 = 0.0;
-        for (_, val) in arr.entries() {
+        for (_, val) in arr.iter() {
             match val.value_type() {
                 ValueType::Long => sum_int = sum_int.wrapping_add(val.as_long().unwrap()),
                 ValueType::Double => { has_float = true; sum_float += val.as_double().unwrap(); }
@@ -757,7 +758,7 @@ fn fn_array_product(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
         let mut has_float = false;
         let mut prod_int: i64 = 1;
         let mut prod_float: f64 = 1.0;
-        for (_, val) in arr.entries() {
+        for (_, val) in arr.iter() {
             match val.value_type() {
                 ValueType::Long => prod_int = prod_int.wrapping_mul(val.as_long().unwrap()),
                 ValueType::Double => { has_float = true; prod_float *= val.as_double().unwrap(); }
@@ -774,7 +775,7 @@ fn fn_array_count_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Executo
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut counts: Vec<(String, i64)> = Vec::new();
-        for (_, val) in arr.entries() {
+        for (_, val) in arr.iter() {
             let s = val.echo_to_string();
             if let Some(entry) = counts.iter_mut().find(|(k, _)| k == &s) {
                 entry.1 += 1;
@@ -814,7 +815,7 @@ fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         if size < 0 {
             for _ in 0..pad_count { result.push(value.clone()); }
         }
-        for (_, v) in arr.entries() { result.push(v.clone()); }
+        for (_, v) in arr.iter() { result.push(v.clone()); }
         if size >= 0 {
             for _ in 0..pad_count { result.push(value.clone()); }
         }
@@ -831,7 +832,7 @@ fn fn_array_chunk(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
         let mut result = PhpArray::new();
         let mut chunk = PhpArray::new();
         let mut i = 0;
-        for (_, v) in arr.entries() {
+        for (_, v) in arr.iter() {
             chunk.push(v.clone());
             i += 1;
             if i == size {
@@ -855,7 +856,7 @@ fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     if let Some(arr) = arr_arg.as_array() {
         let mut result = PhpArray::new();
         let key_str = col_key.echo_to_string();
-        for (_, row) in arr.entries() {
+        for (_, row) in arr.iter() {
             if let Some(inner) = row.as_array() {
                 // Try string key first, then integer
                 let val = inner.get_str(&key_str)
@@ -874,7 +875,7 @@ fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
 fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
-        let mut entries: Vec<Value> = a.entries().iter().map(|(_, v)| v.clone()).collect();
+        let mut entries: Vec<Value> = a.iter().map(|(_, v)| v.clone()).collect();
         entries.sort_by(|a, b| cmp_val(compare_values(a, b)));
         let mut new = PhpArray::new();
         for v in entries { new.push(v); }
@@ -888,7 +889,7 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
-        let mut entries: Vec<Value> = a.entries().iter().map(|(_, v)| v.clone()).collect();
+        let mut entries: Vec<Value> = a.iter().map(|(_, v)| v.clone()).collect();
         entries.sort_by(|a, b| cmp_val(compare_values(b, a)));
         let mut new = PhpArray::new();
         for v in entries { new.push(v); }
@@ -903,11 +904,11 @@ fn fn_array_search(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
     if let Some(arr) = haystack.as_array() {
-        for (key, val) in arr.entries() {
+        for (key, val) in arr.iter() {
             if values_equal(needle, val) {
                 let result = match key {
-                    ArrayKey::Int(k) => Value::long(*k),
-                    ArrayKey::String(k) => Value::string(k.clone()),
+                    ArrayKey::Int(k) => Value::long(k),
+                    ArrayKey::String(k) => Value::string(k),
                 };
                 ret!(rv, result);
             }
@@ -941,7 +942,7 @@ fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
         };
         let replacement = arg_opt!(ed, 3).and_then(|v| v.as_array());
 
-        let entries: Vec<(ArrayKey, Value)> = a.entries().to_vec();
+        let entries: Vec<(ArrayKey, Value)> = a.iter().map(|(k, v)| (k, v.clone())).collect();
         let mut removed = PhpArray::new();
         let mut new = PhpArray::new();
 
@@ -952,7 +953,7 @@ fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
                 removed.push(v.clone());
                 if i == start {
                     if let Some(repl) = replacement {
-                        for (_, rv) in repl.entries() { new.push(rv.clone()); }
+                        for (_, rv) in repl.iter() { new.push(rv.clone()); }
                     }
                 }
             }
@@ -975,10 +976,10 @@ fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
                 .subsec_nanos() as usize) % arr.len();
-            let (key, _) = &arr.entries()[idx];
+            let (_, key) = arr.get_at(idx).unwrap();
             let result = match key {
-                ArrayKey::Int(k) => Value::long(*k),
-                ArrayKey::String(k) => Value::string(k.clone()),
+                ArrayKey::Int(k) => Value::long(k),
+                ArrayKey::String(k) => Value::string(k),
             };
             ret!(rv, result);
         }
@@ -990,7 +991,7 @@ fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
 fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
-        let mut entries: Vec<Value> = a.entries().iter().map(|(_, v)| v.clone()).collect();
+        let mut entries: Vec<Value> = a.iter().map(|(_, v)| v.clone()).collect();
         // Fisher-Yates with simple PRNG
         let mut seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1025,10 +1026,10 @@ fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
     };
     if let Some(arr) = arr_val.as_array() {
         let mut result = PhpArray::new();
-        for (key, val) in arr.entries().iter() {
+        for (key, val) in arr.iter() {
             let mapped = call_function(eg, func_ptr, &[val.clone()])?;
             if eg.exception.is_some() { return Ok(()); }
-            result.set(key.clone(), mapped);
+            result.set(key, mapped);
         }
         ret!(rv, Value::array(result));
     } else {
@@ -1057,19 +1058,19 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
                         return Ok(());
                     }
                 };
-                for (key, val) in arr.entries().iter() {
+                for (key, val) in arr.iter() {
                     let ret_val = call_function(eg, func_ptr, &[val.clone()])?;
                     if eg.exception.is_some() { return Ok(()); }
                     if ret_val.is_truthy() {
-                        result.set(key.clone(), val.clone());
+                        result.set(key, val.clone());
                     }
                 }
             }
             None => {
                 // No callback — filter by truthiness
-                for (key, val) in arr.entries().iter() {
+                for (key, val) in arr.iter() {
                     if val.is_truthy() {
-                        result.set(key.clone(), val.clone());
+                        result.set(key, val.clone());
                     }
                 }
             }
@@ -1180,7 +1181,7 @@ fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
     let glue = arg_str!(ed, 0);
     let pieces = arg!(ed, 1);
     if let Some(arr) = pieces.as_array() {
-        let parts: Vec<String> = arr.entries().iter().map(|(_, v)| v.echo_to_string()).collect();
+        let parts: Vec<String> = arr.iter().map(|(_, v)| v.echo_to_string()).collect();
         ret!(rv, Value::string(parts.join(glue.as_ref())));
     } else {
         ret!(rv, Value::string(""));
@@ -1380,7 +1381,7 @@ fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
     // Read individual values from that array
     let variadic_arr = arg!(ed, 1);
     let args: Vec<Value> = if let Some(arr) = variadic_arr.as_array() {
-        arr.entries().iter().map(|(_, v)| v.clone()).collect()
+        arr.iter().map(|(_, v)| v.clone()).collect()
     } else if variadic_arr.value_type() != ValueType::Undef {
         // Single non-array arg (non-variadic call path)
         vec![variadic_arr.clone()]
@@ -1817,8 +1818,8 @@ fn var_dump_value(val: &Value, indent: usize) -> String {
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let mut out = format!("{}array({}) {{\n", prefix, arr.len());
-            for (key, v) in arr.entries() {
-                let key_str = match key {
+            for (key, v) in arr.iter() {
+                let key_str = match &key {
                     ArrayKey::Int(k) => format!("[{}]", k),
                     ArrayKey::String(k) => format!("[\"{}\"]", k),
                 };
@@ -1849,8 +1850,8 @@ fn print_r_value(val: &Value, indent: usize) -> String {
             let inner = "    ".repeat(indent + 1);
             let mut out = "Array\n".to_string();
             out.push_str(&format!("{}(\n", prefix));
-            for (key, v) in arr.entries() {
-                let key_str = match key {
+            for (key, v) in arr.iter() {
+                let key_str = match &key {
                     ArrayKey::Int(k) => format!("{}", k),
                     ArrayKey::String(k) => k.clone(),
                 };
@@ -1875,8 +1876,8 @@ fn var_export_value(val: &Value) -> String {
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let mut out = "array (\n".to_string();
-            for (key, v) in arr.entries() {
-                let key_str = match key {
+            for (key, v) in arr.iter() {
+                let key_str = match &key {
                     ArrayKey::Int(k) => format!("{}", k),
                     ArrayKey::String(k) => format!("'{}'", k),
                 };
@@ -1912,19 +1913,19 @@ fn value_to_json(val: &Value) -> serde_json::Value {
         ValueType::String => serde_json::Value::String(val.as_str().unwrap().to_string()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
-            let is_list = arr.entries().iter().enumerate().all(|(i, (k, _))| {
-                matches!(k, ArrayKey::Int(n) if *n == i as i64)
+            let is_list = arr.iter().enumerate().all(|(i, (k, _))| {
+                matches!(k, ArrayKey::Int(n) if n == i as i64)
             });
             if is_list {
                 serde_json::Value::Array(
-                    arr.entries().iter().map(|(_, v)| value_to_json(v)).collect()
+                    arr.iter().map(|(_, v)| value_to_json(v)).collect()
                 )
             } else {
                 let mut map = serde_json::Map::new();
-                for (k, v) in arr.entries() {
+                for (k, v) in arr.iter() {
                     let key = match k {
                         ArrayKey::Int(n) => n.to_string(),
-                        ArrayKey::String(s) => s.clone(),
+                        ArrayKey::String(s) => s,
                     };
                     map.insert(key, value_to_json(v));
                 }
@@ -2286,14 +2287,13 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
         }
         ValueType::Array => {
             let arr = val.as_array()?;
-            let entries = arr.entries();
-            if entries.is_empty() { return None; }
+            if arr.is_empty() { return None; }
 
             // Case 1: Closure descriptor array [func_name_string, use_val1, ...]
-            if let Some(func_name) = entries[0].1.as_str() {
+            if let Some(func_name) = arr.get_value_at(0)?.as_str() {
                 if func_name.starts_with("__closure_") {
                     let func_ptr = eg.find_function(func_name)?;
-                    let use_vars: Vec<Value> = entries.iter().skip(1).map(|(_, v)| v.clone()).collect();
+                    let use_vars: Vec<Value> = arr.iter().skip(1).map(|(_, v)| v.clone()).collect();
                     return Some(ResolvedCallback {
                         func_ptr, prepend_args: vec![], use_vars,
                     });
@@ -2301,9 +2301,9 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
             }
 
             // Case 2: Method callback [object_or_class, "method_name"]
-            if entries.len() != 2 { return None; }
-            let obj_val = &entries[0].1;
-            let method_val = &entries[1].1;
+            if arr.len() != 2 { return None; }
+            let obj_val = arr.get_value_at(0)?;
+            let method_val = arr.get_value_at(1)?;
             let method_name = method_val.as_str()?;
             if let Some(obj) = obj_val.as_object() {
                 // Instance method: [$obj, "method"]
@@ -2412,7 +2412,7 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
     // Variadic args packed at CV(1)
     let variadic_val = arg!(ed, 1);
     let extra_args: Vec<Value> = if let Some(arr) = variadic_val.as_array() {
-        arr.entries().iter().map(|(_, v)| v.clone()).collect()
+        arr.iter().map(|(_, v)| v.clone()).collect()
     } else if variadic_val.value_type() != ValueType::Undef {
         vec![variadic_val.clone()]
     } else {

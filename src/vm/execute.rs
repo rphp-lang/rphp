@@ -1567,13 +1567,15 @@ fn op_init_dynamic_call(
         }
     } else if let Some(arr) = callable.as_array() {
         // Legacy array callable: [class_or_object, method_name]
-        let entries = arr.entries();
-        if entries.is_empty() {
+        let arr_len = arr.len();
+        if arr_len == 0 {
             return Err(VmError::Fatal("Array is not callable".into()));
         }
-        let func_name = entries[0].1.as_str().ok_or_else(|| {
-            VmError::Fatal("Closure descriptor must start with function name".into())
-        })?;
+        let func_name = arr.get_value_at(0)
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| {
+                VmError::Fatal("Closure descriptor must start with function name".into())
+            })?;
 
         let func_ptr = eg.find_function(func_name).ok_or_else(|| {
             VmError::Fatal(format!("Call to undefined function {}()", func_name))
@@ -1590,8 +1592,8 @@ fn op_init_dynamic_call(
         // Copy captured use_vars into CV slots after params
         let func = unsafe { &*func_ptr };
         let use_var_offset = func.sig.num_args;
-        for i in 1..entries.len() {
-            let captured_val = entries[i].1.clone();
+        for i in 1..arr_len {
+            let captured_val = arr.get_value_at(i).unwrap().clone();
             let cv_slot = unsafe { (*call).cv_mut(use_var_offset + (i as u32 - 1)) };
             unsafe { frame_slot_set(call, cv_slot as *mut Value, captured_val) };
         }
@@ -1769,19 +1771,24 @@ fn op_foreach_next(
         let pos = pos_val.as_long().unwrap_or(0) as usize;
 
         if let Some(arr) = arr_val.as_array() {
-            let entries = arr.entries();
-            if pos < entries.len() {
-                let (ref key, ref val) = entries[pos];
-                let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                unsafe { slot_set(val_ptr, val.clone()) };
+            if pos < arr.len() {
                 if key_encoded > 0 {
+                    // Need both key and value — use get_at()
+                    let (val, key) = arr.get_at(pos).unwrap();
+                    let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
+                    unsafe { slot_set(val_ptr, val.clone()) };
                     let key_cv = key_encoded - 1;
                     let key_val = match key {
-                        ArrayKey::Int(k) => Value::long(*k),
-                        ArrayKey::String(k) => Value::string(k.clone()),
+                        ArrayKey::Int(k) => Value::long(k),
+                        ArrayKey::String(k) => Value::string(k),
                     };
                     let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
                     unsafe { slot_set(key_ptr, key_val) };
+                } else {
+                    // Only value needed — use get_value_at() (avoids key clone)
+                    let val = arr.get_value_at(pos).unwrap();
+                    let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
+                    unsafe { slot_set(val_ptr, val.clone()) };
                 }
                 let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
                 unsafe { slot_set(pos_ptr, Value::long((pos + 1) as i64)) };
@@ -1961,7 +1968,7 @@ fn op_yield_from<'a>(
                 }
             }
         } else if let Some(arr) = source_val.as_array() {
-            let entries: Vec<(crate::value::ArrayKey, Value)> = arr.entries().iter().map(|(k, v): &(crate::value::ArrayKey, Value)| (k.clone(), v.clone())).collect();
+            let entries: Vec<(crate::value::ArrayKey, Value)> = arr.iter().map(|(k, v)| (k, v.clone())).collect();
 
             if entries.is_empty() {
                 // Empty array — result is null, continue
@@ -4368,9 +4375,7 @@ fn values_identical(a: &Value, b: &Value) -> bool {
                 return false;
             }
             // Same keys in same order, each value ===
-            let entries_a = arr_a.entries();
-            let entries_b = arr_b.entries();
-            for ((ka, va), (kb, vb)) in entries_a.iter().zip(entries_b.iter()) {
+            for ((ka, va), (kb, vb)) in arr_a.iter().zip(arr_b.iter()) {
                 if ka != kb || !values_identical(va, vb) {
                     return false;
                 }
