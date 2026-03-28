@@ -9,57 +9,18 @@ use super::instruction::{Instruction, OpType};
 pub const CALL_FRAME_SLOTS: usize =
     (size_of::<ExecuteData>() + size_of::<Value>() - 1) / size_of::<Value>();
 
-// ── SlotState ────────────────────────────────────────────────────────────────
+// ── HeapSlotIter ─────────────────────────────────────────────────────────────
 
-/// Slot-state tracking for frame slots (CV + TMP).
-///
-/// Two bitmaps: `init` (which slots are valid) and `heap` (which hold heap values).
-/// Invariant: `heap ⊆ init`.
-///
-/// Covers up to 64 slots (u64). Frames with > 64 slots use fallback
-/// (checked by caller via `num_cvs + num_temps > 64`).
-#[derive(Clone, Copy)]
-pub struct SlotState {
-    pub init: u64,
-    pub heap: u64,
-}
-
-impl SlotState {
-    pub const EMPTY: SlotState = SlotState { init: 0, heap: 0 };
-
-    /// Set init bits for range [start..end).
-    #[inline(always)]
-    pub fn mark_init_range(&mut self, start: u32, end: u32) {
-        if start >= end { return; }
-        let mask = if end >= 64 { !0u64 << start } else { ((1u64 << end) - 1) & !((1u64 << start) - 1) };
-        self.init |= mask;
-    }
-
-    #[inline(always)]
-    pub fn is_init(&self, idx: u32) -> bool {
-        self.init & (1u64 << idx) != 0
-    }
-
-    #[inline(always)]
-    pub fn is_heap(&self, idx: u32) -> bool {
-        self.heap & (1u64 << idx) != 0
-    }
-
-    #[inline(always)]
-    pub fn has_any_heap(&self) -> bool {
-        self.heap != 0
-    }
-
-    /// Iterator over indices of heap slots.
-    #[inline(always)]
-    pub fn heap_iter(&self) -> HeapSlotIter {
-        HeapSlotIter { bits: self.heap }
-    }
-}
-
-/// Iterator over set bits in heap bitmap. Yields slot indices.
+/// Iterator over set bits in a u64 heap bitmap. Yields slot indices.
 pub struct HeapSlotIter {
     bits: u64,
+}
+
+impl HeapSlotIter {
+    #[inline(always)]
+    pub fn new(bits: u64) -> Self {
+        Self { bits }
+    }
 }
 
 impl Iterator for HeapSlotIter {
@@ -95,6 +56,12 @@ pub struct ExecuteData {
     /// Monotonically true — once set, never cleared within frame lifetime.
     /// Used by cleanup to fast-skip scan and by frame_slot_set to skip drop.
     pub has_heap_slots: bool,
+    /// Per-slot heap bitmap: bit N = 1 means slot N currently holds a heap value
+    /// (String, Array, Object, Closure) that needs drop on cleanup or overwrite.
+    /// Only valid for frames with <= 64 total slots (CVs + TMPs).
+    /// For larger frames, falls back to has_heap_slots + full scan.
+    /// Only maintained when has_heap_slots is true (scalar-only frames skip bitmap ops).
+    pub heap_bitmap: u64,
 }
 
 impl ExecuteData {

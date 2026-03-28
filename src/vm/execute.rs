@@ -7,7 +7,7 @@ use crate::parser::Visibility;
 use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
-use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
+use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint};
 
 /// Get the current caller's **lexical** (declaring) class name from the frame.
@@ -100,14 +100,28 @@ pub enum VmError {
 
 // ── Slot write API ──
 //
+// Per-slot bitmap tracking: each write helper maintains heap_bitmap (u64) alongside
+// the has_heap_slots flag. Cleanup uses bitmap to drop only truly-heap slots instead
+// of scanning all. Bitmap ops are gated behind has_heap_slots — scalar-only frames
+// (like fib) skip bitmap entirely for zero overhead.
+//
+// For frames with > 64 total slots, bitmap path is skipped (u64 covers 64 bits).
+// The has_heap_slots flag is always kept in sync as fallback.
+//
 // slot_set:              Overwrite any initialized slot. Drops old. No frame tracking.
-// frame_slot_set:        Overwrite a frame slot. Skips drop if no heap slots.
+// frame_slot_set:        Overwrite a frame slot. Per-slot drop via bitmap.
 // frame_slot_init:       First write to uninitialized arg slot. No drop.
 // frame_set_this:        Write $this into CV[0].
-// frame_tmp_set:         Write to frame TMP slot. Skips drop if no heap slots. (hot path)
+// frame_tmp_set:         Write to frame TMP slot. Per-slot drop via bitmap. (hot path)
 // frame_tmp_set_long:    Write Long directly to TMP. No Value construction. (hot path)
 // frame_tmp_set_bool:    Write Bool directly to TMP. No Value construction. (hot path)
 // mark_caller_heap_return: Propagate heap flag to caller frame.
+
+/// Compute absolute slot index from frame pointer and slot pointer.
+#[inline(always)]
+unsafe fn slot_idx(frame: *const ExecuteData, ptr: *const Value) -> u32 {
+    ptr.offset_from((frame as *const Value).add(CALL_FRAME_SLOTS)) as u32
+}
 
 /// Overwrite a slot, dropping the old value. No frame heap tracking.
 /// For external targets (return_value, globals) or mixed contexts.
@@ -119,24 +133,75 @@ unsafe fn slot_set(ptr: *mut Value, val: Value) {
     ptr.write(val);
 }
 
-/// Write to a frame TMP result slot. Skips drop when frame has no heap values.
-/// Use for arithmetic/comparison/cast result opcodes.
+/// Bitmap slow path: drop + update bitmap for a TMP slot overwrite.
+/// Outlined to keep hot inline code small.
+#[inline(never)]
+#[cold]
+unsafe fn bitmap_drop_and_update(frame: *mut ExecuteData, ptr: *mut Value, heap: bool) {
+    let total = (*frame).num_cvs + (*frame).num_temps;
+    if total <= 64 {
+        let idx = slot_idx(frame, ptr);
+        let bit = 1u64 << idx;
+        if (*frame).heap_bitmap & bit != 0 {
+            std::ptr::drop_in_place(ptr);
+        }
+        if heap { (*frame).heap_bitmap |= bit; } else { (*frame).heap_bitmap &= !bit; }
+    } else {
+        std::ptr::drop_in_place(ptr);
+    }
+}
+
+/// Bitmap slow path: drop a scalar overwrite of a heap slot.
+#[inline(never)]
+#[cold]
+unsafe fn bitmap_drop_scalar(frame: *mut ExecuteData, ptr: *mut Value) {
+    let total = (*frame).num_cvs + (*frame).num_temps;
+    if total <= 64 {
+        let idx = slot_idx(frame, ptr);
+        let bit = 1u64 << idx;
+        if (*frame).heap_bitmap & bit != 0 {
+            std::ptr::drop_in_place(ptr);
+            (*frame).heap_bitmap &= !bit;
+        }
+    } else {
+        std::ptr::drop_in_place(ptr);
+    }
+}
+
+/// Bitmap slow path: mark a slot as heap (first heap write in frame).
+#[inline(never)]
+#[cold]
+unsafe fn bitmap_mark_heap(frame: *mut ExecuteData, ptr: *const Value) {
+    let total = (*frame).num_cvs + (*frame).num_temps;
+    if total <= 64 {
+        let idx = slot_idx(frame, ptr);
+        (*frame).heap_bitmap |= 1u64 << idx;
+    }
+}
+
+/// Write to a frame TMP result slot.
+/// Hot-path: when has_heap_slots is false (scalar-only frame), identical to original.
+/// Cold-path: bitmap-driven per-slot drop, outlined for icache efficiency.
 #[inline(always)]
 unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     if (*frame).has_heap_slots {
-        std::ptr::drop_in_place(ptr);
+        bitmap_drop_and_update(frame, ptr, heap);
+        ptr.write(val);
+    } else {
+        ptr.write(val);
+        if heap {
+            (*frame).has_heap_slots = true;
+            bitmap_mark_heap(frame, ptr);
+        }
     }
-    ptr.write(val);
-    if heap { (*frame).has_heap_slots = true; }
 }
 
 /// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
-/// No Value construction on Rust stack — writes raw i64 + type tag directly.
 #[inline(always)]
 unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
     if (*frame).has_heap_slots {
-        std::ptr::drop_in_place(ptr);
+        bitmap_drop_scalar(frame, ptr);
     }
     Value::write_long(ptr, v);
 }
@@ -145,40 +210,51 @@ unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
 #[inline(always)]
 unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) {
     if (*frame).has_heap_slots {
-        std::ptr::drop_in_place(ptr);
+        bitmap_drop_scalar(frame, ptr);
     }
     Value::write_bool(ptr, v);
 }
 
-/// Overwrite a frame slot. Skips drop when frame has no heap slots (scalar-only fast path).
+/// Overwrite a frame slot (CV or TMP). Per-slot drop via bitmap when heap present.
 #[inline(always)]
 unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     stats::inc_write_frame_slot(heap);
     if (*frame).has_heap_slots {
-        std::ptr::drop_in_place(ptr);
+        bitmap_drop_and_update(frame, ptr, heap);
+        ptr.write(val);
+    } else {
+        ptr.write(val);
+        if heap {
+            (*frame).has_heap_slots = true;
+            bitmap_mark_heap(frame, ptr);
+        }
     }
-    ptr.write(val);
-    if heap { (*frame).has_heap_slots = true; }
 }
 
 /// Init an unwritten frame slot (arg CV during SendVal/SendRef/SendNamed).
-/// No drop — slot is uninitialized. Sets has_heap_slots if needed.
+/// No drop — slot is uninitialized. Bitmap + has_heap_slots only if heap value.
 #[inline(always)]
 unsafe fn frame_slot_init(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     stats::inc_write_frame_slot(heap);
     ptr.write(val);
-    if heap { (*frame).has_heap_slots = true; }
+    if heap {
+        (*frame).has_heap_slots = true;
+        bitmap_mark_heap(frame, ptr);
+    }
 }
 
 /// Restore a saved CV/TMP slot into a freshly pushed generator frame.
-/// The frame was just allocated by push_call_frame(func, 0) so all slots
-/// are uninitialized. No drop needed — just write + track heap.
+/// No drop — slot is uninitialized. Track heap via bitmap.
 #[inline(always)]
 unsafe fn frame_restore_slot(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
-    if val.needs_cleanup() { (*frame).has_heap_slots = true; }
+    let heap = val.needs_cleanup();
     ptr.write(val);
+    if heap {
+        (*frame).has_heap_slots = true;
+        bitmap_mark_heap(frame, ptr);
+    }
 }
 
 /// Write $this into CV[0] of a method frame.
@@ -187,16 +263,41 @@ unsafe fn frame_set_this(frame: *mut ExecuteData, val: Value) {
     let heap = val.needs_cleanup();
     let ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     ptr.write(val);
-    if heap { (*frame).has_heap_slots = true; }
+    if heap {
+        (*frame).has_heap_slots = true;
+        let total = (*frame).num_cvs + (*frame).num_temps;
+        if total <= 64 {
+            (*frame).heap_bitmap |= 1u64;
+        }
+    }
 }
 
 /// Propagate heap-backed return values into the caller's cleanup bookkeeping.
+///
+/// SAFETY: `return_value` must point into the caller's frame slot area.
+/// This is guaranteed today because the compiler always emits DoFcall with
+/// result_type = Tmp/Var. If the optimizer ever writes return values into
+/// a dereferenced CV reference (outside frame), the bitmap update would be
+/// unsound. The debug_assert below guards against this.
 #[inline(always)]
 unsafe fn mark_caller_heap_return(frame: *mut ExecuteData, val: &Value) {
     if val.needs_cleanup() {
         let prev = (*frame).prev_execute_data;
         if !prev.is_null() {
             (*prev).has_heap_slots = true;
+            let return_ptr = (*frame).return_value;
+            if !return_ptr.is_null() {
+                let total = (*prev).num_cvs + (*prev).num_temps;
+                if total <= 64 {
+                    let idx = slot_idx(prev, return_ptr);
+                    debug_assert!(
+                        (idx as u32) < total,
+                        "mark_caller_heap_return: return_value slot idx {} out of bounds (total={})",
+                        idx, total
+                    );
+                    (*prev).heap_bitmap |= 1u64 << idx;
+                }
+            }
         }
     }
 }
@@ -222,19 +323,44 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
 }
 
 /// Drop all heap-backed slot values in a frame before popping it.
-/// Fast-skips when has_heap_slots is false (scalar-only frames).
+///
+/// Three-tier cleanup:
+///   1. No heap values at all (has_heap_slots == false) → skip entirely
+///   2. Bitmap-driven (total slots <= 64) → iterate only heap bits via trailing_zeros
+///   3. Full scan fallback (total slots > 64) → scan all slots by value type
+///
 /// After dropping, zeros the slot so reused stack space sees Undef.
 #[inline]
 unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     let num_cvs = (*frame).num_cvs as usize;
     let num_temps = (*frame).num_temps as usize;
     let total = num_cvs + num_temps;
-    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
 
+    // Tier 1: no heap values written during this invocation.
     if !(*frame).has_heap_slots {
         stats::inc_cleanup_frame(total, true);
         return;
     }
+
+    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+
+    // Tier 2: bitmap-driven — only drop slots with heap bit set.
+    if total <= 64 {
+        let bitmap = (*frame).heap_bitmap;
+        if bitmap == 0 {
+            stats::inc_cleanup_frame(total, true);
+            return;
+        }
+        stats::inc_cleanup_frame(total, false);
+        for idx in HeapSlotIter::new(bitmap) {
+            let ptr = base.add(idx as usize);
+            std::ptr::drop_in_place(ptr);
+            std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
+        }
+        return;
+    }
+
+    // Tier 3: full scan fallback for large frames (> 64 slots).
     stats::inc_cleanup_frame(total, false);
     for i in 0..total {
         let ptr = base.add(i);
