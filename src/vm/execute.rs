@@ -2235,6 +2235,8 @@ fn op_send_named<'a>(
             }
         }
     } else {
+        // Mark frame as having named args — FastScalar uses this to skip holes check.
+        unsafe { (*call).named_args_used = true; }
         match resolved_idx {
             Some(idx) => {
                 let cv_idx = func_common.sig.param_cv_index(idx);
@@ -3221,11 +3223,63 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // Restore previous pending call from the chain
                 unsafe { (*frame).call = (*call).call };
 
+                // ── FastScalar path: tightest call protocol ──
+                // Preconditions guaranteed at compile time: fixed arity, no by-ref,
+                // no variadics, no generator, no globals, no type hints, no return type.
+                // Runtime: only check fn_type + plan + no pending edge cases.
+                let func_common_fast = unsafe { &*(*call).func };
+                if func_common_fast.fn_type == FunctionType::User
+                    && func_common_fast.plan.call == CallStrategy::FastScalar
+                    && unsafe { (*call).num_args } == func_common_fast.sig.num_args
+                    && eg.pending_invoke_this.is_none()
+                    && eg.pending_named_variadic.is_empty()
+                {
+                    // Named args can create holes: SendNamed bumps num_args while
+                    // leaving gaps in required positions. Only check for holes when
+                    // named args were actually used — the common positional-only
+                    // path skips this entirely (zero overhead on fib hot path).
+                    let has_hole = unsafe { (*call).named_args_used } && {
+                        let mut hole = false;
+                        for i in 0..func_common_fast.sig.num_args {
+                            let cv_idx = func_common_fast.sig.param_cv_index(i);
+                            if unsafe { (*(*call).cv(cv_idx)).is_undef() } {
+                                hole = true;
+                                break;
+                            }
+                        }
+                        hole
+                    };
+                    if !has_hole {
+                    stats::inc_do_fcall_fast();
+                    let user = unsafe { &*((*call).func as *const UserFunction) };
+                    // Return value target — inline for Tmp result (most common).
+                    let return_value_ptr = match opline.result_type {
+                        OpType::Tmp | OpType::Var => unsafe {
+                            (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                        },
+                        OpType::Unused => std::ptr::null_mut(),
+                        _ => unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) },
+                    };
+                    unsafe { (*call).return_value = return_value_ptr };
+                    // No globals sync needed (may_access_globals == false by FastScalar invariant).
+                    // Arity verified above: num_args == declared (all required, no defaults).
+                    // No type hint scan (none declared by FastScalar invariant).
+                    unsafe {
+                        (*call).opline = user.op_array.instructions.as_ptr();
+                        (*frame).opline = (*frame).opline.add(1);
+                    }
+                    eg.current_execute_data.set(call);
+                    frame = call;
+                    op_array = unsafe { (*frame).op_array() };
+                    continue;
+                    }
+                    // has_hole == true → fall through to Fast/Full path for error reporting
+                }
+
                 // ── Fast path for simple user function calls ──
                 // Single precomputed flag check replaces 5 runtime conditions.
                 // CALL_FAST = no variadics, no param type hints.
                 // Also requires: User function, not generator, no pending invoke/named-variadic.
-                let func_common_fast = unsafe { &*(*call).func };
                 if func_common_fast.fn_type == FunctionType::User
                     && func_common_fast.plan.call == CallStrategy::Fast
                     && eg.pending_invoke_this.is_none()
@@ -4085,10 +4139,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Return => {
+                let func_common_ret = unsafe { &*(*frame).func };
+
+                // ── FastScalar return: tightest path ──
+                // No return type check, no globals sync, no dirty_globals propagation.
+                // Guaranteed by FastScalar invariant: no globals, no statics, no try/finally,
+                // no return type, no generator, may_access_globals == false.
+                if func_common_ret.plan.call == CallStrategy::FastScalar
+                    && func_common_ret.plan.ret == ReturnStrategy::Fast
+                    && eg.exception.is_none()
+                {
+                    stats::inc_return_fast();
+                    if opline.op1_type != OpType::Unused {
+                        let retval = unsafe {
+                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                        };
+                        let return_target = unsafe { (*frame).return_value };
+                        if !return_target.is_null() {
+                            unsafe { mark_caller_heap_return(frame, retval) };
+                            unsafe { slot_set(return_target, retval.clone()) };
+                        }
+                    }
+                    let prev = unsafe { (*frame).prev_execute_data };
+                    if prev.is_null() {
+                        return Ok(());
+                    }
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    frame = prev;
+                    op_array = unsafe { (*frame).op_array() };
+                    // No dirty_globals check: FastScalar callee never touches globals,
+                    // and may_access_globals == false means no deeper callee did either.
+                    continue;
+                }
+
                 // ── Fast return path ──
                 // Single precomputed flag check replaces 6 runtime conditions.
                 // ReturnStrategy::Fast = no globals, no statics, no return type, no try/finally, not generator.
-                let func_common_ret = unsafe { &*(*frame).func };
                 if func_common_ret.plan.ret == ReturnStrategy::Fast
                     && eg.exception.is_none()
                 {

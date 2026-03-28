@@ -56,6 +56,10 @@ pub struct ExecuteData {
     /// Monotonically true — once set, never cleared within frame lifetime.
     /// Used by cleanup to fast-skip scan and by frame_slot_set to skip drop.
     pub has_heap_slots: bool,
+    /// True if any SendNamed wrote to this call frame.
+    /// Used by FastScalar DoFcall to skip the holes check on the hot path.
+    /// Only named args can create holes in required params while num_args matches sig.num_args.
+    pub named_args_used: bool,
     /// Per-slot heap bitmap: bit N = 1 means slot N currently holds a heap value
     /// (String, Array, Object, Closure) that needs drop on cleanup or overwrite.
     /// Only valid for frames with <= 64 total slots (CVs + TMPs).

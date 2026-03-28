@@ -55,9 +55,14 @@ impl ParamTypeHint {
     }
 }
 
-/// DoFcall dispatch: Fast skips arity validation, type hints, variadic packing.
+/// DoFcall dispatch: controls how much validation happens at call boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CallStrategy {
+    /// Tightest path: fixed arity, no by-ref, no variadics, no type hints,
+    /// no globals/statics, no generator, no try/finally, no return type.
+    /// Enables: inlined scalar SendVal, minimal DoFcall, direct Return.
+    /// Typical profile: `fib($n)`, `add($a, $b)`.
+    FastScalar,
     /// No variadics, no param type hints → skip validation in DoFcall.
     Fast,
     /// Full validation: arity check, type hints, variadic packing.

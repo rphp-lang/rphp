@@ -215,7 +215,21 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
-    let call = if !is_variadic && !op_array.is_generator { CallStrategy::Fast } else { CallStrategy::Full };
+    let is_fast_scalar = !is_variadic
+        && !op_array.is_generator
+        && ref_args == 0
+        && num_args == required_num_args
+        && op_array.global_vars.is_empty()
+        && op_array.static_vars.is_empty()
+        && op_array.try_entries.is_empty()
+        && !op_array.may_access_globals;
+    let call = if is_fast_scalar {
+        CallStrategy::FastScalar
+    } else if !is_variadic && !op_array.is_generator {
+        CallStrategy::Fast
+    } else {
+        CallStrategy::Full
+    };
     let cleanup = if op_array_supports_cleanup_fast(&op_array) { CleanupMode::SkipScan } else { CleanupMode::ScanAll };
     let ret = if op_array.global_vars.is_empty()
         && op_array.static_vars.is_empty()
@@ -263,12 +277,29 @@ pub fn make_user_function_typed(
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
-    // Fast path is allowed when: not variadic AND all param hints are either None or simple scalar
-    // (Int, Float, String, Bool, Mixed). Complex hints (Callable, ClassName, Union, etc.) use Full.
-    let call = if !is_variadic && !op_array.is_generator && param_type_hints.iter().all(|h| matches!(h,
+    // FastScalar: tightest path for simple fixed-arity scalar functions.
+    // Requires NO actual type hints — DoFcall FastScalar skips type checking entirely.
+    let has_only_scalar_hints = param_type_hints.iter().all(|h| matches!(h,
         ParamTypeHint::None | ParamTypeHint::Int | ParamTypeHint::Float
         | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed
-    )) {
+    ));
+    let has_no_type_hints = param_type_hints.iter().all(|h| matches!(h,
+        ParamTypeHint::None | ParamTypeHint::Mixed
+    ));
+    let has_no_return_type = matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+    let is_fast_scalar = !is_variadic
+        && !op_array.is_generator
+        && ref_args == 0
+        && num_args == required_num_args
+        && op_array.global_vars.is_empty()
+        && op_array.static_vars.is_empty()
+        && op_array.try_entries.is_empty()
+        && !op_array.may_access_globals
+        && has_no_type_hints
+        && has_no_return_type;
+    let call = if is_fast_scalar {
+        CallStrategy::FastScalar
+    } else if !is_variadic && !op_array.is_generator && has_only_scalar_hints {
         CallStrategy::Fast
     } else {
         CallStrategy::Full

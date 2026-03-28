@@ -80,6 +80,7 @@ impl VmStack {
             (*frame).num_temps = num_temps as u32;
             (*frame).pending_return_after_finally = false;
             (*frame).has_heap_slots = false;
+            (*frame).named_args_used = false;
             (*frame).heap_bitmap = 0;
         }
 
