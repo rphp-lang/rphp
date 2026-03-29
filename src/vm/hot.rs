@@ -521,6 +521,10 @@ pub fn execute_hot_frame(
                                 }
                                 unsafe { Value::write_long(return_target, sum) };
                             }
+                            // Cleanup heap slots (e.g. $this) before popping
+                            if unsafe { (*frame).has_heap_slots } {
+                                unsafe { super::execute::cleanup_frame_slots(frame) };
+                            }
                             let prev = unsafe { (*frame).prev_execute_data };
                             eg.current_execute_data.set(prev);
                             eg.vm_stack.pop_call_frame(frame);
@@ -627,9 +631,11 @@ pub fn execute_hot_frame(
                 // Guard: only User functions with FastScalar/Fast call semantics + matching arity.
                 // Promotion guard (can_promote_to_hot) guarantees ret==Fast and no typed params
                 // for any Hot function, so we don't re-check those here.
+                // Arity: use public_arity() (= num_args - this_offset) so methods work —
+                // call.num_args excludes $this, sig.num_args includes it.
                 if func_common.fn_type != FunctionType::User
                     || !matches!(func_common.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
-                    || unsafe { (*call).num_args } != func_common.sig.num_args
+                    || unsafe { (*call).num_args } != func_common.sig.public_arity()
                 {
                     unsafe { (*frame).call = call };
                     return bailout(frame, opline_ptr, HotBailReason::IneligibleCallee);
@@ -727,6 +733,10 @@ pub fn execute_hot_frame(
                         }
                         unsafe { Value::raw_copy(retval_ptr, return_target) };
                     }
+                }
+                // Cleanup heap slots (e.g. $this in method frames) before popping
+                if unsafe { (*frame).has_heap_slots } {
+                    unsafe { super::execute::cleanup_frame_slots(frame) };
                 }
                 // Pop frame
                 let prev = unsafe { (*frame).prev_execute_data };
@@ -840,6 +850,46 @@ pub fn execute_hot_frame(
                 let mut new_val = Value::undef();
                 unsafe { Value::raw_copy(src_val as *const Value, &mut new_val as *mut Value) };
                 unsafe { obj_val.object_set_property_unchecked(name, new_val) };
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                continue;
+            }
+
+            // ── InitMethodCall — monomorphic inline cache fast path ──
+            // Contract: cache hit (func + class_id) + object in CV.
+            // Sets up call frame with $this at CV[0]. $this is a heap value — frame
+            // is marked has_heap_slots so Return cleanup drops it correctly.
+            OpCode::InitMethodCall => {
+                // op1 = CV (object), op2 = Const (method name), extended_value = num_args
+                let obj_val = unsafe { (*frame).cv(opline.op1 as u32) };
+                let obj_val = if obj_val.is_reference() { unsafe { &*obj_val.as_ref_ptr() } } else { obj_val };
+                if obj_val.value_type() != ValueType::Object {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjNotObject);
+                }
+                let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
+                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ic = &op_array.cache[ip];
+                if ic.func.is_null() || ic.class_id != obj_class_id || obj_class_id == 0 {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
+                }
+                let func_ptr = ic.func;
+                let num_args = opline.extended_value;
+                let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+                unsafe {
+                    (*call).num_args = num_args;
+                    (*call).prev_execute_data = frame;
+                    (*call).call = (*frame).call;
+                    (*frame).call = call;
+                    // Write $this into CV[0] — clone the object Rc handle
+                    let this_clone = obj_val.clone();
+                    let this_ptr = (call as *mut Value).add(CALL_FRAME_SLOTS);
+                    this_ptr.write(this_clone);
+                    // Mark frame: $this is heap (Object) — cleanup on Return
+                    (*call).has_heap_slots = true;
+                    let total = (*call).num_cvs + (*call).num_temps;
+                    if total <= 64 {
+                        (*call).heap_bitmap |= 1u64; // bit 0 = CV[0] = $this
+                    }
+                }
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
             }
