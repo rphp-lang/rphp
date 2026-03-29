@@ -1,10 +1,13 @@
 <?php
+// Array build + indexed read: 500K elements
+$t = microtime(true);
 $a = [];
-for ($i = 0; $i < 50000; $i++) {
+for ($i = 0; $i < 500000; $i++) {
     $a[] = $i;
 }
 $sum = 0;
-for ($i = 0; $i < 50000; $i++) {
+for ($i = 0; $i < 500000; $i++) {
     $sum += $a[$i];
 }
-echo $sum;
+$elapsed = microtime(true) - $t;
+echo $sum . '|' . $elapsed;

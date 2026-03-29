@@ -1,5 +1,5 @@
 <?php
-// Property read/write heavy benchmark — measures FetchObjR + AssignObjProp hot path
+// Property R/W: 5M method calls with 4 property accesses each
 class Stats {
     public $count = 0;
     public $sum = 0;
@@ -15,7 +15,9 @@ class Stats {
 }
 
 $st = new Stats();
-for ($i = 0; $i < 1000000; $i++) {
+$t = microtime(true);
+for ($i = 0; $i < 5000000; $i++) {
     $st->record($i);
 }
-echo $st->sum;
+$elapsed = microtime(true) - $t;
+echo $st->sum . '|' . $elapsed;

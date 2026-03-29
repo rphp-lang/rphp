@@ -1,6 +1,9 @@
 #!/bin/bash
 # Performance benchmark: rphp vs PHP
 # Usage: ./benches/run_benchmarks.sh
+#
+# Each benchmark outputs "result|elapsed_seconds" via internal microtime().
+# This eliminates process startup from measurements.
 
 set -e
 export LC_ALL=C
@@ -25,61 +28,62 @@ echo "Xdebug: $($PHP -r 'echo extension_loaded("xdebug") ? "ACTIVE (warning!)" :
 echo ""
 
 BENCHMARKS=(
-    "bench_fib.php:Fibonacci(30) recursive"
+    "bench_fib.php:Fibonacci(35) recursive"
     "bench_fib39.php:Fibonacci(39) recursive"
-    "bench_calls.php:Call-heavy 1M iterations"
-    "bench_loop.php:Loop 1M iterations"
-    "bench_string.php:String concat 10K"
-    "bench_array.php:Array build+sum 50K"
-    "bench_foreach.php:Foreach sum 50K"
-    "bench_nested_loops.php:Nested loops 500x500"
-    "bench_fib_method.php:Method fib(30) \$this"
-    "bench_property.php:Property R/W 1M"
+    "bench_calls.php:Call-heavy 5M iterations"
+    "bench_loop.php:Loop 10M iterations"
+    "bench_string.php:String concat 200K"
+    "bench_array.php:Array build+sum 500K"
+    "bench_foreach.php:Foreach sum 500K"
+    "bench_nested_loops.php:Nested 1500x1500"
+    "bench_fib_method.php:Method fib(35) \$this"
+    "bench_property.php:Property R/W 5M"
 )
 
-printf "%-30s %12s %12s %10s\n" "Benchmark" "rphp" "PHP 8.4" "Ratio"
+printf "%-30s %12s %12s %10s\n" "Benchmark" "rphp" "PHP" "Ratio"
 printf "%-30s %12s %12s %10s\n" "------------------------------" "------------" "------------" "----------"
 
 for bench_info in "${BENCHMARKS[@]}"; do
     IFS=: read -r file label <<< "$bench_info"
 
-    # rphp timing (3 runs, take best)
+    # rphp: 3 runs, take best internal time
     best_rust=999999
-    rust_output=""
+    rust_result=""
     for i in 1 2 3; do
-        start=$(python3 -c "import time; print(time.time())")
-        rust_output=$($RUSTPHP < "benches/$file" 2>/dev/null || echo "ERROR")
-        end=$(python3 -c "import time; print(time.time())")
-        elapsed=$(python3 -c "print(f'{$end - $start:.4f}')")
-        if (( $(echo "$elapsed < $best_rust" | bc -l) )); then
+        raw=$($RUSTPHP "benches/$file" 2>/dev/null || echo "ERROR|0")
+        result="${raw%%|*}"
+        elapsed="${raw##*|}"
+        rust_result="$result"
+        if (( $(echo "$elapsed < $best_rust" | bc -l 2>/dev/null || echo 0) )); then
             best_rust=$elapsed
         fi
     done
 
-    # PHP timing (3 runs, take best)
+    # PHP: 3 runs, take best internal time
     best_php=999999
-    php_output=""
+    php_result=""
     for i in 1 2 3; do
-        start=$(python3 -c "import time; print(time.time())")
-        php_output=$($PHP "benches/$file" 2>/dev/null || echo "ERROR")
-        end=$(python3 -c "import time; print(time.time())")
-        elapsed=$(python3 -c "print(f'{$end - $start:.4f}')")
-        if (( $(echo "$elapsed < $best_php" | bc -l) )); then
+        raw=$($PHP "benches/$file" 2>/dev/null || echo "ERROR|0")
+        result="${raw%%|*}"
+        elapsed="${raw##*|}"
+        php_result="$result"
+        if (( $(echo "$elapsed < $best_php" | bc -l 2>/dev/null || echo 0) )); then
             best_php=$elapsed
         fi
     done
 
     # Check correctness
-    if [ "$rust_output" != "$php_output" ]; then
-        printf "%-30s  OUTPUT MISMATCH: rust='%s' php='%s'\n" "$label" "$rust_output" "$php_output"
+    if [ "$rust_result" != "$php_result" ]; then
+        printf "%-30s  OUTPUT MISMATCH: rphp='%s' php='%s'\n" "$label" "$rust_result" "$php_result"
         continue
     fi
 
     # Calculate ratio
-    ratio=$(python3 -c "print(f'{$best_rust / $best_php:.2f}x')")
+    ratio=$(python3 -c "print(f'{float(\"$best_rust\") / float(\"$best_php\"):.2f}x')")
 
-    printf "%-30s %10.4fs %10.4fs %10s\n" "$label" "$best_rust" "$best_php" "$ratio"
+    printf "%-30s %11.4fs %11.4fs %10s\n" "$label" "$best_rust" "$best_php" "$ratio"
 done
 
 echo ""
 echo "Ratio < 1.00x = rphp faster, > 1.00x = PHP faster"
+echo "Times are internal (microtime), excluding process startup."

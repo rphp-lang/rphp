@@ -1,10 +1,13 @@
 <?php
+// Foreach iteration: 500K elements
 $a = [];
-for ($i = 0; $i < 50000; $i++) {
+for ($i = 0; $i < 500000; $i++) {
     $a[] = $i;
 }
+$t = microtime(true);
 $sum = 0;
 foreach ($a as $v) {
     $sum += $v;
 }
-echo $sum;
+$elapsed = microtime(true) - $t;
+echo $sum . '|' . $elapsed;

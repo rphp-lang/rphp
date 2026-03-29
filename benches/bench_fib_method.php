@@ -1,4 +1,5 @@
 <?php
+// Method fib(35) — via $this->fib(), measures InitMethodCall
 class Calculator {
     public function fib($n) {
         if ($n <= 1) { return $n; }
@@ -6,5 +7,7 @@ class Calculator {
     }
 }
 $c = new Calculator();
-$result = $c->fib(30);
-echo $result;
+$t = microtime(true);
+$r = $c->fib(35);
+$elapsed = microtime(true) - $t;
+echo $r . '|' . $elapsed;
