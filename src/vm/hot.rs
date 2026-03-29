@@ -61,7 +61,7 @@
 //! This means: first hot frame may have `MaybeHeap` in parameter CVs.
 //! All deeper recursive frames are guaranteed `Scalar`-only.
 
-use crate::value::Value;
+use crate::value::{Value, ValueType};
 use crate::runtime::ExecutorGlobals;
 use super::execute::VmError;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
@@ -117,6 +117,18 @@ pub enum HotBailReason {
     UnsupportedReturnType = 13,
     /// Opcode not handled by hot executor
     UnsupportedOpcode = 14,
+    /// FetchObjR: inline cache miss (class_id mismatch or not cached)
+    ObjCacheMiss = 15,
+    /// FetchObjR: operand is not an object
+    ObjNotObject = 16,
+    /// FetchObjR: property value is heap (String/Array/Object/Closure)
+    ObjHeapProperty = 17,
+    /// FetchObjR: property not found (deleted or dynamic)
+    ObjPropertyMissing = 18,
+    /// AssignObjProp: inline cache miss
+    ObjAssignCacheMiss = 19,
+    /// AssignObjProp: source value is heap
+    ObjAssignHeapSrc = 20,
 }
 
 // ── Debug-only bail counters ──────────────────────────────────────────
@@ -127,7 +139,7 @@ mod bail_stats {
     use std::cell::RefCell;
     use std::collections::HashMap;
 
-    const NUM_REASONS: usize = 15;
+    const NUM_REASONS: usize = 21;
 
     thread_local! {
         static COUNTERS: [Cell<u64>; NUM_REASONS] = [const { Cell::new(0) }; NUM_REASONS];
@@ -190,7 +202,7 @@ mod bail_stats {
 #[cfg(debug_assertions)]
 pub fn dump_bail_stats() {
     use HotBailReason::*;
-    const ALL: [(HotBailReason, &str); 15] = [
+    const ALL: [(HotBailReason, &str); 21] = [
         (FuncCacheMiss, "FuncCacheMiss"),
         (NonScalarOperand, "NonScalarOperand"),
         (HeapSendVal, "HeapSendVal"),
@@ -206,6 +218,12 @@ pub fn dump_bail_stats() {
         (HeapReturnValue, "HeapReturnValue"),
         (UnsupportedReturnType, "UnsupportedReturnType"),
         (UnsupportedOpcode, "UnsupportedOpcode"),
+        (ObjCacheMiss, "ObjCacheMiss"),
+        (ObjNotObject, "ObjNotObject"),
+        (ObjHeapProperty, "ObjHeapProperty"),
+        (ObjPropertyMissing, "ObjPropertyMissing"),
+        (ObjAssignCacheMiss, "ObjAssignCacheMiss"),
+        (ObjAssignHeapSrc, "ObjAssignHeapSrc"),
     ];
     let entries = bail_stats::entries();
     let completed = bail_stats::completed();
@@ -744,6 +762,84 @@ pub fn execute_hot_frame(
                     return bailout(frame, opline_ptr, HotBailReason::HeapAssignDst);
                 }
                 unsafe { Value::raw_copy(src as *const Value, dst) };
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                continue;
+            }
+
+            // ── FetchObjR — scalar-safe property read ──
+            // Contract: cache hit + public property + scalar value only.
+            // Bails on: cache miss, non-object, heap property value, missing property.
+            OpCode::FetchObjR => {
+                // op1 = CV (object), op2 = Const (property name)
+                let obj_val = unsafe { (*frame).cv(opline.op1 as u32) };
+                let obj_val = if obj_val.is_reference() { unsafe { &*obj_val.as_ref_ptr() } } else { obj_val };
+                if obj_val.value_type() != ValueType::Object {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjNotObject);
+                }
+                let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
+                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ic = &op_array.cache[ip];
+                // Inline cache check: public property (bit 0) + same class
+                if ic.prop_flags & 1 == 0 || ic.class_id != obj_class_id || obj_class_id == 0 {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
+                }
+                let prop_name = &op_array.literals()[opline.op2 as usize];
+                let name = prop_name.as_str().unwrap_or("");
+                let prop_ptr = unsafe { obj_val.object_property_unchecked(name) };
+                if prop_ptr.is_null() {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjPropertyMissing);
+                }
+                let prop_val = unsafe { &*prop_ptr };
+                // Scalar-only: bail if property value is heap type
+                if prop_val.needs_cleanup() || prop_val.is_reference() {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjHeapProperty);
+                }
+                let result_ptr = unsafe {
+                    (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                };
+                unsafe { Value::raw_copy(prop_ptr, result_ptr) };
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                continue;
+            }
+
+            // ── AssignObjProp — scalar-safe property write ──
+            // Contract: cache hit (prop_flags==3) + scalar source value only.
+            // Bails on: cache miss, non-object, heap source.
+            OpCode::AssignObjProp => {
+                // op1 = CV (object), op2 = Const (property name), result = source value
+                let obj_val = unsafe { (*frame).cv(opline.op1 as u32) };
+                let obj_val = if obj_val.is_reference() { unsafe { &*obj_val.as_ref_ptr() } } else { obj_val };
+                if obj_val.value_type() != ValueType::Object {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjNotObject);
+                }
+                let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
+                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ic = &op_array.cache[ip];
+                // Need both read-safe (bit 0) and write-safe (bit 1)
+                if ic.prop_flags != 3 || ic.class_id != obj_class_id || obj_class_id == 0 {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjAssignCacheMiss);
+                }
+                // Read the source value
+                let src_val = match opline.result_type {
+                    OpType::Cv => {
+                        let cv = unsafe { (*frame).cv(opline.result as u32) };
+                        if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                    }
+                    OpType::Tmp | OpType::Var => unsafe {
+                        &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                    },
+                    OpType::Const => &op_array.literals()[opline.result as usize],
+                    _ => return bailout(frame, opline_ptr, HotBailReason::ObjAssignHeapSrc),
+                };
+                if src_val.needs_cleanup() || src_val.is_reference() {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjAssignHeapSrc);
+                }
+                let prop_name = &op_array.literals()[opline.op2 as usize];
+                let name = prop_name.as_str().unwrap_or("");
+                // Write scalar value to property — raw_copy to construct Value, then insert
+                let mut new_val = Value::undef();
+                unsafe { Value::raw_copy(src_val as *const Value, &mut new_val as *mut Value) };
+                unsafe { obj_val.object_set_property_unchecked(name, new_val) };
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
             }

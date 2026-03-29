@@ -717,6 +717,33 @@ impl Value {
         (*refcell.as_ptr()).class_id
     }
 
+    /// Read a property value pointer from an Object without RefCell borrow.
+    /// Returns a pointer to the Value inside the HashMap, or null if not found.
+    /// Single-threaded VM guarantees no concurrent mutations during dispatch.
+    /// SAFETY: Only valid when value_type() == ValueType::Object. Returned pointer
+    /// is valid only while no mutable borrow of the object's properties exists.
+    #[inline(always)]
+    pub unsafe fn object_property_unchecked(&self, name: &str) -> *const Value {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &*refcell.as_ptr();
+        match obj.properties.get(name) {
+            Some(v) => v as *const Value,
+            None => std::ptr::null(),
+        }
+    }
+
+    /// Write a scalar value to a property of an Object without RefCell borrow.
+    /// Single-threaded VM guarantees no concurrent mutations during dispatch.
+    /// SAFETY: Only valid when value_type() == ValueType::Object.
+    #[inline(always)]
+    pub unsafe fn object_set_property_unchecked(&self, name: &str, val: Value) {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &mut *refcell.as_ptr();
+        obj.properties.insert(name.to_string(), val);
+    }
+
     /// Get string reference. Only valid for String values.
     #[inline]
     pub fn as_str(&self) -> Option<&str> {
