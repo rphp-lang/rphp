@@ -544,6 +544,9 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
 
     execute_ex(eg, frame)?;
 
+    #[cfg(debug_assertions)]
+    super::hot::dump_bail_stats();
+
     eg.current_execute_data.set(unsafe { (*frame).prev_execute_data });
     unsafe { cleanup_frame_slots(frame) };
     eg.vm_stack.pop_call_frame(frame);
@@ -3478,12 +3481,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if !has_hole {
                     stats::inc_do_fcall_fast();
 
-                    // Function-level hotness tracking (Etapa B).
-                    // Saturating increment — no branch on hot path after promotion.
+                    // Function-level hotness tracking.
+                    // Promotion uses can_promote_to_hot() — single source of truth.
                     let cc = func_common_fast.call_count.get();
                     if cc < u32::MAX { func_common_fast.call_count.set(cc + 1); }
                     if cc == FUNC_HOT_THRESHOLD && func_common_fast.hot_status.get() == HotStatus::Cold {
-                        func_common_fast.hot_status.set(HotStatus::Hot);
+                        if func_common_fast.can_promote_to_hot() {
+                            func_common_fast.hot_status.set(HotStatus::Hot);
+                        }
                     }
 
                     let user = unsafe { &*((*call).func as *const UserFunction) };
@@ -3610,16 +3615,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             (*call).opline = user.op_array.instructions.as_ptr();
                             (*frame).opline = opline_ptr.add(1);
                         }
-                        // Function-level hotness tracking with promotion guard.
-                        // Only promote to Hot if eligible: Fast return + no typed params.
-                        // Hot implies these properties → hot executor can skip per-call checks.
+                        // Function-level hotness tracking.
+                        // Promotion uses can_promote_to_hot() — single source of truth.
                         let cc = func_common_fast.call_count.get();
                         if cc < u32::MAX { func_common_fast.call_count.set(cc + 1); }
                         if cc == FUNC_HOT_THRESHOLD && func_common_fast.hot_status.get() == HotStatus::Cold {
-                            if func_common_fast.plan.ret == ReturnStrategy::Fast
-                                && (func_common_fast.sig.param_type_hints.is_empty()
-                                    || func_common_fast.sig.param_type_hints.iter().all(|h| matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed)))
-                            {
+                            if func_common_fast.can_promote_to_hot() {
                                 func_common_fast.hot_status.set(HotStatus::Hot);
                             }
                         }

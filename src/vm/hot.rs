@@ -4,20 +4,73 @@
 //! Handles only the opcode subset used by scalar-recursive patterns (fib, etc.).
 //! Returns to baseline interpreter on any unhandled opcode or non-scalar value.
 //!
-//! Design principles:
+//! # Design principles
+//!
 //! - `#[inline(never)]` to keep baseline dispatch loop's icache footprint small
 //! - Minimal match arms — only opcodes proven hot by profiling
 //! - Bailout on anything unexpected — correctness over coverage
 //! - Recursive for DoFcall — mirrors the call structure naturally
+//!
+//! # Hot contract
+//!
+//! Single source of truth: [`FunctionCommon::can_promote_to_hot()`].
+//! A function is promoted to `HotStatus::Hot` only if:
+//! - User function (not internal)
+//! - `CallStrategy::FastScalar` or `CallStrategy::Fast`
+//! - `ReturnStrategy::Fast` (no globals/statics/try-finally/generator sync)
+//! - No non-trivial param type hints
+//!
+//! Once `Hot`, these properties are **invariant** — the hot executor's DoFcall
+//! relies on them without re-checking (except caller-dependent globals guard).
+//!
+//! # Slot discipline
+//!
+//! Every slot (CV or TMP) within a hot frame is in one of three states:
+//!
+//! | State | Meaning | Drop needed? |
+//! |-------|---------|--------------|
+//! | `ZeroInit` | Freshly pushed frame, zeroed memory | No |
+//! | `Scalar` | Written by hot executor (Long, Double, Bool, Null) | No |
+//! | `MaybeHeap` | Written by baseline (String, Array, Object, Ref) | Yes |
+//!
+//! ## Write invariant
+//!
+//! All hot executor write paths produce `Scalar`:
+//! - **SendVal**: bails if source `needs_cleanup() ∨ is_reference()` → writes scalar
+//! - **AssignCv**: bails if source or destination `needs_cleanup() ∨ is_reference()` → writes scalar
+//! - **Arithmetic** (Sub/Add): bails on non-integer → produces Long or Double
+//! - **Return** (to caller): bails if value `needs_cleanup() ∨ is_reference()` → writes scalar
+//!
+//! ## Read safety
+//!
+//! All hot executor reads handle `MaybeHeap` gracefully:
+//! - **CV reads**: dereference via `as_ref_ptr()` if reference, then bail on non-integer
+//! - **TMP reads**: bail on non-integer (via `as_long()` returning None)
+//!
+//! ## Overwrite safety
+//!
+//! - **AssignCv**: bails if destination `needs_cleanup() ∨ is_reference()` (baseline drops)
+//! - **Return** write to caller: drops old value if caller has `has_heap_slots`
+//!
+//! ## How MaybeHeap enters a hot frame
+//!
+//! Only through the **initial entry from baseline**: baseline's SendVal can write
+//! heap values to callee params before DoFcall dispatches to the hot executor.
+//! Recursive hot calls always have `Scalar` params (hot SendVal bails on heap).
+//!
+//! This means: first hot frame may have `MaybeHeap` in parameter CVs.
+//! All deeper recursive frames are guaranteed `Scalar`-only.
 
 use crate::value::Value;
 use crate::runtime::ExecutorGlobals;
 use super::execute::VmError;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{CallStrategy, ReturnStrategy, FunctionType, UserFunction, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
+use super::function::{CallStrategy, FunctionType, UserFunction, HotStatus, FUNC_HOT_THRESHOLD};
 use super::instruction::{Instruction, OpType};
 use super::opcode::OpCode;
 use super::stack;
+
+// ── Public types ──────────────────────────────────────────────────────
 
 /// Result of hot executor: either completed successfully or bailed out.
 pub enum HotResult {
@@ -28,11 +81,174 @@ pub enum HotResult {
     Bailout,
 }
 
+/// Reason for bailing out of the hot executor.
+/// Used for diagnostics and coverage analysis.
+/// In release builds the reason parameter is optimized away (zero cost).
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum HotBailReason {
+    /// Function cache miss in InitFcall
+    FuncCacheMiss = 0,
+    /// Non-integer operands in comparison or arithmetic
+    NonScalarOperand = 1,
+    /// Heap value in SendVal Tmp/Var source
+    HeapSendVal = 2,
+    /// Heap value in SendVal CV source
+    HeapSendValCv = 3,
+    /// Unsupported SendVal operand type (not Tmp/Var/Cv)
+    UnsupportedSendValType = 4,
+    /// Callee not User, not Fast/FastScalar, or arity mismatch
+    IneligibleCallee = 5,
+    /// Caller has globals that need syncing before Fast call
+    CallerHasGlobals = 6,
+    /// DoFcall result target is not Tmp/Var/Unused
+    ComplexResultTarget = 7,
+    /// Callee is Cold (not yet promoted)
+    ColdCallee = 8,
+    /// Heap/ref source in AssignCv
+    HeapAssignSrc = 9,
+    /// Heap/ref destination in AssignCv (baseline needs to drop old value)
+    HeapAssignDst = 10,
+    /// Unsupported AssignCv source type (not Tmp/Var/Cv)
+    UnsupportedAssignType = 11,
+    /// Heap/ref return value
+    HeapReturnValue = 12,
+    /// Unsupported Return source type
+    UnsupportedReturnType = 13,
+    /// Opcode not handled by hot executor
+    UnsupportedOpcode = 14,
+}
+
+// ── Debug-only bail counters ──────────────────────────────────────────
+
+#[cfg(debug_assertions)]
+mod bail_stats {
+    use std::cell::Cell;
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    const NUM_REASONS: usize = 15;
+
+    thread_local! {
+        static COUNTERS: [Cell<u64>; NUM_REASONS] = [const { Cell::new(0) }; NUM_REASONS];
+        static HOT_ENTRIES: Cell<u64> = const { Cell::new(0) };
+        static HOT_COMPLETED: Cell<u64> = const { Cell::new(0) };
+        static OPCODE_BAILS: RefCell<HashMap<u16, u64>> = RefCell::new(HashMap::new());
+    }
+
+    pub fn record(reason: super::HotBailReason) {
+        COUNTERS.with(|c| {
+            let idx = reason as usize;
+            if idx < NUM_REASONS {
+                c[idx].set(c[idx].get() + 1);
+            }
+        });
+    }
+
+    pub fn record_opcode_bail(opcode: u16) {
+        OPCODE_BAILS.with(|m| {
+            *m.borrow_mut().entry(opcode).or_insert(0) += 1;
+        });
+    }
+
+    pub fn record_entry() {
+        HOT_ENTRIES.with(|c| c.set(c.get() + 1));
+    }
+
+    pub fn record_completed() {
+        HOT_COMPLETED.with(|c| c.set(c.get() + 1));
+    }
+
+    pub fn snapshot() -> [u64; NUM_REASONS] {
+        COUNTERS.with(|c| {
+            let mut out = [0u64; NUM_REASONS];
+            for (i, cell) in c.iter().enumerate() {
+                out[i] = cell.get();
+            }
+            out
+        })
+    }
+
+    pub fn opcode_bail_snapshot() -> Vec<(u16, u64)> {
+        OPCODE_BAILS.with(|m| {
+            let mut v: Vec<_> = m.borrow().iter().map(|(&k, &v)| (k, v)).collect();
+            v.sort_by(|a, b| b.1.cmp(&a.1));
+            v
+        })
+    }
+
+    pub fn entries() -> u64 {
+        HOT_ENTRIES.with(|c| c.get())
+    }
+
+    pub fn completed() -> u64 {
+        HOT_COMPLETED.with(|c| c.get())
+    }
+}
+
+/// Dump bail statistics to stderr. Debug builds only.
+#[cfg(debug_assertions)]
+pub fn dump_bail_stats() {
+    use HotBailReason::*;
+    const ALL: [(HotBailReason, &str); 15] = [
+        (FuncCacheMiss, "FuncCacheMiss"),
+        (NonScalarOperand, "NonScalarOperand"),
+        (HeapSendVal, "HeapSendVal"),
+        (HeapSendValCv, "HeapSendValCv"),
+        (UnsupportedSendValType, "UnsupportedSendValType"),
+        (IneligibleCallee, "IneligibleCallee"),
+        (CallerHasGlobals, "CallerHasGlobals"),
+        (ComplexResultTarget, "ComplexResultTarget"),
+        (ColdCallee, "ColdCallee"),
+        (HeapAssignSrc, "HeapAssignSrc"),
+        (HeapAssignDst, "HeapAssignDst"),
+        (UnsupportedAssignType, "UnsupportedAssignType"),
+        (HeapReturnValue, "HeapReturnValue"),
+        (UnsupportedReturnType, "UnsupportedReturnType"),
+        (UnsupportedOpcode, "UnsupportedOpcode"),
+    ];
+    let entries = bail_stats::entries();
+    let completed = bail_stats::completed();
+    let counts = bail_stats::snapshot();
+    let total_bails: u64 = counts.iter().sum();
+    if entries > 0 || total_bails > 0 {
+        eprintln!("[hot] coverage: entries={} completed={} bails={} (completion_rate={:.1}%)",
+            entries, completed, total_bails,
+            if entries > 0 { completed as f64 / entries as f64 * 100.0 } else { 0.0 });
+        if total_bails > 0 {
+            eprintln!("[hot] bail reasons:");
+            for (reason, name) in &ALL {
+                let count = counts[*reason as usize];
+                if count > 0 {
+                    eprintln!("  {}: {} ({:.1}%)", name, count,
+                        count as f64 / total_bails as f64 * 100.0);
+                }
+            }
+        }
+        let opcode_bails = bail_stats::opcode_bail_snapshot();
+        if !opcode_bails.is_empty() {
+            eprintln!("[hot] unsupported opcodes (top bail targets):");
+            for (opcode_raw, count) in opcode_bails.iter().take(10) {
+                // Safe transmute: OpCode is repr(u8), u16 fits
+                let name = if *opcode_raw <= 255 {
+                    let oc: OpCode = unsafe { std::mem::transmute(*opcode_raw as u8) };
+                    format!("{:?}", oc)
+                } else {
+                    format!("unknown({})", opcode_raw)
+                };
+                eprintln!("  {}: {} hits", name, count);
+            }
+        }
+    }
+}
+
+// ── Hot executor ──────────────────────────────────────────────────────
+
 /// Execute a single hot frame to completion.
 ///
 /// Preconditions (caller must guarantee):
 /// - `frame` is a valid, fully set up ExecuteData (opline set to first instruction)
-/// - The function is User + (FastScalar | Fast) + Hot
+/// - The function satisfies `can_promote_to_hot()` (User + Fast/FastScalar + Fast ret)
 /// - `eg.current_execute_data` is set to `frame`
 ///
 /// On Completed: frame is cleaned up (popped from stack), eg.current_execute_data
@@ -45,6 +261,9 @@ pub fn execute_hot_frame(
     eg: &mut ExecutorGlobals,
     mut frame: *mut ExecuteData,
 ) -> Result<HotResult, VmError> {
+    #[cfg(debug_assertions)]
+    bail_stats::record_entry();
+
     let op_array = unsafe { (*frame).op_array() };
     let mut opline_ptr: *const Instruction = unsafe { (*frame).opline };
     // Hoisted: does this frame's function have globals that need syncing before calls?
@@ -64,15 +283,13 @@ pub fn execute_hot_frame(
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if !(l1 <= l2) {
-                            // Jump
                             opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
                             continue;
                         }
-                        // Fall through: skip the dead JmpZ instruction
                         opline_ptr = unsafe { opline_ptr.add(2) };
                         continue;
                     }
-                    _ => return bailout(frame, opline_ptr),
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
                 }
             }
 
@@ -89,7 +306,7 @@ pub fn execute_hot_frame(
                         opline_ptr = unsafe { opline_ptr.add(2) };
                         continue;
                     }
-                    _ => return bailout(frame, opline_ptr),
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
                 }
             }
 
@@ -106,7 +323,7 @@ pub fn execute_hot_frame(
                         opline_ptr = unsafe { opline_ptr.add(2) };
                         continue;
                     }
-                    _ => return bailout(frame, opline_ptr),
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
                 }
             }
 
@@ -123,7 +340,7 @@ pub fn execute_hot_frame(
                         opline_ptr = unsafe { opline_ptr.add(2) };
                         continue;
                     }
-                    _ => return bailout(frame, opline_ptr),
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
                 }
             }
 
@@ -132,8 +349,7 @@ pub fn execute_hot_frame(
                 let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let cached = op_array.cache[ip].func;
                 if cached.is_null() {
-                    // Cache miss — bail to baseline for function resolution
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::FuncCacheMiss);
                 }
                 let func_ptr = cached;
                 let num_args = opline.op1 as u32;
@@ -187,8 +403,7 @@ pub fn execute_hot_frame(
                     if !src_val.needs_cleanup() && !src_val.is_reference() {
                         unsafe { Value::raw_copy(src, dst) };
                     } else {
-                        // Heap value — bail to baseline for proper clone + bitmap tracking
-                        return bailout(frame, opline_ptr);
+                        return bailout(frame, opline_ptr, HotBailReason::HeapSendVal);
                     }
                 } else if opline.op1_type == OpType::Cv {
                     let cv = unsafe { (*frame).cv(opline.op1 as u32) };
@@ -196,10 +411,10 @@ pub fn execute_hot_frame(
                     if !val.needs_cleanup() {
                         unsafe { Value::raw_copy(val as *const Value, dst) };
                     } else {
-                        return bailout(frame, opline_ptr);
+                        return bailout(frame, opline_ptr, HotBailReason::HeapSendValCv);
                     }
                 } else {
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::UnsupportedSendValType);
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
@@ -219,7 +434,7 @@ pub fn execute_hot_frame(
                         None => unsafe { result_ptr.write(Value::double(l1 as f64 - l2 as f64)) },
                     }
                 } else {
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
@@ -238,7 +453,6 @@ pub fn execute_hot_frame(
                             && next.op1_type == OpType::Tmp
                             && next.op1 == opline.result
                         {
-                            // Write sum directly to caller's return_value
                             let return_target = unsafe { (*frame).return_value };
                             if !return_target.is_null() {
                                 let prev = unsafe { (*frame).prev_execute_data };
@@ -247,10 +461,11 @@ pub fn execute_hot_frame(
                                 }
                                 unsafe { Value::write_long(return_target, sum) };
                             }
-                            // Pop frame and return Completed
                             let prev = unsafe { (*frame).prev_execute_data };
                             eg.current_execute_data.set(prev);
                             eg.vm_stack.pop_call_frame(frame);
+                            #[cfg(debug_assertions)]
+                            bail_stats::record_completed();
                             return Ok(HotResult::Completed);
                         }
                         // Normal path: write to TMP
@@ -266,7 +481,7 @@ pub fn execute_hot_frame(
                         unsafe { result_ptr.write(Value::double(l1 as f64 + l2 as f64)) };
                     }
                 } else {
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
@@ -279,36 +494,29 @@ pub fn execute_hot_frame(
 
                 let func_common = unsafe { &*(*call).func };
 
-                // Guard: only User functions with FastScalar/Fast call semantics.
-                // ReturnStrategy::Fast and no-typed-params are guaranteed by promotion guard
-                // (Hot implies ret==Fast and no non-trivial type hints), so we don't re-check here.
+                // Guard: only User functions with FastScalar/Fast call semantics + matching arity.
+                // Promotion guard (can_promote_to_hot) guarantees ret==Fast and no typed params
+                // for any Hot function, so we don't re-check those here.
                 if func_common.fn_type != FunctionType::User
                     || !matches!(func_common.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
                     || unsafe { (*call).num_args } != func_common.sig.num_args
                 {
                     unsafe { (*frame).call = call };
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::IneligibleCallee);
                 }
 
                 // For Fast: bail if caller has globals to sync (depends on call site, not callee).
                 // Uses hoisted bool — single read per DoFcall, always false for fib.
                 if func_common.plan.call == CallStrategy::Fast && caller_has_globals {
                     unsafe { (*frame).call = call };
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::CallerHasGlobals);
                 }
 
-                // Hotness tracking with promotion guard.
-                // Only promote if function is eligible for hot executor:
-                //   - ReturnStrategy::Fast (no globals/statics/try-finally/generator obligations)
-                //   - No non-trivial param type hints (hot path skips validation)
-                // This is checked once at promotion, not per-call.
+                // Hotness tracking — promotion uses can_promote_to_hot() as single source of truth.
                 let cc = func_common.call_count.get();
                 if cc < u32::MAX { func_common.call_count.set(cc + 1); }
                 if cc == FUNC_HOT_THRESHOLD && func_common.hot_status.get() == HotStatus::Cold {
-                    if func_common.plan.ret == ReturnStrategy::Fast
-                        && (func_common.sig.param_type_hints.is_empty()
-                            || func_common.sig.param_type_hints.iter().all(|h| matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed)))
-                    {
+                    if func_common.can_promote_to_hot() {
                         func_common.hot_status.set(HotStatus::Hot);
                     }
                 }
@@ -322,9 +530,8 @@ pub fn execute_hot_frame(
                     },
                     OpType::Unused => std::ptr::null_mut(),
                     _ => {
-                        // Complex result type — bail
                         unsafe { (*frame).call = call };
-                        return bailout(frame, opline_ptr);
+                        return bailout(frame, opline_ptr, HotBailReason::ComplexResultTarget);
                     }
                 };
                 unsafe {
@@ -338,25 +545,21 @@ pub fn execute_hot_frame(
                 if func_common.hot_status.get() == HotStatus::Hot {
                     match execute_hot_frame(eg, call)? {
                         HotResult::Completed => {
-                            // Callee returned successfully. Restore caller state.
                             frame = eg.current_execute_data.get();
-                            // Frame should be our caller now — but we need to verify
-                            // Actually after Completed, eg.current_execute_data was set to prev
-                            // which should be `frame` (our caller). But `frame` here is the
-                            // local in THIS invocation. Let me just reload:
                             opline_ptr = unsafe { (*frame).opline };
-                            // op_array doesn't change (same function)
                             continue;
                         }
                         HotResult::Bailout => {
-                            // Callee bailed — it's still the active frame with opline set.
-                            // We need to bail the entire hot chain back to baseline.
-                            // The callee frame is active, baseline will pick it up.
+                            // Propagate bailout — callee frame is active, baseline picks it up.
+                            // Don't double-count: the nested call already recorded its reason.
                             return Ok(HotResult::Bailout);
                         }
                     }
                 } else {
-                    // Cold callee — bail to baseline to handle it
+                    // Cold callee — bail to baseline to handle it.
+                    // Frame state is already set up for baseline (callee is current_execute_data).
+                    #[cfg(debug_assertions)]
+                    bail_stats::record(HotBailReason::ColdCallee);
                     return Ok(HotResult::Bailout);
                 }
             }
@@ -380,13 +583,12 @@ pub fn execute_hot_frame(
                         } else if opline.op1_type == OpType::Const {
                             &op_array.literals()[opline.op1 as usize] as *const Value
                         } else {
-                            return bailout(frame, opline_ptr);
+                            return bailout(frame, opline_ptr, HotBailReason::UnsupportedReturnType);
                         };
 
                         let src_val = unsafe { &*retval_ptr };
                         if src_val.needs_cleanup() || src_val.is_reference() {
-                            // Heap/ref return — bail to baseline for proper handling
-                            return bailout(frame, opline_ptr);
+                            return bailout(frame, opline_ptr, HotBailReason::HeapReturnValue);
                         }
 
                         let prev = unsafe { (*frame).prev_execute_data };
@@ -400,10 +602,12 @@ pub fn execute_hot_frame(
                 let prev = unsafe { (*frame).prev_execute_data };
                 eg.current_execute_data.set(prev);
                 eg.vm_stack.pop_call_frame(frame);
+                #[cfg(debug_assertions)]
+                bail_stats::record_completed();
                 return Ok(HotResult::Completed);
             }
 
-            // ── AssignCv (for $result = fib(...) in main scope) ──
+            // ── AssignCv — scalar-only assignment ──
             OpCode::AssignCv => {
                 let src = if opline.op2_type == OpType::Tmp || opline.op2_type == OpType::Var {
                     unsafe { &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize) }
@@ -411,11 +615,11 @@ pub fn execute_hot_frame(
                     let cv = unsafe { (*frame).cv(opline.op2 as u32) };
                     if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
                 } else {
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::UnsupportedAssignType);
                 };
 
                 if src.needs_cleanup() || src.is_reference() {
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::HeapAssignSrc);
                 }
 
                 let dst = unsafe { (*frame).cv_mut(opline.op1 as u32) as *mut Value };
@@ -425,7 +629,7 @@ pub fn execute_hot_frame(
                 // is always false — CVs are scalar or zero-init within the hot path.
                 let dst_val = unsafe { &*dst };
                 if dst_val.needs_cleanup() || dst_val.is_reference() {
-                    return bailout(frame, opline_ptr);
+                    return bailout(frame, opline_ptr, HotBailReason::HeapAssignDst);
                 }
                 unsafe { Value::raw_copy(src as *const Value, dst) };
                 opline_ptr = unsafe { opline_ptr.add(1) };
@@ -434,15 +638,25 @@ pub fn execute_hot_frame(
 
             // ── Any unhandled opcode → bail to baseline ──
             _ => {
-                return bailout(frame, opline_ptr);
+                #[cfg(debug_assertions)]
+                bail_stats::record_opcode_bail(opline.opcode as u16);
+                return bailout(frame, opline_ptr, HotBailReason::UnsupportedOpcode);
             }
         }
     }
 }
 
-/// Set frame's opline to current position and return Bailout.
+// ── Bailout helper ────────────────────────────────────────────────────
+
+/// Set frame's opline to current position, record bail reason, and return Bailout.
 #[inline(always)]
-fn bailout(frame: *mut ExecuteData, opline_ptr: *const Instruction) -> Result<HotResult, VmError> {
+fn bailout(
+    frame: *mut ExecuteData,
+    opline_ptr: *const Instruction,
+    _reason: HotBailReason,
+) -> Result<HotResult, VmError> {
+    #[cfg(debug_assertions)]
+    bail_stats::record(_reason);
     unsafe { (*frame).opline = opline_ptr };
     Ok(HotResult::Bailout)
 }

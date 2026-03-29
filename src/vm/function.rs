@@ -193,6 +193,28 @@ pub struct FunctionCommon {
     pub hot_status: Cell<HotStatus>,
 }
 
+impl FunctionCommon {
+    /// Whether this function is eligible for hot executor promotion.
+    ///
+    /// **Single source of truth** — all promotion paths must use this.
+    /// `HotStatus::Hot` implies `can_promote_to_hot() == true`.
+    ///
+    /// A function is hot-eligible if:
+    /// - User function (internal functions have opaque handlers)
+    /// - FastScalar or Fast call strategy (no variadics, no by-ref)
+    /// - Fast return strategy (no globals/statics/try-finally/generator sync)
+    /// - No non-trivial param type hints (hot executor skips type validation)
+    #[inline]
+    pub fn can_promote_to_hot(&self) -> bool {
+        self.fn_type == FunctionType::User
+            && matches!(self.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
+            && self.plan.ret == ReturnStrategy::Fast
+            && (self.sig.param_type_hints.is_empty()
+                || self.sig.param_type_hints.iter().all(|h|
+                    matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed)))
+    }
+}
+
 /// User-defined PHP function — contains compiled OpArray.
 #[repr(C)]
 pub struct UserFunction {

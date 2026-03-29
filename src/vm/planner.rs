@@ -15,7 +15,7 @@
 use crate::compiler::OpArray;
 use crate::value::{Value, ValueType};
 use crate::vm::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use crate::vm::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ParamTypeHint};
+use crate::vm::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy};
 use crate::vm::instruction::{Instruction, OpType};
 use crate::vm::opcode::OpCode;
 use crate::runtime::ExecutorGlobals;
@@ -119,7 +119,11 @@ pub const DEOPT_THRESHOLD: u32 = 10;
 /// sequence, checks safety preconditions, and emits a type-specialized plan.
 /// Called at runtime when a block's counter crosses HOT_THRESHOLD.
 pub fn plan_hot_block(op_array: &OpArray, block_idx: usize) -> Option<MacroPlan> {
-    // Safety bail: function-level preconditions
+    // Safety bail: function-level preconditions.
+    // These are equivalent to FunctionCommon::can_promote_to_hot() checks:
+    //   try_entries → ReturnStrategy::Full, generator → Full, globals/statics → Full.
+    // We check op_array fields directly because plan_hot_block receives an OpArray,
+    // not a FunctionCommon. Both systems share the same eligibility invariants.
     if !op_array.try_entries.is_empty()
         || op_array.is_generator
         || !op_array.global_vars.is_empty()
@@ -222,28 +226,17 @@ pub fn plan_hot_block(op_array: &OpArray, block_idx: usize) -> Option<MacroPlan>
                     eprintln!("[planner] block {} bail: InitFcall at IP {} has null cache", block_idx, ip);
                     return None; // Not cached yet — can't plan
                 }
-                // Check callee is a User function with Fast or FastScalar strategy.
-                // Both are safe for the macro: no variadics, no generator, no by-ref.
-                // At plan-time we verify the callee is suitable; at runtime the
-                // DoFcall step does a guard check.
+                // Callee eligibility: use same predicate as hot executor.
+                // can_promote_to_hot() checks: User, Fast/FastScalar call, Fast return,
+                // no non-trivial type hints. Single source of truth.
                 let common = unsafe { &*func_ptr };
-                if common.fn_type != FunctionType::User
-                    || !matches!(common.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
-                {
+                if !common.can_promote_to_hot() {
                     return None;
                 }
-                // Additional plan-time checks: callee must have exact arity match
-                // (no default params), no type hints (so DoFcall can skip type checking).
+                // Additional plan-time checks: exact arity match (no default params).
                 let num_args_check = instr.op1 as u32;
                 if num_args_check != common.sig.num_args
                     || num_args_check != common.sig.required_num_args
-                {
-                    return None;
-                }
-                // No type hints on callee params (skip type validation in macro)
-                if !common.sig.param_type_hints.is_empty()
-                    && common.sig.param_type_hints.iter().any(|h|
-                        !matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed))
                 {
                     return None;
                 }
