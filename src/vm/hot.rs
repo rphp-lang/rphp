@@ -344,6 +344,41 @@ pub fn execute_hot_frame(
                 }
             }
 
+            // ── Fused equality + conditional jump ──
+            OpCode::JmpZ_Eq_CvConst => {
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                match (op1.as_long(), op2.as_long()) {
+                    (Some(l1), Some(l2)) => {
+                        if !(l1 == l2) {
+                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            continue;
+                        }
+                        opline_ptr = unsafe { opline_ptr.add(2) };
+                        continue;
+                    }
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
+                }
+            }
+
+            OpCode::JmpNZ_Eq_CvConst => {
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                match (op1.as_long(), op2.as_long()) {
+                    (Some(l1), Some(l2)) => {
+                        if l1 == l2 {
+                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            continue;
+                        }
+                        opline_ptr = unsafe { opline_ptr.add(2) };
+                        continue;
+                    }
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
+                }
+            }
+
             // ── InitFcall with inline Sub_CvConst+SendVal peek-ahead ──
             OpCode::InitFcall => {
                 let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
@@ -413,6 +448,13 @@ pub fn execute_hot_frame(
                     } else {
                         return bailout(frame, opline_ptr, HotBailReason::HeapSendValCv);
                     }
+                } else if opline.op1_type == OpType::Const {
+                    let val = &op_array.literals()[opline.op1 as usize];
+                    if !val.needs_cleanup() {
+                        unsafe { Value::raw_copy(val as *const Value, dst) };
+                    } else {
+                        return bailout(frame, opline_ptr, HotBailReason::HeapSendVal);
+                    }
                 } else {
                     return bailout(frame, opline_ptr, HotBailReason::UnsupportedSendValType);
                 }
@@ -479,6 +521,58 @@ pub fn execute_hot_frame(
                             (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
                         };
                         unsafe { result_ptr.write(Value::double(l1 as f64 + l2 as f64)) };
+                    }
+                } else {
+                    return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                continue;
+            }
+
+            // ── General Add/Mul/Sub — integer-only fast path ──
+            // Handles any operand type combo (Cv, Tmp, Var, Const).
+            // Bails on non-integer. Covers Add_CvTmp, Add(generic), Mul, Sub_TmpTmp.
+            OpCode::Add | OpCode::Add_CvTmp | OpCode::Sub_TmpTmp | OpCode::Mul => {
+                let op1_val = match opline.op1_type {
+                    OpType::Cv => {
+                        let cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                        if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                    }
+                    OpType::Tmp | OpType::Var => unsafe {
+                        &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
+                    },
+                    OpType::Const => &op_array.literals()[opline.op1 as usize],
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
+                };
+                let op2_val = match opline.op2_type {
+                    OpType::Cv => {
+                        let cv = unsafe { (*frame).cv(opline.op2 as u32) };
+                        if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                    }
+                    OpType::Tmp | OpType::Var => unsafe {
+                        &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
+                    },
+                    OpType::Const => &op_array.literals()[opline.op2 as usize],
+                    _ => return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand),
+                };
+                if let (Some(l1), Some(l2)) = (op1_val.as_long(), op2_val.as_long()) {
+                    let result_ptr = unsafe {
+                        (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                    };
+                    match opline.opcode {
+                        OpCode::Add | OpCode::Add_CvTmp => match l1.checked_add(l2) {
+                            Some(r) => unsafe { Value::write_long(result_ptr, r) },
+                            None => unsafe { result_ptr.write(Value::double(l1 as f64 + l2 as f64)) },
+                        },
+                        OpCode::Sub_TmpTmp => match l1.checked_sub(l2) {
+                            Some(r) => unsafe { Value::write_long(result_ptr, r) },
+                            None => unsafe { result_ptr.write(Value::double(l1 as f64 - l2 as f64)) },
+                        },
+                        OpCode::Mul => match l1.checked_mul(l2) {
+                            Some(r) => unsafe { Value::write_long(result_ptr, r) },
+                            None => unsafe { result_ptr.write(Value::double(l1 as f64 * l2 as f64)) },
+                        },
+                        _ => unreachable!(),
                     }
                 } else {
                     return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);

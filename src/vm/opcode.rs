@@ -127,6 +127,8 @@ pub enum OpCode {
     Add_CvTmp = 204,
     /// Sub Tmp - Tmp → Tmp (Long fast path)
     Sub_TmpTmp = 205,
+    /// IsEqual CV == Const → Tmp (Long fast path)
+    IsEqual_CvConst = 210,
 
     // ── Superinstructions (fused opcode pairs) ──────────────────────
     // Fuse comparison + conditional jump into a single dispatch.
@@ -147,5 +149,11 @@ pub enum OpCode {
     /// If CV < Const, jump to result. Else fall through (+2).
     JmpNZ_Lt_CvConst = 209,
 
+    /// Fused: IsEqual CV == Const; JmpZ → target
+    /// If !(CV == Const), jump to result. Else fall through (+2).
+    JmpZ_Eq_CvConst = 211,
+    /// Fused: IsEqual CV == Const; JmpNZ → target
+    /// If CV == Const, jump to result. Else fall through (+2).
+    JmpNZ_Eq_CvConst = 212,
 
 }

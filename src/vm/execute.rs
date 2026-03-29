@@ -2823,6 +2823,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::IsEqual_CvConst => {
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, l1 == l2) };
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, d1 == d2) };
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    unsafe { frame_tmp_set_bool(frame, result_ptr, s1 == s2) };
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                }
+            }
+
             // ── Superinstructions: fused comparison + conditional jump ──
             // Eliminates TMP write/read and one dispatch cycle.
             // On fall-through, advances opline by 2 (skipping the dead JmpZ/JmpNZ).
@@ -2915,7 +2931,55 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if cmp_result {
                     unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
-    
+
+                    continue;
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+
+            }
+
+            OpCode::JmpZ_Eq_CvConst => {
+                // Fused: IsEqual_CvConst + JmpZ
+                // Jump to result if !(CV == Const), else fall through (+2).
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let cmp_result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 == l2
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1 == d2
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1 == s2
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                };
+                if !cmp_result {
+                    unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
+
+                    continue;
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+
+            }
+
+            OpCode::JmpNZ_Eq_CvConst => {
+                // Fused: IsEqual_CvConst + JmpNZ
+                // Jump to result if CV == Const, else fall through (+2).
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let cmp_result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 == l2
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1 == d2
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1 == s2
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                };
+                if cmp_result {
+                    unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
+
                     continue;
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };

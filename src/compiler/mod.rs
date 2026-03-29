@@ -129,6 +129,11 @@ impl OpArray {
                         instr.opcode = OpCode::IsSmallerOrEqual_CvConst;
                     }
                 }
+                OpCode::IsEqual => {
+                    if instr.op1_type == OpType::Cv && instr.op2_type == OpType::Const {
+                        instr.opcode = OpCode::IsEqual_CvConst;
+                    }
+                }
                 _ => {}
             }
         }
@@ -168,6 +173,18 @@ impl OpArray {
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpNZ_Lt_CvConst)
+                }
+                (OpCode::IsEqual_CvConst, OpCode::JmpZ)
+                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                        && curr.result_type == OpType::Tmp =>
+                {
+                    Some(OpCode::JmpZ_Eq_CvConst)
+                }
+                (OpCode::IsEqual_CvConst, OpCode::JmpNZ)
+                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                        && curr.result_type == OpType::Tmp =>
+                {
+                    Some(OpCode::JmpNZ_Eq_CvConst)
                 }
                 _ => None,
             };
@@ -337,6 +354,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::Sub_TmpTmp
                 | OpCode::IsSmaller_CvConst
                 | OpCode::IsSmallerOrEqual_CvConst
+                | OpCode::IsEqual_CvConst
         )
     })
 }

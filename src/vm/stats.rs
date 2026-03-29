@@ -219,6 +219,14 @@ mod inner {
             123 => Some("BindStatic"), 124 => Some("AssignObjDim"),
             125 => Some("Include"), 126 => Some("NullSafeCheck"),
             127 => Some("CloneObj"),
+            128 => Some("CreateClosure"), 129 => Some("ClosureUseVar"),
+            200 => Some("Add_TmpTmp"), 201 => Some("Sub_CvConst"),
+            202 => Some("IsSmaller_CvConst"), 203 => Some("IsSmallerOrEqual_CvConst"),
+            204 => Some("Add_CvTmp"), 205 => Some("Sub_TmpTmp"),
+            206 => Some("JmpZ_Le_CvConst"), 207 => Some("JmpNZ_Le_CvConst"),
+            208 => Some("JmpZ_Lt_CvConst"), 209 => Some("JmpNZ_Lt_CvConst"),
+            210 => Some("IsEqual_CvConst"),
+            211 => Some("JmpZ_Eq_CvConst"), 212 => Some("JmpNZ_Eq_CvConst"),
             _ => None,
         }
     }
