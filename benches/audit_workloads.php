@@ -12,8 +12,7 @@ echo "fib(25)=" . fib(25) . "\n";
 // ── 2. gcd (euclidean, loop-called) ──
 function gcd($a, $b) {
     if ($b == 0) return $a;
-    $q = intval($a / $b);
-    return gcd($b, $a - $q * $b);
+    return gcd($b, $a % $b);
 }
 $sum = 0;
 for ($i = 1; $i <= 100; $i++) { $sum = $sum + gcd(120, $i); }

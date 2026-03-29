@@ -529,10 +529,12 @@ pub fn execute_hot_frame(
                 continue;
             }
 
-            // ── General Add/Mul/Sub — integer-only fast path ──
+            // ── General arithmetic — integer-only fast path ──
             // Handles any operand type combo (Cv, Tmp, Var, Const).
-            // Bails on non-integer. Covers Add_CvTmp, Add(generic), Mul, Sub_TmpTmp.
-            OpCode::Add | OpCode::Add_CvTmp | OpCode::Sub_TmpTmp | OpCode::Mul => {
+            // Bails on non-integer. Covers Add, Sub, Mul, Div, Mod.
+            // Div: exact PHP semantics — divisible → long, else → double. Div-by-zero → fatal.
+            // Mod: integer-only (PHP semantics). Div-by-zero → fatal.
+            OpCode::Add | OpCode::Add_CvTmp | OpCode::Sub_TmpTmp | OpCode::Mul | OpCode::Div | OpCode::Mod => {
                 let op1_val = match opline.op1_type {
                     OpType::Cv => {
                         let cv = unsafe { (*frame).cv(opline.op1 as u32) };
@@ -571,6 +573,22 @@ pub fn execute_hot_frame(
                         OpCode::Mul => match l1.checked_mul(l2) {
                             Some(r) => unsafe { Value::write_long(result_ptr, r) },
                             None => unsafe { result_ptr.write(Value::double(l1 as f64 * l2 as f64)) },
+                        },
+                        OpCode::Div => {
+                            if l2 == 0 {
+                                return Err(VmError::Fatal("Division by zero".into()));
+                            }
+                            if l1 % l2 == 0 {
+                                unsafe { Value::write_long(result_ptr, l1 / l2) };
+                            } else {
+                                unsafe { result_ptr.write(Value::double(l1 as f64 / l2 as f64)) };
+                            }
+                        },
+                        OpCode::Mod => {
+                            if l2 == 0 {
+                                return Err(VmError::Fatal("Division by zero".into()));
+                            }
+                            unsafe { Value::write_long(result_ptr, l1 % l2) };
                         },
                         _ => unreachable!(),
                     }

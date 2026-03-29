@@ -20,7 +20,7 @@ function fib($n) { if ($n <= 1) return $n; return fib($n-1) + fib($n-2); }
 echo fib(25) . "\n";'
 
 run_workload "2. gcd — euclidean recursion (loop)" '<?php
-function gcd($a, $b) { if ($b == 0) return $a; $q = intval($a / $b); return gcd($b, $a - $q * $b); }
+function gcd($a, $b) { if ($b == 0) return $a; return gcd($b, $a % $b); }
 $s = 0; for ($i = 1; $i <= 100; $i++) { $s = $s + gcd(120, $i); } echo $s . "\n";'
 
 run_workload "3. ackermann(3,5)" '<?php
@@ -60,7 +60,7 @@ echo is_even(100) . is_odd(100) . "\n";'
 
 run_workload "11. app-like — process_item dispatch x1000" '<?php
 function process_item($t, $v) { if ($t == 1) return $v * 2; if ($t == 2) return $v + 10; return $v; }
-$total = 0; for ($i = 0; $i < 1000; $i++) { $total = $total + process_item($i - intval($i / 3) * 3, $i); } echo $total . "\n";'
+$total = 0; for ($i = 0; $i < 1000; $i++) { $total = $total + process_item($i % 3, $i); } echo $total . "\n";'
 
 run_workload "12. recursive with conditional string return" '<?php
 function maybe_str($n) { if ($n <= 0) return "done"; return maybe_str($n - 1); }
