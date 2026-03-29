@@ -359,3 +359,216 @@ function power($base, $exp) {
 echo power(2, 20) . '|' . power(3, 10);
 "), "1048576|59049");
 }
+
+// ══════════════════════════════════════════════════════════════════════
+// 9. FetchObjR + AssignObjProp: property access in hot tier
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_hot_property_read_write() {
+    // Method reads and writes public properties via inline cache.
+    // Property values are scalar → stays fully in hot tier.
+    assert_eq!(run_php("<?php
+class Counter {
+    public $val = 0;
+    public function inc() {
+        $this->val = $this->val + 1;
+    }
+    public function get() { return $this->val; }
+}
+$c = new Counter();
+for ($i = 0; $i < 100; $i++) { $c->inc(); }
+echo $c->get();
+"), "100");
+}
+
+#[test]
+fn test_hot_property_multiple_fields() {
+    // Multiple property reads/writes per method call.
+    assert_eq!(run_php("<?php
+class Stats {
+    public $count = 0;
+    public $sum = 0;
+    public function record($v) {
+        $this->count = $this->count + 1;
+        $this->sum = $this->sum + $v;
+    }
+}
+$st = new Stats();
+for ($i = 1; $i <= 100; $i++) { $st->record($i); }
+echo $st->count . '|' . $st->sum;
+"), "100|5050");
+}
+
+#[test]
+fn test_hot_property_conditional_update() {
+    // Property update inside conditional — exercises FetchObjR in comparison.
+    assert_eq!(run_php("<?php
+class MinMax {
+    public $min = 999;
+    public $max = 0;
+    public function update($v) {
+        if ($v < $this->min) { $this->min = $v; }
+        if ($v > $this->max) { $this->max = $v; }
+    }
+}
+$mm = new MinMax();
+for ($i = 50; $i >= 1; $i--) { $mm->update($i); }
+for ($i = 51; $i <= 100; $i++) { $mm->update($i); }
+echo $mm->min . '|' . $mm->max;
+"), "1|100");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 10. InitMethodCall: method dispatch in hot tier
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_hot_method_recursion_fib() {
+    // fib via $this->fib() — recursive method call through InitMethodCall.
+    assert_eq!(run_php("<?php
+class MathHelper {
+    public function fib($n) {
+        if ($n <= 1) return $n;
+        return $this->fib($n - 1) + $this->fib($n - 2);
+    }
+}
+$m = new MathHelper();
+echo $m->fib(20);
+"), "6765");
+}
+
+#[test]
+fn test_hot_method_recursion_power() {
+    // Recursive power via method call.
+    assert_eq!(run_php("<?php
+class Calc {
+    public function pow($b, $e) {
+        if ($e <= 0) return 1;
+        return $b * $this->pow($b, $e - 1);
+    }
+}
+$c = new Calc();
+echo $c->pow(2, 20);
+"), "1048576");
+}
+
+#[test]
+fn test_hot_method_with_property_recursion() {
+    // Combines InitMethodCall + FetchObjR in recursive context.
+    // Method reads property, recurses, updates property.
+    assert_eq!(run_php("<?php
+class Accumulator {
+    public $total = 0;
+    public function add_range($from, $to) {
+        if ($from > $to) return $this->total;
+        $this->total = $this->total + $from;
+        return $this->add_range($from + 1, $to);
+    }
+}
+$a = new Accumulator();
+echo $a->add_range(1, 100);
+"), "5050");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 11. Method bailout: heap return / non-scalar boundaries
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_hot_method_return_this_bailout() {
+    // Fluent method returns $this (object/heap) → HeapReturnValue bail.
+    // Baseline handles correctly after bail.
+    assert_eq!(run_php("<?php
+class Builder {
+    public $val = 0;
+    public function inc() { $this->val = $this->val + 1; return $this; }
+    public function get() { return $this->val; }
+}
+$b = new Builder();
+for ($i = 0; $i < 50; $i++) { $b->inc(); }
+echo $b->get();
+"), "50");
+}
+
+#[test]
+fn test_hot_method_mixed_scalar_and_object_return() {
+    // Method sometimes returns scalar, sometimes called in chain.
+    // Tests transition between hot completion and bailout.
+    assert_eq!(run_php("<?php
+class Acc {
+    public $v = 0;
+    public function add($x) { $this->v = $this->v + $x; }
+    public function result() { return $this->v; }
+}
+$a = new Acc();
+for ($i = 0; $i < 100; $i++) { $a->add($i); }
+echo $a->result();
+"), "4950");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 12. Static methods: already work via InitFcall path
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_hot_static_method_calls() {
+    // Static methods go through InitStaticCall → DoFcall standard path.
+    // Should work at 100% in hot tier.
+    assert_eq!(run_php("<?php
+class Math {
+    public static function add($a, $b) { return $a + $b; }
+    public static function mul($a, $b) { return $a * $b; }
+}
+$r = 0;
+for ($i = 0; $i < 100; $i++) {
+    $r = Math::add($r, Math::mul($i, 2));
+}
+echo $r;
+"), "9900");
+}
+
+// ══════════════════════════════════════════════════════════════════════
+// 13. Multi-class: method calls across different classes
+// ══════════════════════════════════════════════════════════════════════
+
+#[test]
+fn test_hot_method_different_classes() {
+    // Two different classes with scalar-return methods called in loop.
+    // InitMethodCall IC is monomorphic — different class_id causes re-resolve.
+    assert_eq!(run_php("<?php
+class Adder {
+    public function apply($x) { return $x + 1; }
+}
+class Doubler {
+    public function apply($x) { return $x * 2; }
+}
+$a = new Adder();
+$d = new Doubler();
+$r1 = 0; $r2 = 0;
+for ($i = 0; $i < 50; $i++) { $r1 = $a->apply($r1); }
+for ($i = 0; $i < 50; $i++) { $r2 = $d->apply($r2); }
+echo $r1 . '|' . $r2;
+"), "50|0");
+}
+
+#[test]
+fn test_hot_method_property_across_instances() {
+    // Same class, different instances — inline cache should hit for both
+    // since class_id is identical.
+    assert_eq!(run_php("<?php
+class Box {
+    public $val;
+    public function __construct($v) { $this->val = $v; }
+    public function add($x) { $this->val = $this->val + $x; }
+    public function get() { return $this->val; }
+}
+$a = new Box(0);
+$b = new Box(100);
+for ($i = 0; $i < 50; $i++) {
+    $a->add(1);
+    $b->add(2);
+}
+echo $a->get() . '|' . $b->get();
+"), "50|200");
+}

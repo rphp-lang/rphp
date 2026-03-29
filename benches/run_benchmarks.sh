@@ -33,6 +33,8 @@ BENCHMARKS=(
     "bench_array.php:Array build+sum 50K"
     "bench_foreach.php:Foreach sum 50K"
     "bench_nested_loops.php:Nested loops 500x500"
+    "bench_fib_method.php:Method fib(30) \$this"
+    "bench_property.php:Property R/W 1M"
 )
 
 printf "%-30s %12s %12s %10s\n" "Benchmark" "rphp" "PHP 8.4" "Ratio"
