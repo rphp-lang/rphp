@@ -741,7 +741,12 @@ impl Value {
         debug_assert!(self.value_type() == ValueType::Object);
         let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
         let obj = &mut *refcell.as_ptr();
-        obj.properties.insert(name.to_string(), val);
+        // Fast path: if property already exists, overwrite in-place (no String alloc).
+        if let Some(slot) = obj.properties.get_mut(name) {
+            *slot = val;
+        } else {
+            obj.properties.insert(name.to_string(), val);
+        }
     }
 
     /// Get string reference. Only valid for String values.

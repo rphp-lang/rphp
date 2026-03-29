@@ -1,6 +1,9 @@
 #!/bin/bash
 # Performance benchmark: rphp vs PHP
-# Usage: ./benches/run_benchmarks.sh
+# Usage: ./benches/run_benchmarks.sh [--no-pgo]
+#
+# Default: PGO build (instrument → profile → rebuild).
+# --no-pgo: plain release build (faster, for quick checks).
 #
 # Each benchmark outputs "result|elapsed_seconds" via internal microtime().
 # This eliminates process startup from measurements.
@@ -10,14 +13,36 @@ export LC_ALL=C
 
 cd "$(dirname "$0")/.."
 
-# Build release (skip with --no-build for PGO builds)
-if [ "$1" != "--no-build" ]; then
-    echo "=== Building rphp (release) ==="
+PROFDATA_DIR="/tmp/pgo-data"
+PROFDATA_MERGED="/tmp/pgo-merged.profdata"
+LLVM_PROFDATA=$(find ~/.rustup/toolchains/*/lib/rustlib/*/bin/llvm-profdata 2>/dev/null | head -1)
+
+if [ "$1" = "--no-pgo" ]; then
+    echo "=== Building rphp (release, no PGO) ==="
     cargo build --release 2>&1 | tail -1
 else
-    echo "=== Skipping build (--no-build) ==="
+    echo "=== PGO Step 1/3: Instrumented build ==="
+    rm -rf "$PROFDATA_DIR" && mkdir -p "$PROFDATA_DIR"
+    RUSTFLAGS="-Cprofile-generate=$PROFDATA_DIR" cargo build --release 2>&1 | tail -1
+
+    echo "=== PGO Step 2/3: Collecting profiles ==="
+    for f in benches/bench_*.php; do
+        ./target/release/rphp "$f" > /dev/null 2>&1 || true
+    done
+    echo "  Collected $(ls "$PROFDATA_DIR"/*.profraw 2>/dev/null | wc -l | tr -d ' ') profile(s)"
+
+    echo "=== PGO Step 3/3: Optimized rebuild ==="
+    if [ -z "$LLVM_PROFDATA" ]; then
+        echo "ERROR: llvm-profdata not found. Run: rustup component add llvm-tools-preview"
+        exit 1
+    fi
+    "$LLVM_PROFDATA" merge -o "$PROFDATA_MERGED" "$PROFDATA_DIR/" 2>&1
+    cargo clean -p rphp 2>/dev/null || true
+    RUSTFLAGS="-Cprofile-use=$PROFDATA_MERGED" cargo build --release 2>&1 | tail -1
+    echo "  PGO build ready."
 fi
 
+echo ""
 RUSTPHP="./target/release/rphp"
 PHP="php -n"
 
@@ -38,6 +63,9 @@ BENCHMARKS=(
     "bench_nested_loops.php:Nested 1500x1500"
     "bench_fib_method.php:Method fib(35) \$this"
     "bench_property.php:Property R/W 5M"
+    "bench_method_chain.php:Method chain 5M"
+    "bench_scalar_method.php:Scalar method 5M"
+    "bench_obj_dispatch.php:App-like obj dispatch 5M"
 )
 
 printf "%-30s %12s %12s %10s\n" "Benchmark" "rphp" "PHP" "Ratio"
