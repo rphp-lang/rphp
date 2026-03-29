@@ -1,8 +1,31 @@
-//! Hot executor — specialized interpreter for scalar-only recursive functions.
+//! Hot executor — specialized interpreter for hot functions.
 //!
 //! Called from DoFcall when a function's `hot_status == Hot`.
-//! Handles only the opcode subset used by scalar-recursive patterns (fib, etc.).
+//! Handles the opcode subset used by scalar-recursive and object/method patterns.
 //! Returns to baseline interpreter on any unhandled opcode or non-scalar value.
+//!
+//! # Scope (v1, closed 2026-03)
+//!
+//! ## In-scope — handled fully
+//! - **Scalar recursion**: fib, ack, gcd, power, mutual recursion
+//! - **Scalar call chains**: non-recursive functions called from loops
+//! - **Closures**: scalar-only closure calls
+//! - **Method calls**: `$this->method()` via InitMethodCall (monomorphic IC)
+//! - **Property access**: FetchObjR + AssignObjProp (scalar property values, IC cache hit)
+//! - **Static methods**: via existing InitStaticCall → DoFcall path
+//!
+//! ## Out-of-scope — deliberate bailout to baseline
+//! - **Heap return values**: `return $this`, `return $string` → HeapReturnValue bail
+//! - **Object arguments**: object as SendVal argument → NonScalarOperand bail
+//! - **Magic methods**: `__get`/`__set` → ObjCacheMiss bail (no IC entry)
+//! - **Dynamic dispatch**: polymorphic call sites, `__call` → bail
+//! - **Internal functions**: stdlib calls from hot → IneligibleCallee bail
+//!
+//! ## Architecture boundary
+//! The remaining gaps (HeapReturnValue, NonScalarOperand) require heap/object
+//! ownership semantics (refcount, aliasing, lifecycle). This is a new domain,
+//! not a continuation of scalar-safe expansion. Opening it requires explicit
+//! design decision, not incremental opcode addition.
 //!
 //! # Design principles
 //!
@@ -54,12 +77,17 @@
 //!
 //! ## How MaybeHeap enters a hot frame
 //!
-//! Only through the **initial entry from baseline**: baseline's SendVal can write
-//! heap values to callee params before DoFcall dispatches to the hot executor.
-//! Recursive hot calls always have `Scalar` params (hot SendVal bails on heap).
+//! Two paths:
+//! 1. **Initial entry from baseline**: baseline's SendVal can write heap values
+//!    to callee params before DoFcall dispatches to the hot executor.
+//! 2. **Method frames ($this)**: InitMethodCall writes an Object value to CV[0].
+//!    Frame is marked `has_heap_slots` with bitmap bit 0 set. Return handler
+//!    calls `cleanup_frame_slots` to drop $this correctly.
 //!
-//! This means: first hot frame may have `MaybeHeap` in parameter CVs.
-//! All deeper recursive frames are guaranteed `Scalar`-only.
+//! Recursive hot calls always have `Scalar` params (hot SendVal bails on heap).
+//! For non-method frames: first hot frame may have `MaybeHeap` in parameter CVs,
+//! all deeper frames are guaranteed `Scalar`-only.
+//! For method frames: CV[0] ($this) is always `MaybeHeap` (Object).
 
 use crate::value::{Value, ValueType};
 use crate::runtime::ExecutorGlobals;
