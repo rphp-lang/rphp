@@ -531,7 +531,7 @@ pub unsafe fn execute_macro(
 
 /// Find the instruction IP corresponding to a macro step index.
 /// Guards don't correspond to instructions, so we skip them when counting.
-fn find_instruction_ip_for_step(plan: &MacroPlan, step_idx: usize, instrs: &[Instruction]) -> usize {
+fn find_instruction_ip_for_step(plan: &MacroPlan, step_idx: usize, _instrs: &[Instruction]) -> usize {
     let mut instr_offset = 0usize;
     for s in 0..=step_idx {
         match &plan.steps[s] {

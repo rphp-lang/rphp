@@ -9,7 +9,8 @@ use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint};
-use super::planner::{self, BlockPlan, MacroResult, HOT_THRESHOLD};
+// Planner module is kept as scaffolding for future hot-executor architecture.
+// Not used in baseline dispatch loop — will be integrated via function-entry dispatch.
 
 /// Get the current caller's **lexical** (declaring) class name from the frame.
 /// Uses the `method_declaring_class` map on EG rather than runtime $this,
@@ -2476,12 +2477,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
     let mut frame = initial_frame;
     let mut op_array = unsafe { (*frame).op_array() };
     let mut tick: u8 = 255; // First iteration checks immediately (wraps to 0)
-    // Flag: true when we're at a potential block leader (function entry, after jump/call/return).
-    // When false, we skip the expensive block lookup. Set to true at control flow points.
-    // DISABLED: block planner infrastructure costs ~28% overhead on call-heavy workloads.
-    // Keep code intact for future use with cheaper block detection (embed block_idx in Instruction).
-    let mut at_block_entry = false;
-
     'vm: loop {
         // Batch interrupt check: every 256 opcodes instead of every opcode.
         // Placed at loop top so all `continue` paths also pass through it.
@@ -2489,95 +2484,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         if tick == 0 {
             if eg.vm_interrupt.load(Ordering::Relaxed) {
                 handle_interrupt(eg)?;
-            }
-        }
-
-        // ── Block entry: hot-block profiling and macro dispatch ──
-        // Only check when at_block_entry is set (control flow points).
-        if false && at_block_entry && !op_array.ip_to_block.is_empty() {
-            at_block_entry = false;
-            let current_ip = unsafe {
-                (*frame).opline.offset_from(op_array.instructions.as_ptr()) as usize
-            };
-            if current_ip < op_array.ip_to_block.len() {
-                let block_idx = op_array.ip_to_block[current_ip] as usize;
-                if current_ip == op_array.block_info[block_idx].start_ip as usize {
-                    // At a block leader — check plan
-                    let plan_ptr = unsafe {
-                        op_array.block_plans.as_ptr().add(block_idx) as *mut BlockPlan
-                    };
-                    match unsafe { &*plan_ptr } {
-                        BlockPlan::Interpret => {
-                            // Increment counter (mutable access via unsafe, same pattern as inline cache)
-                            let counter_ptr = unsafe {
-                                &mut *(op_array.block_counters.as_ptr().add(block_idx) as *mut u32)
-                            };
-                            *counter_ptr += 1;
-                            if *counter_ptr >= HOT_THRESHOLD {
-                                if let Some(plan) = planner::plan_hot_block(op_array, block_idx) {
-                                    unsafe { *plan_ptr = BlockPlan::Macro(plan); }
-                                } else {
-                                    unsafe { *plan_ptr = BlockPlan::Deoptimized; }
-                                }
-                            }
-                        }
-                        BlockPlan::Macro(plan) => {
-                            // Recursive macro execution: run the plan in a loop.
-                            // On CallYield (DoFcall), call execute_ex recursively for
-                            // the callee, then resume the macro at the next step.
-                            // This eliminates the resume stack entirely.
-                            let mut macro_step = 0usize;
-                            'macro_loop: loop {
-                                match unsafe { planner::execute_macro(eg, frame, op_array, plan, macro_step) } {
-                                    MacroResult::Returned => {
-                                        let prev = unsafe { (*frame).prev_execute_data };
-                                        if prev.is_null() { return Ok(()); }
-                                        if frame == initial_frame {
-                                            eg.current_execute_data.set(prev);
-                                            unsafe { cleanup_frame_slots(frame) };
-                                            eg.vm_stack.pop_call_frame(frame);
-                                            return Ok(());
-                                        }
-                                        eg.current_execute_data.set(prev);
-                                        unsafe { cleanup_frame_slots(frame) };
-                                        eg.vm_stack.pop_call_frame(frame);
-                                        frame = prev;
-                                        op_array = unsafe { (*frame).op_array() };
-                                        at_block_entry = true;
-                                        continue 'vm;
-                                    }
-                                    MacroResult::Jump(target_ip) => {
-                                        unsafe { (*frame).opline = op_array.instructions.as_ptr().add(target_ip as usize) };
-                                        at_block_entry = true;
-                                        continue 'vm;
-                                    }
-                                    MacroResult::CallYield { resume_step } => {
-                                        // Callee frame is active. Run it via recursive execute_ex.
-                                        let callee = eg.current_execute_data.get();
-                                        let eg_ptr = eg as *mut ExecutorGlobals;
-                                        execute_ex(unsafe { &mut *eg_ptr }, callee)?;
-                                        // Callee returned and was cleaned up. Resume macro.
-                                        macro_step = resume_step as usize;
-                                        continue 'macro_loop;
-                                    }
-                                    MacroResult::GuardFail => {
-                                        // Fall through to baseline interpreter
-                                        break 'macro_loop;
-                                    }
-                                    MacroResult::FallThrough => {
-                                        let end_ip = op_array.block_info[block_idx].end_ip as usize;
-                                        unsafe { (*frame).opline = op_array.instructions.as_ptr().add(end_ip + 1) };
-                                        at_block_entry = true;
-                                        continue 'vm;
-                                    }
-                                }
-                            }
-                        }
-                        BlockPlan::Deoptimized => {
-                            // Do nothing — use baseline interpreter
-                        }
-                    }
-                }
             }
         }
 
@@ -2784,7 +2690,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg.vm_stack.pop_call_frame(frame);
                             frame = prev;
                             op_array = unsafe { (*frame).op_array() };
-                            at_block_entry = true;
+            
                             continue;
                         }
                         // Normal path: write to TMP
@@ -2935,12 +2841,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if !cmp_result {
                     unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
-                    at_block_entry = true;
+    
                     continue;
                 }
                 // Fall through: advance local +1, loop bottom adds +1 more → net +2
                 opline_ptr = unsafe { opline_ptr.add(1) };
-                at_block_entry = true;
+
             }
 
             OpCode::JmpNZ_Le_CvConst => {
@@ -2960,11 +2866,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if cmp_result {
                     unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
-                    at_block_entry = true;
+    
                     continue;
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };
-                at_block_entry = true;
+
             }
 
             OpCode::JmpZ_Lt_CvConst => {
@@ -2983,11 +2889,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if !cmp_result {
                     unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
-                    at_block_entry = true;
+    
                     continue;
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };
-                at_block_entry = true;
+
             }
 
             OpCode::JmpNZ_Lt_CvConst => {
@@ -3006,11 +2912,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if cmp_result {
                     unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
-                    at_block_entry = true;
+    
                     continue;
                 }
                 opline_ptr = unsafe { opline_ptr.add(1) };
-                at_block_entry = true;
+
             }
 
             OpCode::Add => {
@@ -3314,7 +3220,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe {
                     (*frame).opline = op_array.instructions().as_ptr().add(target);
                 }
-                at_block_entry = true;
+
                 continue; // skip normal advance
             }
 
@@ -3326,11 +3232,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe {
                         (*frame).opline = op_array.instructions().as_ptr().add(target);
                     }
-                    at_block_entry = true;
+    
                     continue;
                 }
                 // Fall-through after JmpZ is also a block leader
-                at_block_entry = true;
+
             }
 
             OpCode::JmpNZ => {
@@ -3341,11 +3247,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe {
                         (*frame).opline = op_array.instructions().as_ptr().add(target);
                     }
-                    at_block_entry = true;
+    
                     continue;
                 }
                 // Fall-through after JmpNZ is also a block leader
-                at_block_entry = true;
+
             }
 
             OpCode::InitFcall => {
@@ -3587,7 +3493,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.current_execute_data.set(call);
                     frame = call;
                     op_array = unsafe { (*frame).op_array() };
-                    at_block_entry = true;
+    
                     continue;
                     }
                 }
@@ -3677,7 +3583,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         eg.current_execute_data.set(call);
                         frame = call;
                         op_array = unsafe { (*frame).op_array() };
-                        at_block_entry = true;
+        
                         continue;
                     } // else: type_ok
                     } // if arity/generator ok
@@ -3890,7 +3796,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             eg.current_execute_data.set(call);
                             frame = call;
                             op_array = unsafe { (*frame).op_array() };
-                            at_block_entry = true;
+            
                             continue;
                         }
                     }
@@ -4500,7 +4406,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     op_array = unsafe { (*frame).op_array() };
                     // No dirty_globals check: FastScalar callee never touches globals,
                     // and may_access_globals == false means no deeper callee did either.
-                    at_block_entry = true;
+    
                     continue;
                 }
 
@@ -4618,7 +4524,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         eg.dirty_globals.clear();
                     }
-                    at_block_entry = true;
+    
                     continue;
                     } // else: not strict with return type
                 }
@@ -4822,7 +4728,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         eg.dirty_globals.clear();
                     }
                 }
-                at_block_entry = true;
+
                 continue;
             }
 
@@ -4916,10 +4822,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             // All opcodes handled — new opcodes must be added above
         }
 
-        // Advance to next instruction — sequential step, never a block leader.
+        // Advance to next instruction.
         // Use local opline_ptr to avoid redundant memory load of (*frame).opline.
         unsafe { (*frame).opline = opline_ptr.add(1); }
-        at_block_entry = false;
     }
 }
 
