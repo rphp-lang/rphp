@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::ptr::NonNull;
 
 use crate::compiler::OpArray;
@@ -154,19 +155,42 @@ pub struct CallPlan {
     pub cleanup: CleanupMode,
 }
 
+/// Hotness state for function-level tiering.
+/// Transitions: Cold → Hot (when call_count crosses threshold).
+/// Unplannable functions (generators, try/finally, variadics) stay Cold permanently.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HotStatus {
+    /// Not yet hot — use baseline interpreter.
+    Cold,
+    /// Crossed hotness threshold — eligible for hot executor.
+    /// Future: will carry an ExecPlan reference.
+    Hot,
+}
+
+/// Threshold for function call count before promoting to Hot.
+/// Tuned for fib-like workloads: 8 calls is enough to identify recursive hot functions
+/// without adding overhead to one-shot functions.
+pub const FUNC_HOT_THRESHOLD: u32 = 8;
+
 /// Common header shared by all function types.
 /// MUST be first field in UserFunction and InternalFunction (#[repr(C)]).
 ///
-/// Three concerns, cleanly separated:
+/// Four concerns, cleanly separated:
 /// - `sig`:   parameter metadata (arity, types, names, ref passing)
 /// - `frame`: precomputed frame geometry (slot counts)
 /// - `plan`:  precomputed call strategy (fast/slow path flags)
+/// - `hot_status` + `call_count`: function-level hotness for tiered execution
 #[repr(C)]
 pub struct FunctionCommon {
     pub fn_type: FunctionType,
     pub sig: SignatureInfo,
     pub frame: FrameLayout,
     pub plan: CallPlan,
+    /// Number of times this function has been called. Saturates at u32::MAX.
+    /// Cell because FunctionCommon is shared via raw pointer — single-threaded VM.
+    pub call_count: Cell<u32>,
+    /// Current hotness tier. Transitions Cold → Hot after call_count >= FUNC_HOT_THRESHOLD.
+    pub hot_status: Cell<HotStatus>,
 }
 
 /// User-defined PHP function — contains compiled OpArray.

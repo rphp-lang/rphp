@@ -3,12 +3,17 @@
 # Usage: ./benches/run_benchmarks.sh
 
 set -e
+export LC_ALL=C
 
 cd "$(dirname "$0")/.."
 
-# Build release
-echo "=== Building rphp (release) ==="
-cargo build --release 2>&1 | tail -1
+# Build release (skip with --no-build for PGO builds)
+if [ "$1" != "--no-build" ]; then
+    echo "=== Building rphp (release) ==="
+    cargo build --release 2>&1 | tail -1
+else
+    echo "=== Skipping build (--no-build) ==="
+fi
 
 RUSTPHP="./target/release/rphp"
 PHP="php -n"
@@ -21,6 +26,8 @@ echo ""
 
 BENCHMARKS=(
     "bench_fib.php:Fibonacci(30) recursive"
+    "bench_fib39.php:Fibonacci(39) recursive"
+    "bench_calls.php:Call-heavy 1M iterations"
     "bench_loop.php:Loop 1M iterations"
     "bench_string.php:String concat 10K"
     "bench_array.php:Array build+sum 50K"

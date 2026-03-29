@@ -2,11 +2,12 @@ pub mod compile;
 
 use crate::value::Value;
 use crate::vm::instruction::{Instruction, InlineCache};
+use std::cell::Cell;
 use crate::vm::function::{
     FunctionCommon, FunctionType, UserFunction, ParamTypeHint,
     InternalFunction, InternalFunctionHandler,
     SignatureInfo, FrameLayout, CallPlan,
-    CallStrategy, ReturnStrategy, CleanupMode,
+    CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -403,6 +404,8 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
             },
             frame: FrameLayout { num_cvs, num_temps, total_slots },
             plan: CallPlan { call, ret, cleanup },
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
         },
         op_array,
     }
@@ -480,6 +483,8 @@ pub fn make_user_function_typed(
             },
             frame: FrameLayout { num_cvs, num_temps, total_slots },
             plan: CallPlan { call, ret, cleanup },
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
         },
         op_array,
     }
@@ -509,6 +514,8 @@ pub fn make_internal_function(
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
             plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
     }
@@ -539,6 +546,8 @@ pub fn make_internal_method(
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
             plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
     }
@@ -569,6 +578,8 @@ pub fn make_internal_function_ref(
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
             plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
     }
@@ -598,6 +609,8 @@ pub fn make_internal_function_variadic(
             },
             frame: FrameLayout { num_cvs, num_temps: 0, total_slots },
             plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            call_count: Cell::new(0),
+            hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
     }

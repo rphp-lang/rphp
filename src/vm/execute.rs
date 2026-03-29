@@ -8,7 +8,7 @@ use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint};
+use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
 // Planner module is kept as scaffolding for future hot-executor architecture.
 // Not used in baseline dispatch loop — will be integrated via function-entry dispatch.
 
@@ -3477,6 +3477,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if !has_hole {
                     stats::inc_do_fcall_fast();
+
+                    // Function-level hotness tracking (Etapa B).
+                    // Saturating increment — no branch on hot path after promotion.
+                    let cc = func_common_fast.call_count.get();
+                    if cc < u32::MAX { func_common_fast.call_count.set(cc + 1); }
+                    if cc == FUNC_HOT_THRESHOLD && func_common_fast.hot_status.get() == HotStatus::Cold {
+                        func_common_fast.hot_status.set(HotStatus::Hot);
+                    }
+
                     let user = unsafe { &*((*call).func as *const UserFunction) };
                     let return_value_ptr = match opline.result_type {
                         OpType::Tmp | OpType::Var => unsafe {
@@ -3493,7 +3502,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.current_execute_data.set(call);
                     frame = call;
                     op_array = unsafe { (*frame).op_array() };
-    
+
+                    // Future Etapa C: if func_common_fast.hot_status.get() == HotStatus::Hot {
+                    //     return execute_hot(eg, frame);  // separate hot executor
+                    // }
+
                     continue;
                     }
                 }
