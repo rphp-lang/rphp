@@ -582,6 +582,15 @@ impl Value {
         });
     }
 
+    /// Raw 16-byte copy from src to dst. No type-checking, no clone ceremony.
+    /// Use for TMP→arg copies where the source is a scalar (Long/Double/Bool/Null)
+    /// and will not be read again (consumed TMP).
+    /// For heap-backed values (String/Array/Object), caller must handle refcount.
+    #[inline(always)]
+    pub unsafe fn raw_copy(src: *const Value, dst: *mut Value) {
+        std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, std::mem::size_of::<Value>());
+    }
+
     /// Write Null directly into a slot.
     #[inline(always)]
     pub unsafe fn write_null(ptr: *mut Value) {

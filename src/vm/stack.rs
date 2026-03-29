@@ -39,7 +39,7 @@ impl VmStack {
     }
 
     /// Allocate a call frame on the stack.
-    #[inline]
+    #[inline(always)]
     pub fn push_call_frame(
         &mut self,
         func: *const FunctionCommon,
@@ -68,20 +68,16 @@ impl VmStack {
         let frame = self.top as *mut ExecuteData;
         self.top = unsafe { self.top.add(total_slots) };
 
-        // Initialize frame header.
+        // Initialize frame header: zero all bytes, then write non-zero fields.
+        // Zeroing handles: opline=null, call=null, return_value=null,
+        // prev_execute_data=null, pending_return_after_finally=false,
+        // has_heap_slots=false, named_args_used=false, heap_bitmap=0.
         unsafe {
+            std::ptr::write_bytes(frame as *mut u8, 0, size_of::<ExecuteData>());
             (*frame).func = func;
-            (*frame).opline = std::ptr::null();
-            (*frame).call = std::ptr::null_mut();
-            (*frame).return_value = std::ptr::null_mut();
-            (*frame).prev_execute_data = std::ptr::null_mut();
             (*frame).num_args = num_args;
             (*frame).num_cvs = effective_cvs as u32;
             (*frame).num_temps = num_temps as u32;
-            (*frame).pending_return_after_finally = false;
-            (*frame).has_heap_slots = false;
-            (*frame).named_args_used = false;
-            (*frame).heap_bitmap = 0;
         }
 
         // Zero-init only CV slots beyond argument count. TMPs NOT zeroed.
@@ -107,6 +103,7 @@ impl VmStack {
     }
 
     /// Pop call frame — reset stack top to frame start
+    #[inline(always)]
     pub fn pop_call_frame(&mut self, frame: *mut ExecuteData) {
         self.top = frame as *mut Value;
     }

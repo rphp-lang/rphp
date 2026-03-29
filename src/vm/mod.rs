@@ -6,3 +6,4 @@ pub mod stack;
 pub mod execute;
 pub mod generator;
 pub mod stats;
+pub mod planner;

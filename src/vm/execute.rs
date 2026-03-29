@@ -9,6 +9,7 @@ use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint};
+use super::planner::{self, BlockPlan, MacroResult, HOT_THRESHOLD};
 
 /// Get the current caller's **lexical** (declaring) class name from the frame.
 /// Uses the `method_declaring_class` map on EG rather than runtime $this,
@@ -330,7 +331,7 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
 ///   3. Full scan fallback (total slots > 64) → scan all slots by value type
 ///
 /// After dropping, zeros the slot so reused stack space sees Undef.
-#[inline]
+#[inline(always)]
 unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     let num_cvs = (*frame).num_cvs as usize;
     let num_temps = (*frame).num_temps as usize;
@@ -2475,6 +2476,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
     let mut frame = initial_frame;
     let mut op_array = unsafe { (*frame).op_array() };
     let mut tick: u8 = 255; // First iteration checks immediately (wraps to 0)
+    // Flag: true when we're at a potential block leader (function entry, after jump/call/return).
+    // When false, we skip the expensive block lookup. Set to true at control flow points.
+    // DISABLED: block planner infrastructure costs ~28% overhead on call-heavy workloads.
+    // Keep code intact for future use with cheaper block detection (embed block_idx in Instruction).
+    let mut at_block_entry = false;
 
     'vm: loop {
         // Batch interrupt check: every 256 opcodes instead of every opcode.
@@ -2486,7 +2492,97 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
         }
 
-        let opline = unsafe { &*(*frame).opline };
+        // ── Block entry: hot-block profiling and macro dispatch ──
+        // Only check when at_block_entry is set (control flow points).
+        if false && at_block_entry && !op_array.ip_to_block.is_empty() {
+            at_block_entry = false;
+            let current_ip = unsafe {
+                (*frame).opline.offset_from(op_array.instructions.as_ptr()) as usize
+            };
+            if current_ip < op_array.ip_to_block.len() {
+                let block_idx = op_array.ip_to_block[current_ip] as usize;
+                if current_ip == op_array.block_info[block_idx].start_ip as usize {
+                    // At a block leader — check plan
+                    let plan_ptr = unsafe {
+                        op_array.block_plans.as_ptr().add(block_idx) as *mut BlockPlan
+                    };
+                    match unsafe { &*plan_ptr } {
+                        BlockPlan::Interpret => {
+                            // Increment counter (mutable access via unsafe, same pattern as inline cache)
+                            let counter_ptr = unsafe {
+                                &mut *(op_array.block_counters.as_ptr().add(block_idx) as *mut u32)
+                            };
+                            *counter_ptr += 1;
+                            if *counter_ptr >= HOT_THRESHOLD {
+                                if let Some(plan) = planner::plan_hot_block(op_array, block_idx) {
+                                    unsafe { *plan_ptr = BlockPlan::Macro(plan); }
+                                } else {
+                                    unsafe { *plan_ptr = BlockPlan::Deoptimized; }
+                                }
+                            }
+                        }
+                        BlockPlan::Macro(plan) => {
+                            // Recursive macro execution: run the plan in a loop.
+                            // On CallYield (DoFcall), call execute_ex recursively for
+                            // the callee, then resume the macro at the next step.
+                            // This eliminates the resume stack entirely.
+                            let mut macro_step = 0usize;
+                            'macro_loop: loop {
+                                match unsafe { planner::execute_macro(eg, frame, op_array, plan, macro_step) } {
+                                    MacroResult::Returned => {
+                                        let prev = unsafe { (*frame).prev_execute_data };
+                                        if prev.is_null() { return Ok(()); }
+                                        if frame == initial_frame {
+                                            eg.current_execute_data.set(prev);
+                                            unsafe { cleanup_frame_slots(frame) };
+                                            eg.vm_stack.pop_call_frame(frame);
+                                            return Ok(());
+                                        }
+                                        eg.current_execute_data.set(prev);
+                                        unsafe { cleanup_frame_slots(frame) };
+                                        eg.vm_stack.pop_call_frame(frame);
+                                        frame = prev;
+                                        op_array = unsafe { (*frame).op_array() };
+                                        at_block_entry = true;
+                                        continue 'vm;
+                                    }
+                                    MacroResult::Jump(target_ip) => {
+                                        unsafe { (*frame).opline = op_array.instructions.as_ptr().add(target_ip as usize) };
+                                        at_block_entry = true;
+                                        continue 'vm;
+                                    }
+                                    MacroResult::CallYield { resume_step } => {
+                                        // Callee frame is active. Run it via recursive execute_ex.
+                                        let callee = eg.current_execute_data.get();
+                                        let eg_ptr = eg as *mut ExecutorGlobals;
+                                        execute_ex(unsafe { &mut *eg_ptr }, callee)?;
+                                        // Callee returned and was cleaned up. Resume macro.
+                                        macro_step = resume_step as usize;
+                                        continue 'macro_loop;
+                                    }
+                                    MacroResult::GuardFail => {
+                                        // Fall through to baseline interpreter
+                                        break 'macro_loop;
+                                    }
+                                    MacroResult::FallThrough => {
+                                        let end_ip = op_array.block_info[block_idx].end_ip as usize;
+                                        unsafe { (*frame).opline = op_array.instructions.as_ptr().add(end_ip + 1) };
+                                        at_block_entry = true;
+                                        continue 'vm;
+                                    }
+                                }
+                            }
+                        }
+                        BlockPlan::Deoptimized => {
+                            // Do nothing — use baseline interpreter
+                        }
+                    }
+                }
+            }
+        }
+
+        let mut opline_ptr: *const Instruction = unsafe { (*frame).opline };
+        let opline = unsafe { &*opline_ptr };
         stats::inc_opcode(opline.opcode as usize);
 
         // Check for pending return or exception after finally block ends
@@ -2655,15 +2751,53 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let base = frame as *const Value;
                 let op1 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op1 as usize) };
                 let op2 = unsafe { &*base.add(CALL_FRAME_SLOTS + opline.op2 as usize) };
-                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                    match l1.checked_add(l2) {
-                        Some(sum) => unsafe { frame_tmp_set_long(frame, result_ptr, sum) },
-                        None => unsafe {
+                    if let Some(sum) = l1.checked_add(l2) {
+                        // Peek ahead: if next is Return consuming our result TMP,
+                        // and frame is FastScalar with no heap — skip TMP write + Return dispatch.
+                        // Write sum directly to caller's return_value, pop frame inline.
+                        let next = unsafe { &*opline_ptr.add(1) };
+                        if next.opcode == OpCode::Return
+                            && next.op1_type == OpType::Tmp
+                            && next.op1 == opline.result
+                            && !unsafe { (*frame).has_heap_slots }
+                        {
+                            let return_target = unsafe { (*frame).return_value };
+                            if !return_target.is_null() {
+                                let prev = unsafe { (*frame).prev_execute_data };
+                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
+                                    unsafe { std::ptr::drop_in_place(return_target) };
+                                }
+                                unsafe { Value::write_long(return_target, sum) };
+                            }
+                            stats::inc_return_fast();
+                            let prev = unsafe { (*frame).prev_execute_data };
+                            if prev.is_null() {
+                                return Ok(());
+                            }
+                            if frame == initial_frame {
+                                eg.current_execute_data.set(prev);
+                                eg.vm_stack.pop_call_frame(frame);
+                                return Ok(());
+                            }
+                            eg.current_execute_data.set(prev);
+                            eg.vm_stack.pop_call_frame(frame);
+                            frame = prev;
+                            op_array = unsafe { (*frame).op_array() };
+                            at_block_entry = true;
+                            continue;
+                        }
+                        // Normal path: write to TMP
+                        let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                        unsafe { frame_tmp_set_long(frame, result_ptr, sum) };
+                    } else {
+                        let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                        unsafe {
                             frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 + l2 as f64))
-                        },
+                        };
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for +".into()));
@@ -2694,15 +2828,35 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
                 let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
                 let op2 = &op_array.literals()[opline.op2 as usize];
-                let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                    match l1.checked_sub(l2) {
-                        Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
-                        None => unsafe {
-                            frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
-                        },
+                    // Peek ahead: if next instruction is SendVal consuming our TMP result,
+                    // write directly to the call arg slot and skip the SendVal dispatch.
+                    let next = unsafe { &*opline_ptr.add(1) };
+                    if next.opcode == OpCode::SendVal
+                        && next.op1_type == OpType::Tmp
+                        && next.op1 == opline.result
+                    {
+                        let call = unsafe { (*frame).call };
+                        let dst = unsafe {
+                            (call as *mut Value).add(CALL_FRAME_SLOTS + next.op2 as usize)
+                        };
+                        match l1.checked_sub(l2) {
+                            Some(diff) => unsafe { Value::write_long(dst, diff) },
+                            None => unsafe { dst.write(Value::double(l1 as f64 - l2 as f64)) },
+                        }
+                        // Skip SendVal: advance local ptr +1, loop bottom adds +1 → net +2
+                        opline_ptr = unsafe { opline_ptr.add(1) };
+                    } else {
+                        let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
+                        match l1.checked_sub(l2) {
+                            Some(diff) => unsafe { frame_tmp_set_long(frame, result_ptr, diff) },
+                            None => unsafe {
+                                frame_tmp_set(frame, result_ptr, Value::double(l1 as f64 - l2 as f64))
+                            },
+                        }
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 - d2)) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for -".into()));
@@ -2758,6 +2912,105 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
                 }
+            }
+
+            // ── Superinstructions: fused comparison + conditional jump ──
+            // Eliminates TMP write/read and one dispatch cycle.
+            // On fall-through, advances opline by 2 (skipping the dead JmpZ/JmpNZ).
+
+            OpCode::JmpZ_Le_CvConst => {
+                // Fused: IsSmallerOrEqual_CvConst + JmpZ
+                // Jump to result if !(CV <= Const), else fall through (+2).
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let cmp_result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 <= l2
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1 <= d2
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1 <= s2
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                };
+                if !cmp_result {
+                    unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
+                    at_block_entry = true;
+                    continue;
+                }
+                // Fall through: advance local +1, loop bottom adds +1 more → net +2
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                at_block_entry = true;
+            }
+
+            OpCode::JmpNZ_Le_CvConst => {
+                // Fused: IsSmallerOrEqual_CvConst + JmpNZ
+                // Jump to result if CV <= Const, else fall through (+2).
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let cmp_result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 <= l2
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1 <= d2
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1 <= s2
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                };
+                if cmp_result {
+                    unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
+                    at_block_entry = true;
+                    continue;
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                at_block_entry = true;
+            }
+
+            OpCode::JmpZ_Lt_CvConst => {
+                // Fused: IsSmaller_CvConst + JmpZ
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let cmp_result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 < l2
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1 < d2
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1 < s2
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                };
+                if !cmp_result {
+                    unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
+                    at_block_entry = true;
+                    continue;
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                at_block_entry = true;
+            }
+
+            OpCode::JmpNZ_Lt_CvConst => {
+                // Fused: IsSmaller_CvConst + JmpNZ
+                let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
+                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op2 = &op_array.literals()[opline.op2 as usize];
+                let cmp_result = if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                    l1 < l2
+                } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
+                    d1 < d2
+                } else if let (Some(s1), Some(s2)) = (op1.as_str(), op2.as_str()) {
+                    s1 < s2
+                } else {
+                    return Err(VmError::Fatal("Unsupported operand types for comparison".into()));
+                };
+                if cmp_result {
+                    unsafe { (*frame).opline = op_array.instructions().as_ptr().add(opline.result as usize) };
+                    at_block_entry = true;
+                    continue;
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                at_block_entry = true;
             }
 
             OpCode::Add => {
@@ -3061,6 +3314,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 unsafe {
                     (*frame).opline = op_array.instructions().as_ptr().add(target);
                 }
+                at_block_entry = true;
                 continue; // skip normal advance
             }
 
@@ -3072,8 +3326,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe {
                         (*frame).opline = op_array.instructions().as_ptr().add(target);
                     }
+                    at_block_entry = true;
                     continue;
                 }
+                // Fall-through after JmpZ is also a block leader
+                at_block_entry = true;
             }
 
             OpCode::JmpNZ => {
@@ -3084,8 +3341,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe {
                         (*frame).opline = op_array.instructions().as_ptr().add(target);
                     }
+                    at_block_entry = true;
                     continue;
                 }
+                // Fall-through after JmpNZ is also a block leader
+                at_block_entry = true;
             }
 
             OpCode::InitFcall => {
@@ -3142,18 +3402,65 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     (*call).call = (*frame).call;
                     (*frame).call = call;
                 }
+
+                // Peek ahead: if next is Sub_CvConst whose result feeds SendVal,
+                // inline the subtraction + arg write, skip 2 instructions.
+                let next = unsafe { &*opline_ptr.add(1) };
+                if next.opcode == OpCode::Sub_CvConst {
+                    let next2 = unsafe { &*opline_ptr.add(2) };
+                    if next2.opcode == OpCode::SendVal
+                        && next2.op1_type == OpType::Tmp
+                        && next2.op1 == next.result
+                    {
+                        let op1_cv = unsafe { (*frame).cv(next.op1 as u32) };
+                        let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                        let op2 = &op_array.literals()[next.op2 as usize];
+                        if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
+                            let dst = unsafe {
+                                (call as *mut Value).add(CALL_FRAME_SLOTS + next2.op2 as usize)
+                            };
+                            match l1.checked_sub(l2) {
+                                Some(diff) => unsafe { Value::write_long(dst, diff) },
+                                None => unsafe { dst.write(Value::double(l1 as f64 - l2 as f64)) },
+                            }
+                            // Skip Sub_CvConst + SendVal: advance local +2, loop bottom adds +1 → net +3
+                            opline_ptr = unsafe { opline_ptr.add(2) };
+                        }
+                    }
+                }
             }
 
             OpCode::SendVal => {
                 // Send value to pending call frame
                 // op1 = value to send, op2 = argument number (0-based)
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                let cloned = val.clone();
                 let call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
-                // Arguments are stored in CV slots of the callee frame
-                let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
-                unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
+                let dst = unsafe {
+                    (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
+                };
+                // For TMP operands (common case: Sub result → callee arg),
+                // use raw 16-byte copy — no clone/drop overhead.
+                // TMP values are consumed (not read again), so this is safe.
+                if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
+                    let src = unsafe {
+                        (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
+                    };
+                    unsafe { Value::raw_copy(src, dst) };
+                } else {
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                    let cloned = val.clone();
+                    unsafe { dst.write(cloned) };
+                    // Mark heap bit if needed
+                    if unsafe { (*dst).needs_cleanup() } {
+                        unsafe {
+                            (*call).has_heap_slots = true;
+                            let total = (*call).num_cvs + (*call).num_temps;
+                            if total <= 64 {
+                                (*call).heap_bitmap |= 1u64 << opline.op2;
+                            }
+                        }
+                    }
+                }
             }
 
             OpCode::SendRef => {
@@ -3234,10 +3541,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
                 {
-                    // Named args can create holes: SendNamed bumps num_args while
-                    // leaving gaps in required positions. Only check for holes when
-                    // named args were actually used — the common positional-only
-                    // path skips this entirely (zero overhead on fib hot path).
                     let has_hole = unsafe { (*call).named_args_used } && {
                         let mut hole = false;
                         for i in 0..func_common_fast.sig.num_args {
@@ -3252,7 +3555,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if !has_hole {
                     stats::inc_do_fcall_fast();
                     let user = unsafe { &*((*call).func as *const UserFunction) };
-                    // Return value target — inline for Tmp result (most common).
                     let return_value_ptr = match opline.result_type {
                         OpType::Tmp | OpType::Var => unsafe {
                             (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
@@ -3261,25 +3563,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         _ => unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) },
                     };
                     unsafe { (*call).return_value = return_value_ptr };
-                    // No globals sync needed (may_access_globals == false by FastScalar invariant).
-                    // Arity verified above: num_args == declared (all required, no defaults).
-                    // No type hint scan (none declared by FastScalar invariant).
                     unsafe {
                         (*call).opline = user.op_array.instructions.as_ptr();
-                        (*frame).opline = (*frame).opline.add(1);
+                        (*frame).opline = opline_ptr.add(1);
                     }
                     eg.current_execute_data.set(call);
                     frame = call;
                     op_array = unsafe { (*frame).op_array() };
+                    at_block_entry = true;
                     continue;
                     }
-                    // has_hole == true → fall through to Fast/Full path for error reporting
                 }
 
                 // ── Fast path for simple user function calls ──
-                // Single precomputed flag check replaces 5 runtime conditions.
-                // CALL_FAST = no variadics, no param type hints.
-                // Also requires: User function, not generator, no pending invoke/named-variadic.
                 if func_common_fast.fn_type == FunctionType::User
                     && func_common_fast.plan.call == CallStrategy::Fast
                     && eg.pending_invoke_this.is_none()
@@ -3287,8 +3583,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 {
                     let num_args_fast = unsafe { (*call).num_args };
                     let user = unsafe { &*((*call).func as *const UserFunction) };
-                    // Check for holes in required params (named args can skip positional params).
-                    // This loop is typically 0-2 iterations — cheap for the fast path.
                     let mut has_required_holes = false;
                     if func_common_fast.sig.required_num_args > 0 {
                         for i in 0..func_common_fast.sig.required_num_args {
@@ -3305,16 +3599,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && num_args_fast >= func_common_fast.sig.required_num_args
                         && num_args_fast <= func_common_fast.sig.public_arity()
                     {
-                        // Inline scalar type validation for Fast path.
-                        // Only checks hints that are not None (mixed/untyped skip check).
-                        // strict_types uses full path for proper coercion semantics.
                         let mut type_ok = true;
                         let hints = &func_common_fast.sig.param_type_hints;
                         let caller_strict = op_array.strict_types;
-                        // strict_types with typed params → fall through to full path
                         let has_typed_params = !hints.is_empty() && hints.iter().any(|h| !matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed));
                         if caller_strict && has_typed_params {
-                            type_ok = false; // force full path
+                            type_ok = false;
                         } else if !hints.is_empty() {
                             let check_count = std::cmp::min(num_args_fast as usize, hints.len());
                             for i in 0..check_count {
@@ -3324,8 +3614,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                                 let cv_idx = func_common_fast.sig.param_cv_index(i as u32);
                                 let val = unsafe { &*(*call).cv(cv_idx) };
-                                // Strict scalar type check — no implicit coercion.
-                                // Non-strict coercion falls through to full path.
                                 let ok = match hint {
                                     ParamTypeHint::Int => val.as_long().is_some(),
                                     ParamTypeHint::Float => val.value_type() == ValueType::Double || val.as_long().is_some(),
@@ -3343,20 +3631,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // Fall through to full path for proper TypeError
                         } else {
                         stats::inc_do_fcall_fast();
-                        // Fast path: inline return_value_ptr for Tmp result (most common).
                         let return_value_ptr = match opline.result_type {
                             OpType::Tmp | OpType::Var => unsafe {
-                                // Absolute slot offset — no get_op_mut match needed.
                                 (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
                             },
                             OpType::Unused => std::ptr::null_mut(),
                             _ => unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) },
                         };
                         unsafe { (*call).return_value = return_value_ptr };
-
-                        // Sync caller's scope to globals — only when callee may reach globals.
-                        // Skip for leaf functions that never call other user functions
-                        // and have no `global` bindings (e.g. `add($a, $b)`).
                         if user.op_array.may_access_globals
                             && (!op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty())
                         {
@@ -3371,14 +3653,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 eg.globals.insert(var_name.clone(), val);
                             }
                         }
-
                         unsafe {
                             (*call).opline = user.op_array.instructions.as_ptr();
-                            (*frame).opline = (*frame).opline.add(1);
+                            (*frame).opline = opline_ptr.add(1);
                         }
                         eg.current_execute_data.set(call);
                         frame = call;
                         op_array = unsafe { (*frame).op_array() };
+                        at_block_entry = true;
                         continue;
                     } // else: type_ok
                     } // if arity/generator ok
@@ -3586,11 +3868,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                             unsafe {
                                 (*call).opline = user.op_array.instructions.as_ptr();
-                                (*frame).opline = (*frame).opline.add(1);
+                                (*frame).opline = opline_ptr.add(1);
                             }
                             eg.current_execute_data.set(call);
                             frame = call;
                             op_array = unsafe { (*frame).op_array() };
+                            at_block_entry = true;
                             continue;
                         }
                     }
@@ -4151,17 +4434,46 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 {
                     stats::inc_return_fast();
                     if opline.op1_type != OpType::Unused {
-                        let retval = unsafe {
-                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                        };
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
-                            unsafe { mark_caller_heap_return(frame, retval) };
-                            unsafe { slot_set(return_target, retval.clone()) };
+                            let frame_no_heap = !unsafe { (*frame).has_heap_slots };
+                            if frame_no_heap && opline.op1_type != OpType::Const {
+                                let retval_ptr = unsafe {
+                                    (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
+                                };
+                                let src = if opline.op1_type == OpType::Cv {
+                                    let cv_val = unsafe { &*retval_ptr };
+                                    if cv_val.is_reference() {
+                                        unsafe { cv_val.as_ref_ptr() as *const Value }
+                                    } else {
+                                        retval_ptr
+                                    }
+                                } else {
+                                    retval_ptr
+                                };
+                                let prev = unsafe { (*frame).prev_execute_data };
+                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
+                                    unsafe { std::ptr::drop_in_place(return_target) };
+                                }
+                                unsafe { Value::raw_copy(src, return_target) };
+                            } else {
+                                let retval = unsafe {
+                                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                                };
+                                unsafe { mark_caller_heap_return(frame, retval) };
+                                unsafe { slot_set(return_target, retval.clone()) };
+                            }
                         }
                     }
                     let prev = unsafe { (*frame).prev_execute_data };
                     if prev.is_null() {
+                        return Ok(());
+                    }
+                    // Recursive execute_ex boundary: callee done → return to caller's macro loop
+                    if frame == initial_frame {
+                        eg.current_execute_data.set(prev);
+                        unsafe { cleanup_frame_slots(frame) };
+                        eg.vm_stack.pop_call_frame(frame);
                         return Ok(());
                     }
                     eg.current_execute_data.set(prev);
@@ -4171,6 +4483,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     op_array = unsafe { (*frame).op_array() };
                     // No dirty_globals check: FastScalar callee never touches globals,
                     // and may_access_globals == false means no deeper callee did either.
+                    at_block_entry = true;
                     continue;
                 }
 
@@ -4213,17 +4526,53 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     stats::inc_return_fast();
                     if opline.op1_type != OpType::Unused {
-                        let retval = unsafe {
-                            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                        };
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
-                            unsafe { mark_caller_heap_return(frame, retval) };
-                            unsafe { slot_set(return_target, retval.clone()) };
+                            // Scalar-frame fast path: if frame has no heap slots and
+                            // operand is a slot (not Const), ALL values are scalar.
+                            // Skip clone/needs_cleanup entirely — raw 16-byte copy.
+                            let frame_no_heap = !unsafe { (*frame).has_heap_slots };
+                            if frame_no_heap && opline.op1_type != OpType::Const {
+                                let retval_ptr = unsafe {
+                                    (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
+                                };
+                                // CV ref check: even in scalar frame, CV could be a ref.
+                                // But for Fast return path, function has no by-ref params
+                                // and no globals, so refs are rare. Check anyway for safety.
+                                let src = if opline.op1_type == OpType::Cv {
+                                    let cv_val = unsafe { &*retval_ptr };
+                                    if cv_val.is_reference() {
+                                        unsafe { cv_val.as_ref_ptr() as *const Value }
+                                    } else {
+                                        retval_ptr
+                                    }
+                                } else {
+                                    retval_ptr
+                                };
+                                // Caller's target: drop old only if caller has heap slots.
+                                let prev = unsafe { (*frame).prev_execute_data };
+                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
+                                    unsafe { std::ptr::drop_in_place(return_target) };
+                                }
+                                unsafe { Value::raw_copy(src, return_target) };
+                            } else {
+                                let retval = unsafe {
+                                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                                };
+                                unsafe { mark_caller_heap_return(frame, retval) };
+                                unsafe { slot_set(return_target, retval.clone()) };
+                            }
                         }
                     }
                     let prev = unsafe { (*frame).prev_execute_data };
                     if prev.is_null() {
+                        return Ok(());
+                    }
+                    // Recursive execute_ex boundary: callee done → return to caller's macro loop
+                    if frame == initial_frame {
+                        eg.current_execute_data.set(prev);
+                        unsafe { cleanup_frame_slots(frame) };
+                        eg.vm_stack.pop_call_frame(frame);
                         return Ok(());
                     }
                     eg.current_execute_data.set(prev);
@@ -4252,6 +4601,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         eg.dirty_globals.clear();
                     }
+                    at_block_entry = true;
                     continue;
                     } // else: not strict with return type
                 }
@@ -4418,6 +4768,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if prev.is_null() {
                     return Ok(());
                 }
+                // Recursive execute_ex boundary: callee done → return to caller's macro loop
+                if frame == initial_frame {
+                    eg.current_execute_data.set(prev);
+                    unsafe { cleanup_frame_slots(frame) };
+                    eg.vm_stack.pop_call_frame(frame);
+                    return Ok(());
+                }
 
                 eg.current_execute_data.set(prev);
                 unsafe { cleanup_frame_slots(frame) };
@@ -4448,6 +4805,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         eg.dirty_globals.clear();
                     }
                 }
+                at_block_entry = true;
                 continue;
             }
 
@@ -4541,8 +4899,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             // All opcodes handled — new opcodes must be added above
         }
 
-        // Advance to next instruction
-        unsafe { (*frame).opline = (*frame).opline.add(1); }
+        // Advance to next instruction — sequential step, never a block leader.
+        // Use local opline_ptr to avoid redundant memory load of (*frame).opline.
+        unsafe { (*frame).opline = opline_ptr.add(1); }
+        at_block_entry = false;
     }
 }
 

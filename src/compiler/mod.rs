@@ -9,6 +9,7 @@ use crate::vm::function::{
     CallStrategy, ReturnStrategy, CleanupMode,
 };
 use crate::vm::opcode::OpCode;
+use crate::vm::planner::{BlockInfo, BlockPlan};
 
 /// Compiled function body — equivalent to zend_op_array.
 pub struct OpArray {
@@ -43,6 +44,14 @@ pub struct OpArray {
     ///   - true if function calls any user function (may transitively reach `global`)
     ///   - false only for leaf functions with no calls and no global bindings
     pub may_access_globals: bool,
+    /// Basic block metadata, computed once after instruction finalization.
+    pub block_info: Vec<BlockInfo>,
+    /// Per-block execution counters (for hot-block detection).
+    pub block_counters: Vec<u32>,
+    /// Per-block execution plans (Interpret / Macro / Deoptimized).
+    pub block_plans: Vec<BlockPlan>,
+    /// Maps instruction IP -> block index.
+    pub ip_to_block: Vec<u16>,
 }
 
 impl OpArray {
@@ -92,6 +101,7 @@ impl OpArray {
         use crate::vm::instruction::OpType;
         use crate::vm::opcode::OpCode;
 
+        // Pass 1: operand-type specialization (single-instruction patterns)
         for instr in &mut self.instructions {
             match instr.opcode {
                 OpCode::Add => {
@@ -121,6 +131,63 @@ impl OpArray {
                 _ => {}
             }
         }
+
+        // Pass 2: superinstructions (fuse comparison + conditional jump)
+        // Fuses CmpCvConst + JmpZ/JmpNZ into a single dispatch when the JmpZ/JmpNZ
+        // consumes the comparison's TMP result and that TMP is not used elsewhere.
+        // Pass 2 active
+        let len = self.instructions.len();
+        if len < 2 { return; }
+        let mut i = 0;
+        while i < len - 1 {
+            let curr = self.instructions[i];
+            let next = self.instructions[i + 1];
+            // Pattern A: comparison + conditional jump → fused branch
+            let fused_cmp = match (curr.opcode, next.opcode) {
+                (OpCode::IsSmallerOrEqual_CvConst, OpCode::JmpZ)
+                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                        && curr.result_type == OpType::Tmp =>
+                {
+                    Some(OpCode::JmpZ_Le_CvConst)
+                }
+                (OpCode::IsSmallerOrEqual_CvConst, OpCode::JmpNZ)
+                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                        && curr.result_type == OpType::Tmp =>
+                {
+                    Some(OpCode::JmpNZ_Le_CvConst)
+                }
+                (OpCode::IsSmaller_CvConst, OpCode::JmpZ)
+                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                        && curr.result_type == OpType::Tmp =>
+                {
+                    Some(OpCode::JmpZ_Lt_CvConst)
+                }
+                (OpCode::IsSmaller_CvConst, OpCode::JmpNZ)
+                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                        && curr.result_type == OpType::Tmp =>
+                {
+                    Some(OpCode::JmpNZ_Lt_CvConst)
+                }
+                _ => None,
+            };
+            if let Some(fused_opcode) = fused_cmp {
+                self.instructions[i] = Instruction {
+                    opcode: fused_opcode,
+                    op1_type: curr.op1_type, // Cv
+                    op2_type: curr.op2_type, // Const
+                    result_type: OpType::Unused,
+                    op1: curr.op1,            // CV index
+                    op2: curr.op2,            // Const index
+                    result: next.op2,         // jump target IP
+                    _pad: 0,
+                    extended_value: 0,
+                };
+                i += 2;
+                continue;
+            }
+
+            i += 1;
+        }
     }
 
     /// Initialize the inline cache side table to match instruction count.
@@ -131,6 +198,86 @@ impl OpArray {
         for _ in 0..len {
             self.cache.push(InlineCache::empty());
         }
+    }
+
+    /// Scan instructions and identify basic block boundaries.
+    /// Populates block_info, block_counters, block_plans, and ip_to_block.
+    pub fn compute_blocks(&mut self) {
+        if self.instructions.is_empty() {
+            return;
+        }
+
+        let n = self.instructions.len();
+        let mut is_leader = vec![false; n];
+        is_leader[0] = true; // first instruction is always a block start
+
+        // Scan for jump targets and instructions after branches
+        for (i, instr) in self.instructions.iter().enumerate() {
+            match instr.opcode {
+                OpCode::Jmp => {
+                    // Jmp stores target in op1
+                    let target = instr.op1 as usize;
+                    if target < n {
+                        is_leader[target] = true;
+                    }
+                    if i + 1 < n {
+                        is_leader[i + 1] = true;
+                    }
+                }
+                OpCode::JmpZ | OpCode::JmpNZ => {
+                    // JmpZ/JmpNZ store target in op2
+                    let target = instr.op2 as usize;
+                    if target < n {
+                        is_leader[target] = true;
+                    }
+                    // Instruction after the branch is also a leader (fall-through)
+                    if i + 1 < n {
+                        is_leader[i + 1] = true;
+                    }
+                }
+                OpCode::Return => {
+                    if i + 1 < n {
+                        is_leader[i + 1] = true;
+                    }
+                }
+                // DoFcall: the instruction after DoFcall starts a new context
+                // but for our purposes, we keep it in the same block
+                // (the macro executor handles DoFcall as a yield point within a block)
+                _ => {}
+            }
+        }
+
+        // Build block_info and ip_to_block
+        let mut blocks = Vec::new();
+        let mut ip_to_block = vec![0u16; n];
+        let mut current_block_start = 0u32;
+
+        for i in 0..n {
+            if is_leader[i] && i > 0 {
+                // Close previous block
+                blocks.push(BlockInfo {
+                    start_ip: current_block_start,
+                    end_ip: (i - 1) as u32,
+                });
+                current_block_start = i as u32;
+            }
+            ip_to_block[i] = blocks.len() as u16; // current block index
+        }
+        // Close last block
+        blocks.push(BlockInfo {
+            start_ip: current_block_start,
+            end_ip: (n - 1) as u32,
+        });
+        // Fix: ip_to_block for last block
+        for i in current_block_start as usize..n {
+            ip_to_block[i] = (blocks.len() - 1) as u16;
+        }
+
+        let num_blocks = blocks.len();
+        self.block_info = blocks;
+        self.block_counters = vec![0u32; num_blocks];
+        self.block_plans = (0..num_blocks).map(|_| BlockPlan::Interpret).collect();
+        self.ip_to_block = ip_to_block;
     }
 }
 
@@ -215,6 +362,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
+    op_array.compute_blocks();
     let is_fast_scalar = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -277,6 +425,7 @@ pub fn make_user_function_typed(
     if op_array.cache.len() != op_array.instructions.len() {
         op_array.init_cache();
     }
+    op_array.compute_blocks();
     // FastScalar: tightest path for simple fixed-arity scalar functions.
     // Requires NO actual type hints — DoFcall FastScalar skips type checking entirely.
     let has_only_scalar_hints = param_type_hints.iter().all(|h| matches!(h,

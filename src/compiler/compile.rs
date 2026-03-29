@@ -304,6 +304,10 @@ impl Compiler {
                 all_cvs,
                 cache,
                 may_access_globals: false, // main script is entry point, never a callee
+                block_info: Vec::new(),
+                block_counters: Vec::new(),
+                block_plans: Vec::new(),
+                ip_to_block: Vec::new(),
             },
             functions: self.functions,
             class_defs: self.class_defs,
@@ -453,6 +457,10 @@ impl Compiler {
                     all_cvs: func_all_cvs,
                     cache,
                     may_access_globals,
+                    block_info: Vec::new(),
+                    block_counters: Vec::new(),
+                    block_plans: Vec::new(),
+                    ip_to_block: Vec::new(),
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 
@@ -1199,6 +1207,10 @@ impl Compiler {
                         all_cvs: vec![],
                         cache,
                         may_access_globals,
+                        block_info: Vec::new(),
+                        block_counters: Vec::new(),
+                        block_plans: Vec::new(),
+                        ip_to_block: Vec::new(),
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
@@ -1293,6 +1305,10 @@ impl Compiler {
                         all_cvs: vec![],
                         cache,
                         may_access_globals,
+                        block_info: Vec::new(),
+                        block_counters: Vec::new(),
+                        block_plans: Vec::new(),
+                        ip_to_block: Vec::new(),
                     };
                     let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     self.functions.extend(func_compiler.functions);
@@ -1359,6 +1375,10 @@ impl Compiler {
                         all_cvs: vec![],
                         cache,
                         may_access_globals,
+                        block_info: Vec::new(),
+                        block_counters: Vec::new(),
+                        block_plans: Vec::new(),
+                        ip_to_block: Vec::new(),
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.sig.this_offset = 1;
@@ -1438,6 +1458,10 @@ impl Compiler {
                         all_cvs: vec![],
                         cache,
                         may_access_globals,
+                        block_info: Vec::new(),
+                        block_counters: Vec::new(),
+                        block_plans: Vec::new(),
+                        ip_to_block: Vec::new(),
                     };
                     let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
                     user_func.common.sig.this_offset = 1;
@@ -2368,6 +2392,10 @@ impl Compiler {
                     all_cvs: closure_all_cvs,
                     cache,
                     may_access_globals,
+                    block_info: Vec::new(),
+                    block_counters: Vec::new(),
+                    block_plans: Vec::new(),
+                    ip_to_block: Vec::new(),
                 };
                 let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
 

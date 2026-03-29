@@ -128,4 +128,24 @@ pub enum OpCode {
     /// Sub Tmp - Tmp → Tmp (Long fast path)
     Sub_TmpTmp = 205,
 
+    // ── Superinstructions (fused opcode pairs) ──────────────────────
+    // Fuse comparison + conditional jump into a single dispatch.
+    // Eliminates TMP write/read and one dispatch cycle.
+    // result field stores jump target IP (replaces JmpZ/JmpNZ.op2).
+    // On fall-through, opline advances by 2 (skipping the dead JmpZ/JmpNZ).
+
+    /// Fused: IsSmallerOrEqual CV <= Const; JmpZ → target
+    /// If !(CV <= Const), jump to result. Else fall through (+2).
+    JmpZ_Le_CvConst = 206,
+    /// Fused: IsSmallerOrEqual CV <= Const; JmpNZ → target
+    /// If CV <= Const, jump to result. Else fall through (+2).
+    JmpNZ_Le_CvConst = 207,
+    /// Fused: IsSmaller CV < Const; JmpZ → target
+    /// If !(CV < Const), jump to result. Else fall through (+2).
+    JmpZ_Lt_CvConst = 208,
+    /// Fused: IsSmaller CV < Const; JmpNZ → target
+    /// If CV < Const, jump to result. Else fall through (+2).
+    JmpNZ_Lt_CvConst = 209,
+
+
 }

@@ -28,7 +28,7 @@ pub struct Instruction {
     pub op2: u16,
     pub result: u16,
     // 2 bytes padding to align extended_value to 4
-    _pad: u16,
+    pub _pad: u16,
     /// Extended value (opcode-specific extra data, u32 for ForeachNext key encoding etc.)
     pub extended_value: u32,
 }

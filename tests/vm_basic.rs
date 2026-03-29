@@ -55,6 +55,10 @@ fn test_echo_int() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -90,6 +94,10 @@ fn test_echo_negative() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -134,6 +142,10 @@ fn test_add_and_echo() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -172,6 +184,10 @@ fn test_overflow_to_float() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -207,6 +223,10 @@ fn test_timeout_interrupt() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -264,6 +284,10 @@ fn test_assign_and_echo_cv() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -324,6 +348,10 @@ fn test_assign_add_echo() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -398,6 +426,10 @@ fn test_internal_function_call() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -442,6 +474,10 @@ fn test_user_function_call() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let add_one_func = make_user_function_with_args(fn_op_array, 1);
@@ -490,6 +526,10 @@ fn test_user_function_call() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(main_op_array);
@@ -529,6 +569,10 @@ fn test_undefined_function_error() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -592,6 +636,10 @@ fn test_nested_calls() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     }, 1);
 
     // --- main script ---
@@ -667,6 +715,10 @@ fn test_nested_calls() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -717,6 +769,10 @@ fn test_recursive_countdown() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     // f2: return f1()
@@ -748,6 +804,10 @@ fn test_recursive_countdown() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     // f3: return f2()
@@ -779,6 +839,10 @@ fn test_recursive_countdown() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     // main: echo f3()
@@ -814,6 +878,10 @@ fn test_recursive_countdown() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -855,6 +923,10 @@ fn test_interrupt_during_deep_call() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     // main: init_fcall f1, do_fcall, echo "2", return
@@ -889,6 +961,10 @@ fn test_interrupt_during_deep_call() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
@@ -953,6 +1029,10 @@ fn test_assign_result_used() {
         all_cvs: vec![],
         cache: vec![],
         may_access_globals: false,
+        block_info: Vec::new(),
+        block_counters: Vec::new(),
+        block_plans: Vec::new(),
+        ip_to_block: Vec::new(),
     });
 
     let (mut eg, buf) = make_eg_with_capture();
