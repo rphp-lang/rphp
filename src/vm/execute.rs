@@ -333,7 +333,7 @@ fn exception_matches_catch(thrown: &Value, types: &[String], eg: &ExecutorGlobal
 ///
 /// After dropping, zeros the slot so reused stack space sees Undef.
 #[inline(always)]
-unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
+pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     let num_cvs = (*frame).num_cvs as usize;
     let num_temps = (*frame).num_temps as usize;
     let total = num_cvs + num_temps;
