@@ -324,3 +324,55 @@ function big_throw() {
 try { big_throw(); } catch (Exception $e) { echo $e->getMessage(); }
 "), "s0end1");
 }
+
+// === Regression: SendVal with heap-type TMP operand ===
+// These tests verify that SendVal correctly clones heap values (String, Array)
+// when the source is a TMP/Var slot, rather than doing an unsafe bitwise copy.
+// A raw_copy without clone would cause double-free or use-after-free.
+
+#[test]
+fn test_sendval_heap_tmp_string_concat() {
+    // substr() returns a String TMP → passed as argument to another function.
+    // Without proper clone in SendVal, the String would be bitwise-copied
+    // and then double-freed when both the TMP slot and callee frame clean up.
+    assert_eq!(run_php("<?php
+function identity($s) { return $s; }
+$x = 'hello world';
+echo identity(substr($x, 0, 5));
+echo identity(substr($x, 6));
+"), "helloworld");
+}
+
+#[test]
+fn test_sendval_heap_tmp_array_literal() {
+    // Array expression result as TMP → passed to function.
+    assert_eq!(run_php("<?php
+function count_arr($arr) { return count($arr); }
+echo count_arr([1, 2, 3]);
+echo count_arr(array_merge([1], [2, 3, 4]));
+"), "34");
+}
+
+#[test]
+fn test_sendval_heap_tmp_string_repeated_calls() {
+    // Multiple calls sending heap TMPs in sequence — stresses cleanup correctness.
+    assert_eq!(run_php("<?php
+function wrap($s) { return '[' . $s . ']'; }
+$base = 'abcdef';
+$r = '';
+for ($i = 0; $i < 5; $i++) {
+    $r .= wrap(substr($base, $i, 2));
+}
+echo $r;
+"), "[ab][bc][cd][de][ef]");
+}
+
+#[test]
+fn test_sendval_heap_tmp_nested_calls() {
+    // Nested function calls where inner returns heap String TMP → outer receives it.
+    assert_eq!(run_php("<?php
+function upper($s) { return strtoupper($s); }
+function exclaim($s) { return $s . '!'; }
+echo exclaim(upper('hello'));
+"), "HELLO!");
+}

@@ -459,10 +459,22 @@ pub unsafe fn execute_macro(
                 let dst = (call as *mut Value)
                     .add(CALL_FRAME_SLOTS)
                     .add(*arg_idx as usize);
-                // Raw 16-byte copy — no clone(), no needs_cleanup(), no bitmap.
-                // Source is a TMP holding a Long (guaranteed by guards + SubLongConst).
-                // Destination is an uninitialized arg slot in a scalar-only callee frame.
-                std::ptr::copy_nonoverlapping(src, dst, 1);
+                // Check scalar safety at runtime: only raw-copy if value doesn't
+                // need cleanup (no heap/reference). This guards against cases where
+                // the source TMP unexpectedly holds a heap type.
+                let src_val = &*src;
+                if !src_val.needs_cleanup() && !src_val.is_reference() {
+                    std::ptr::copy_nonoverlapping(src, dst, 1);
+                } else {
+                    // Heap/reference: must clone + mark callee frame
+                    let cloned = src_val.clone();
+                    dst.write(cloned);
+                    (*call).has_heap_slots = true;
+                    let total = (*call).num_cvs + (*call).num_temps;
+                    if total <= 64 {
+                        (*call).heap_bitmap |= 1u64 << *arg_idx;
+                    }
+                }
             }
 
             MacroStep::DoFcallFastScalar { result_slot } => {

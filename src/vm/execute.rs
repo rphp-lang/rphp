@@ -3438,14 +3438,31 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let dst = unsafe {
                     (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
                 };
-                // For TMP operands (common case: Sub result → callee arg),
-                // use raw 16-byte copy — no clone/drop overhead.
-                // TMP values are consumed (not read again), so this is safe.
+                // For TMP/Var operands that are provably scalar (Long, Double, Bool, Null),
+                // use raw 16-byte bitwise copy — no clone/drop overhead.
+                // TMP values are consumed (not read again), so move semantics are valid.
+                // IMPORTANT: heap types (String, Array, Object, Closure) and References
+                // MUST go through clone to maintain refcount / avoid double-free.
                 if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
                     let src = unsafe {
                         (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
                     };
-                    unsafe { Value::raw_copy(src, dst) };
+                    let src_val = unsafe { &*src };
+                    if !src_val.needs_cleanup() && !src_val.is_reference() {
+                        // Scalar TMP/Var: safe bitwise move
+                        unsafe { Value::raw_copy(src, dst) };
+                    } else {
+                        // Heap or reference TMP/Var: must clone + mark callee heap bits
+                        let cloned = src_val.clone();
+                        unsafe { dst.write(cloned) };
+                        unsafe {
+                            (*call).has_heap_slots = true;
+                            let total = (*call).num_cvs + (*call).num_temps;
+                            if total <= 64 {
+                                (*call).heap_bitmap |= 1u64 << opline.op2;
+                            }
+                        }
+                    }
                 } else {
                     let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                     let cloned = val.clone();
