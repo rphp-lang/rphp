@@ -98,6 +98,8 @@ fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &
 pub enum VmError {
     Fatal(String),
     UnimplementedOpcode(OpCode),
+    /// `exit($code)` / `die($msg)` — clean script termination.
+    Exit(i32),
 }
 
 /// Update a globals entry in-place if the key exists, otherwise insert.
@@ -648,6 +650,76 @@ pub fn call_function(
     eg.vm_stack.pop_call_frame(frame);
 
     Ok(return_value)
+}
+
+/// Like `call_function`, but reads back CV(0) before frame cleanup.
+/// Used by `array_walk` to capture mutations made by `function (&$val, $key)` callbacks.
+/// Returns `(return_value, modified_arg0)`.
+pub fn call_function_readback_arg0(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    args: &[Value],
+) -> Result<(Value, Value), VmError> {
+    let saved_execute_data = eg.current_execute_data.get();
+    let frame = eg.vm_stack.push_call_frame(func_ptr, args.len() as u32);
+    let mut return_value = Value::null();
+
+    unsafe {
+        (*frame).return_value = &mut return_value;
+        (*frame).prev_execute_data = std::ptr::null_mut();
+        (*frame).num_args = args.len() as u32;
+    }
+    for (i, arg) in args.iter().enumerate() {
+        let slot = unsafe { (*frame).cv_mut(i as u32) };
+        unsafe { frame_slot_init(frame, slot as *mut Value, arg.clone()) };
+    }
+
+    let func = unsafe { Function::from_common_ptr(func_ptr) };
+    match func.fn_type() {
+        FunctionType::User => {
+            let user = unsafe { func.as_user() };
+            unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
+            eg.current_execute_data.set(frame);
+            execute_ex(eg, frame)?;
+            if eg.exception.is_some() {
+                let arg0 = unsafe { (*frame).cv(0).clone() };
+                eg.current_execute_data.set(saved_execute_data);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                return Ok((Value::null(), arg0));
+            }
+        }
+        FunctionType::Internal => {
+            let internal = unsafe { func.as_internal() };
+            unsafe { std::ptr::drop_in_place(&mut return_value as *mut Value) };
+            if let Err(e) = (internal.handler)(frame, &mut return_value, eg) {
+                eg.current_execute_data.set(saved_execute_data);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                return Err(e);
+            }
+            if eg.exception.is_some() {
+                let arg0 = unsafe { (*frame).cv(0).clone() };
+                eg.current_execute_data.set(saved_execute_data);
+                unsafe { cleanup_frame_slots(frame) };
+                eg.vm_stack.pop_call_frame(frame);
+                return Ok((Value::null(), arg0));
+            }
+        }
+        FunctionType::Undef => {
+            eg.current_execute_data.set(saved_execute_data);
+            eg.exception = Some(make_error_value("Error", "Call to undefined function"));
+            return Ok((Value::null(), if !args.is_empty() { args[0].clone() } else { Value::null() }));
+        }
+    }
+
+    // Read CV(0) BEFORE cleanup — captures mutations from by-ref callbacks.
+    let arg0 = unsafe { (*frame).cv(0).clone() };
+    eg.current_execute_data.set(saved_execute_data);
+    unsafe { cleanup_frame_slots(frame) };
+    eg.vm_stack.pop_call_frame(frame);
+
+    Ok((return_value, arg0))
 }
 
 /// Resume a generator: set up frame, copy state, execute until yield/return.

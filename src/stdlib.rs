@@ -292,6 +292,101 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("microtime", fn_microtime, 1, 0, "as_float");
     reg!("hrtime", fn_hrtime, 1, 0, "as_nanoseconds");
     reg!("time", fn_time, 0, 0);
+    reg!("date", fn_date, 2, 1, "format", "timestamp");
+    reg!("mktime", fn_mktime, 6, 1, "hour", "minute", "second", "month", "day", "year");
+
+    // --- exit / die ---
+    reg!("exit", fn_exit, 1, 0, "status");
+    reg!("die", fn_exit, 1, 0, "status");
+
+    // --- Filesystem ---
+    reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");
+    reg!("file_put_contents", fn_file_put_contents, 2, 2, "filename", "data");
+    reg!("file_exists", fn_file_exists, 1, 1, "filename");
+    reg!("is_file", fn_is_file, 1, 1, "filename");
+    reg!("is_dir", fn_is_dir, 1, 1, "filename");
+    reg!("is_readable", fn_is_readable, 1, 1, "filename");
+    reg!("is_writable", fn_is_writable, 1, 1, "filename");
+    reg!("is_writeable", fn_is_writable, 1, 1, "filename");
+    reg!("dirname", fn_dirname, 1, 1, "path");
+    reg!("basename", fn_basename, 2, 1, "path", "suffix");
+    reg!("realpath", fn_realpath, 1, 1, "path");
+    reg!("pathinfo", fn_pathinfo, 1, 1, "path");
+    reg!("getcwd", fn_getcwd, 0, 0);
+    reg!("file", fn_file, 1, 1, "filename");
+    reg!("mkdir", fn_mkdir, 3, 1, "pathname", "mode", "recursive");
+    reg!("rmdir", fn_rmdir, 1, 1, "dirname");
+    reg!("unlink", fn_unlink, 1, 1, "filename");
+    reg!("rename", fn_rename, 2, 2, "old", "new");
+    reg!("copy", fn_copy, 2, 2, "source", "dest");
+    reg!("tempnam", fn_tempnam, 2, 2, "dir", "prefix");
+    reg!("sys_get_temp_dir", fn_sys_get_temp_dir, 0, 0);
+    reg!("glob", fn_glob, 1, 1, "pattern");
+
+    // --- String encoding ---
+    reg!("htmlspecialchars", fn_htmlspecialchars, 1, 1, "string");
+    reg!("htmlspecialchars_decode", fn_htmlspecialchars_decode, 1, 1, "string");
+    reg!("htmlentities", fn_htmlentities, 1, 1, "string");
+    reg!("urlencode", fn_urlencode, 1, 1, "string");
+    reg!("urldecode", fn_urldecode, 1, 1, "string");
+    reg!("rawurlencode", fn_rawurlencode, 1, 1, "string");
+    reg!("rawurldecode", fn_rawurldecode, 1, 1, "string");
+    reg!("base64_encode", fn_base64_encode, 1, 1, "data");
+    reg!("base64_decode", fn_base64_decode, 1, 1, "data");
+
+    // --- Case-insensitive string functions ---
+    reg!("stripos", fn_stripos, 2, 2, "haystack", "needle");
+    reg!("strripos", fn_strripos, 2, 2, "haystack", "needle");
+    reg!("str_ireplace", fn_str_ireplace, 3, 3, "search", "replace", "subject");
+    reg!("substr_replace", fn_substr_replace, 4, 3, "string", "replacement", "start", "length");
+    reg!("str_getcsv", fn_str_getcsv, 3, 1, "string", "separator", "enclosure");
+    reg!("chunk_split", fn_chunk_split, 3, 1, "string", "chunklen", "end");
+
+    // --- Additional array functions ---
+    reg!("array_reduce", fn_array_reduce, 3, 2, "array", "callback", "initial");
+    reg_ref!("usort", fn_usort, 2, 2, 0b1, "array", "callback");
+    reg!("array_diff", fn_array_diff, 2, 2, "array1", "array2");
+    reg!("array_intersect", fn_array_intersect, 2, 2, "array1", "array2");
+    reg_ref!("array_walk", fn_array_walk, 2, 2, 0b1, "array", "callback");
+    reg_ref!("asort", fn_asort, 1, 1, 0b1, "array");
+    reg_ref!("arsort", fn_arsort, 1, 1, 0b1, "array");
+    reg_ref!("ksort", fn_ksort, 1, 1, 0b1, "array");
+    reg_ref!("krsort", fn_krsort, 1, 1, 0b1, "array");
+    reg!("array_key_first", fn_array_key_first, 1, 1, "array");
+    reg!("array_key_last", fn_array_key_last, 1, 1, "array");
+
+    // --- Math (trigonometric + friends) ---
+    reg!("sin", fn_sin, 1, 1, "num");
+    reg!("cos", fn_cos, 1, 1, "num");
+    reg!("tan", fn_tan, 1, 1, "num");
+    reg!("asin", fn_asin, 1, 1, "num");
+    reg!("acos", fn_acos, 1, 1, "num");
+    reg!("atan", fn_atan, 1, 1, "num");
+    reg!("atan2", fn_atan2, 2, 2, "y", "x");
+    reg!("exp", fn_exp, 1, 1, "num");
+    reg!("sinh", fn_sinh, 1, 1, "num");
+    reg!("cosh", fn_cosh, 1, 1, "num");
+    reg!("tanh", fn_tanh, 1, 1, "num");
+    reg!("deg2rad", fn_deg2rad, 1, 1, "num");
+    reg!("rad2deg", fn_rad2deg, 1, 1, "num");
+    reg!("hypot", fn_hypot, 2, 2, "x", "y");
+
+    // --- Environment / system ---
+    reg!("getenv", fn_getenv, 1, 1, "name");
+    reg!("putenv", fn_putenv, 1, 1, "assignment");
+    reg!("php_uname", fn_php_uname, 1, 0, "mode");
+    reg!("php_sapi_name", fn_php_sapi_name, 0, 0);
+    reg!("phpversion", fn_phpversion, 0, 0);
+    reg!("sleep", fn_sleep, 1, 1, "seconds");
+    reg!("usleep", fn_usleep, 1, 1, "microseconds");
+
+    // --- ctype ---
+    reg!("ctype_alpha", fn_ctype_alpha, 1, 1, "text");
+    reg!("ctype_digit", fn_ctype_digit, 1, 1, "text");
+    reg!("ctype_alnum", fn_ctype_alnum, 1, 1, "text");
+    reg!("ctype_space", fn_ctype_space, 1, 1, "text");
+    reg!("ctype_upper", fn_ctype_upper, 1, 1, "text");
+    reg!("ctype_lower", fn_ctype_lower, 1, 1, "text");
 
     funcs
 }
@@ -2497,4 +2592,1211 @@ fn fn_time(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
     use std::time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     ret!(rv, Value::long(secs as i64));
+}
+
+// ============================================================================
+// exit / die
+// ============================================================================
+
+/// exit($status = 0) / die($status = 0)
+/// If $status is int → exit with that code.  If string → print it, exit 0.
+fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let status = arg_opt!(ed, 0);
+    match status {
+        None => Err(VmError::Exit(0)),
+        Some(v) if v.value_type() == ValueType::Long => Err(VmError::Exit(v.as_long().unwrap_or(0) as i32)),
+        Some(v) => {
+            // String argument: print it, exit 0
+            print!("{}", v.echo_to_string());
+            Err(VmError::Exit(0))
+        }
+    }
+}
+
+// ============================================================================
+// Filesystem functions
+// ============================================================================
+
+/// file_get_contents($filename): string|false
+/// PHP strings are byte strings. We use Latin-1 (byte→char 1:1) to preserve raw bytes
+/// losslessly inside Rust String, pending a proper byte-string Value backend.
+fn fn_file_get_contents(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    match std::fs::read(path.as_ref()) {
+        Ok(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// Convert raw bytes to a Rust String preserving every byte losslessly.
+/// Uses Latin-1 encoding: each byte 0x00-0xFF maps to the same Unicode codepoint.
+/// This is the standard way to round-trip PHP byte strings through Rust Strings.
+fn bytes_to_php_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|&b| b as char).collect()
+}
+
+/// Convert a PHP-style string back to raw bytes (inverse of bytes_to_php_string).
+fn php_string_to_bytes(s: &str) -> Vec<u8> {
+    s.chars().map(|c| c as u8).collect()
+}
+
+/// file_put_contents($filename, $data): int|false
+/// Writes using Latin-1 byte mapping to preserve binary data round-trip.
+fn fn_file_put_contents(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let data = arg_str!(ed, 1);
+    let raw_bytes = php_string_to_bytes(data.as_ref());
+    match std::fs::write(path.as_ref(), &raw_bytes) {
+        Ok(()) => ret!(rv, Value::long(raw_bytes.len() as i64)),
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// file_exists($filename): bool
+fn fn_file_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    ret!(rv, Value::bool(std::path::Path::new(path.as_ref()).exists()));
+}
+
+/// is_file($filename): bool
+fn fn_is_file(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    ret!(rv, Value::bool(std::path::Path::new(path.as_ref()).is_file()));
+}
+
+/// is_dir($filename): bool
+fn fn_is_dir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    ret!(rv, Value::bool(std::path::Path::new(path.as_ref()).is_dir()));
+}
+
+/// dirname($path): string
+fn fn_dirname(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let p = std::path::Path::new(path.as_ref());
+    let dir = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|| ".".to_string());
+    // PHP returns "." for paths without directory component, empty parent → "."
+    let dir = if dir.is_empty() { ".".to_string() } else { dir };
+    ret!(rv, Value::string(dir));
+}
+
+/// basename($path, $suffix = ""): string
+fn fn_basename(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let suffix = arg_opt!(ed, 1).map(|v| v.echo_to_string()).unwrap_or_default();
+    let p = std::path::Path::new(path.as_ref());
+    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let result = if !suffix.is_empty() && name.ends_with(&suffix) {
+        name[..name.len() - suffix.len()].to_string()
+    } else {
+        name
+    };
+    ret!(rv, Value::string(result));
+}
+
+/// realpath($path): string|false
+fn fn_realpath(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    match std::fs::canonicalize(path.as_ref()) {
+        Ok(p) => ret!(rv, Value::string(p.to_string_lossy().into_owned())),
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// getcwd(): string|false
+fn fn_getcwd(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    match std::env::current_dir() {
+        Ok(p) => ret!(rv, Value::string(p.to_string_lossy().into_owned())),
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// file($filename): array|false — read file into array of lines
+/// Uses Latin-1 mapping to preserve binary content losslessly.
+fn fn_file(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    match std::fs::read(path.as_ref()) {
+        Ok(bytes) => {
+            let contents = bytes_to_php_string(&bytes);
+            let mut arr = PhpArray::new();
+            let mut start = 0;
+            while start < contents.len() {
+                match contents[start..].find('\n') {
+                    Some(pos) => {
+                        arr.push(Value::string(contents[start..start + pos + 1].to_string()));
+                        start += pos + 1;
+                    }
+                    None => {
+                        arr.push(Value::string(contents[start..].to_string()));
+                        break;
+                    }
+                }
+            }
+            ret!(rv, Value::array(arr));
+        }
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// mkdir($pathname, $mode = 0777, $recursive = false): bool
+fn fn_mkdir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let recursive = arg_opt!(ed, 2).map(|v| v.is_truthy()).unwrap_or(false);
+    let result = if recursive {
+        std::fs::create_dir_all(path.as_ref())
+    } else {
+        std::fs::create_dir(path.as_ref())
+    };
+    ret!(rv, Value::bool(result.is_ok()));
+}
+
+/// rmdir($dirname): bool
+fn fn_rmdir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    ret!(rv, Value::bool(std::fs::remove_dir(path.as_ref()).is_ok()));
+}
+
+/// unlink($filename): bool
+fn fn_unlink(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    ret!(rv, Value::bool(std::fs::remove_file(path.as_ref()).is_ok()));
+}
+
+/// rename($old, $new): bool
+fn fn_rename(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let old = arg_str!(ed, 0);
+    let new = arg_str!(ed, 1);
+    ret!(rv, Value::bool(std::fs::rename(old.as_ref(), new.as_ref()).is_ok()));
+}
+
+/// copy($source, $dest): bool
+fn fn_copy(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let src = arg_str!(ed, 0);
+    let dst = arg_str!(ed, 1);
+    ret!(rv, Value::bool(std::fs::copy(src.as_ref(), dst.as_ref()).is_ok()));
+}
+
+/// tempnam($dir, $prefix): string|false
+fn fn_tempnam(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use std::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+
+    let dir = arg_str!(ed, 0);
+    let prefix = arg_str!(ed, 1);
+    let dir_path = std::path::Path::new(dir.as_ref());
+    if !dir_path.is_dir() {
+        ret!(rv, Value::bool(false));
+    }
+    // Generate a unique filename: prefix + pid + atomic counter
+    let seq = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let name = format!("{}{}{}", prefix, std::process::id(), seq);
+    let path = dir_path.join(&name);
+    match std::fs::File::create(&path) {
+        Ok(_) => ret!(rv, Value::string(path.to_string_lossy().into_owned())),
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// sys_get_temp_dir(): string
+fn fn_sys_get_temp_dir(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::string(std::env::temp_dir().to_string_lossy().into_owned()));
+}
+
+/// pathinfo($path, $flags = PATHINFO_ALL): array|string
+fn fn_pathinfo(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let p = std::path::Path::new(path.as_ref());
+    let dirname = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|| ".".to_string());
+    let dirname = if dirname.is_empty() { ".".to_string() } else { dirname };
+    let basename_str = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let extension = p.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
+    let filename = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+
+    let mut arr = PhpArray::new();
+    arr.set_str("dirname", Value::string(dirname));
+    arr.set_str("basename", Value::string(basename_str));
+    arr.set_str("extension", Value::string(extension));
+    arr.set_str("filename", Value::string(filename));
+    ret!(rv, Value::array(arr));
+}
+
+/// is_readable($filename): bool
+fn fn_is_readable(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let p = std::path::Path::new(path.as_ref());
+    // Simple check: file exists and we can open it for reading
+    ret!(rv, Value::bool(std::fs::File::open(p).is_ok()));
+}
+
+/// is_writable($filename): bool / is_writeable()
+fn fn_is_writable(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let path = arg_str!(ed, 0);
+    let p = std::path::Path::new(path.as_ref());
+    let writable = if p.is_dir() {
+        // For directories: try creating a temp file inside
+        let probe = p.join(format!(".rphp_writable_probe_{}", std::process::id()));
+        match std::fs::File::create(&probe) {
+            Ok(_) => { let _ = std::fs::remove_file(&probe); true }
+            Err(_) => false,
+        }
+    } else {
+        // For files: try opening for append (non-destructive)
+        std::fs::OpenOptions::new().append(true).open(p).is_ok()
+    };
+    ret!(rv, Value::bool(writable));
+}
+
+/// glob($pattern): array|false
+fn fn_glob(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let pattern = arg_str!(ed, 0);
+    let pat = pattern.as_ref();
+    let mut arr = PhpArray::new();
+
+    // Split pattern into directory and filename parts
+    let (dir, file_pat) = match pat.rfind('/') {
+        Some(pos) => (&pat[..pos], &pat[pos + 1..]),
+        None => (".", pat),
+    };
+    let dir = if dir.is_empty() { "/" } else { dir };
+
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        let mut results: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            let name = entry.file_name().to_string_lossy().into_owned();
+            if glob_match(file_pat, &name) {
+                // Return full path (dir + name) when pattern had directory component
+                if pat.contains('/') {
+                    results.push(format!("{}/{}", dir, name));
+                } else {
+                    results.push(name);
+                }
+            }
+        }
+        results.sort(); // PHP glob returns sorted results
+        for r in results {
+            arr.push(Value::string(r));
+        }
+    }
+    ret!(rv, Value::array(arr));
+}
+
+/// Simple glob matcher for *, ? patterns (no full POSIX glob)
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let pi: Vec<char> = pattern.chars().collect();
+    let ti: Vec<char> = text.chars().collect();
+    glob_match_inner(&pi, 0, &ti, 0)
+}
+
+fn glob_match_inner(pat: &[char], pi: usize, txt: &[char], ti: usize) -> bool {
+    if pi == pat.len() && ti == txt.len() { return true; }
+    if pi == pat.len() { return false; }
+    match pat[pi] {
+        '*' => {
+            // Match zero or more characters
+            for skip in 0..=(txt.len() - ti) {
+                if glob_match_inner(pat, pi + 1, txt, ti + skip) { return true; }
+            }
+            false
+        }
+        '?' => {
+            if ti < txt.len() {
+                glob_match_inner(pat, pi + 1, txt, ti + 1)
+            } else {
+                false
+            }
+        }
+        c => {
+            if ti < txt.len() && txt[ti] == c {
+                glob_match_inner(pat, pi + 1, txt, ti + 1)
+            } else {
+                false
+            }
+        }
+    }
+}
+
+// ============================================================================
+// String encoding functions
+// ============================================================================
+
+/// htmlspecialchars($string, $flags = ENT_QUOTES|ENT_SUBSTITUTE): string
+fn fn_htmlspecialchars(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '&' => out.push_str("&amp;"),
+            '"' => out.push_str("&quot;"),
+            '\'' => out.push_str("&#039;"),
+            '<' => out.push_str("&lt;"),
+            '>' => out.push_str("&gt;"),
+            _ => out.push(c),
+        }
+    }
+    ret!(rv, Value::string(out));
+}
+
+/// htmlspecialchars_decode($string): string
+/// Decodes only one layer — `&amp;lt;` becomes `&lt;`, not `<`.
+fn fn_htmlspecialchars_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    // Single-pass decode to avoid chaining issues (e.g. &amp;lt; → &lt; not <)
+    let src = s.as_ref();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    let bytes = src.as_bytes();
+    while i < bytes.len() {
+        if bytes[i] == b'&' {
+            if src[i..].starts_with("&amp;") {
+                out.push('&'); i += 5;
+            } else if src[i..].starts_with("&quot;") {
+                out.push('"'); i += 6;
+            } else if src[i..].starts_with("&#039;") {
+                out.push('\''); i += 6;
+            } else if src[i..].starts_with("&lt;") {
+                out.push('<'); i += 4;
+            } else if src[i..].starts_with("&gt;") {
+                out.push('>'); i += 4;
+            } else {
+                out.push('&'); i += 1;
+            }
+        } else {
+            out.push(bytes[i] as char); i += 1;
+        }
+    }
+    ret!(rv, Value::string(out));
+}
+
+/// htmlentities($string): string — same as htmlspecialchars for basic usage
+fn fn_htmlentities(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    fn_htmlspecialchars(ed, rv, eg)
+}
+
+/// urlencode($string): string
+fn fn_urlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => out.push(*b as char),
+            b' ' => out.push('+'),
+            _ => { out.push_str(&format!("%{:02X}", b)); }
+        }
+    }
+    ret!(rv, Value::string(out));
+}
+
+/// urldecode($string): string
+fn fn_urldecode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'+' => { out.push(b' '); i += 1; }
+            b'%' if i + 2 < bytes.len() => {
+                if let Ok(val) = u8::from_str_radix(
+                    &String::from_utf8_lossy(&bytes[i+1..i+3]), 16
+                ) {
+                    out.push(val);
+                    i += 3;
+                } else {
+                    out.push(b'%');
+                    i += 1;
+                }
+            }
+            c => { out.push(c); i += 1; }
+        }
+    }
+    ret!(rv, Value::string(String::from_utf8_lossy(&out).into_owned()));
+}
+
+/// rawurlencode($string): string — like urlencode but space → %20
+fn fn_rawurlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match *b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            _ => { out.push_str(&format!("%{:02X}", b)); }
+        }
+    }
+    ret!(rv, Value::string(out));
+}
+
+/// rawurldecode($string): string
+fn fn_rawurldecode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let mut out = Vec::with_capacity(s.len());
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(val) = u8::from_str_radix(
+                &String::from_utf8_lossy(&bytes[i+1..i+3]), 16
+            ) {
+                out.push(val);
+                i += 3;
+            } else {
+                out.push(b'%');
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    ret!(rv, Value::string(String::from_utf8_lossy(&out).into_owned()));
+}
+
+/// base64_encode($data): string
+/// Uses Latin-1 byte mapping to handle binary PHP strings correctly.
+fn fn_base64_encode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    use crate::base64;
+    let raw = php_string_to_bytes(s.as_ref());
+    ret!(rv, Value::string(base64::encode(&raw)));
+}
+
+/// base64_decode($data): string|false
+fn fn_base64_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    use crate::base64;
+    match base64::decode(s.as_ref()) {
+        Some(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
+        None => ret!(rv, Value::bool(false)),
+    }
+}
+
+// ============================================================================
+// Missing common string functions
+// ============================================================================
+
+/// stripos($haystack, $needle): int|false
+fn fn_stripos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let hay = arg_str!(ed, 0);
+    let needle = arg_str!(ed, 1);
+    let hay_lower = hay.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    match hay_lower.find(&needle_lower) {
+        Some(pos) => {
+            // Convert byte offset to char offset for consistency
+            let char_pos = hay[..pos].chars().count();
+            ret!(rv, Value::long(char_pos as i64));
+        }
+        None => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// strripos($haystack, $needle): int|false
+fn fn_strripos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let hay = arg_str!(ed, 0);
+    let needle = arg_str!(ed, 1);
+    let hay_lower = hay.to_lowercase();
+    let needle_lower = needle.to_lowercase();
+    match hay_lower.rfind(&needle_lower) {
+        Some(pos) => ret!(rv, Value::long(hay[..pos].chars().count() as i64)),
+        None => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// str_ireplace($search, $replace, $subject): string
+fn fn_str_ireplace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let search = arg_str!(ed, 0);
+    let replace = arg_str!(ed, 1);
+    let subject = arg_str!(ed, 2);
+    if search.is_empty() {
+        ret!(rv, Value::string(subject.into_owned()));
+    }
+    // Case-insensitive replace
+    let search_lower = search.to_lowercase();
+    let mut result = String::with_capacity(subject.len());
+    let subject_lower = subject.to_lowercase();
+    let mut start = 0;
+    while let Some(pos) = subject_lower[start..].find(&search_lower) {
+        result.push_str(&subject[start..start + pos]);
+        result.push_str(replace.as_ref());
+        start += pos + search.len();
+    }
+    result.push_str(&subject[start..]);
+    ret!(rv, Value::string(result));
+}
+
+/// substr_replace($string, $replacement, $start, $length = null): string
+fn fn_substr_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let replacement = arg_str!(ed, 1);
+    let start_raw = arg_long!(ed, 2);
+    let len = s.len() as i64;
+    let start = if start_raw < 0 { (len + start_raw).max(0) as usize } else { start_raw.min(len) as usize };
+    let length = match arg_opt!(ed, 3) {
+        Some(v) if !v.is_undef() => {
+            let l = v.to_long_val();
+            if l < 0 { ((len as i64 - start as i64) + l).max(0) as usize } else { l as usize }
+        }
+        _ => s.len() - start,
+    };
+    let end = (start + length).min(s.len());
+    let mut result = String::with_capacity(start + replacement.len() + (s.len() - end));
+    result.push_str(&s[..start]);
+    result.push_str(replacement.as_ref());
+    result.push_str(&s[end..]);
+    ret!(rv, Value::string(result));
+}
+
+/// str_getcsv($string, $separator = ",", $enclosure = "\"", $escape = "\\"): array
+fn fn_str_getcsv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let sep = arg_opt!(ed, 1).map(|v| v.echo_to_string().chars().next().unwrap_or(',')).unwrap_or(',');
+    let enc = arg_opt!(ed, 2).map(|v| v.echo_to_string().chars().next().unwrap_or('"')).unwrap_or('"');
+
+    let mut arr = PhpArray::new();
+    let mut field = String::new();
+    let mut in_enclosure = false;
+    let mut chars = s.chars().peekable();
+
+    while let Some(c) = chars.next() {
+        if c == enc {
+            if in_enclosure {
+                if chars.peek() == Some(&enc) {
+                    field.push(enc);
+                    chars.next();
+                } else {
+                    in_enclosure = false;
+                }
+            } else {
+                in_enclosure = true;
+            }
+        } else if c == sep && !in_enclosure {
+            arr.push(Value::string(std::mem::take(&mut field)));
+        } else {
+            field.push(c);
+        }
+    }
+    arr.push(Value::string(field));
+    ret!(rv, Value::array(arr));
+}
+
+/// chunk_split($string, $chunklen = 76, $end = "\r\n"): string
+fn fn_chunk_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    let chunklen = arg_opt!(ed, 1).map(|v| v.to_long_val() as usize).unwrap_or(76);
+    let end = arg_opt!(ed, 2).map(|v| v.echo_to_string()).unwrap_or_else(|| "\r\n".to_string());
+    if chunklen == 0 {
+        return Err(VmError::Fatal("chunk_split(): Argument #2 ($chunklen) must be greater than 0".into()));
+    }
+    let mut result = String::new();
+    for chunk in s.as_bytes().chunks(chunklen) {
+        result.push_str(&String::from_utf8_lossy(chunk));
+        result.push_str(&end);
+    }
+    ret!(rv, Value::string(result));
+}
+
+// ============================================================================
+// Missing common array functions
+// ============================================================================
+
+/// Helper: resolve a callback Value and call it with given args.
+fn invoke_callback(eg: &mut ExecutorGlobals, cb_val: &Value, user_args: &[Value], ed: *mut ExecuteData) -> Result<Value, VmError> {
+    let caller_class = get_calling_scope_class(ed, eg);
+    let resolved = match resolve_callback(cb_val, eg, caller_class.as_deref()) {
+        Some(r) => r,
+        None => {
+            let desc = cb_val.echo_to_string();
+            return Err(VmError::Fatal(format!(
+                "Callback must be a valid callable, function \"{}\" not found", desc
+            )));
+        }
+    };
+    let mut args = Vec::with_capacity(resolved.prepend_args.len() + user_args.len() + resolved.use_vars.len());
+    args.extend(resolved.prepend_args);
+    args.extend_from_slice(user_args);
+    args.extend(resolved.use_vars);
+    let result = call_function(eg, resolved.func_ptr, &args)?;
+    Ok(result)
+}
+
+/// array_reduce($array, $callback, $initial = null): mixed
+fn fn_array_reduce(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr_val = arg!(ed, 0);
+    let callback = arg!(ed, 1).clone();
+    let initial = arg_opt!(ed, 2).cloned().unwrap_or(Value::null());
+
+    if let Some(arr) = arr_val.as_array() {
+        let items: Vec<Value> = arr.iter().map(|(_, v)| v.clone()).collect();
+        let mut carry = initial;
+        for item in items {
+            carry = invoke_callback(eg, &callback, &[carry.clone(), item], ed)?;
+            if eg.exception.is_some() { return Ok(()); }
+        }
+        ret!(rv, carry);
+    }
+    ret!(rv, initial);
+}
+
+/// usort(&$array, $callback): bool
+fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    // Save raw pointer to array BEFORE any call_function.
+    // call_function may push/pop VM stack frames but the by-ref pointer target
+    // lives in the CALLER's frame (which is below us on the stack and stays valid).
+    let arr_ptr: *mut Value = arg_mut!(ed, 0);
+    let callback = arg!(ed, 1).clone();
+
+    let items = {
+        let arr = unsafe { &*arr_ptr };
+        match arr.as_array() {
+            Some(a) => a.iter().map(|(_, v)| v.clone()).collect::<Vec<Value>>(),
+            None => { ret!(rv, Value::bool(false)); }
+        }
+    };
+    let caller_class = get_calling_scope_class(ed, eg);
+    let resolved = match resolve_callback(&callback, eg, caller_class.as_deref()) {
+        Some(r) => r,
+        None => {
+            eg.exception = Some(crate::value::make_error_value("TypeError",
+                "usort(): Argument #2 ($callback) must be a valid callback"));
+            return Ok(());
+        }
+    };
+    let func_ptr = resolved.func_ptr;
+    let prepend = resolved.prepend_args;
+    let use_vars = resolved.use_vars;
+    let mut items = items;
+    // Insertion sort with PHP callback comparison
+    let len = items.len();
+    for i in 1..len {
+        let mut j = i;
+        while j > 0 {
+            let mut args = Vec::with_capacity(prepend.len() + 2 + use_vars.len());
+            args.extend(prepend.iter().cloned());
+            args.push(items[j - 1].clone());
+            args.push(items[j].clone());
+            args.extend(use_vars.iter().cloned());
+            let result = call_function(eg, func_ptr, &args)?;
+            if eg.exception.is_some() { return Ok(()); }
+            if result.to_long_val() <= 0 { break; }
+            items.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    let mut new_arr = PhpArray::new();
+    for v in items { new_arr.push(v); }
+    // Write back using saved raw pointer (stable across call_function calls).
+    unsafe { *arr_ptr = Value::array(new_arr); }
+    ret!(rv, Value::bool(true));
+}
+
+/// array_diff($array1, $array2): array
+fn fn_array_diff(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr1 = arg!(ed, 0);
+    let arr2 = arg!(ed, 1);
+
+    if let (Some(a1), Some(a2)) = (arr1.as_array(), arr2.as_array()) {
+        let mut result = PhpArray::new();
+        let vals2: Vec<String> = a2.iter().map(|(_, v)| v.echo_to_string()).collect();
+        for (k, v) in a1.iter() {
+            let vs = v.echo_to_string();
+            if !vals2.iter().any(|v2| *v2 == vs) {
+                match k {
+                    ArrayKey::Int(i) => result.set_int(i, v.clone()),
+                    ArrayKey::String(s) => result.set_str(&s, v.clone()),
+                }
+            }
+        }
+        ret!(rv, Value::array(result));
+    }
+    ret!(rv, Value::array(PhpArray::new()));
+}
+
+/// array_intersect($array1, $array2): array
+fn fn_array_intersect(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr1 = arg!(ed, 0);
+    let arr2 = arg!(ed, 1);
+
+    if let (Some(a1), Some(a2)) = (arr1.as_array(), arr2.as_array()) {
+        let mut result = PhpArray::new();
+        let vals2: Vec<String> = a2.iter().map(|(_, v)| v.echo_to_string()).collect();
+        for (k, v) in a1.iter() {
+            let vs = v.echo_to_string();
+            if vals2.iter().any(|v2| *v2 == vs) {
+                match k {
+                    ArrayKey::Int(i) => result.set_int(i, v.clone()),
+                    ArrayKey::String(s) => result.set_str(&s, v.clone()),
+                }
+            }
+        }
+        ret!(rv, Value::array(result));
+    }
+    ret!(rv, Value::array(PhpArray::new()));
+}
+
+/// array_walk(&$array, $callback): bool
+/// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
+fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use crate::vm::execute::call_function_readback_arg0;
+    let callback = arg!(ed, 1).clone();
+    let arr_ptr: *mut Value = arg_mut!(ed, 0);
+
+    let arr = unsafe { &*arr_ptr };
+    let pairs = match arr.as_array() {
+        Some(a) => a.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>(),
+        None => { ret!(rv, Value::bool(false)); }
+    };
+
+    let caller_class = get_calling_scope_class(ed, eg);
+    let resolved = match resolve_callback(&callback, eg, caller_class.as_deref()) {
+        Some(r) => r,
+        None => {
+            eg.exception = Some(crate::value::make_error_value("TypeError",
+                "array_walk(): Argument #2 ($callback) must be a valid callback"));
+            return Ok(());
+        }
+    };
+
+    // Check if callback's first parameter is declared by-reference.
+    let cb_arg0_by_ref = unsafe { (*resolved.func_ptr).sig.is_param_by_ref(0) };
+
+    if cb_arg0_by_ref {
+        // By-ref callback: read back CV(0) after each call and rebuild the array.
+        let mut mutations: Vec<(ArrayKey, Value)> = Vec::new();
+        for (k, v) in pairs {
+            let key_val = match &k {
+                ArrayKey::Int(i) => Value::long(*i),
+                ArrayKey::String(s) => Value::string(s.clone()),
+            };
+            let mut args = Vec::with_capacity(resolved.prepend_args.len() + 2 + resolved.use_vars.len());
+            args.extend(resolved.prepend_args.iter().cloned());
+            args.push(v.clone());
+            args.push(key_val);
+            args.extend(resolved.use_vars.iter().cloned());
+            let (_ret, modified_val) = call_function_readback_arg0(eg, resolved.func_ptr, &args)?;
+            if eg.exception.is_some() { return Ok(()); }
+            mutations.push((k, modified_val));
+        }
+        let mut new_arr = PhpArray::new();
+        for (k, v) in mutations {
+            match k {
+                ArrayKey::Int(i) => new_arr.set_int(i, v),
+                ArrayKey::String(s) => new_arr.set_str(&s, v),
+            }
+        }
+        unsafe { *arr_ptr = Value::array(new_arr); }
+    } else {
+        // By-value callback: call without readback, array stays unchanged.
+        for (k, v) in pairs {
+            let key_val = match &k {
+                ArrayKey::Int(i) => Value::long(*i),
+                ArrayKey::String(s) => Value::string(s.clone()),
+            };
+            let mut args = Vec::with_capacity(resolved.prepend_args.len() + 2 + resolved.use_vars.len());
+            args.extend(resolved.prepend_args.iter().cloned());
+            args.push(v.clone());
+            args.push(key_val);
+            args.extend(resolved.use_vars.iter().cloned());
+            call_function(eg, resolved.func_ptr, &args)?;
+            if eg.exception.is_some() { return Ok(()); }
+        }
+    }
+    ret!(rv, Value::bool(true));
+}
+
+/// asort(&$array): bool — sort by value, preserve keys
+fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr = unsafe { &mut *arg_mut!(ed, 0) };
+    if let Some(php_arr) = arr.as_array() {
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        pairs.sort_by(|(_, a), (_, b)| cmp_val(compare_values(a, b)));
+        let mut new_arr = PhpArray::new();
+        for (k, v) in pairs {
+            match k {
+                ArrayKey::Int(i) => new_arr.set_int(i, v),
+                ArrayKey::String(s) => new_arr.set_str(&s, v),
+            }
+        }
+        *arr = Value::array(new_arr);
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+/// arsort(&$array): bool — reverse sort by value, preserve keys
+fn fn_arsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr = unsafe { &mut *arg_mut!(ed, 0) };
+    if let Some(php_arr) = arr.as_array() {
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        pairs.sort_by(|(_, a), (_, b)| cmp_val(compare_values(b, a)));
+        let mut new_arr = PhpArray::new();
+        for (k, v) in pairs {
+            match k {
+                ArrayKey::Int(i) => new_arr.set_int(i, v),
+                ArrayKey::String(s) => new_arr.set_str(&s, v),
+            }
+        }
+        *arr = Value::array(new_arr);
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+/// ksort(&$array): bool — sort by key
+fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr = unsafe { &mut *arg_mut!(ed, 0) };
+    if let Some(php_arr) = arr.as_array() {
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        pairs.sort_by(|(a, _), (b, _)| {
+            match (a, b) {
+                (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
+                (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
+                (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
+                (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
+            }
+        });
+        let mut new_arr = PhpArray::new();
+        for (k, v) in pairs {
+            match k {
+                ArrayKey::Int(i) => new_arr.set_int(i, v),
+                ArrayKey::String(s) => new_arr.set_str(&s, v),
+            }
+        }
+        *arr = Value::array(new_arr);
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+/// krsort(&$array): bool — reverse sort by key
+fn fn_krsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr = unsafe { &mut *arg_mut!(ed, 0) };
+    if let Some(php_arr) = arr.as_array() {
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        pairs.sort_by(|(a, _), (b, _)| {
+            match (b, a) {
+                (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
+                (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
+                (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
+                (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
+            }
+        });
+        let mut new_arr = PhpArray::new();
+        for (k, v) in pairs {
+            match k {
+                ArrayKey::Int(i) => new_arr.set_int(i, v),
+                ArrayKey::String(s) => new_arr.set_str(&s, v),
+            }
+        }
+        *arr = Value::array(new_arr);
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+// ============================================================================
+// Missing math functions
+// ============================================================================
+
+fn fn_sin(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).sin()));
+}
+fn fn_cos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).cos()));
+}
+fn fn_tan(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).tan()));
+}
+fn fn_asin(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).asin()));
+}
+fn fn_acos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).acos()));
+}
+fn fn_atan(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).atan()));
+}
+fn fn_atan2(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).atan2(arg_float!(ed, 1))));
+}
+fn fn_exp(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).exp()));
+}
+fn fn_sinh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).sinh()));
+}
+fn fn_cosh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).cosh()));
+}
+fn fn_tanh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).tanh()));
+}
+fn fn_deg2rad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).to_radians()));
+}
+fn fn_rad2deg(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).to_degrees()));
+}
+fn fn_hypot(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::double(arg_float!(ed, 0).hypot(arg_float!(ed, 1))));
+}
+
+// ============================================================================
+// Date/Time functions
+// ============================================================================
+
+/// date($format, $timestamp = time()): string
+fn fn_date(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let fmt = arg_str!(ed, 0);
+    let ts = match arg_opt!(ed, 1) {
+        Some(v) if !v.is_undef() => v.to_long_val(),
+        _ => SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+    };
+    ret!(rv, Value::string(format_php_date(&fmt, ts)));
+}
+
+/// Format a Unix timestamp according to PHP date() format characters
+fn format_php_date(fmt: &str, ts: i64) -> String {
+    // Break timestamp into components using manual calculation (no chrono dependency)
+    let (year, month, day, hour, min, sec, wday, yday) = unix_to_parts(ts);
+    let mut out = String::new();
+    let mut escape = false;
+    for c in fmt.chars() {
+        if escape {
+            out.push(c);
+            escape = false;
+            continue;
+        }
+        match c {
+            '\\' => { escape = true; }
+            'Y' => out.push_str(&format!("{:04}", year)),
+            'y' => out.push_str(&format!("{:02}", year % 100)),
+            'm' => out.push_str(&format!("{:02}", month)),
+            'n' => out.push_str(&format!("{}", month)),
+            'd' => out.push_str(&format!("{:02}", day)),
+            'j' => out.push_str(&format!("{}", day)),
+            'H' => out.push_str(&format!("{:02}", hour)),
+            'G' => out.push_str(&format!("{}", hour)),
+            'i' => out.push_str(&format!("{:02}", min)),
+            's' => out.push_str(&format!("{:02}", sec)),
+            'g' => { let h = if hour == 0 { 12 } else if hour > 12 { hour - 12 } else { hour }; out.push_str(&format!("{}", h)); }
+            'h' => { let h = if hour == 0 { 12 } else if hour > 12 { hour - 12 } else { hour }; out.push_str(&format!("{:02}", h)); }
+            'A' => out.push_str(if hour < 12 { "AM" } else { "PM" }),
+            'a' => out.push_str(if hour < 12 { "am" } else { "pm" }),
+            'N' => out.push_str(&format!("{}", if wday == 0 { 7 } else { wday })),
+            'w' => out.push_str(&format!("{}", wday)),
+            'z' => out.push_str(&format!("{}", yday)),
+            'U' => out.push_str(&format!("{}", ts)),
+            'D' => out.push_str(["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][wday as usize]),
+            'l' => out.push_str(["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][wday as usize]),
+            'F' => out.push_str(["","January","February","March","April","May","June","July","August","September","October","November","December"][month as usize]),
+            'M' => out.push_str(["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][month as usize]),
+            't' => {
+                let days = days_in_month(year, month);
+                out.push_str(&format!("{}", days));
+            }
+            'L' => out.push_str(if is_leap_year(year) { "1" } else { "0" }),
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+fn is_leap_year(y: i64) -> bool {
+    (y % 4 == 0 && y % 100 != 0) || y % 400 == 0
+}
+
+fn days_in_month(year: i64, month: i64) -> i64 {
+    match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 => if is_leap_year(year) { 29 } else { 28 },
+        _ => 30,
+    }
+}
+
+/// Convert Unix timestamp to (year, month, day, hour, min, sec, weekday, yearday)
+fn unix_to_parts(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
+    let sec = ((ts % 60) + 60) % 60;
+    let total_min = if ts < 0 { (ts - 59) / 60 } else { ts / 60 };
+    let min = ((total_min % 60) + 60) % 60;
+    let total_hours = if total_min < 0 { (total_min - 59) / 60 } else { total_min / 60 };
+    let hour = ((total_hours % 24) + 24) % 24;
+    let mut days = if total_hours < 0 { (total_hours - 23) / 24 } else { total_hours / 24 };
+
+    // weekday: 1970-01-01 was Thursday (4)
+    let wday = ((days % 7 + 4) % 7 + 7) % 7;
+
+    // Civil date from days since epoch
+    // Algorithm from https://howardhinnant.github.io/date_algorithms.html
+    days += 719468; // shift to 0000-03-01
+    let era = if days >= 0 { days } else { days - 146096 } / 146097;
+    let doe = days - era * 146097; // day of era [0, 146096]
+    let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365*yoe + yoe/4 - yoe/100);
+    let mp = (5*doy + 2) / 153;
+    let d = doy - (153*mp + 2)/5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = if m <= 2 { y + 1 } else { y };
+
+    // Day of year
+    let month_days: [i64; 12] = [31,if is_leap_year(year){29}else{28},31,30,31,30,31,31,30,31,30,31];
+    let mut yday = d - 1;
+    for i in 0..(m-1) as usize {
+        yday += month_days[i];
+    }
+
+    (year, m, d, hour, min, sec, wday, yday)
+}
+
+/// mktime($hour, $minute, $second, $month, $day, $year): int|false
+fn fn_mktime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let hour = arg_long!(ed, 0);
+    let min = arg_opt!(ed, 1).map(|v| v.to_long_val()).unwrap_or(0);
+    let sec = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(0);
+    let month = arg_opt!(ed, 3).map(|v| v.to_long_val()).unwrap_or(1);
+    let day = arg_opt!(ed, 4).map(|v| v.to_long_val()).unwrap_or(1);
+    let year = arg_opt!(ed, 5).map(|v| v.to_long_val()).unwrap_or(1970);
+
+    ret!(rv, Value::long(parts_to_unix(year, month, day, hour, min, sec)));
+}
+
+fn parts_to_unix(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) -> i64 {
+    // Days from 1970-01-01 to the given date
+    let m = if month > 2 { month } else { month + 12 };
+    let y = if month > 2 { year } else { year - 1 };
+    let days = 365 * y + y/4 - y/100 + y/400 + (153*(m-3)+2)/5 + day - 719469;
+    days * 86400 + hour * 3600 + min * 60 + sec
+}
+
+// ============================================================================
+// Misc missing functions
+// ============================================================================
+
+/// getenv($name): string|false
+fn fn_getenv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let name = arg_str!(ed, 0);
+    match std::env::var(name.as_ref()) {
+        Ok(val) => ret!(rv, Value::string(val)),
+        Err(_) => ret!(rv, Value::bool(false)),
+    }
+}
+
+/// putenv($assignment): bool
+fn fn_putenv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    if let Some(pos) = s.find('=') {
+        let (key, val) = s.split_at(pos);
+        unsafe { std::env::set_var(key, &val[1..]); }
+        ret!(rv, Value::bool(true));
+    }
+    ret!(rv, Value::bool(false));
+}
+
+/// php_uname($mode = "a"): string
+fn fn_php_uname(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let mode = arg_opt!(ed, 0).map(|v| v.echo_to_string().chars().next().unwrap_or('a')).unwrap_or('a');
+    let result = match mode {
+        's' => std::env::consts::OS.to_string(),
+        'r' => "rphp".to_string(),
+        'm' => std::env::consts::ARCH.to_string(),
+        _ => format!("{} {} {}", std::env::consts::OS, "rphp", std::env::consts::ARCH),
+    };
+    ret!(rv, Value::string(result));
+}
+
+/// php_sapi_name(): string
+fn fn_php_sapi_name(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::string("cli".to_string()));
+}
+
+/// phpversion(): string
+fn fn_phpversion(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    ret!(rv, Value::string("8.4.0".to_string()));
+}
+
+/// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.
+/// sleep($seconds): int
+fn fn_sleep(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let secs = arg_long!(ed, 0);
+    if secs > 0 {
+        std::thread::sleep(std::time::Duration::from_secs(secs as u64));
+    }
+    ret!(rv, Value::long(0));
+}
+
+/// usleep($microseconds): void
+fn fn_usleep(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let us = arg_long!(ed, 0);
+    if us > 0 {
+        std::thread::sleep(std::time::Duration::from_micros(us as u64));
+    }
+    Ok(())
+}
+
+/// array_key_first($array): int|string|null
+fn fn_array_key_first(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr_val = arg!(ed, 0);
+    if let Some(arr) = arr_val.as_array() {
+        if let Some((k, _)) = arr.iter().next() {
+            match k {
+                ArrayKey::Int(i) => ret!(rv, Value::long(i)),
+                ArrayKey::String(s) => ret!(rv, Value::string(s.clone())),
+            }
+        }
+    }
+    ret!(rv, Value::null());
+}
+
+/// array_key_last($array): int|string|null
+fn fn_array_key_last(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let arr_val = arg!(ed, 0);
+    if let Some(arr) = arr_val.as_array() {
+        if let Some((k, _)) = arr.iter().last() {
+            match k {
+                ArrayKey::Int(i) => ret!(rv, Value::long(i)),
+                ArrayKey::String(s) => ret!(rv, Value::string(s.clone())),
+            }
+        }
+    }
+    ret!(rv, Value::null());
+}
+
+/// compact(...$var_names): array  — can't access caller scope; stub returns empty array
+/// (Noted in registration as intentionally limited)
+
+/// ctype_alpha($text): bool
+fn fn_ctype_alpha(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic())));
+}
+
+/// ctype_digit($text): bool
+fn fn_ctype_digit(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit())));
+}
+
+/// ctype_alnum($text): bool
+fn fn_ctype_alnum(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())));
+}
+
+/// ctype_space($text): bool
+fn fn_ctype_space(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_whitespace())));
+}
+
+/// ctype_upper($text): bool
+fn fn_ctype_upper(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_uppercase())));
+}
+
+/// ctype_lower($text): bool
+fn fn_ctype_lower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())));
 }

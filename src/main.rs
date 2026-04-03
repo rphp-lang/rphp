@@ -2,7 +2,7 @@ use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
-use rphp::vm::execute;
+use rphp::vm::execute::{self};
 use rphp::vm::function::FunctionCommon;
 use rphp::runtime::ExecutorGlobals;
 use rphp::stdlib;
@@ -100,6 +100,9 @@ fn main() {
 
     match exec_result {
         Ok(_) => {}
+        Err(execute::VmError::Exit(code)) => {
+            std::process::exit(code);
+        }
         Err(e) => {
             eprintln!("Fatal error: {:?}", e);
             std::process::exit(255);

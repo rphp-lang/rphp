@@ -127,7 +127,9 @@ pub struct Compiler {
 /// Returns 0 for unknown/non-ref functions.
 fn builtin_ref_args(name: &str) -> u64 {
     match name {
-        "sort" | "rsort" | "shuffle" => 0b1,           // arg 0
+        "sort" | "rsort" | "shuffle"
+        | "usort" | "asort" | "arsort" | "ksort" | "krsort"
+        | "array_walk" => 0b1,                           // arg 0
         "array_push" | "array_unshift" => 0b1,          // arg 0
         "array_pop" | "array_shift" => 0b1,             // arg 0
         "array_splice" => 0b1,                           // arg 0
