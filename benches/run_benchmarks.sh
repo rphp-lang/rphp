@@ -25,9 +25,11 @@ else
     rm -rf "$PROFDATA_DIR" && mkdir -p "$PROFDATA_DIR"
     RUSTFLAGS="-Cprofile-generate=$PROFDATA_DIR" cargo build --release 2>&1 | tail -1
 
-    echo "=== PGO Step 2/3: Collecting profiles ==="
-    for f in benches/bench_*.php; do
-        ./target/release/rphp "$f" > /dev/null 2>&1 || true
+    echo "=== PGO Step 2/3: Collecting profiles (3 passes) ==="
+    for pass in 1 2 3; do
+        for f in benches/bench_*.php; do
+            ./target/release/rphp "$f" > /dev/null 2>&1 || true
+        done
     done
     echo "  Collected $(ls "$PROFDATA_DIR"/*.profraw 2>/dev/null | wc -l | tr -d ' ') profile(s)"
 
