@@ -100,6 +100,17 @@ pub enum VmError {
     UnimplementedOpcode(OpCode),
 }
 
+/// Update a globals entry in-place if the key exists, otherwise insert.
+/// Avoids String clone + HashMap rehash on the hot path (key already present).
+#[inline(always)]
+fn globals_set(globals: &mut HashMap<String, Value>, key: &str, val: Value) {
+    if let Some(slot) = globals.get_mut(key) {
+        *slot = val;
+    } else {
+        globals.insert(key.to_string(), val);
+    }
+}
+
 // ── Slot write API ──
 //
 // Per-slot bitmap tracking: each write helper maintains heap_bitmap (u64) alongside
@@ -1001,7 +1012,7 @@ fn op_include(
         if var_name == "this" { continue; }
         let cv_ptr = unsafe { (*frame).get_op_ptr(*cv_idx, OpType::Cv, op_array) };
         let val = unsafe { (*cv_ptr).clone() };
-        eg.globals.insert(var_name.clone(), val);
+        globals_set(&mut eg.globals, var_name, val);
     }
 
     let inc_func_ptr = &main_func.common as *const FunctionCommon;
@@ -1032,7 +1043,7 @@ fn op_include(
     for (cv_idx, var_name) in inc_scope {
         let cv_ptr = unsafe { (*inc_frame).get_op_mut(*cv_idx, OpType::Cv) };
         let val = unsafe { (*cv_ptr).clone() };
-        eg.globals.insert(var_name.clone(), val);
+        globals_set(&mut eg.globals, var_name, val);
     }
 
     eg.current_execute_data.set(prev_ed);
@@ -3672,7 +3683,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             for (cv_idx, var_name) in vars_to_sync {
                                 let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
                                 let val = unsafe { (*cv_ptr).clone() };
-                                eg.globals.insert(var_name.clone(), val);
+                                globals_set(&mut eg.globals, var_name, val);
                             }
                         }
                         unsafe {
@@ -3909,7 +3920,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 for (cv_idx, var_name) in vars_to_sync {
                                     let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
                                     let val = unsafe { (*cv_ptr).clone() };
-                                    eg.globals.insert(var_name.clone(), val);
+                                    globals_set(&mut eg.globals, var_name, val);
                                 }
                             }
                             unsafe {
@@ -4661,7 +4672,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     for (cv_idx, var_name) in &op_array.global_vars {
                         let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
                         let val = unsafe { (*cv_ptr).clone() };
-                        eg.globals.insert(var_name.clone(), val);
+                        globals_set(&mut eg.globals, var_name, val);
                         eg.dirty_globals.insert(var_name.clone());
                     }
                 }

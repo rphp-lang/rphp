@@ -9,7 +9,17 @@
 set -euo pipefail
 
 PROFDATA_DIR="/tmp/rphp-pgo-data"
-LLVM_PROFDATA="$(xcrun --find llvm-profdata 2>/dev/null || echo llvm-profdata)"
+# Find llvm-profdata matching Rust's LLVM version.
+# Prefer the copy shipped with rustup (llvm-tools component) over system llvm-profdata,
+# which may be a different LLVM major version and reject the profraw files.
+LLVM_PROFDATA=""
+if command -v rustc &>/dev/null; then
+    _candidate="$(rustc --print sysroot)/lib/rustlib/$(rustc -vV | awk '/^host:/{print $2}')/bin/llvm-profdata"
+    [ -x "$_candidate" ] && LLVM_PROFDATA="$_candidate"
+fi
+if [ -z "$LLVM_PROFDATA" ]; then
+    LLVM_PROFDATA="$(xcrun --find llvm-profdata 2>/dev/null || echo llvm-profdata)"
+fi
 
 echo "=== Step 1/4: Clean ==="
 rm -rf "$PROFDATA_DIR"
