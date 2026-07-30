@@ -240,6 +240,44 @@ echo $j;
 }
 
 #[test]
+fn quick_accumulate_supports_commuted_invariant_cv_term() {
+    assert_eq!(
+        run_php(
+            "<?php
+$offset = 7;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $offset + $i;
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "5650|100"
+    );
+}
+
+#[test]
+fn quick_accumulate_deoptimizes_at_invariant_cv_term_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$offset = PHP_INT_MAX;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $i + $offset;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|100"
+    );
+}
+
+#[test]
 fn quick_long_ops_support_conditional_body() {
     assert_eq!(
         run_php(

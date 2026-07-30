@@ -34,6 +34,12 @@ pub enum QuickLongTerm {
         term_tmp: u16,
         term_ip: usize,
     },
+    /// First compute induction + an invariant CV into a TMP, then accumulate it.
+    InductionPlusCv {
+        addend_cv: u16,
+        term_tmp: u16,
+        term_ip: usize,
+    },
 }
 
 /// Region for the compiler shapes produced by:
@@ -42,6 +48,7 @@ pub enum QuickLongTerm {
 /// for (...; $i < $limit; $i++) {
 ///     $accumulator += $i;
 ///     // or: $accumulator += $i + INTEGER_CONSTANT;
+///     // or: $accumulator += $i + $loop_invariant_cv;
 /// }
 /// ```
 ///
@@ -405,9 +412,6 @@ pub fn detect_long_accumulate_loop(
     } else {
         let sum = op_array.instructions[header_ip + 3];
         if first_body.opcode != OpCode::Add
-            || first_body.op1_type != OpType::Cv
-            || first_body.op1 != induction_cv
-            || first_body.op2_type != OpType::Const
             || first_body.result_type != OpType::Tmp
             || sum.opcode != OpCode::Add_CvTmp
             || sum.op1_type != OpType::Cv
@@ -417,17 +421,42 @@ pub fn detect_long_accumulate_loop(
         {
             return None;
         }
-        (
-            sum.op1,
-            QuickLongTerm::InductionPlusConst {
-                addend: long_literal(op_array, first_body.op2)?,
-                term_tmp: first_body.result,
-                term_ip: header_ip + 2,
-            },
-            sum.result,
-            header_ip + 3,
-            header_ip + 4,
-        )
+        let term = match (first_body.op1_type, first_body.op2_type) {
+            (OpType::Cv, OpType::Const) if first_body.op1 == induction_cv => {
+                QuickLongTerm::InductionPlusConst {
+                    addend: long_literal(op_array, first_body.op2)?,
+                    term_tmp: first_body.result,
+                    term_ip: header_ip + 2,
+                }
+            }
+            (OpType::Const, OpType::Cv) if first_body.op2 == induction_cv => {
+                QuickLongTerm::InductionPlusConst {
+                    addend: long_literal(op_array, first_body.op1)?,
+                    term_tmp: first_body.result,
+                    term_ip: header_ip + 2,
+                }
+            }
+            (OpType::Cv, OpType::Cv)
+                if first_body.op1 == induction_cv && first_body.op2 != induction_cv =>
+            {
+                QuickLongTerm::InductionPlusCv {
+                    addend_cv: first_body.op2,
+                    term_tmp: first_body.result,
+                    term_ip: header_ip + 2,
+                }
+            }
+            (OpType::Cv, OpType::Cv)
+                if first_body.op2 == induction_cv && first_body.op1 != induction_cv =>
+            {
+                QuickLongTerm::InductionPlusCv {
+                    addend_cv: first_body.op1,
+                    term_tmp: first_body.result,
+                    term_ip: header_ip + 2,
+                }
+            }
+            _ => return None,
+        };
+        (sum.op1, term, sum.result, header_ip + 3, header_ip + 4)
     };
 
     let assign = op_array.instructions[assign_ip];
@@ -463,6 +492,11 @@ pub fn detect_long_accumulate_loop(
 
     if accumulator_cv == induction_cv
         || matches!(bound, QuickLongBound::Cv(cv) if cv == induction_cv || cv == accumulator_cv)
+        || matches!(
+            term,
+            QuickLongTerm::InductionPlusCv { addend_cv, .. }
+                if addend_cv == induction_cv || addend_cv == accumulator_cv
+        )
     {
         return None;
     }
@@ -471,8 +505,12 @@ pub fn detect_long_accumulate_loop(
     if let Some(slot) = condition_tmp {
         temporary_slots.push(slot);
     }
-    if let QuickLongTerm::InductionPlusConst { term_tmp, .. } = term {
-        temporary_slots.push(term_tmp);
+    match term {
+        QuickLongTerm::Induction => {}
+        QuickLongTerm::InductionPlusConst { term_tmp, .. }
+        | QuickLongTerm::InductionPlusCv { term_tmp, .. } => {
+            temporary_slots.push(term_tmp);
+        }
     }
     if let Some(slot) = post_tmp {
         temporary_slots.push(slot);
@@ -492,6 +530,11 @@ pub fn detect_long_accumulate_loop(
         || induction_cv as u32 >= op_array.num_cvs
         || accumulator_cv as u32 >= op_array.num_cvs
         || matches!(bound, QuickLongBound::Cv(cv) if cv as u32 >= op_array.num_cvs)
+        || matches!(
+            term,
+            QuickLongTerm::InductionPlusCv { addend_cv, .. }
+                if addend_cv as u32 >= op_array.num_cvs
+        )
     {
         return None;
     }
@@ -1235,6 +1278,27 @@ for ($i = 0; $i < $n; $i++) {
             QuickLongTerm::InductionPlusConst { addend: 1, .. }
         ));
         assert_eq!(plan.exit_ip, 10);
+    }
+
+    #[test]
+    fn detects_induction_plus_invariant_cv_in_either_order() {
+        for expression in ["$i + $offset", "$offset + $i"] {
+            let plan = quick_plan(&format!(
+                "<?php
+$offset = 7;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {{
+    $sum += {expression};
+}}
+"
+            ));
+            assert_eq!(plan.induction_cv, 2);
+            assert_eq!(plan.accumulator_cv, 1);
+            assert!(matches!(
+                plan.term,
+                QuickLongTerm::InductionPlusCv { addend_cv: 0, .. }
+            ));
+        }
     }
 
     #[test]

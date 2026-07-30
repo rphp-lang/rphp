@@ -623,3 +623,75 @@ precise side-exit for missing keys. Before implementing them, profile the
 current compact executor to separate the remaining enum-dispatch cost from
 slot-array traffic; that determines whether a denser typed bytecode or the
 array guard should come first.
+
+## Phase 2e result: profile-guided invariant-CV recurrence
+
+Sampling the Phase 2d less-than branch workload put 69 of 76 samples, or
+90.8%, inside `run_quick_long_ops_loop`. Region entry and baseline dispatch
+are therefore no longer the dominant cost. Disassembly also showed more than
+30 bounds-check failure edges in the typed executor, but isolated attempts to
+remove them were not generally beneficial:
+
+- unchecked slot access made the nested loop faster but consistently made the
+  less-than branch about 13% slower;
+- masking every slot index to six bits helped nested arithmetic by roughly
+  11-13% but made the modulo branch roughly 11-13% slower;
+- moving deoptimization blocks to cold helpers helped nested arithmetic while
+  regressing both branch workloads by roughly 4-5%;
+- separating cold resume positions reduced `QuickLongOp` from 56 to 48 bytes,
+  but six alternating long pairs still showed a 5.5% nested regression.
+
+All four experimental changes were removed. The result is important:
+`run_quick_long_ops_loop` is sensitive to global code layout and register
+allocation, so smaller source, fewer checks, or a denser operation record is
+not sufficient evidence of a faster interpreter. Every executor change must
+continue to pass all three workload shapes.
+
+The nested profile also exposed a coverage mistake. Its hot inner loop,
+
+```php
+$sum += $outer + $inner;
+```
+
+has the same recurrence as the existing direct accumulator executor. The only
+missing case was an invariant CV addend. `QuickLongTerm` now accepts
+`InductionPlusCv` in either operand order. Planning proves that this CV is
+distinct from the induction and accumulator slots, is a non-heap long, and is
+not written by the region. The guarded executor can consequently load it once
+and retain the existing precise side exits for term, accumulator, and
+post-increment overflow.
+
+This is a class-level extension rather than a benchmark-specific whole-loop
+variant. It covers inner-loop offsets, precomputed scalar coefficients, and
+other invariant local integer addends with the same bytecode shape.
+
+Six long A/B rounds alternated Phase 2d and Phase 2e binary order and measured
+aggregate process user CPU time:
+
+| Workload | median Phase 2e / Phase 2d | CPU reduction |
+|---|---:|---:|
+| Nested invariant-CV accumulation | 0.273x | 72.7% |
+| Less-than conditional addition | 0.959x | 4.1% |
+| Modulo/equality conditional addition | 0.997x | within noise |
+
+Seven additional runs compared the elapsed time reported inside each script
+with Homebrew PHP 8.4.12 and CLI opcache disabled:
+
+| Workload | rphp median | PHP median | rphp / PHP |
+|---|---:|---:|---:|
+| Nested invariant-CV accumulation | 0.00204 s | 0.00747 s | 0.273x |
+| Less-than conditional addition | 0.03998 s | 0.02757 s | 1.45x |
+| Modulo/equality conditional addition | 0.04731 s | 0.03618 s | 1.31x |
+
+The arithmetic recurrence is now about 3.66x faster than PHP without JIT.
+The largest measured gap has moved to general typed branch execution:
+approximately 45% for the less-than plan and 31% for modulo/equality. The next
+performance step should therefore specialize the execution representation by
+stable plan shape or split the monolithic branch executor, while retaining the
+three-shape A/B acceptance gate. Array-read coverage remains the next semantic
+expansion after that executor work.
+
+Detection tests cover both commutative CV operand orders. The existing nested
+overflow end-to-end test exercises exact deoptimization through the new
+direct path. The complete test suite passes with default features and with
+`--no-default-features`.

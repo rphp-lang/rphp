@@ -2704,8 +2704,15 @@ unsafe fn run_quick_long_accumulate_loop(
         .map(|slot| slot_base.add(slot as usize));
     let term_ptr = match plan.term {
         QuickLongTerm::Induction => None,
-        QuickLongTerm::InductionPlusConst { term_tmp, .. } => {
+        QuickLongTerm::InductionPlusConst { term_tmp, .. }
+        | QuickLongTerm::InductionPlusCv { term_tmp, .. } => {
             Some(slot_base.add(term_tmp as usize))
+        }
+    };
+    let addend_ptr = match plan.term {
+        QuickLongTerm::Induction | QuickLongTerm::InductionPlusConst { .. } => None,
+        QuickLongTerm::InductionPlusCv { addend_cv, .. } => {
+            Some(slot_base.add(addend_cv as usize))
         }
     };
     let sum_ptr = slot_base.add(plan.sum_tmp as usize);
@@ -2724,7 +2731,13 @@ unsafe fn run_quick_long_accumulate_loop(
         || matches!(
             plan.term,
             QuickLongTerm::InductionPlusConst { term_tmp, .. }
+                | QuickLongTerm::InductionPlusCv { term_tmp, .. }
                 if quick_loop_slot_has_heap(frame, term_tmp)
+        )
+        || matches!(
+            plan.term,
+            QuickLongTerm::InductionPlusCv { addend_cv, .. }
+                if quick_loop_slot_has_heap(frame, addend_cv)
         )
         || quick_loop_slot_has_heap(frame, plan.sum_tmp)
         || plan.post_tmp.is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
@@ -2735,6 +2748,7 @@ unsafe fn run_quick_long_accumulate_loop(
             !matches!((*ptr).value_type(), ValueType::True | ValueType::False)
         })
         || term_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+        || addend_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || (*sum_ptr).value_type() != ValueType::Long
         || post_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || bound_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
@@ -2749,6 +2763,7 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongBound::Cv(_) => (*bound_ptr.unwrap_unchecked()).raw_long(),
         QuickLongBound::Const(value) => value,
     };
+    let invariant_addend = addend_ptr.map(|ptr| (*ptr).raw_long());
     let mut iterations = 0u64;
     let mut last_term = 0i64;
     let mut last_induction = 0i64;
@@ -2792,6 +2807,22 @@ unsafe fn run_quick_long_accumulate_loop(
                     return Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
+            QuickLongTerm::InductionPlusCv { term_ip, .. } => {
+                let addend = invariant_addend.unwrap_unchecked();
+                match induction.checked_add(addend) {
+                    Some(value) => value,
+                    None => {
+                        Value::write_long(induction_ptr, induction);
+                        Value::write_long(accumulator_ptr, accumulator);
+                        if let Some(ptr) = condition_ptr {
+                            Value::write_bool(ptr, true);
+                        }
+                        (*frame).opline = op_array.instructions.as_ptr().add(term_ip);
+                        stats::inc_quick_loop_deoptimized(iterations);
+                        return Ok(QuickLoopOutcome::Deoptimized);
+                    }
+                }
+            }
         };
 
         let next_accumulator = match accumulator.checked_add(term) {
