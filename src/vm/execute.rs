@@ -2705,15 +2705,24 @@ unsafe fn run_quick_long_accumulate_loop(
     let term_ptr = match plan.term {
         QuickLongTerm::Induction => None,
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
-        | QuickLongTerm::InductionPlusCv { term_tmp, .. } => {
+        | QuickLongTerm::InductionPlusCv { term_tmp, .. }
+        | QuickLongTerm::PackedArrayIndex { term_tmp, .. } => {
             Some(slot_base.add(term_tmp as usize))
         }
     };
     let addend_ptr = match plan.term {
-        QuickLongTerm::Induction | QuickLongTerm::InductionPlusConst { .. } => None,
+        QuickLongTerm::Induction
+        | QuickLongTerm::InductionPlusConst { .. }
+        | QuickLongTerm::PackedArrayIndex { .. } => None,
         QuickLongTerm::InductionPlusCv { addend_cv, .. } => {
             Some(slot_base.add(addend_cv as usize))
         }
+    };
+    let array_ptr = match plan.term {
+        QuickLongTerm::PackedArrayIndex { array_cv, .. } => {
+            Some(slot_base.add(array_cv as usize))
+        }
+        _ => None,
     };
     let sum_ptr = slot_base.add(plan.sum_tmp as usize);
     let post_ptr = plan.post_tmp.map(|slot| slot_base.add(slot as usize));
@@ -2732,6 +2741,7 @@ unsafe fn run_quick_long_accumulate_loop(
             plan.term,
             QuickLongTerm::InductionPlusConst { term_tmp, .. }
                 | QuickLongTerm::InductionPlusCv { term_tmp, .. }
+                | QuickLongTerm::PackedArrayIndex { term_tmp, .. }
                 if quick_loop_slot_has_heap(frame, term_tmp)
         )
         || matches!(
@@ -2749,6 +2759,12 @@ unsafe fn run_quick_long_accumulate_loop(
         })
         || term_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || addend_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+        || array_ptr.is_some_and(|ptr| {
+            (*ptr)
+                .as_array()
+                .and_then(|array| array.packed_values())
+                .is_none()
+        })
         || (*sum_ptr).value_type() != ValueType::Long
         || post_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || bound_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
@@ -2764,6 +2780,17 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongBound::Const(value) => value,
     };
     let invariant_addend = addend_ptr.map(|ptr| (*ptr).raw_long());
+    let packed_array = array_ptr.map(|ptr| {
+        let values = (*ptr)
+            .as_array()
+            .unwrap_unchecked()
+            .packed_values()
+            .unwrap_unchecked();
+        QuickPackedLongArray {
+            values: values.as_ptr(),
+            len: values.len(),
+        }
+    });
     let mut iterations = 0u64;
     let mut last_term = 0i64;
     let mut last_induction = 0i64;
@@ -2822,6 +2849,32 @@ unsafe fn run_quick_long_accumulate_loop(
                         return Ok(QuickLoopOutcome::Deoptimized);
                     }
                 }
+            }
+            QuickLongTerm::PackedArrayIndex { fetch_ip, .. } => {
+                let packed = packed_array.unwrap_unchecked();
+                let fetched = if induction >= 0 && (induction as usize) < packed.len {
+                    &*packed.values.add(induction as usize)
+                } else {
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(accumulator_ptr, accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(fetch_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                };
+                if fetched.value_type() != ValueType::Long {
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(accumulator_ptr, accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(fetch_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+                fetched.raw_long()
             }
         };
 
@@ -2907,6 +2960,27 @@ unsafe fn commit_quick_long_ops_slots(
         dirty_bool_mask &= dirty_bool_mask - 1;
         Value::write_bool(slot_base.add(slot), slots[slot] != 0);
     }
+}
+
+/// Borrowed view of an immutable packed array for one guarded region.
+///
+/// The planner rejects writes and calls in the region, the array slot cannot
+/// overlap a scalar output, and PHP array aliases detach through copy-on-write.
+/// The source `Value` therefore keeps this allocation alive and stable until
+/// the region completes or takes a side exit.
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickPackedLongArray {
+    values: *const Value,
+    len: usize,
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickPackedLongArray {
+    const EMPTY: Self = Self {
+        values: std::ptr::null(),
+        len: 0,
+    };
 }
 
 #[derive(Clone, Copy)]
@@ -3342,7 +3416,9 @@ unsafe fn run_quick_long_ops_loop(
 ) -> Result<QuickLoopOutcome, VmError> {
     if (*frame).num_cvs != op_array.num_cvs
         || (*frame).num_cvs + (*frame).num_temps > 64
-        || (*frame).heap_bitmap & plan.involved_mask != 0
+        || (*frame).heap_bitmap
+            & (plan.involved_mask & !plan.packed_array_input_mask)
+            != 0
     {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
@@ -3366,6 +3442,22 @@ unsafe fn run_quick_long_ops_loop(
         return dispatch_quick_long_conditional_kernel(
             eg, frame, op_array, plan, slot_base, slots, kernel, body,
         );
+    }
+
+    let mut packed_arrays = [QuickPackedLongArray::EMPTY; 64];
+    let mut array_mask = plan.packed_array_input_mask;
+    while array_mask != 0 {
+        let slot = array_mask.trailing_zeros() as usize;
+        array_mask &= array_mask - 1;
+        let value = &*slot_base.add(slot);
+        let Some(values) = value.as_array().and_then(|array| array.packed_values()) else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        packed_arrays[slot] = QuickPackedLongArray {
+            values: values.as_ptr(),
+            len: values.len(),
+        };
     }
 
     let mut dirty_long_mask = 0u64;
@@ -3438,6 +3530,43 @@ unsafe fn run_quick_long_ops_loop(
                     return Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
+            QuickLongOp::FetchPackedLong {
+                array,
+                index,
+                result,
+                next_target,
+                resume_ip,
+            } => {
+                let index = quick_long_operand(&slots, index);
+                let packed = packed_arrays[array as usize];
+                let fetched = if index >= 0 && (index as usize) < packed.len {
+                    &*packed.values.add(index as usize)
+                } else {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                };
+                if fetched.value_type() != ValueType::Long {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+                slots[result as usize] = fetched.raw_long();
+                dirty_long_mask |= 1u64 << result;
+                next_target
+            }
             QuickLongOp::Add {
                 lhs,
                 rhs,

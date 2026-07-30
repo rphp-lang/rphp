@@ -491,6 +491,92 @@ echo $i;
 }
 
 #[test]
+fn quick_long_ops_read_packed_long_array() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 1000);
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$i];
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "500500|1000"
+    );
+}
+
+#[test]
+fn quick_packed_array_read_deoptimizes_for_missing_key() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 100);
+$sum = 0;
+$last = 0;
+for ($i = 0; $i < 200; $i++) {
+    $last = $values[$i];
+    $sum += $i;
+}
+echo $sum;
+echo '|';
+echo is_null($last) ? 'null' : 'value';
+echo '|';
+echo $i;
+"
+        ),
+        "19900|null|200"
+    );
+}
+
+#[test]
+fn quick_packed_array_read_deoptimizes_for_non_long_value() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 100);
+$values[99] = 'marker';
+$sum = 0;
+$last = 0;
+for ($i = 0; $i < 100; $i++) {
+    $last = $values[$i];
+    $sum += $i;
+}
+echo $sum;
+echo '|';
+echo $last;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|marker|100"
+    );
+}
+
+#[test]
+fn quick_packed_array_guard_rejects_hash_storage() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 100);
+$values['extra'] = 999;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$i];
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "5050|100"
+    );
+}
+
+#[test]
 fn quick_conditional_add_assign_deoptimizes_at_overflow() {
     assert_eq!(
         run_php(

@@ -764,3 +764,75 @@ The next performance work should widen useful program coverage rather than
 specialize more predicate combinations without evidence. Scalar array reads
 remain the first materially different boundary: they need an immutable
 layout/version guard, key-existence side exits, and correct value ownership.
+
+## Phase 2g result: guarded packed-array long reads
+
+Packed arrays in this runtime are reference-counted and use copy-on-write.
+That makes a read-only quick region possible without a global mutation
+version:
+
+- the planner rejects array writes, calls, and every other unsupported opcode;
+- an array input slot cannot overlap a scalar output slot;
+- reference values fail the `Array` guard;
+- mutations through another ordinary array value detach when the `Rc` is
+  shared, leaving the guarded allocation stable.
+
+At region entry the executor validates `Array` plus packed storage and records
+a borrowed pointer/length view. The source `Value` remains live for the whole
+region. Hash storage takes a guard failure. A negative or out-of-range index,
+a missing key, or a non-long element commits preceding scalar work and resumes
+at the original `FetchDimR`; no fetch result is fabricated or committed before
+that side exit.
+
+The general typed program gains `FetchPackedLong`. Its array inputs have a
+separate mask, while CV/TMP integer indices remain in the long-input mask.
+This lets more complex closed scalar programs use packed reads without
+pretending that the array itself is a scalar.
+
+The common recurrence
+
+```php
+for ($i = 0; $i < $n; $i++) {
+    $sum += $values[$i];
+}
+```
+
+is also represented as `QuickLongTerm::PackedArrayIndex`. It reuses the direct
+accumulator executor, so the hot loop performs one checked packed read, one
+checked addition, and the induction update without typed-operation dispatch.
+The general `FetchPackedLong` remains available for shapes with additional
+assignments or arithmetic.
+
+A new benchmark builds `range(1, 1_000_000)` before timing and sums every
+element. Eleven rounds alternated Phase 2f, Phase 2g, and PHP process order and
+used the elapsed time reported inside the script:
+
+| Engine | Median | Relative to Phase 2f |
+|---|---:|---:|
+| Phase 2f rphp | 0.01696 s | 1.000x |
+| Phase 2g rphp | 0.00136 s | 0.080x |
+| PHP 8.4.12, CLI opcache disabled | 0.00432 s | 0.255x |
+
+The retained implementation is therefore about 12.5x faster than the prior
+rphp path and 3.18x faster than PHP without JIT on this packed-long
+recurrence.
+
+The existing scalar acceptance workloads were rerun against the saved Phase
+2f binary. Nested and modulo medians did not regress. An additional eight-pair
+branch run with 100 process repetitions per sample produced a median
+candidate/reference ratio of `0.996x`.
+
+Validation now includes eight quick-plan detector tests and 29 quick-loop
+end-to-end tests. Array cases cover:
+
+- direct packed-long accumulation;
+- the general typed fetch operation;
+- exact missing-key and non-long-element side exits after the hot threshold;
+- rejection of hash storage;
+- unchanged overflow and conditional fallback behavior.
+
+The complete test suite passes with default features and with
+`--no-default-features`. Future array coverage should be driven separately:
+hash lookups need a stable hash-layout contract, while writes require explicit
+copy-on-write and mutation-version semantics and must not reuse this borrowed
+packed view.
