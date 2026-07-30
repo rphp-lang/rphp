@@ -836,3 +836,66 @@ The complete test suite passes with default features and with
 hash lookups need a stable hash-layout contract, while writes require explicit
 copy-on-write and mutation-version semantics and must not reuse this borrowed
 packed view.
+
+## Phase 2h result: guarded hash-array reads
+
+The packed-only guard was widened without weakening its ownership contract.
+`QuickLongArray` now records either the existing raw packed value slice or a
+borrowed pointer to an immutable `PhpArray` in hash storage. The source array
+slot remains live, calls and writes are still rejected by the planner, and COW
+keeps aliases from mutating the guarded allocation.
+
+`QuickArrayIndex` distinguishes long keys from string literals. Canonical
+numeric string literals use the same integer-key normalization as baseline
+`FetchDimR`; other literals remain string keys. The typed program consequently
+uses the general `FetchArrayLong` operation and one array-input mask for both
+storage layouts. Missing keys and non-long values commit earlier scalar state
+and resume at the original fetch instruction.
+
+The direct accumulator executor also accepts constant integer and string
+indices. Since both the array and literal key are invariant in that closed
+region, it validates and loads the long once at activation. A failed invariant
+lookup is a guard failure before any quick state is committed. Dynamic integer
+indices continue to perform a checked lookup per iteration.
+
+The array representation received two general changes based on the first hash
+profile:
+
+- integer keys use a dedicated SplitMix64-based hasher instead of the default
+  string-oriented randomized hasher; string keys retain the default hasher;
+- hash storage first tries a validated ordered-entry position derived from its
+  first integer key. This covers arrays that transitioned from packed storage
+  and contiguous non-zero integer runs. Any hole, reordering, string prefix, or
+  other mismatch falls through to the integer hash index.
+
+The positional path is an optimization, not a layout assumption: the stored
+`ArrayKey` must equal the requested key before its value is returned. Removal,
+cloning, negative keys, irregular keys, and the fallback index have dedicated
+tests.
+
+Before Phase 2h, five-run medians were `0.11866 s` for a one-million-element
+array transitioned to hash storage and `0.40995 s` for ten million reads of one
+string key. Nine final rounds alternated rphp and PHP execution order:
+
+| Workload | Phase 2h rphp | PHP 8.4.12, no CLI opcache | Result |
+|---|---:|---:|---:|
+| Packed integer keys, 1M reads | 0.00160 s | 0.00444 s | rphp 2.78x faster |
+| Hash storage, contiguous integer keys, 1M reads | 0.00508 s | 0.00535 s | rphp 1.05x faster |
+| Hash storage, irregular stride-7 keys, 250K reads | 0.00693 s | 0.00175 s | rphp 3.96x slower |
+| Invariant string key, 10M reads | 0.00837 s | 0.07850 s | rphp 9.38x faster |
+
+The contiguous hash recurrence is about 23.4x faster than the previous rphp
+path; the invariant string recurrence is about 49.0x faster. The irregular
+benchmark deliberately defeats the positional path. Quick execution still
+reduces its median from `0.01320 s` with quick loops disabled to `0.00693 s`,
+but its remaining gap is now the next concrete target: the generic typed-op
+dispatch around each lookup and the fallback integer table, rather than
+baseline PHP value ownership.
+
+Validation contains ten quick-plan tests and 35 quick-loop end-to-end tests.
+New cases cover integer and string hash reads, numeric-string normalization,
+the general typed string-fetch shape, missing/non-long dynamic-key side exits,
+and hash-index behavior after removal and clone. The complete suite passes
+with default features and with `--no-default-features`. Five 200-process
+aggregate CPU comparisons of the nested scalar workload also stayed within
+normal run noise of the saved Phase 2f binary.

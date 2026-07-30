@@ -24,6 +24,12 @@ pub enum QuickLongBound {
     Const(i64),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickArrayIndex {
+    Long(QuickLongOperand),
+    StringLiteral(u16),
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum QuickLongTerm {
     /// Add the induction variable directly to the accumulator.
@@ -40,9 +46,10 @@ pub enum QuickLongTerm {
         term_tmp: u16,
         term_ip: usize,
     },
-    /// Read a long from an invariant packed array at the induction index.
-    PackedArrayIndex {
+    /// Read a long from an invariant array using an integer or string key.
+    ArrayIndex {
         array_cv: u16,
+        index: QuickArrayIndex,
         term_tmp: u16,
         fetch_ip: usize,
     },
@@ -179,9 +186,9 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
-    FetchPackedLong {
+    FetchArrayLong {
         array: u16,
-        index: QuickLongOperand,
+        index: QuickArrayIndex,
         result: u16,
         next_target: QuickLongTarget,
         resume_ip: usize,
@@ -282,7 +289,7 @@ impl QuickLongOp {
                 resolve(next_target)
             }
             Self::ModConst { next_target, .. }
-            | Self::FetchPackedLong { next_target, .. }
+            | Self::FetchArrayLong { next_target, .. }
             | Self::Add { next_target, .. }
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
@@ -313,7 +320,7 @@ pub struct QuickLongOpsLoop {
     pub long_input_mask: u64,
     pub long_output_mask: u64,
     pub bool_output_mask: u64,
-    pub packed_array_input_mask: u64,
+    pub array_input_mask: u64,
     pub involved_mask: u64,
 }
 
@@ -332,6 +339,21 @@ fn long_literal(op_array: &OpArray, index: u16) -> Option<i64> {
         .literals
         .get(index as usize)
         .and_then(Value::as_long)
+}
+
+fn array_literal_index(op_array: &OpArray, index: u16) -> Option<QuickArrayIndex> {
+    let value = op_array.literals.get(index as usize)?;
+    if let Some(value) = value.as_long() {
+        return Some(QuickArrayIndex::Long(QuickLongOperand::Const(value)));
+    }
+
+    let value = value.as_str()?;
+    if let Ok(integer) = value.parse::<i64>() {
+        if integer.to_string() == value {
+            return Some(QuickArrayIndex::Long(QuickLongOperand::Const(integer)));
+        }
+    }
+    Some(QuickArrayIndex::StringLiteral(index))
 }
 
 /// Recognize one side-effect-free scalar loop region.
@@ -470,8 +492,17 @@ pub fn detect_long_accumulate_loop(
                 }
             }
             (OpCode::FetchDimR, OpType::Cv, OpType::Cv) if first_body.op2 == induction_cv => {
-                QuickLongTerm::PackedArrayIndex {
+                QuickLongTerm::ArrayIndex {
                     array_cv: first_body.op1,
+                    index: QuickArrayIndex::Long(QuickLongOperand::Slot(induction_cv)),
+                    term_tmp: first_body.result,
+                    fetch_ip: header_ip + 2,
+                }
+            }
+            (OpCode::FetchDimR, OpType::Cv, OpType::Const) => {
+                QuickLongTerm::ArrayIndex {
+                    array_cv: first_body.op1,
+                    index: array_literal_index(op_array, first_body.op2)?,
                     term_tmp: first_body.result,
                     fetch_ip: header_ip + 2,
                 }
@@ -521,7 +552,7 @@ pub fn detect_long_accumulate_loop(
         )
         || matches!(
             term,
-            QuickLongTerm::PackedArrayIndex { array_cv, .. }
+            QuickLongTerm::ArrayIndex { array_cv, .. }
                 if array_cv == induction_cv || array_cv == accumulator_cv
         )
     {
@@ -536,7 +567,7 @@ pub fn detect_long_accumulate_loop(
         QuickLongTerm::Induction => {}
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
-        | QuickLongTerm::PackedArrayIndex { term_tmp, .. } => {
+        | QuickLongTerm::ArrayIndex { term_tmp, .. } => {
             temporary_slots.push(term_tmp);
         }
     }
@@ -565,7 +596,7 @@ pub fn detect_long_accumulate_loop(
         )
         || matches!(
             term,
-            QuickLongTerm::PackedArrayIndex { array_cv, .. }
+            QuickLongTerm::ArrayIndex { array_cv, .. }
                 if array_cv as u32 >= op_array.num_cvs
         )
     {
@@ -674,7 +705,7 @@ pub fn detect_long_ops_loop(
     let mut long_input_mask = 0u64;
     let mut long_output_mask = 0u64;
     let mut bool_output_mask = 0u64;
-    let mut packed_array_input_mask = 0u64;
+    let mut array_input_mask = 0u64;
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_post_inc = false;
@@ -872,18 +903,16 @@ pub fn detect_long_ops_loop(
                 let index = match instruction.op2_type {
                     OpType::Cv | OpType::Tmp => {
                         add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
-                        QuickLongOperand::Slot(instruction.op2)
+                        QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
                     }
-                    OpType::Const => {
-                        QuickLongOperand::Const(long_literal(op_array, instruction.op2)?)
-                    }
+                    OpType::Const => array_literal_index(op_array, instruction.op2)?,
                     _ => return None,
                 };
-                add_mask_slot(&mut packed_array_input_mask, array, total_slots)?;
+                add_mask_slot(&mut array_input_mask, array, total_slots)?;
                 add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
                 let resume_ip = ip;
                 ip += 1;
-                QuickLongOp::FetchPackedLong {
+                QuickLongOp::FetchArrayLong {
                     array,
                     index,
                     result: instruction.result,
@@ -1159,7 +1188,7 @@ pub fn detect_long_ops_loop(
             QuickLongOp::BranchUnlessLt { resume_ip, .. }
             | QuickLongOp::BranchUnlessEq { resume_ip, .. }
             | QuickLongOp::ModConst { resume_ip, .. }
-            | QuickLongOp::FetchPackedLong { resume_ip, .. }
+            | QuickLongOp::FetchArrayLong { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
             | QuickLongOp::PostIncJump { resume_ip, .. }
@@ -1247,12 +1276,12 @@ pub fn detect_long_ops_loop(
 
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
-        || packed_array_input_mask & (long_mask | bool_output_mask) != 0
+        || array_input_mask & (long_mask | bool_output_mask) != 0
     {
         return None;
     }
     let involved_mask =
-        long_input_mask | long_output_mask | bool_output_mask | packed_array_input_mask;
+        long_input_mask | long_output_mask | bool_output_mask | array_input_mask;
 
     Some(QuickLongOpsLoop {
         header_ip,
@@ -1263,7 +1292,7 @@ pub fn detect_long_ops_loop(
         long_input_mask,
         long_output_mask,
         bool_output_mask,
-        packed_array_input_mask,
+        array_input_mask,
         involved_mask,
     })
 }
@@ -1381,7 +1410,32 @@ for ($i = 0; $i < 4; $i++) {
         );
         assert!(matches!(
             plan.term,
-            QuickLongTerm::PackedArrayIndex { array_cv: 0, .. }
+            QuickLongTerm::ArrayIndex {
+                array_cv: 0,
+                index: QuickArrayIndex::Long(QuickLongOperand::Slot(2)),
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn detects_string_literal_array_index_as_accumulate_term() {
+        let plan = quick_plan(
+            "<?php
+$values = ['hot' => 7];
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values['hot'];
+}
+",
+        );
+        assert!(matches!(
+            plan.term,
+            QuickLongTerm::ArrayIndex {
+                array_cv: 0,
+                index: QuickArrayIndex::StringLiteral(_),
+                ..
+            }
         ));
     }
 
@@ -1445,13 +1499,36 @@ for ($i = 0; $i < 4; $i++) {
         assert!(plan
             .ops
             .iter()
-            .any(|op| matches!(op, QuickLongOp::FetchPackedLong { .. })));
-        assert_ne!(plan.packed_array_input_mask, 0);
+            .any(|op| matches!(op, QuickLongOp::FetchArrayLong { .. })));
+        assert_ne!(plan.array_input_mask, 0);
         assert_eq!(
-            plan.packed_array_input_mask
+            plan.array_input_mask
                 & (plan.long_input_mask | plan.long_output_mask | plan.bool_output_mask),
             0
         );
+    }
+
+    #[test]
+    fn detects_string_literal_hash_read_as_typed_op() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['hot' => 7];
+$sum = 0;
+$last = 0;
+for ($i = 0; $i < 100; $i++) {
+    $last = $values['hot'];
+    $sum += $i;
+}
+",
+        );
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            QuickLongOp::FetchArrayLong {
+                index: QuickArrayIndex::StringLiteral(_),
+                ..
+            }
+        )));
+        assert_ne!(plan.array_input_mask, 0);
     }
 
     #[test]

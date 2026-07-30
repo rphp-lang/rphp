@@ -1,5 +1,6 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
 use std::rc::Rc;
 
@@ -220,6 +221,59 @@ pub struct PhpArray {
     next_int_key: i64,
 }
 
+/// Fast deterministic hashing for integer-only PHP array keys.
+///
+/// `std::HashMap` otherwise uses the DOS-resistant general-purpose string
+/// hasher for every integer lookup. SplitMix64's finalizer is a bijection over
+/// `u64`, so distinct integer keys retain full-width entropy without paying
+/// that general hashing cost. String keys keep the randomized default hasher.
+#[derive(Default)]
+struct IntKeyHasher {
+    hash: u64,
+}
+
+impl IntKeyHasher {
+    #[inline(always)]
+    fn mix(mut value: u64) -> u64 {
+        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        value ^ (value >> 31)
+    }
+}
+
+impl Hasher for IntKeyHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.hash
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let mut value = 0xcbf2_9ce4_8422_2325u64;
+        for byte in bytes {
+            value ^= u64::from(*byte);
+            value = value.wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        self.hash = Self::mix(value);
+    }
+
+    #[inline(always)]
+    fn write_i64(&mut self, value: i64) {
+        self.hash = Self::mix(value as u64);
+    }
+
+    #[inline(always)]
+    fn write_u64(&mut self, value: u64) {
+        self.hash = Self::mix(value);
+    }
+}
+
+type IntIndex = HashMap<i64, usize, BuildHasherDefault<IntKeyHasher>>;
+
+#[inline]
+fn int_index_with_capacity(capacity: usize) -> IntIndex {
+    IntIndex::with_capacity_and_hasher(capacity, BuildHasherDefault::default())
+}
+
 /// Internal storage representation. Not exposed outside PhpArray.
 enum ArrayStorage {
     /// Sequential 0..N-1 integer keys — values only, no key storage.
@@ -228,7 +282,7 @@ enum ArrayStorage {
     Hash {
         entries: Vec<(ArrayKey, Value)>,
         str_index: HashMap<String, usize>,
-        int_index: HashMap<i64, usize>,
+        int_index: IntIndex,
     },
 }
 
@@ -251,7 +305,7 @@ impl PhpArray {
         if let ArrayStorage::Packed(values) = &mut self.storage {
             let len = values.len();
             let mut entries = Vec::with_capacity(len);
-            let mut int_index = HashMap::with_capacity(len);
+            let mut int_index = int_index_with_capacity(len);
             for (i, val) in std::mem::take(values).into_iter().enumerate() {
                 int_index.insert(i as i64, i);
                 entries.push((ArrayKey::Int(i as i64), val));
@@ -356,6 +410,28 @@ impl PhpArray {
                 }
             }
             ArrayStorage::Hash { entries, int_index, .. } => {
+                // Ordered PHP arrays commonly retain a contiguous integer run
+                // after transitioning to hash storage. Derive the likely entry
+                // position from its first key and validate it; irregular
+                // layouts fall through to the general integer hash index.
+                if let Some((ArrayKey::Int(first_key), _)) = entries.first() {
+                    if let Some(position) = key
+                        .checked_sub(*first_key)
+                        .and_then(|offset| usize::try_from(offset).ok())
+                    {
+                        if let Some((ArrayKey::Int(found_key), value)) = entries.get(position) {
+                            if *found_key == key {
+                                return Some(value);
+                            }
+                        }
+                    }
+                } else if key >= 0 {
+                    if let Some((ArrayKey::Int(found_key), value)) = entries.get(key as usize) {
+                        if *found_key == key {
+                            return Some(value);
+                        }
+                    }
+                }
                 int_index.get(&key).map(|&idx| &entries[idx].1)
             }
         }
@@ -533,7 +609,7 @@ impl PhpArray {
     /// Rebuild index entries from position `from` onward (after remove/shift).
     fn reindex_entries(
         entries: &[(ArrayKey, Value)],
-        int_index: &mut HashMap<i64, usize>,
+        int_index: &mut IntIndex,
         str_index: &mut HashMap<String, usize>,
         from: usize,
     ) {
@@ -629,6 +705,43 @@ impl std::fmt::Debug for PhpArray {
                     .finish()
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod php_array_tests {
+    use super::{ArrayKey, PhpArray, Value};
+
+    #[test]
+    fn integer_index_handles_offset_and_irregular_hash_keys() {
+        let mut array = PhpArray::new();
+        for key in 1_000_000..1_000_100 {
+            array.set_int(key, Value::long(key * 2));
+        }
+        array.set_str("separator", Value::long(7));
+        array.set_int(-11, Value::long(22));
+        array.set_int(9_000_007, Value::long(33));
+
+        assert_eq!(array.get_int(1_000_000).and_then(Value::as_long), Some(2_000_000));
+        assert_eq!(array.get_int(1_000_099).and_then(Value::as_long), Some(2_000_198));
+        assert_eq!(array.get_int(-11).and_then(Value::as_long), Some(22));
+        assert_eq!(array.get_int(9_000_007).and_then(Value::as_long), Some(33));
+        assert!(array.get_int(1_000_101).is_none());
+    }
+
+    #[test]
+    fn integer_index_remains_valid_after_remove_and_clone() {
+        let mut array = PhpArray::new();
+        for key in [17, 3, 9001, -4, 42] {
+            array.set_int(key, Value::long(key));
+        }
+        assert!(array.remove(&ArrayKey::Int(9001)));
+
+        let cloned = array.clone();
+        for key in [17, 3, -4, 42] {
+            assert_eq!(cloned.get_int(key).and_then(Value::as_long), Some(key));
+        }
+        assert!(cloned.get_int(9001).is_none());
     }
 }
 
