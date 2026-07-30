@@ -322,6 +322,50 @@ echo $i;
 }
 
 #[test]
+fn quick_less_than_conditional_kernel_deoptimizes_at_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$cutoff = 1000;
+$sum = PHP_INT_MAX - 100000;
+for ($i = 0; $i < $n; $i++) {
+    if ($i < $cutoff) {
+        $sum += $i;
+    }
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|1000"
+    );
+}
+
+#[test]
+fn quick_conditional_kernel_falls_back_for_direct_equality() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$needle = 500;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    if ($i == $needle) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "500|1000"
+    );
+}
+
+#[test]
 fn quick_long_ops_deoptimize_nested_accumulator_overflow() {
     assert_eq!(
         run_php(
@@ -422,6 +466,27 @@ echo $i;
 "
         ),
         "-100|100"
+    );
+}
+
+#[test]
+fn quick_conditional_kernel_falls_back_for_modulo_less_than() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    if (($i % 3) < 2) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "333000|1000"
     );
 }
 

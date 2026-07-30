@@ -71,13 +71,13 @@ pub struct QuickLongAccumulateLoop {
     pub post_inc_ip: usize,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickLongOperand {
     Slot(u16),
     Const(i64),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickLongCondition {
     Lt { lhs: u16, rhs: QuickLongOperand },
     Eq { lhs: u16, rhs: QuickLongOperand },

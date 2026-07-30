@@ -695,3 +695,72 @@ Detection tests cover both commutative CV operand orders. The existing nested
 overflow end-to-end test exercises exact deoptimization through the new
 direct path. The complete test suite passes with default features and with
 `--no-default-features`.
+
+## Phase 2f result: stable conditional plan-shape kernels
+
+Phase 2e left the two conditional workloads 31-45% behind PHP even though
+their complete control flow had already been validated and compacted. The
+remaining cost was executing three or four `QuickLongOp` dispatches on every
+iteration.
+
+Phase 2f reuses the existing typed plan as its semantic source rather than
+adding another PHP-source detector. Once per region activation it recognizes
+two stable operation graphs:
+
+1. loop-header less-than, conditional less-than `AddAssign`, and fused
+   `PostIncLoopLt`;
+2. loop-header less-than, `ModConst`, conditional equality `AddAssign`, and
+   fused `PostIncLoopLt`.
+
+Recognition checks the entry operation, every internal target index, the
+shared external exit, the copied header condition in `PostIncLoopLt`, and the
+precise resume positions for modulo, addition, and post-increment. A mismatch
+returns to the general typed executor. Direct equality without modulo and
+modulo followed by less-than are deliberately tested fallback cases.
+
+The selected graph runs through a shared conditional kernel. Its body
+predicate is monomorphized for the two accepted shapes, so the hot loop has no
+per-operation enum dispatch. It retains:
+
+- the original one-time heap and long guards;
+- the fixed scalar slot buffer and separate dirty long/boolean masks;
+- exact baseline resume positions after modulo, addition, or increment
+  failure;
+- the 32-iteration interrupt check and the same next-IP reconstruction;
+- the original completion, deoptimization, and guard accounting.
+
+An initial four-predicate experiment produced the same speed but about 14 KiB
+of additional machine code. The retained version specializes only the two
+measured stable families; its extractor, dispatcher, and two kernels occupy
+approximately 4.6 KiB. The general `run_quick_long_ops_loop` remains a
+separate approximately 3.7 KiB fallback.
+
+Six long rounds alternated the Phase 2e and Phase 2f release binaries:
+
+| Workload | median Phase 2f / Phase 2e | CPU reduction |
+|---|---:|---:|
+| Nested invariant-CV accumulation | 1.000x | no regression |
+| Less-than conditional addition | 0.559x | 44.1% |
+| Modulo/equality conditional addition | 0.491x | 50.9% |
+
+Seven runs then compared the elapsed time measured inside each script against
+Homebrew PHP 8.4.12 with CLI opcache disabled:
+
+| Workload | rphp median | PHP median | rphp / PHP |
+|---|---:|---:|---:|
+| Less-than conditional addition | 0.02172 s | 0.02842 s | 0.764x |
+| Modulo/equality conditional addition | 0.02341 s | 0.03657 s | 0.640x |
+
+The two branch workloads are now approximately 1.31x and 1.56x faster than
+PHP without JIT. Together with Phase 2e, all three scalar acceptance workloads
+now beat PHP while retaining baseline side exits.
+
+The quick-loop end-to-end suite now contains 25 tests. New cases cover
+overflow in the specialized less-than conditional addition and explicit
+fallback for the two nearby unsupported graphs. The complete test suite
+passes with default features and with `--no-default-features`.
+
+The next performance work should widen useful program coverage rather than
+specialize more predicate combinations without evidence. Scalar array reads
+remain the first materially different boundary: they need an immutable
+layout/version guard, key-existence side exits, and correct value ownership.
