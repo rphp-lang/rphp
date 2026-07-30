@@ -8,3 +8,4 @@ pub mod generator;
 pub mod stats;
 pub mod planner;
 pub mod hot;
+pub mod quick;

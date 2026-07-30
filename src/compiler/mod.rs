@@ -47,7 +47,7 @@ pub struct OpArray {
     /// Basic block metadata, computed once after instruction finalization.
     pub block_info: Vec<BlockInfo>,
     /// Per-block execution counters (for hot-block detection).
-    pub block_counters: Vec<u32>,
+    pub block_counters: Vec<Cell<u32>>,
     /// Per-block execution plans (Interpret / Macro / Deoptimized).
     pub block_plans: Vec<BlockPlan>,
     /// Maps instruction IP -> block index.
@@ -231,7 +231,7 @@ impl OpArray {
         // Scan for jump targets and instructions after branches
         for (i, instr) in self.instructions.iter().enumerate() {
             match instr.opcode {
-                OpCode::Jmp => {
+                OpCode::Jmp | OpCode::QuickLongLoopJmp => {
                     // Jmp stores target in op1
                     let target = instr.op1 as usize;
                     if target < n {
@@ -292,9 +292,59 @@ impl OpArray {
 
         let num_blocks = blocks.len();
         self.block_info = blocks;
-        self.block_counters = vec![0u32; num_blocks];
+        self.block_counters = (0..num_blocks).map(|_| Cell::new(0)).collect();
         self.block_plans = (0..num_blocks).map(|_| BlockPlan::Interpret).collect();
         self.ip_to_block = ip_to_block;
+    }
+
+    /// Precompute closed scalar loop regions and mark their backedges.
+    ///
+    /// Matching `Jmp` instructions are rewritten to the dedicated
+    /// `QuickLongLoopJmp`; ordinary jumps remain unchanged. `extended_value`
+    /// stores the header block index + 1, so runtime activation does not scan
+    /// instructions or build a plan.
+    pub fn prepare_quick_loops(&mut self) {
+        if !cfg!(feature = "quick-loops") {
+            return;
+        }
+        if std::env::var_os("RPHP_DISABLE_QUICK_LOOPS").is_some() {
+            return;
+        }
+
+        let mut candidates = Vec::new();
+
+        for backedge_ip in 0..self.instructions.len() {
+            let backedge = self.instructions[backedge_ip];
+            if backedge.opcode != OpCode::Jmp {
+                continue;
+            }
+            let header_ip = backedge.op1 as usize;
+            if header_ip >= backedge_ip {
+                continue;
+            }
+            let plan = crate::vm::quick::detect_long_accumulate_loop(
+                self,
+                header_ip,
+                backedge_ip,
+            )
+            .map(BlockPlan::QuickLongAccumulate)
+            .or_else(|| {
+                crate::vm::quick::detect_long_ops_loop(self, header_ip, backedge_ip)
+                    .map(BlockPlan::QuickLongOps)
+            });
+            if let Some(plan) = plan {
+                let block_idx = *self.ip_to_block.get(header_ip).unwrap_or(&u16::MAX);
+                if block_idx != u16::MAX {
+                    candidates.push((backedge_ip, block_idx, plan));
+                }
+            }
+        }
+
+        for (backedge_ip, block_idx, plan) in candidates {
+            self.block_plans[block_idx as usize] = plan;
+            self.instructions[backedge_ip].opcode = OpCode::QuickLongLoopJmp;
+            self.instructions[backedge_ip].extended_value = block_idx as u32 + 1;
+        }
     }
 }
 
@@ -342,6 +392,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::DoFcall
                 | OpCode::Return
                 | OpCode::Jmp
+                | OpCode::QuickLongLoopJmp
                 | OpCode::JmpZ
                 | OpCode::JmpNZ
                 | OpCode::NullSafeCheck
@@ -381,6 +432,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         op_array.init_cache();
     }
     op_array.compute_blocks();
+    op_array.prepare_quick_loops();
     let is_fast_scalar = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -446,6 +498,7 @@ pub fn make_user_function_typed(
         op_array.init_cache();
     }
     op_array.compute_blocks();
+    op_array.prepare_quick_loops();
     // FastScalar: tightest path for simple fixed-arity scalar functions.
     // Requires NO actual type hints — DoFcall FastScalar skips type checking entirely.
     let has_only_scalar_hints = param_type_hints.iter().all(|h| matches!(h,

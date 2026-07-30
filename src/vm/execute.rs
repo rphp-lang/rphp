@@ -9,6 +9,12 @@ use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
+use super::quick::{
+    QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongOp,
+    QuickLongOperand, QuickLongOpsLoop, QuickLongTerm,
+    QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
+    QUICK_LOOP_HOT_THRESHOLD,
+};
 // Planner module is kept as scaffolding for future hot-executor architecture.
 // Not used in baseline dispatch loop — will be integrated via function-entry dispatch.
 
@@ -2662,6 +2668,663 @@ fn op_concat(
     Ok(())
 }
 
+#[cfg(feature = "quick-loops")]
+enum QuickLoopOutcome {
+    Completed,
+    Deoptimized,
+    GuardFailed,
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn quick_loop_slot_has_heap(frame: *mut ExecuteData, slot: u16) -> bool {
+    (*frame).heap_bitmap & (1u64 << slot) != 0
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn run_quick_long_accumulate_loop(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: QuickLongAccumulateLoop,
+) -> Result<QuickLoopOutcome, VmError> {
+    if (*frame).num_cvs != op_array.num_cvs
+        || (*frame).num_cvs + (*frame).num_temps > 64
+    {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+
+    let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    let induction_ptr = slot_base.add(plan.induction_cv as usize);
+    let accumulator_ptr = slot_base.add(plan.accumulator_cv as usize);
+    let condition_ptr = plan
+        .condition_tmp
+        .map(|slot| slot_base.add(slot as usize));
+    let term_ptr = match plan.term {
+        QuickLongTerm::Induction => None,
+        QuickLongTerm::InductionPlusConst { term_tmp, .. } => {
+            Some(slot_base.add(term_tmp as usize))
+        }
+    };
+    let sum_ptr = slot_base.add(plan.sum_tmp as usize);
+    let post_ptr = plan.post_tmp.map(|slot| slot_base.add(slot as usize));
+
+    let bound_ptr = match plan.bound {
+        QuickLongBound::Cv(slot) => Some(slot_base.add(slot as usize)),
+        QuickLongBound::Const(_) => None,
+    };
+
+    if quick_loop_slot_has_heap(frame, plan.induction_cv)
+        || quick_loop_slot_has_heap(frame, plan.accumulator_cv)
+        || plan
+            .condition_tmp
+            .is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
+        || matches!(
+            plan.term,
+            QuickLongTerm::InductionPlusConst { term_tmp, .. }
+                if quick_loop_slot_has_heap(frame, term_tmp)
+        )
+        || quick_loop_slot_has_heap(frame, plan.sum_tmp)
+        || plan.post_tmp.is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
+        || matches!(plan.bound, QuickLongBound::Cv(slot) if quick_loop_slot_has_heap(frame, slot))
+        || (*induction_ptr).value_type() != ValueType::Long
+        || (*accumulator_ptr).value_type() != ValueType::Long
+        || condition_ptr.is_some_and(|ptr| {
+            !matches!((*ptr).value_type(), ValueType::True | ValueType::False)
+        })
+        || term_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+        || (*sum_ptr).value_type() != ValueType::Long
+        || post_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+        || bound_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+    {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+
+    let mut induction = (*induction_ptr).raw_long();
+    let mut accumulator = (*accumulator_ptr).raw_long();
+    let bound = match plan.bound {
+        QuickLongBound::Cv(_) => (*bound_ptr.unwrap_unchecked()).raw_long(),
+        QuickLongBound::Const(value) => value,
+    };
+    let mut iterations = 0u64;
+    let mut last_term = 0i64;
+    let mut last_induction = 0i64;
+    let mut completed_iteration = false;
+
+    loop {
+        if induction >= bound {
+            Value::write_long(induction_ptr, induction);
+            Value::write_long(accumulator_ptr, accumulator);
+            if let Some(ptr) = condition_ptr {
+                Value::write_bool(ptr, false);
+            }
+            if completed_iteration {
+                if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, last_term);
+                }
+                Value::write_long(sum_ptr, accumulator);
+                if let Some(ptr) = post_ptr {
+                    Value::write_long(ptr, last_induction);
+                }
+            }
+            (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
+            stats::inc_quick_loop_completed(iterations);
+            return Ok(QuickLoopOutcome::Completed);
+        }
+
+        let term = match plan.term {
+            QuickLongTerm::Induction => induction,
+            QuickLongTerm::InductionPlusConst {
+                addend, term_ip, ..
+            } => match induction.checked_add(addend) {
+                Some(value) => value,
+                None => {
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(accumulator_ptr, accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(term_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+        };
+
+        let next_accumulator = match accumulator.checked_add(term) {
+            Some(value) => value,
+            None => {
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, term);
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(QuickLoopOutcome::Deoptimized);
+            }
+        };
+
+        let next_induction = match induction.checked_add(1) {
+            Some(value) => value,
+            None => {
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, next_accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, term);
+                }
+                Value::write_long(sum_ptr, next_accumulator);
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.post_inc_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(QuickLoopOutcome::Deoptimized);
+            }
+        };
+
+        last_induction = induction;
+        last_term = term;
+        induction = next_induction;
+        accumulator = next_accumulator;
+        completed_iteration = true;
+        iterations += 1;
+
+        // One quick iteration represents seven baseline instructions. Checking
+        // every 32 iterations preserves approximately the same interrupt bound
+        // as execute_ex's 256-opcode batch.
+        if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+            Value::write_long(induction_ptr, induction);
+            Value::write_long(accumulator_ptr, accumulator);
+            if let Some(ptr) = condition_ptr {
+                Value::write_bool(ptr, true);
+            }
+            if let Some(ptr) = term_ptr {
+                Value::write_long(ptr, last_term);
+            }
+            Value::write_long(sum_ptr, accumulator);
+            if let Some(ptr) = post_ptr {
+                Value::write_long(ptr, last_induction);
+            }
+            (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+            handle_interrupt(eg)?;
+        }
+    }
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn commit_quick_long_ops_slots(
+    slot_base: *mut Value,
+    slots: &[i64; 64],
+    mut dirty_long_mask: u64,
+    mut dirty_bool_mask: u64,
+) {
+    while dirty_long_mask != 0 {
+        let slot = dirty_long_mask.trailing_zeros() as usize;
+        dirty_long_mask &= dirty_long_mask - 1;
+        Value::write_long(slot_base.add(slot), slots[slot]);
+    }
+    while dirty_bool_mask != 0 {
+        let slot = dirty_bool_mask.trailing_zeros() as usize;
+        dirty_bool_mask &= dirty_bool_mask - 1;
+        Value::write_bool(slot_base.add(slot), slots[slot] != 0);
+    }
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn run_quick_long_ops_loop(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+) -> Result<QuickLoopOutcome, VmError> {
+    if (*frame).num_cvs != op_array.num_cvs
+        || (*frame).num_cvs + (*frame).num_temps > 64
+        || (*frame).heap_bitmap & plan.involved_mask != 0
+    {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+
+    let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    let mut slots = [0i64; 64];
+    let mut input_mask = plan.long_input_mask;
+    while input_mask != 0 {
+        let slot = input_mask.trailing_zeros() as usize;
+        input_mask &= input_mask - 1;
+        let value = slot_base.add(slot);
+        if (*value).value_type() != ValueType::Long {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        slots[slot] = (*value).raw_long();
+    }
+
+    let mut dirty_long_mask = 0u64;
+    let mut dirty_bool_mask = 0u64;
+    let mut iterations = 0u64;
+    let mut op_index = plan.entry_op as usize;
+
+    loop {
+        let mut completed_backedge = false;
+        let next_target = match *plan.ops.get_unchecked(op_index) {
+            QuickLongOp::BranchUnlessLt {
+                lhs,
+                rhs,
+                condition_tmp,
+                false_target,
+                next_target,
+                ..
+            } => {
+                let rhs = match rhs {
+                    QuickLongOperand::Slot(slot) => slots[slot as usize],
+                    QuickLongOperand::Const(value) => value,
+                };
+                let condition = slots[lhs as usize] < rhs;
+                if let Some(slot) = condition_tmp {
+                    slots[slot as usize] = i64::from(condition);
+                    dirty_bool_mask |= 1u64 << slot;
+                }
+                if condition { next_target } else { false_target }
+            }
+            QuickLongOp::BranchUnlessEq {
+                lhs,
+                rhs,
+                condition_tmp,
+                false_target,
+                next_target,
+                ..
+            } => {
+                let rhs = match rhs {
+                    QuickLongOperand::Slot(slot) => slots[slot as usize],
+                    QuickLongOperand::Const(value) => value,
+                };
+                let condition = slots[lhs as usize] == rhs;
+                if let Some(slot) = condition_tmp {
+                    slots[slot as usize] = i64::from(condition);
+                    dirty_bool_mask |= 1u64 << slot;
+                }
+                if condition { next_target } else { false_target }
+            }
+            QuickLongOp::ModConst {
+                value,
+                divisor,
+                result,
+                next_target,
+                resume_ip,
+            } => match slots[value as usize].checked_rem(divisor) {
+                Some(remainder) => {
+                    slots[result as usize] = remainder;
+                    dirty_long_mask |= 1u64 << result;
+                    next_target
+                }
+                None => {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+            QuickLongOp::Add {
+                lhs,
+                rhs,
+                result,
+                next_target,
+                resume_ip,
+            } => match slots[lhs as usize].checked_add(slots[rhs as usize]) {
+                Some(value) => {
+                    slots[result as usize] = value;
+                    dirty_long_mask |= 1u64 << result;
+                    next_target
+                }
+                None => {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+            QuickLongOp::AddAssign {
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                add_resume_ip,
+            } => match slots[lhs as usize].checked_add(slots[rhs as usize]) {
+                Some(value) => {
+                    slots[result as usize] = value;
+                    slots[destination as usize] = value;
+                    dirty_long_mask |= (1u64 << result) | (1u64 << destination);
+                    next_target
+                }
+                None => {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline =
+                        op_array.instructions.as_ptr().add(add_resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+            QuickLongOp::ConditionalAddAssign {
+                condition,
+                condition_tmp,
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                add_resume_ip,
+                ..
+            } => {
+                let condition = match condition {
+                    QuickLongCondition::Lt { lhs, rhs } => {
+                        let rhs = match rhs {
+                            QuickLongOperand::Slot(slot) => slots[slot as usize],
+                            QuickLongOperand::Const(value) => value,
+                        };
+                        slots[lhs as usize] < rhs
+                    }
+                    QuickLongCondition::Eq { lhs, rhs } => {
+                        let rhs = match rhs {
+                            QuickLongOperand::Slot(slot) => slots[slot as usize],
+                            QuickLongOperand::Const(value) => value,
+                        };
+                        slots[lhs as usize] == rhs
+                    }
+                };
+                if let Some(slot) = condition_tmp {
+                    slots[slot as usize] = i64::from(condition);
+                    dirty_bool_mask |= 1u64 << slot;
+                }
+                if !condition {
+                    next_target
+                } else {
+                    match slots[lhs as usize].checked_add(slots[rhs as usize]) {
+                        Some(value) => {
+                            slots[result as usize] = value;
+                            slots[destination as usize] = value;
+                            dirty_long_mask |=
+                                (1u64 << result) | (1u64 << destination);
+                            next_target
+                        }
+                        None => {
+                            commit_quick_long_ops_slots(
+                                slot_base,
+                                &slots,
+                                dirty_long_mask,
+                                dirty_bool_mask,
+                            );
+                            (*frame).opline =
+                                op_array.instructions.as_ptr().add(add_resume_ip);
+                            stats::inc_quick_loop_deoptimized(iterations);
+                            return Ok(QuickLoopOutcome::Deoptimized);
+                        }
+                    }
+                }
+            }
+            QuickLongOp::AddAddAssign {
+                first_lhs,
+                first_rhs,
+                first_result,
+                second_lhs,
+                second_rhs,
+                second_result,
+                destination,
+                next_target,
+                first_resume_ip,
+                second_resume_ip,
+            } => {
+                let first = match slots[first_lhs as usize]
+                    .checked_add(slots[first_rhs as usize])
+                {
+                    Some(value) => value,
+                    None => {
+                        commit_quick_long_ops_slots(
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                        );
+                        (*frame).opline =
+                            op_array.instructions.as_ptr().add(first_resume_ip);
+                        stats::inc_quick_loop_deoptimized(iterations);
+                        return Ok(QuickLoopOutcome::Deoptimized);
+                    }
+                };
+                slots[first_result as usize] = first;
+                dirty_long_mask |= 1u64 << first_result;
+
+                let second = match slots[second_lhs as usize]
+                    .checked_add(slots[second_rhs as usize])
+                {
+                    Some(value) => value,
+                    None => {
+                        commit_quick_long_ops_slots(
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                        );
+                        (*frame).opline =
+                            op_array.instructions.as_ptr().add(second_resume_ip);
+                        stats::inc_quick_loop_deoptimized(iterations);
+                        return Ok(QuickLoopOutcome::Deoptimized);
+                    }
+                };
+                slots[second_result as usize] = second;
+                slots[destination as usize] = second;
+                dirty_long_mask |=
+                    (1u64 << second_result) | (1u64 << destination);
+                next_target
+            }
+            QuickLongOp::Assign {
+                destination,
+                source,
+                next_target,
+            } => {
+                slots[destination as usize] = slots[source as usize];
+                dirty_long_mask |= 1u64 << destination;
+                next_target
+            }
+            QuickLongOp::PostInc {
+                value,
+                result,
+                next_target,
+                resume_ip,
+            }
+            | QuickLongOp::PostIncJump {
+                value,
+                result,
+                target: next_target,
+                resume_ip,
+            } => match slots[value as usize].checked_add(1) {
+                Some(incremented) => {
+                    if let Some(result) = result {
+                        slots[result as usize] = slots[value as usize];
+                        dirty_long_mask |= 1u64 << result;
+                    }
+                    slots[value as usize] = incremented;
+                    dirty_long_mask |= 1u64 << value;
+                    next_target
+                }
+                None => {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+            QuickLongOp::PostIncLoopLt {
+                value,
+                result,
+                condition_lhs,
+                condition_rhs,
+                condition_tmp,
+                body_target,
+                exit_target,
+                resume_ip,
+            } => match slots[value as usize].checked_add(1) {
+                Some(incremented) => {
+                    if let Some(result) = result {
+                        slots[result as usize] = slots[value as usize];
+                        dirty_long_mask |= 1u64 << result;
+                    }
+                    slots[value as usize] = incremented;
+                    dirty_long_mask |= 1u64 << value;
+
+                    let rhs = match condition_rhs {
+                        QuickLongOperand::Slot(slot) => slots[slot as usize],
+                        QuickLongOperand::Const(value) => value,
+                    };
+                    let condition = slots[condition_lhs as usize] < rhs;
+                    if let Some(slot) = condition_tmp {
+                        slots[slot as usize] = i64::from(condition);
+                        dirty_bool_mask |= 1u64 << slot;
+                    }
+                    completed_backedge = true;
+                    if condition { body_target } else { exit_target }
+                }
+                None => {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+            QuickLongOp::Jump { target } => target,
+        };
+
+        if completed_backedge || next_target.op_index() == Some(plan.entry_op as usize) {
+            iterations += 1;
+            if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    &slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                let next_ip = plan.target_ip(next_target).unwrap_unchecked();
+                (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+                handle_interrupt(eg)?;
+            }
+        }
+
+        if let Some(next_index) = next_target.op_index() {
+            op_index = next_index;
+            continue;
+        }
+
+        commit_quick_long_ops_slots(
+            slot_base,
+            &slots,
+            dirty_long_mask,
+            dirty_bool_mask,
+        );
+        let next_ip = next_target.exit_ip().unwrap_unchecked();
+        (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+        stats::inc_quick_loop_completed(iterations);
+        return Ok(QuickLoopOutcome::Completed);
+    }
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn execute_quick_loop_backedge(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let target = opline.op1 as usize;
+    let block_idx = opline.extended_value as usize - 1;
+
+    if let Some(plan) = op_array.block_plans.get(block_idx) {
+        let hot_counter = &op_array.block_counters[block_idx];
+        let count = hot_counter.get();
+        if count == QUICK_LOOP_DISABLED {
+            (*frame).opline = op_array.instructions().as_ptr().add(target);
+            return Ok(());
+        }
+        let hot_progress = count % QUICK_LOOP_COUNTER_STRIDE;
+        if hot_progress >= QUICK_LOOP_HOT_THRESHOLD {
+            let outcome = match plan {
+                super::planner::BlockPlan::QuickLongAccumulate(plan) => {
+                    run_quick_long_accumulate_loop(eg, frame, op_array, *plan)?
+                }
+                super::planner::BlockPlan::QuickLongOps(plan) => {
+                    run_quick_long_ops_loop(eg, frame, op_array, plan)?
+                }
+                _ => {
+                    (*frame).opline = op_array.instructions().as_ptr().add(target);
+                    return Ok(());
+                }
+            };
+            match outcome {
+                QuickLoopOutcome::Completed => {
+                    hot_counter.set(QUICK_LOOP_HOT_THRESHOLD);
+                    return Ok(());
+                }
+                QuickLoopOutcome::Deoptimized => {
+                    let failures = count / QUICK_LOOP_COUNTER_STRIDE + 1;
+                    hot_counter.set(if failures >= QUICK_LOOP_FAILURE_LIMIT {
+                        QUICK_LOOP_DISABLED
+                    } else {
+                        failures * QUICK_LOOP_COUNTER_STRIDE
+                    });
+                    return Ok(());
+                }
+                QuickLoopOutcome::GuardFailed => {
+                    let failures = count / QUICK_LOOP_COUNTER_STRIDE + 1;
+                    hot_counter.set(if failures >= QUICK_LOOP_FAILURE_LIMIT {
+                        QUICK_LOOP_DISABLED
+                    } else {
+                        failures * QUICK_LOOP_COUNTER_STRIDE
+                    });
+                }
+            }
+        } else {
+            hot_counter.set(count + 1);
+        }
+    }
+
+    (*frame).opline = op_array.instructions().as_ptr().add(target);
+    Ok(())
+}
+
 /// Inner execute loop — equivalent to zend_execute_ex.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -3476,6 +4139,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 continue; // skip normal advance
+            }
+
+            #[cfg(feature = "quick-loops")]
+            OpCode::QuickLongLoopJmp => {
+                unsafe { execute_quick_loop_backedge(eg, frame, op_array, opline)? };
+                continue;
+            }
+
+            #[cfg(not(feature = "quick-loops"))]
+            OpCode::QuickLongLoopJmp => {
+                let target = opline.op1 as usize;
+                unsafe {
+                    (*frame).opline = op_array.instructions().as_ptr().add(target);
+                }
+                continue;
             }
 
             OpCode::JmpZ => {

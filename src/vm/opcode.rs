@@ -156,4 +156,8 @@ pub enum OpCode {
     /// If CV == Const, jump to result. Else fall through (+2).
     JmpNZ_Eq_CvConst = 212,
 
+    /// Backward jump for a precomputed guarded scalar loop region.
+    /// `op1` remains the baseline target; `extended_value` is block index + 1.
+    QuickLongLoopJmp = 213,
+
 }

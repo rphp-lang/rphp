@@ -9,6 +9,7 @@
 # This eliminates process startup from measurements.
 
 set -e
+set -o pipefail
 export LC_ALL=C
 
 cd "$(dirname "$0")/.."
@@ -59,6 +60,9 @@ BENCHMARKS=(
     "bench_fib39.php:Fibonacci(39) recursive"
     "bench_calls.php:Call-heavy 5M iterations"
     "bench_loop.php:Loop 10M iterations"
+    "bench_scalar_loop.php:Scalar quick loop 50M"
+    "bench_branch_loop.php:Branched scalar loop 10M"
+    "bench_modulo_branch_loop.php:Modulo branch loop 10M"
     "bench_string.php:String concat 200K"
     "bench_array.php:Array build+sum 500K"
     "bench_foreach.php:Foreach sum 500K"

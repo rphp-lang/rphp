@@ -1,0 +1,409 @@
+mod common;
+
+use common::run_php;
+
+#[test]
+fn quick_long_loop_in_main_keeps_exact_result() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $i + 1;
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "500500|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_works_inside_user_function() {
+    assert_eq!(
+        run_php(
+            "<?php
+function total($n) {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $i + 1;
+    }
+    return $sum;
+}
+echo total(1000);
+"
+        ),
+        "500500"
+    );
+}
+
+#[test]
+fn quick_long_loop_survives_hot_function_bailout() {
+    assert_eq!(
+        run_php(
+            "<?php
+function total($n) {
+    $sum = 0;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $i + 1;
+    }
+    return $sum;
+}
+$result = 0;
+for ($call = 0; $call < 20; $call++) {
+    $result = total(100);
+}
+echo $result;
+"
+        ),
+        "5050"
+    );
+}
+
+#[test]
+fn quick_long_loop_supports_other_integer_addends() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $i + 2;
+}
+echo $sum;
+"
+        ),
+        "501500"
+    );
+}
+
+#[test]
+fn quick_long_loop_accumulates_induction_directly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $i;
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "499500|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_supports_while_shape() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = 0;
+$i = 0;
+while ($i < $n) {
+    $sum += $i;
+    $i++;
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "499500|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_supports_fused_constant_bound() {
+    assert_eq!(
+        run_php(
+            "<?php
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $i + 1;
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "500500|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_deoptimizes_at_accumulator_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = PHP_INT_MAX - 100000;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $i + 1;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|1000"
+    );
+}
+
+#[test]
+fn quick_direct_accumulation_deoptimizes_at_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = PHP_INT_MAX - 100000;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $i;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_rejects_non_long_bound() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000.0;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $i + 1;
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "500500|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_rejects_reference_accumulator() {
+    assert_eq!(
+        run_php(
+            "<?php
+$sum = 0;
+function total($n) {
+    global $sum;
+    for ($i = 0; $i < $n; $i++) {
+        $sum += $i + 1;
+    }
+    return $sum;
+}
+echo total(1000);
+echo '|';
+echo $sum;
+"
+        ),
+        "500500|500500"
+    );
+}
+
+#[test]
+fn quick_long_ops_support_two_cv_nested_term() {
+    assert_eq!(
+        run_php(
+            "<?php
+$sum = 0;
+for ($i = 0; $i < 10; $i++) {
+    for ($j = 0; $j < 20; $j++) {
+        $sum += $i + $j;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+echo '|';
+echo $j;
+"
+        ),
+        "2800|10|20"
+    );
+}
+
+#[test]
+fn quick_long_ops_support_conditional_body() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 100;
+$cutoff = 50;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    if ($i < $cutoff) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "1225|100"
+    );
+}
+
+#[test]
+fn quick_long_ops_preserve_never_written_tmp() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 100;
+$cutoff = 0;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    if ($i < $cutoff) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "0|100"
+    );
+}
+
+#[test]
+fn quick_long_ops_deoptimize_nested_accumulator_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$sum = PHP_INT_MAX - 100000;
+for ($i = 0; $i < 1; $i++) {
+    for ($j = 0; $j < 1000; $j++) {
+        $sum += $i + $j;
+    }
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+echo '|';
+echo $j;
+"
+        ),
+        "float|1|1000"
+    );
+}
+
+#[test]
+fn quick_long_ops_deoptimize_add_assign_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$base = PHP_INT_MAX - 40;
+$result = 0;
+for ($i = 0; $i < 100; $i++) {
+    $result = $base + $i;
+}
+echo is_float($result) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|100"
+    );
+}
+
+#[test]
+fn quick_long_ops_reject_non_long_internal_branch_bound() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 100;
+$cutoff = 50.0;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    if ($i < $cutoff) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "1225|100"
+    );
+}
+
+#[test]
+fn quick_long_ops_support_modulo_equality_branch() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    if (($i % 3) == 1) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "166167|1000"
+    );
+}
+
+#[test]
+fn quick_long_ops_modulo_matches_negative_remainder_semantics() {
+    assert_eq!(
+        run_php(
+            "<?php
+$sum = 0;
+for ($i = -100; $i < 100; $i++) {
+    if (($i % 2) == 0) {
+        $sum += $i;
+    }
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "-100|100"
+    );
+}
+
+#[test]
+fn quick_conditional_add_assign_deoptimizes_at_overflow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$sum = PHP_INT_MAX - 100000;
+for ($i = 0; $i < $n; $i++) {
+    if (($i % 2) == 0) {
+        $sum += $i;
+    }
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|1000"
+    );
+}

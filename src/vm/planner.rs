@@ -18,6 +18,7 @@ use crate::vm::frame::{ExecuteData, CALL_FRAME_SLOTS};
 use crate::vm::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy};
 use crate::vm::instruction::{Instruction, OpType};
 use crate::vm::opcode::OpCode;
+use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOpsLoop};
 use crate::runtime::ExecutorGlobals;
 
 /// Basic block metadata, computed once per OpArray at compile time.
@@ -35,6 +36,10 @@ pub enum BlockPlan {
     Macro(MacroPlan),
     /// Was macro but guards failed too often — permanently reverted.
     Deoptimized,
+    /// Guarded scalar loop region selected by the no-JIT quick executor.
+    QuickLongAccumulate(QuickLongAccumulateLoop),
+    /// Typed scalar operations for a closed loop not covered by a superinstruction.
+    QuickLongOps(QuickLongOpsLoop),
 }
 
 /// A compiled macro plan for a single basic block.

@@ -29,6 +29,12 @@ mod inner {
     static RETURN_FAST_PATHS: AtomicU64 = AtomicU64::new(0);
     static RETURN_FULL_PATHS: AtomicU64 = AtomicU64::new(0);
 
+    static QUICK_LOOP_ENTRIES: AtomicU64 = AtomicU64::new(0);
+    static QUICK_LOOP_COMPLETIONS: AtomicU64 = AtomicU64::new(0);
+    static QUICK_LOOP_DEOPTIMIZATIONS: AtomicU64 = AtomicU64::new(0);
+    static QUICK_LOOP_GUARD_FAILURES: AtomicU64 = AtomicU64::new(0);
+    static QUICK_LOOP_ITERATIONS: AtomicU64 = AtomicU64::new(0);
+
     static FIND_FUNCTION_CALLS: AtomicU64 = AtomicU64::new(0);
     static FIND_FUNCTION_EXACT_HITS: AtomicU64 = AtomicU64::new(0);
     static FIND_FUNCTION_LOWER_HITS: AtomicU64 = AtomicU64::new(0);
@@ -66,6 +72,11 @@ mod inner {
         DO_FCALL_FULL_PATHS.store(0, Ordering::Relaxed);
         RETURN_FAST_PATHS.store(0, Ordering::Relaxed);
         RETURN_FULL_PATHS.store(0, Ordering::Relaxed);
+        QUICK_LOOP_ENTRIES.store(0, Ordering::Relaxed);
+        QUICK_LOOP_COMPLETIONS.store(0, Ordering::Relaxed);
+        QUICK_LOOP_DEOPTIMIZATIONS.store(0, Ordering::Relaxed);
+        QUICK_LOOP_GUARD_FAILURES.store(0, Ordering::Relaxed);
+        QUICK_LOOP_ITERATIONS.store(0, Ordering::Relaxed);
         FIND_FUNCTION_CALLS.store(0, Ordering::Relaxed);
         FIND_FUNCTION_EXACT_HITS.store(0, Ordering::Relaxed);
         FIND_FUNCTION_LOWER_HITS.store(0, Ordering::Relaxed);
@@ -130,6 +141,28 @@ mod inner {
     #[inline]
     pub fn inc_return_full() {
         if enabled() { RETURN_FULL_PATHS.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    #[inline]
+    pub fn inc_quick_loop_completed(iterations: u64) {
+        if !enabled() { return; }
+        QUICK_LOOP_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        QUICK_LOOP_COMPLETIONS.fetch_add(1, Ordering::Relaxed);
+        QUICK_LOOP_ITERATIONS.fetch_add(iterations, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn inc_quick_loop_deoptimized(iterations: u64) {
+        if !enabled() { return; }
+        QUICK_LOOP_ENTRIES.fetch_add(1, Ordering::Relaxed);
+        QUICK_LOOP_DEOPTIMIZATIONS.fetch_add(1, Ordering::Relaxed);
+        QUICK_LOOP_ITERATIONS.fetch_add(iterations, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn inc_quick_loop_guard_failed() {
+        if !enabled() { return; }
+        QUICK_LOOP_GUARD_FAILURES.fetch_add(1, Ordering::Relaxed);
     }
 
     #[inline]
@@ -227,6 +260,7 @@ mod inner {
             208 => Some("JmpZ_Lt_CvConst"), 209 => Some("JmpNZ_Lt_CvConst"),
             210 => Some("IsEqual_CvConst"),
             211 => Some("JmpZ_Eq_CvConst"), 212 => Some("JmpNZ_Eq_CvConst"),
+            213 => Some("QuickLongLoopJmp"),
             _ => None,
         }
     }
@@ -249,6 +283,11 @@ mod inner {
         let _ = writeln!(err, "do_fcall_full_paths={}", DO_FCALL_FULL_PATHS.load(Ordering::Relaxed));
         let _ = writeln!(err, "return_fast_paths={}", RETURN_FAST_PATHS.load(Ordering::Relaxed));
         let _ = writeln!(err, "return_full_paths={}", RETURN_FULL_PATHS.load(Ordering::Relaxed));
+        let _ = writeln!(err, "quick_loop_entries={}", QUICK_LOOP_ENTRIES.load(Ordering::Relaxed));
+        let _ = writeln!(err, "quick_loop_completions={}", QUICK_LOOP_COMPLETIONS.load(Ordering::Relaxed));
+        let _ = writeln!(err, "quick_loop_deoptimizations={}", QUICK_LOOP_DEOPTIMIZATIONS.load(Ordering::Relaxed));
+        let _ = writeln!(err, "quick_loop_guard_failures={}", QUICK_LOOP_GUARD_FAILURES.load(Ordering::Relaxed));
+        let _ = writeln!(err, "quick_loop_iterations={}", QUICK_LOOP_ITERATIONS.load(Ordering::Relaxed));
         let _ = writeln!(err, "find_function_calls={}", FIND_FUNCTION_CALLS.load(Ordering::Relaxed));
         let _ = writeln!(err, "find_function_exact_hits={}", FIND_FUNCTION_EXACT_HITS.load(Ordering::Relaxed));
         let _ = writeln!(err, "find_function_lower_hits={}", FIND_FUNCTION_LOWER_HITS.load(Ordering::Relaxed));
@@ -362,6 +401,27 @@ pub fn inc_return_full() { inner::inc_return_full(); }
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_return_full() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_quick_loop_completed(iterations: u64) { inner::inc_quick_loop_completed(iterations); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_quick_loop_completed(_iterations: u64) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_quick_loop_deoptimized(iterations: u64) { inner::inc_quick_loop_deoptimized(iterations); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_quick_loop_deoptimized(_iterations: u64) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_quick_loop_guard_failed() { inner::inc_quick_loop_guard_failed(); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_quick_loop_guard_failed() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]
