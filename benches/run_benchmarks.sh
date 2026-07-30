@@ -65,7 +65,7 @@ BENCHMARKS=(
     "bench_modulo_branch_loop.php:Modulo branch loop 10M"
     "bench_packed_array_loop.php:Packed array reads 1M"
     "bench_hash_int_array_loop.php:Hash integer-key reads 1M"
-    "bench_hash_sparse_int_array_loop.php:Sparse hash integer reads 250K"
+    "bench_hash_sparse_int_array_loop.php:Sparse hash integer reads 1M"
     "bench_hash_string_array_loop.php:Hash string-key reads 10M"
     "bench_string.php:String concat 200K"
     "bench_array.php:Array build+sum 500K"

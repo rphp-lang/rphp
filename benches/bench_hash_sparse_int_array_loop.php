@@ -1,7 +1,7 @@
 <?php
 // Irregular integer-key reads that must use the hash index fallback.
 $start = 1000000;
-$n = 250000;
+$n = 1000000;
 $stride = 7;
 $values = [];
 $key = $start;

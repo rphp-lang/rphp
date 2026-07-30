@@ -899,3 +899,46 @@ and hash-index behavior after removal and clone. The complete suite passes
 with default features and with `--no-default-features`. Five 200-process
 aggregate CPU comparisons of the nested scalar workload also stayed within
 normal run noise of the saved Phase 2f binary.
+
+## Phase 2i result: strided hash-read kernel
+
+The irregular-key benchmark compiles to one stable five-operation typed graph:
+
+1. loop-header less-than branch;
+2. dynamic integer `FetchArrayLong`;
+3. accumulator `AddAssign`;
+4. key-step `AddAssign`;
+5. `PostIncLoopLt`.
+
+Phase 2i recognizes only that complete graph, including every sequential
+target, the shared exit target, the copied loop condition, and the body
+backedge. It reuses the already validated `QuickLongOpsLoop`; no second bytecode
+analysis or weaker semantic assumption is introduced.
+
+The kernel executes both additions with checked overflow, retains the original
+resume IP for the fetch, both additions, and the post-increment, and commits
+only operations that baseline execution would already have completed at each
+side exit. Interrupt handling commits the same long/bool masks and records
+either the body or exit target before invoking the existing handler.
+
+To reduce short-run noise, the irregular stride-7 benchmark was increased from
+250,000 to 1,000,000 reads. Eleven rounds alternated Phase 2i, the saved Phase
+2h binary, and PHP:
+
+| Engine | Median | Relative to Phase 2h |
+|---|---:|---:|
+| Phase 2h rphp, typed-op dispatch | 0.03781 s | 1.000x |
+| Phase 2i rphp, specialized kernel | 0.02884 s | 0.763x |
+| PHP 8.4.12, CLI opcache disabled | 0.00699 s | 0.185x |
+
+Removing typed dispatch therefore reduces this recurrence by about 23.7%.
+The remaining rphp/PHP gap is still 4.12x. This experiment isolates the next
+boundary cleanly: approximately nine nanoseconds per iteration came from typed
+operation dispatch, while the remaining cost is dominated by the fallback
+integer index lookup and its indirect entry load.
+
+Acceptance reruns showed no material change in packed, contiguous-hash,
+invariant-string, or conditional scalar loops. Validation now includes eleven
+quick-plan tests and 38 quick-loop end-to-end tests. The new cases cover the
+exact stride graph, successful key/accumulator state, a non-long fetch side
+exit, and accumulator overflow after the hot threshold.

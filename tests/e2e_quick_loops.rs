@@ -707,6 +707,97 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_stride_kernel_updates_key_and_accumulator() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 1000; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$key = $start;
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "499500|7100|1000"
+    );
+}
+
+#[test]
+fn quick_hash_stride_kernel_deoptimizes_non_long_fetch_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$values[793] = 1.5;
+$key = $start;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    $key = $key + $stride;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "float|800|100"
+    );
+}
+
+#[test]
+fn quick_hash_stride_kernel_deoptimizes_accumulator_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = 1;
+    $key = $key + $stride;
+}
+$key = $start;
+$sum = PHP_INT_MAX - 40;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    $key = $key + $stride;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "float|800|100"
+    );
+}
+
+#[test]
 fn quick_conditional_add_assign_deoptimizes_at_overflow() {
     assert_eq!(
         run_php(

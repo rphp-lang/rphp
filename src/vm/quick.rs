@@ -1532,6 +1532,36 @@ for ($i = 0; $i < 100; $i++) {
     }
 
     #[test]
+    fn detects_strided_integer_hash_scan_as_typed_ops() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [100 => 3, 107 => 5, 114 => 7];
+$stride = 7;
+$key = 100;
+$sum = 0;
+for ($i = 0; $i < 3; $i++) {
+    $sum += $values[$key];
+    $key = $key + $stride;
+}
+",
+        );
+        assert_eq!(plan.ops.len(), 5, "{:#?}", plan.ops);
+        assert!(matches!(
+            plan.ops.as_slice(),
+            [
+                QuickLongOp::BranchUnlessLt { .. },
+                QuickLongOp::FetchArrayLong {
+                    index: QuickArrayIndex::Long(QuickLongOperand::Slot(_)),
+                    ..
+                },
+                QuickLongOp::AddAssign { .. },
+                QuickLongOp::AddAssign { .. },
+                QuickLongOp::PostIncLoopLt { .. },
+            ]
+        ));
+    }
+
+    #[test]
     fn detects_conditional_body_as_internal_branch() {
         let plan = long_ops_plan(
             "<?php
