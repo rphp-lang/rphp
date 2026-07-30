@@ -7,20 +7,135 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-use crate::value::Value;
+use crate::value::{ObjectLayout, Value};
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{Instruction, InlineCache, OpType};
 use super::OpArray;
 
-use super::{make_user_function_with_args, make_user_function_full, make_user_function_typed};
-use crate::vm::function::UserFunction;
+use super::{
+    finalize_user_method, make_user_function_full, make_user_function_typed,
+    make_user_function_with_args,
+};
+use crate::vm::function::{CallStrategy, ParamTypeHint, UserFunction};
 
 /// Result of compiling a script — main OpArray + declared functions + class defs.
 pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
+}
+
+/// Refine the conservative per-function global-access flag once every declared
+/// function in the compilation unit is known.
+///
+/// During body compilation an `InitFcall` has to be treated as potentially
+/// reaching `global`, because its target may not have been compiled yet. Here
+/// direct calls can be resolved into a small call graph. Only dynamic/unknown
+/// calls and chains that actually reach a `global` binding remain conservative.
+fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
+    let function_indices: HashMap<String, usize> = functions
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| (name.to_ascii_lowercase(), index))
+        .collect();
+
+    let mut direct_global_access = vec![false; functions.len()];
+    let mut callees = vec![Vec::<usize>::new(); functions.len()];
+
+    for (index, (_, function)) in functions.iter().enumerate() {
+        let op_array = &function.op_array;
+        direct_global_access[index] = !op_array.global_vars.is_empty();
+
+        for instruction in &op_array.instructions {
+            match instruction.opcode {
+                OpCode::InitFcall => {
+                    let primary = op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .and_then(|name| function_indices.get(&name.to_ascii_lowercase()))
+                        .copied();
+
+                    // Namespaced unqualified calls fall back to the global
+                    // function only when the primary target is not declared.
+                    let resolved = primary.or_else(|| {
+                        if instruction.extended_value == 0 {
+                            return None;
+                        }
+                        op_array
+                            .literals
+                            .get(instruction.extended_value as usize)
+                            .and_then(Value::as_str)
+                            .and_then(|name| function_indices.get(&name.to_ascii_lowercase()))
+                            .copied()
+                    });
+
+                    if let Some(callee) = resolved {
+                        callees[index].push(callee);
+                    } else {
+                        // Unknown targets include builtins and functions loaded
+                        // later via include. Keep the conservative behavior.
+                        direct_global_access[index] = true;
+                    }
+                }
+                OpCode::InitDynamicCall
+                | OpCode::InitMethodCall
+                | OpCode::InitStaticCall
+                | OpCode::Include => {
+                    direct_global_access[index] = true;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let mut may_access_globals = direct_global_access;
+    loop {
+        let mut changed = false;
+        for index in 0..functions.len() {
+            if !may_access_globals[index]
+                && callees[index]
+                    .iter()
+                    .any(|&callee| may_access_globals[callee])
+            {
+                may_access_globals[index] = true;
+                changed = true;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    for (index, (_, function)) in functions.iter_mut().enumerate() {
+        function.op_array.may_access_globals = may_access_globals[index];
+
+        // A direct, fixed-arity scalar call chain proven not to reach globals
+        // can use the tight FastScalar protocol and hot executor.
+        let common = &mut function.common;
+        let has_no_type_hints = common
+            .sig
+            .param_type_hints
+            .iter()
+            .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
+        let has_no_return_type =
+            matches!(common.sig.return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+        let can_use_fast_scalar = !may_access_globals[index]
+            && !common.sig.is_variadic
+            && common.sig.ref_args == 0
+            && common.sig.public_arity() == common.sig.required_num_args
+            && function.op_array.global_vars.is_empty()
+            && function.op_array.static_vars.is_empty()
+            && function.op_array.try_entries.is_empty()
+            && !function.op_array.is_generator
+            && has_no_type_hints
+            && has_no_return_type;
+
+        if can_use_fast_scalar {
+            common.plan.call = CallStrategy::FastScalar;
+        }
+    }
 }
 
 /// A single catch clause within a try entry
@@ -65,6 +180,9 @@ pub struct ClassDef {
     pub is_enum: bool,
     pub uses: Vec<String>,  // trait names from `use Foo, Bar;`
     pub properties: Vec<(String, Option<Value>, Visibility, String)>,  // (name, default_value, visibility, declaring_class)
+    /// Shared declared-property storage-key → numeric slot layout.
+    /// Rebuilt after inheritance and trait properties are merged.
+    pub property_layout: std::rc::Rc<ObjectLayout>,
     pub readonly_props: Vec<String>,  // names of readonly properties
     pub methods: Vec<(String, Visibility, bool, bool, UserFunction)>, // (name, vis, is_static, is_final, func)
     /// Stable numeric ID assigned at registration time. Used as inline cache key.
@@ -134,7 +252,8 @@ fn builtin_ref_args(name: &str) -> u64 {
         "array_pop" | "array_shift" => 0b1,             // arg 0
         "array_splice" => 0b1,                           // arg 0
         "settype" => 0b1,                                // arg 0
-        "preg_match" => 0b100,                           // arg 2 (&$matches)
+        "preg_match" | "preg_match_all" => 0b100,          // arg 2 (&$matches)
+        "parse_str" => 0b10,                                // arg 1 (&$result)
         _ => 0,
     }
 }
@@ -290,6 +409,8 @@ impl Compiler {
         let all_cvs = self.all_cvs();
 
         let cache = (0..self.instructions.len()).map(|_| InlineCache::empty()).collect();
+        refine_function_global_access(&mut self.functions);
+
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
@@ -1216,8 +1337,17 @@ impl Compiler {
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
-                    user_func.common.sig.this_offset = 1;
+                    let user_func = finalize_user_method(make_user_function_typed(
+                        op_array,
+                        cp.num_args + 1,
+                        cp.required_num_args,
+                        cp.is_variadic,
+                        cp.variadic_cv_index,
+                        cp.ref_args,
+                        cp.type_hints,
+                        cp.param_names,
+                        cp.return_type_hint,
+                    ));
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1262,6 +1392,7 @@ impl Compiler {
                     is_enum: false,
                     uses: resolved_uses,
                     properties: compiled_props,
+                    property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     readonly_props,
                     methods: compiled_methods,
                     class_id: 0,
@@ -1331,6 +1462,7 @@ impl Compiler {
                     is_enum: false,
                     uses: vec![],
                     properties: vec![],
+                    property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     readonly_props: vec![],
                     methods: compiled_methods,
                     class_id: 0,
@@ -1382,8 +1514,17 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
-                    user_func.common.sig.this_offset = 1;
+                    let user_func = finalize_user_method(make_user_function_typed(
+                        op_array,
+                        cp.num_args + 1,
+                        cp.required_num_args,
+                        cp.is_variadic,
+                        cp.variadic_cv_index,
+                        cp.ref_args,
+                        cp.type_hints,
+                        cp.param_names,
+                        cp.return_type_hint,
+                    ));
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1411,6 +1552,7 @@ impl Compiler {
                     is_enum: false,
                     uses: vec![],
                     properties: compiled_props,
+                    property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     readonly_props: vec![],
                     methods: compiled_methods,
                     class_id: 0,
@@ -1465,8 +1607,17 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let mut user_func = make_user_function_typed(op_array, cp.num_args + 1, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
-                    user_func.common.sig.this_offset = 1;
+                    let user_func = finalize_user_method(make_user_function_typed(
+                        op_array,
+                        cp.num_args + 1,
+                        cp.required_num_args,
+                        cp.is_variadic,
+                        cp.variadic_cv_index,
+                        cp.ref_args,
+                        cp.type_hints,
+                        cp.param_names,
+                        cp.return_type_hint,
+                    ));
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1487,12 +1638,11 @@ impl Compiler {
                             props.insert("value".to_string(), val);
                         }
                     }
-                    let obj = Value::object(PhpObject {
-                        class_name: name.clone(),
-                        class_id: 0, // assigned at runtime registration
-                        properties: props,
-                        generator: None,
-                    });
+                    let obj = Value::object(PhpObject::dynamic(
+                        name.clone(),
+                        0, // assigned at runtime registration
+                        props,
+                    ));
                     compiled_props.push((case_name.clone(), Some(obj), Visibility::Public, name.clone()));
                 }
 
@@ -1508,6 +1658,7 @@ impl Compiler {
                     is_enum: true,
                     uses: vec![],
                     properties: compiled_props,
+                    property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     readonly_props: vec![],
                     methods: compiled_methods,
                     class_id: 0,

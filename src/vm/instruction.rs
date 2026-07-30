@@ -60,21 +60,45 @@ pub struct InlineCache {
     /// class_id that `func` was resolved for (methods only; 0 = function call).
     pub class_id: u32,
     /// Property access cache flags (used by FetchObjR/AssignObjProp):
-    /// 0 = not cached
-    /// 1 = public property, key == literal name (skip visibility + mangling)
-    pub prop_flags: u32,
+    /// low 2 bits: read-safe/write-safe flags
+    /// high 30 bits: declared property slot
+    ///
+    /// Packing keeps InlineCache at 16 bytes.
+    prop_info: u32,
 }
+
+const _: [(); 16] = [(); std::mem::size_of::<InlineCache>()];
 
 // SAFETY: InlineCache is only written from the single VM execution thread.
 unsafe impl Send for InlineCache {}
 unsafe impl Sync for InlineCache {}
 
 impl InlineCache {
+    const PROP_FLAG_MASK: u32 = 0b11;
+
     pub fn empty() -> Self {
         Self {
             func: std::ptr::null(),
             class_id: 0,
-            prop_flags: 0,
+            prop_info: 0,
         }
+    }
+
+    #[inline(always)]
+    pub fn property_flags(&self) -> u32 {
+        self.prop_info & Self::PROP_FLAG_MASK
+    }
+
+    #[inline(always)]
+    pub fn property_slot(&self) -> usize {
+        (self.prop_info >> 2) as usize
+    }
+
+    #[inline]
+    pub fn set_property(&mut self, class_id: u32, slot: usize, flags: u32) {
+        debug_assert!(flags <= Self::PROP_FLAG_MASK);
+        debug_assert!(slot <= (u32::MAX >> 2) as usize);
+        self.class_id = class_id;
+        self.prop_info = ((slot as u32) << 2) | flags;
     }
 }

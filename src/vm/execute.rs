@@ -287,6 +287,111 @@ unsafe fn frame_set_this(frame: *mut ExecuteData, val: Value) {
     }
 }
 
+/// Borrow `$this` from the caller for the lifetime of a synchronous method
+/// frame. The slot deliberately stays out of heap cleanup bookkeeping.
+///
+/// SAFETY: the caller's source Value must outlive `frame`, and the compiled
+/// call plan must prove that CV 0 is never returned directly.
+#[inline(always)]
+unsafe fn frame_set_borrowed_this(frame: *mut ExecuteData, val: *const Value) {
+    let ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    Value::raw_copy(val, ptr);
+}
+
+/// Copy a scalar argument operand directly into a pending call frame.
+#[inline(always)]
+unsafe fn try_copy_scalar_arg(
+    frame: *mut ExecuteData,
+    call: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    send: &Instruction,
+) -> bool {
+    let source = match send.op1_type {
+        OpType::Tmp | OpType::Var => {
+            (frame as *const Value).add(CALL_FRAME_SLOTS + send.op1 as usize)
+        }
+        OpType::Cv => {
+            let cv = (*frame).cv(send.op1 as u32);
+            if cv.is_reference() {
+                cv.as_ref_ptr() as *const Value
+            } else {
+                cv as *const Value
+            }
+        }
+        OpType::Const => &op_array.literals()[send.op1 as usize] as *const Value,
+        OpType::Unused => return false,
+    };
+    let value = &*source;
+    if value.needs_cleanup() || value.is_reference() {
+        return false;
+    }
+
+    let destination = (call as *mut Value).add(CALL_FRAME_SLOTS + send.op2 as usize);
+    Value::raw_copy(source, destination);
+    true
+}
+
+/// Fast path used by ordinary function calls. Keeping the SendVal-only wrapper
+/// separate avoids adding method/reference branches to this hotter path.
+#[inline(always)]
+pub(crate) unsafe fn try_send_scalar_arg(
+    frame: *mut ExecuteData,
+    call: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    send: &Instruction,
+) -> bool {
+    debug_assert!(send.opcode == OpCode::SendVal);
+    try_copy_scalar_arg(frame, call, op_array, send)
+}
+
+/// Method-call variant that also accepts SendVarEx after proving the resolved
+/// FastScalar callee cannot require a reference.
+#[inline(always)]
+pub(crate) unsafe fn try_send_scalar_method_arg(
+    frame: *mut ExecuteData,
+    call: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    send: &Instruction,
+) -> bool {
+    match send.opcode {
+        OpCode::SendVal => try_copy_scalar_arg(frame, call, op_array, send),
+        OpCode::SendVarEx => {
+            let common = &*(*call).func;
+            common.plan.call == CallStrategy::FastScalar
+                && !common.sig.is_param_by_ref(send.extended_value)
+                && try_copy_scalar_arg(frame, call, op_array, send)
+        }
+        _ => false,
+    }
+}
+
+/// Consume scalar sends immediately following a call initializer.
+///
+/// Argument expressions may insert other opcodes (including nested calls), so
+/// only the contiguous prefix is fused. Returns the number of Send opcodes
+/// whose argument slots were initialized.
+#[inline(always)]
+unsafe fn bind_contiguous_scalar_args(
+    frame: *mut ExecuteData,
+    call: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    mut next: *const Instruction,
+    max_args: u32,
+) -> usize {
+    let mut bound = 0usize;
+    while bound < max_args as usize {
+        let send = &*next;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || !try_send_scalar_method_arg(frame, call, op_array, send)
+        {
+            break;
+        }
+        bound += 1;
+        next = next.add(1);
+    }
+    bound
+}
+
 /// Propagate heap-backed return values into the caller's cleanup bookkeeping.
 ///
 /// SAFETY: `return_value` must point into the caller's frame slot area.
@@ -568,7 +673,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     if let Some(exc) = eg.exception.take() {
         let (class_name, message) = if let Some(obj) = exc.as_object() {
             let cls = obj.class_name.clone();
-            let msg = obj.properties.get("message")
+            let msg = obj.get_property("message")
                 .map(|v| v.echo_to_string())
                 .unwrap_or_default();
             (cls, msg)
@@ -1133,7 +1238,7 @@ fn op_include(
     if let Some(exc) = eg.exception.take() {
         let (class_name, message) = if let Some(obj) = exc.as_object() {
             let cls = obj.class_name.clone();
-            let msg = obj.properties.get("message")
+            let msg = obj.get_property("message")
                 .map(|v| v.echo_to_string())
                 .unwrap_or_default();
             (cls, msg)
@@ -1258,34 +1363,26 @@ fn op_new_obj<'a>(
         }
     }
 
-    // Create new object with default properties from class definition.
-    // Private properties are stored under a mangled key (ClassName\0prop)
-    // so that parent and child private properties with the same name
-    // occupy separate slots, matching PHP semantics.
-    let mut props = std::collections::HashMap::new();
-    if let Some(class_def) = eg.class_table.get(name) {
-        for (prop_name, default_val, vis, declaring) in &class_def.properties {
-            let is_readonly = eg.class_table.get(name)
-                .map(|cd| cd.readonly_props.contains(prop_name))
-                .unwrap_or(false);
+    // Create compact declared-property slots from the class layout.
+    let (property_layout, property_values) = if let Some(class_def) = eg.class_table.get(name) {
+        let mut values = Vec::with_capacity(class_def.properties.len());
+        for (prop_name, default_val, _vis, _declaring) in &class_def.properties {
+            let is_readonly = class_def.readonly_props.contains(prop_name);
             let val = default_val.as_ref()
                 .map(|v| v.clone())
                 .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
-            let key = if *vis == Visibility::Private {
-                crate::runtime::mangle_private_prop(declaring, prop_name)
-            } else {
-                prop_name.clone()
-            };
-            props.insert(key, val);
+            values.push(val);
         }
-    }
-
-    let obj = PhpObject {
-        class_name: name.to_string(),
-        class_id: eg.class_id_of(name),
-        properties: props,
-        generator: None,
+        (class_def.property_layout.clone(), values)
+    } else {
+        (std::rc::Rc::new(crate::value::ObjectLayout::empty()), Vec::new())
     };
+    let obj = PhpObject::with_layout(
+        name.to_string(),
+        eg.class_id_of(name),
+        property_layout,
+        property_values,
+    );
     unsafe { slot_set(result_ptr, Value::object(obj)) };
 
     // Check for __construct — set up call frame if it exists
@@ -1327,26 +1424,28 @@ fn op_fetch_obj_r(
     let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-    if let Some(obj) = obj_val.as_object() {
-        let name = prop_name.as_str().unwrap_or("");
+    if obj_val.value_type() != ValueType::Object {
+        return Err(VmError::Fatal("Attempt to read property on non-object".into()));
+    }
 
-        // ── Property cache fast path ──
-        // On cache hit (same class_id, public property): skip visibility/mangling entirely.
-        // prop_flags bit 0 = public+unmangled (read-safe), bit 1 = not enum/readonly (write-safe).
-        let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-        let ic = &op_array.cache[ip];
-        if ic.prop_flags & 1 != 0 && ic.class_id == obj.class_id && obj.class_id != 0 {
-            // Cache hit: public property, key == literal name
-            let found_val = obj.properties.get(name).cloned();
-            drop(obj);
-            if let Some(val) = found_val {
-                unsafe { slot_set(result_ptr, val) };
-            } else {
-                // Property disappeared (shouldn't happen for cached public) — fall through
-                unsafe { slot_set(result_ptr, Value::null()) };
-            }
-            return Ok(());
-        }
+    let name = prop_name.as_str().unwrap_or("");
+    let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
+    let ic = &op_array.cache[ip];
+    let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
+
+    // Cache hit: direct class guard + slot load. No RefCell borrow or hash lookup.
+    if ic.property_flags() & 1 != 0
+        && ic.class_id == object_class_id
+        && object_class_id != 0
+    {
+        let property_ptr = unsafe {
+            obj_val.object_property_slot_unchecked(ic.property_slot())
+        };
+        unsafe { slot_set(result_ptr, (*property_ptr).clone()) };
+        return Ok(());
+    }
+
+    if let Some(obj) = obj_val.as_object() {
 
         // ── Full resolution (cache miss or private/protected) ──
         let caller_class = get_caller_class(frame, eg);
@@ -1395,22 +1494,23 @@ fn op_fetch_obj_r(
             }
         }
 
-        // Cache: if public property and key == name (no mangling), mark for fast path.
-        // prop_flags bit 0 = read-safe (public + unmangled).
-        // prop_flags bit 1 = write-safe (not enum, not readonly).
+        // Cache only declared public properties. Dynamic properties have no
+        // stable slot and remain on the cold lookup path.
         if is_public && key == name && obj.class_id != 0 {
-            let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-            ic_mut.class_id = obj.class_id;
-            let mut flags: u32 = 1; // read-safe
-            // Check if also write-safe (not enum, not readonly)
-            let writable = eg.class_table.get(&obj.class_name).map_or(true, |cd| {
-                !cd.is_enum && !cd.readonly_props.contains(&name.to_string())
-            });
-            if writable { flags |= 2; }
-            ic_mut.prop_flags = flags;
+            if let Some(slot) = obj.property_slot(&key) {
+                let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+                let mut flags: u32 = 1; // read-safe
+                let writable = eg.class_table.get(&obj.class_name).is_none_or(|cd| {
+                    !cd.is_enum && !cd.readonly_props.iter().any(|prop| prop == name)
+                });
+                if writable {
+                    flags |= 2;
+                }
+                ic_mut.set_property(obj.class_id, slot, flags);
+            }
         }
 
-        let found_val = obj.properties.get(&key).cloned();
+        let found_val = obj.get_property(&key).cloned();
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
             unsafe { slot_set(result_ptr, val) };
@@ -1422,8 +1522,6 @@ fn op_fetch_obj_r(
                 unsafe { slot_set(result_ptr, Value::null()) };
             }
         }
-    } else {
-        return Err(VmError::Fatal("Attempt to read property on non-object".into()));
     }
     Ok(())
 }
@@ -1499,7 +1597,7 @@ fn op_assign_obj_prop<'a>(
             if class_def.readonly_props.contains(&name) {
                 prop_is_writable = false;
                 let key_check = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
-                let already_init = php_obj.properties.get(&key_check)
+                let already_init = php_obj.get_property(&key_check)
                     .map_or(false, |v| !v.is_undef());
                 if already_init {
                     // Already initialized — always error
@@ -1539,20 +1637,21 @@ fn op_assign_obj_prop<'a>(
         if prop_is_public && prop_is_writable && key == name && php_obj.class_id != 0 {
             let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
             let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-            ic_mut.class_id = php_obj.class_id;
-            ic_mut.prop_flags = 3; // bit 0: read-safe, bit 1: write-safe
+            if let Some(slot) = php_obj.property_slot(&key) {
+                ic_mut.set_property(php_obj.class_id, slot, 3);
+            }
         }
 
-        let prop_exists = php_obj.properties.contains_key(&key);
+        let prop_exists = php_obj.contains_property(&key);
         if prop_exists {
-            php_obj.properties.insert(key, cloned);
+            php_obj.set_property(&key, cloned);
         } else {
             drop(php_obj); // Release borrow before potential magic method call
             // Property not found — try __set magic method
             if call_magic_method(eg, obj, "__set", &[Value::string(name.clone()), cloned.clone()])?.is_none() {
                 // No __set — fall back to direct insert
                 if let Some(mut php_obj) = obj.as_object_mut() {
-                    php_obj.properties.insert(key, cloned);
+                    php_obj.set_property(&key, cloned);
                 }
             }
         }
@@ -1650,9 +1749,12 @@ fn op_init_method_call<'a>(
             (*call).prev_execute_data = frame;
             (*call).call = (*frame).call;
             (*frame).call = call;
-            // Write $this directly — cleanup_frame_slots handles it
-            // separately, so don't set has_heap_slots here.
-            frame_set_this(call, obj_val.clone());
+            let common = &*func_ptr;
+            if common.plan.borrow_this {
+                frame_set_borrowed_this(call, obj_val as *const Value);
+            } else {
+                frame_set_this(call, obj_val.clone());
+            }
         }
     } else {
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
@@ -2467,7 +2569,9 @@ fn op_clone_obj<'a>(
         PhpObject {
             class_name: obj.class_name.clone(),
             class_id: obj.class_id,
-            properties: obj.properties.clone(),
+            property_layout: obj.property_layout.clone(),
+            property_values: obj.property_values.clone(),
+            dynamic_properties: obj.dynamic_properties.clone(),
             generator: None,
         }
     };
@@ -3483,6 +3587,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline_ptr = unsafe { opline_ptr.add(2) };
                         }
                     }
+                } else if next.opcode == OpCode::SendVal
+                    && unsafe { try_send_scalar_arg(frame, call, op_array, next) }
+                {
+                    // InitFcall + scalar SendVal: argument is already in the
+                    // callee frame. Loop-bottom advance skips the SendVal.
+                    opline_ptr = unsafe { opline_ptr.add(1) };
                 }
             }
 
@@ -3610,13 +3720,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let func_common_fast = unsafe { &*(*call).func };
                 if func_common_fast.fn_type == FunctionType::User
                     && func_common_fast.plan.call == CallStrategy::FastScalar
-                    && unsafe { (*call).num_args } == func_common_fast.sig.num_args
+                    // FastScalar is fixed-arity by construction, so the
+                    // required public count is also its exact arity. This
+                    // avoids recomputing public_arity() on every normal call
+                    // while still excluding the hidden method `$this`.
+                    && unsafe { (*call).num_args } == func_common_fast.sig.required_num_args
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
                 {
                     let has_hole = unsafe { (*call).named_args_used } && {
                         let mut hole = false;
-                        for i in 0..func_common_fast.sig.num_args {
+                        for i in 0..func_common_fast.sig.public_arity() {
                             let cv_idx = func_common_fast.sig.param_cv_index(i);
                             if unsafe { (*(*call).cv(cv_idx)).is_undef() } {
                                 hole = true;
@@ -3965,12 +4079,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 user.op_array.num_temps,
                             );
                             let gen_ref = new_generator_ref(generator);
-                            let gen_obj = PhpObject {
-                                class_name: "Generator".to_string(),
-                                class_id: 0,
-                                properties: std::collections::HashMap::new(),
-                                generator: Some(gen_ref),
-                            };
+                            let mut gen_obj = PhpObject::dynamic(
+                                "Generator".to_string(),
+                                0,
+                                std::collections::HashMap::new(),
+                            );
+                            gen_obj.generator = Some(gen_ref);
                             let gen_val = Value::object(gen_obj);
 
                             // Write generator object as return value
@@ -4314,15 +4428,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
                     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
                     let ic = &op_array.cache[ip];
-                    // prop_flags == 3: bit 0 (public+unmangled) + bit 1 (not enum/readonly)
-                    if ic.prop_flags == 3 && ic.class_id == obj_class_id && obj_class_id != 0 {
-                        let prop_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+                    // flags == 3: read-safe + write-safe declared property slot.
+                    if ic.property_flags() == 3 && ic.class_id == obj_class_id && obj_class_id != 0 {
                         let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
                         let cloned = val.clone();
-                        let name = prop_name.as_str().unwrap_or("");
-                        if let Some(mut php_obj) = obj_val.as_object_mut() {
-                            php_obj.properties.insert(name.to_string(), cloned);
-                        }
+                        unsafe {
+                            obj_val.object_set_property_slot_unchecked(ic.property_slot(), cloned);
+                        };
                     } else {
                         match op_assign_obj_prop(eg, frame, op_array, opline)? {
                             ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
@@ -4359,7 +4471,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let effective_caller = if receiver_in_scope { caller_class.as_deref() } else { None };
                     let storage_key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &prop_name, effective_caller);
 
-                    if let Some(arr_val) = php_obj.properties.get_mut(&storage_key) {
+                    if let Some(arr_val) = php_obj.get_property_mut(&storage_key) {
                         // Property exists — mutate the array in place
                         if let Some(arr) = arr_val.as_array_mut() {
                             arr.set(arr_key, new_val);
@@ -4372,7 +4484,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // Property doesn't exist — create new array
                         let mut new_arr = crate::value::PhpArray::new();
                         new_arr.set(arr_key, new_val);
-                        php_obj.properties.insert(storage_key, Value::array(new_arr));
+                        php_obj.set_property(&storage_key, Value::array(new_arr));
                     }
                 } else {
                     return Err(VmError::Fatal("Attempt to assign property on non-object".into()));
@@ -4397,7 +4509,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             (*call).prev_execute_data = frame;
                             (*call).call = (*frame).call;
                             (*frame).call = call;
-                            frame_set_this(call, obj_val.clone());
+                            let common = &*func_ptr;
+                            if common.plan.borrow_this {
+                                frame_set_borrowed_this(call, obj_val as *const Value);
+                            } else {
+                                frame_set_this(call, obj_val.clone());
+                            }
+                        }
+
+                        // Bind the contiguous scalar argument prefix while the
+                        // new frame is hot in registers. Nested argument
+                        // expressions naturally stop the fusion.
+                        let bound = unsafe {
+                            bind_contiguous_scalar_args(
+                                frame,
+                                call,
+                                op_array,
+                                opline_ptr.add(1),
+                                num_args,
+                            )
+                        };
+                        if bound != 0 {
+                            opline_ptr = unsafe { opline_ptr.add(bound) };
                         }
                     } else {
                         // Cache miss — full resolution in cold helper

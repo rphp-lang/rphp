@@ -153,6 +153,10 @@ pub struct CallPlan {
     pub call: CallStrategy,
     pub ret: ReturnStrategy,
     pub cleanup: CleanupMode,
+    /// `$this` may be copied into a nested method frame without incrementing
+    /// its Rc. The caller owns the object for the entire synchronous call and
+    /// the method has no direct `return $this` path.
+    pub borrow_this: bool,
 }
 
 /// Hotness state for function-level tiering.

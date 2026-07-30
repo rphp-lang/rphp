@@ -286,7 +286,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Callable functions ---
     reg_var!("call_user_func", fn_call_user_func, 1, "callback");
+    reg!("call_user_func_array", fn_call_user_func_array, 2, 2, "callback", "args");
     reg!("is_callable", fn_is_callable, 1, 1, "value");
+    reg!("is_scalar", fn_is_scalar, 1, 1, "value");
+    reg!("function_exists", fn_function_exists, 1, 1, "function");
 
     // --- Time functions ---
     reg!("microtime", fn_microtime, 1, 0, "as_float");
@@ -322,6 +325,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("tempnam", fn_tempnam, 2, 2, "dir", "prefix");
     reg!("sys_get_temp_dir", fn_sys_get_temp_dir, 0, 0);
     reg!("glob", fn_glob, 1, 1, "pattern");
+
+    // --- URL / query ---
+    reg!("parse_url", fn_parse_url, 2, 1, "url", "component");
+    reg_ref!("parse_str", fn_parse_str, 2, 2, 0b10, "string", "result");
+    reg!("http_build_query", fn_http_build_query, 3, 1, "data", "numeric_prefix", "arg_separator");
+
+    // --- Regex (extended) ---
+    reg_ref!("preg_match_all", fn_preg_match_all, 3, 2, 0b100, "pattern", "subject", "matches");
+    reg!("preg_split", fn_preg_split, 3, 2, "pattern", "subject", "limit");
+    reg!("preg_replace_callback", fn_preg_replace_callback, 3, 3, "pattern", "callback", "subject");
 
     // --- String encoding ---
     reg!("htmlspecialchars", fn_htmlspecialchars, 1, 1, "string");
@@ -405,7 +418,7 @@ fn fn_throwable_construct(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut Execu
             Some(v) => v.clone(),
             None => Value::string(""),
         };
-        obj.properties.insert("message".to_string(), msg);
+        obj.set_property("message", msg);
     }
     Ok(())
 }
@@ -415,7 +428,7 @@ fn fn_throwable_construct(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut Execu
 fn fn_throwable_get_message(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
     if let Some(obj) = this_val.as_object() {
-        let msg = obj.properties.get("message").cloned().unwrap_or(Value::string(""));
+        let msg = obj.get_property("message").cloned().unwrap_or(Value::string(""));
         ret!(rv, msg);
     }
     ret!(rv, Value::string(""));
@@ -461,6 +474,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -478,6 +492,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Exception".to_string())],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -495,6 +510,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Error".to_string())],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -512,6 +528,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -529,6 +546,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -546,6 +564,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -573,6 +592,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_enum: false,
         uses: vec![],
         properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
@@ -2030,9 +2050,9 @@ fn value_to_json(val: &Value) -> serde_json::Value {
         ValueType::Object => {
             if let Some(obj) = val.as_object() {
                 let mut map = serde_json::Map::new();
-                for (k, v) in &obj.properties {
-                    map.insert(k.clone(), value_to_json(v));
-                }
+                obj.for_each_property(|key, value| {
+                    map.insert(key.to_string(), value_to_json(value));
+                });
                 serde_json::Value::Object(map)
             } else {
                 serde_json::Value::Null
@@ -2080,12 +2100,11 @@ fn json_to_value(jv: serde_json::Value, assoc: bool) -> Value {
                 for (k, v) in map {
                     props.insert(k, json_to_value(v, false));
                 }
-                Value::object(PhpObject {
-                    class_name: "stdClass".to_string(),
-                    class_id: 0,
-                    properties: props,
-                    generator: None,
-                })
+                Value::object(PhpObject::dynamic(
+                    "stdClass".to_string(),
+                    0,
+                    props,
+                ))
             }
         }
     }
@@ -3799,4 +3818,637 @@ fn fn_ctype_upper(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 fn fn_ctype_lower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())));
+}
+
+// ============================================================================
+// Compatibility pack: dynamic dispatch, type guards, URL/query, regex trio
+// ============================================================================
+
+/// call_user_func_array($callback, $args): mixed
+fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let callback = arg!(ed, 0);
+    let args_val = arg!(ed, 1);
+    let caller_class = get_calling_scope_class(ed, eg);
+
+    // PHP 8: $args must be an array — TypeError otherwise
+    let arr = match args_val.as_array() {
+        Some(a) => a,
+        None => {
+            eg.exception = Some(crate::value::make_error_value("TypeError",
+                "call_user_func_array(): Argument #2 ($args) must be of type array, given non-array"));
+            return Ok(());
+        }
+    };
+
+    // Resolve callback first — we need its signature for named-arg resolution
+    let resolved = match resolve_callback(callback, eg, caller_class.as_deref()) {
+        Some(r) => r,
+        None => {
+            let desc = callback.echo_to_string();
+            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
+                "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable", desc
+            )));
+            return Ok(());
+        }
+    };
+
+    // Check if the array contains any string keys (named arguments)
+    let has_named = arr.iter().any(|(k, _)| matches!(k, ArrayKey::String(_)));
+
+    let extra_args: Vec<Value> = if has_named {
+        // PHP 8 named-argument semantics:
+        //  - positional (int-key) args must all come before any named (string-key) arg
+        //  - named args are mapped to parameter positions by name
+        //  - a named arg must not overwrite a slot already filled by a positional arg
+        //  - all required params must be covered
+        let sig = unsafe { &(*resolved.func_ptr).sig };
+        let param_names = &sig.param_names;
+        let num_params = sig.public_arity() as usize;
+        let required = (sig.required_num_args - sig.this_offset) as usize;
+
+        let mut positional = vec![Value::undef(); num_params];
+        let mut extra_positional: Vec<Value> = Vec::new();
+        let mut pos_cursor = 0usize;
+        let mut seen_named = false;
+
+        for (key, val) in arr.iter() {
+            match key {
+                ArrayKey::String(name) => {
+                    seen_named = true;
+                    if let Some(idx) = param_names.iter().position(|p| p == name.as_str()) {
+                        if idx < num_params {
+                            // Must not overwrite a slot already filled by a positional arg
+                            if !positional[idx].is_undef() {
+                                eg.exception = Some(crate::value::make_error_value("Error",
+                                    &format!("Named parameter ${} overwrites previous argument", name)));
+                                return Ok(());
+                            }
+                            positional[idx] = val.clone();
+                        } else {
+                            extra_positional.push(val.clone());
+                        }
+                    } else {
+                        eg.exception = Some(crate::value::make_error_value("Error",
+                            &format!("Unknown named parameter ${}", name)));
+                        return Ok(());
+                    }
+                }
+                ArrayKey::Int(_) => {
+                    if seen_named {
+                        eg.exception = Some(crate::value::make_error_value("Error",
+                            "Cannot use positional argument after named argument"));
+                        return Ok(());
+                    }
+                    if pos_cursor < num_params {
+                        positional[pos_cursor] = val.clone();
+                        pos_cursor += 1;
+                    } else {
+                        extra_positional.push(val.clone());
+                    }
+                }
+            }
+        }
+
+        // Check all required params are filled
+        for i in 0..required {
+            if positional[i].is_undef() {
+                let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+                eg.exception = Some(crate::value::make_error_value("ArgumentCountError",
+                    &format!("call_user_func_array(): Argument #{} (${}): not passed", i + 1, name)));
+                return Ok(());
+            }
+        }
+
+        // Trim trailing undefs (unfilled optional params)
+        let mut result: Vec<Value> = positional.into_iter().collect();
+        while result.last().map_or(false, |v| v.is_undef()) {
+            result.pop();
+        }
+        result.extend(extra_positional);
+        result
+    } else {
+        // All integer keys — simple positional pass-through
+        arr.iter().map(|(_, v)| v.clone()).collect()
+    };
+
+    let mut args = Vec::with_capacity(resolved.prepend_args.len() + extra_args.len() + resolved.use_vars.len());
+    args.extend(resolved.prepend_args);
+    args.extend(extra_args);
+    args.extend(resolved.use_vars);
+
+    let result = call_function(eg, resolved.func_ptr, &args)?;
+    if eg.exception.is_some() { return Ok(()); }
+    ret!(rv, result);
+}
+
+/// function_exists($name): bool
+fn fn_function_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let name = arg_str!(ed, 0);
+    let exists = eg.find_function(&name).is_some();
+    ret!(rv, Value::bool(exists));
+}
+
+/// is_scalar($value): bool — true for int, float, string, bool
+fn fn_is_scalar(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let val = arg!(ed, 0);
+    let scalar = matches!(val.value_type(),
+        ValueType::Long | ValueType::Double | ValueType::String | ValueType::True | ValueType::False
+    );
+    ret!(rv, Value::bool(scalar));
+}
+
+/// parse_url($url, $component = -1): mixed
+fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let url = arg_str!(ed, 0);
+    let component = arg_opt!(ed, 1).map(|v| v.to_long_val()).unwrap_or(-1);
+
+    // Manual URL parse — matches PHP's parse_url() behavior.
+    // Handles:  scheme://[user[:pass]@]host[:port][/path][?query][#fragment]
+    //           scheme:opaque_path[?query][#fragment]   (mailto:, tel:, news:, …)
+    //           //host/path  (protocol-relative)
+    //           /path?query  (relative)
+    let s = url.as_ref();
+    let mut rest = s;
+
+    // Detect scheme — a sequence of [A-Za-z][A-Za-z0-9+.-]* followed by ':'
+    let (scheme, has_authority) = if let Some(colon) = rest.find(':') {
+        let candidate = &rest[..colon];
+        let valid_scheme = !candidate.is_empty()
+            && candidate.as_bytes()[0].is_ascii_alphabetic()
+            && candidate.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.' || b == b'-');
+        if valid_scheme {
+            let after_colon = &rest[colon + 1..];
+            if after_colon.starts_with("//") {
+                // scheme://authority...
+                rest = &after_colon[2..];
+                (Some(candidate.to_string()), true)
+            } else {
+                // Opaque scheme (mailto:path, tel:number, etc.)
+                rest = after_colon;
+                (Some(candidate.to_string()), false)
+            }
+        } else if rest.starts_with("//") {
+            rest = &rest[2..];
+            (None, true)
+        } else {
+            (None, false)
+        }
+    } else if rest.starts_with("//") {
+        rest = &rest[2..];
+        (None, true)
+    } else {
+        (None, false)
+    };
+
+    // Fragment (split early — # can appear in query too, but PHP splits on first #)
+    let fragment = if let Some(idx) = rest.find('#') {
+        let f = rest[idx + 1..].to_string();
+        rest = &rest[..idx];
+        Some(f)
+    } else {
+        None
+    };
+
+    // Query
+    let query = if let Some(idx) = rest.find('?') {
+        let q = rest[idx + 1..].to_string();
+        rest = &rest[..idx];
+        Some(q)
+    } else {
+        None
+    };
+
+    // Authority vs path
+    let (user, pass, host, port, path);
+    if has_authority {
+        // Split authority from path at first /
+        let (authority, p) = if let Some(idx) = rest.find('/') {
+            (&rest[..idx], Some(rest[idx..].to_string()))
+        } else {
+            (rest, None)
+        };
+        path = p;
+
+        // user:pass@host:port
+        let (userinfo, hostport) = if let Some(idx) = authority.rfind('@') {
+            (Some(&authority[..idx]), &authority[idx + 1..])
+        } else {
+            (None, authority)
+        };
+
+        if let Some(ui) = userinfo {
+            if let Some(idx) = ui.find(':') {
+                user = Some(ui[..idx].to_string());
+                pass = Some(ui[idx + 1..].to_string());
+            } else {
+                user = Some(ui.to_string());
+                pass = None;
+            }
+        } else {
+            user = None;
+            pass = None;
+        }
+
+        // host[:port]
+        if let Some(idx) = hostport.rfind(':') {
+            let port_str = &hostport[idx + 1..];
+            if let Ok(p) = port_str.parse::<i64>() {
+                host = Some(hostport[..idx].to_string());
+                port = Some(p);
+            } else {
+                host = Some(hostport.to_string());
+                port = None;
+            }
+        } else {
+            host = if hostport.is_empty() { None } else { Some(hostport.to_string()) };
+            port = None;
+        }
+    } else {
+        // No authority — rest is the path (opaque URI or relative)
+        user = None;
+        pass = None;
+        host = None;
+        port = None;
+        path = if rest.is_empty() { None } else { Some(rest.to_string()) };
+    }
+
+    // PHP_URL_* constants
+    const PHP_URL_SCHEME: i64 = 0;
+    const PHP_URL_HOST: i64 = 1;
+    const PHP_URL_PORT: i64 = 2;
+    const PHP_URL_USER: i64 = 3;
+    const PHP_URL_PASS: i64 = 4;
+    const PHP_URL_PATH: i64 = 5;
+    const PHP_URL_QUERY: i64 = 6;
+    const PHP_URL_FRAGMENT: i64 = 7;
+
+    if component >= 0 {
+        let val = match component {
+            PHP_URL_SCHEME => scheme.map(Value::string),
+            PHP_URL_HOST => host.map(Value::string),
+            PHP_URL_PORT => port.map(Value::long),
+            PHP_URL_USER => user.map(Value::string),
+            PHP_URL_PASS => pass.map(Value::string),
+            PHP_URL_PATH => path.map(Value::string),
+            PHP_URL_QUERY => query.map(Value::string),
+            PHP_URL_FRAGMENT => fragment.map(Value::string),
+            _ => None,
+        };
+        ret!(rv, val.unwrap_or(Value::null()));
+    }
+
+    // Return associative array
+    let mut arr = PhpArray::new();
+    if let Some(v) = scheme { arr.set_str("scheme", Value::string(v)); }
+    if let Some(v) = host { arr.set_str("host", Value::string(v)); }
+    if let Some(v) = port { arr.set_str("port", Value::long(v)); }
+    if let Some(v) = user { arr.set_str("user", Value::string(v)); }
+    if let Some(v) = pass { arr.set_str("pass", Value::string(v)); }
+    if let Some(v) = path { arr.set_str("path", Value::string(v)); }
+    if let Some(v) = query { arr.set_str("query", Value::string(v)); }
+    if let Some(v) = fragment { arr.set_str("fragment", Value::string(v)); }
+    ret!(rv, Value::array(arr));
+}
+
+/// Helper: decode percent-encoded string
+fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'+' {
+            out.push(b' ');
+            i += 1;
+        } else if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
+                out.push(byte);
+                i += 3;
+            } else {
+                out.push(bytes[i]);
+                i += 1;
+            }
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// PHP normalizes dots and spaces in top-level query variable names to underscores.
+fn parse_str_normalize_key(key: &str) -> String {
+    key.chars().map(|c| if c == '.' || c == ' ' { '_' } else { c }).collect()
+}
+
+/// Parse bracket segments from a key like `a[b][c][]`.
+/// Returns (base_key, vec_of_segments) where each segment is Some("key") or None for [].
+fn parse_str_brackets(full_key: &str) -> (String, Vec<Option<String>>) {
+    if let Some(bracket_pos) = full_key.find('[') {
+        let base = parse_str_normalize_key(&full_key[..bracket_pos]);
+        let rest = &full_key[bracket_pos..];
+        let mut segments = Vec::new();
+        let mut i = 0;
+        let bytes = rest.as_bytes();
+        while i < bytes.len() {
+            if bytes[i] == b'[' {
+                if let Some(close) = rest[i + 1..].find(']') {
+                    let inner = &rest[i + 1..i + 1 + close];
+                    if inner.is_empty() {
+                        segments.push(None); // []
+                    } else {
+                        segments.push(Some(inner.to_string()));
+                    }
+                    i = i + 2 + close;
+                } else {
+                    // Malformed — no closing bracket; treat rest as literal
+                    segments.push(Some(rest[i..].to_string()));
+                    break;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        (base, segments)
+    } else {
+        (parse_str_normalize_key(full_key), vec![])
+    }
+}
+
+/// Recursively set a value in a nested PhpArray given a chain of bracket segments.
+fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Value) {
+    if segments.is_empty() {
+        // Should not happen — caller handles the leaf case
+        return;
+    }
+    let seg = &segments[0];
+    let remaining = &segments[1..];
+
+    if remaining.is_empty() {
+        // Leaf: set or push
+        match seg {
+            None => { arr.push(val); }
+            Some(k) => { arr.set_str(k, val); }
+        }
+    } else {
+        // Intermediate: get-or-create sub-array, then recurse
+        match seg {
+            None => {
+                // [] at intermediate level: append a new sub-array entry
+                let mut sub = PhpArray::new();
+                parse_str_set_nested(&mut sub, remaining, val);
+                arr.push(Value::array(sub));
+            }
+            Some(k) => {
+                let mut sub = if let Some(existing) = arr.get_str(k) {
+                    existing.as_array().cloned().unwrap_or_else(PhpArray::new)
+                } else {
+                    PhpArray::new()
+                };
+                parse_str_set_nested(&mut sub, remaining, val);
+                arr.set_str(k, Value::array(sub));
+            }
+        }
+    }
+}
+
+/// parse_str($string, &$result): void
+/// Parses a URL-encoded query string into variables.
+/// Supports recursive nesting (a[b][c]=1) and PHP key normalization (dots/spaces → _).
+fn fn_parse_str(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let input = arg_str!(ed, 0);
+    let out_ptr = arg_mut!(ed, 1);
+
+    let mut arr = PhpArray::new();
+    if !input.is_empty() {
+        for pair in input.as_ref().split('&') {
+            if pair.is_empty() { continue; }
+            let (raw_key, val) = if let Some(idx) = pair.find('=') {
+                (percent_decode(&pair[..idx]), percent_decode(&pair[idx + 1..]))
+            } else {
+                (percent_decode(pair), String::new())
+            };
+
+            let (base, segments) = parse_str_brackets(&raw_key);
+            if segments.is_empty() {
+                // Simple key — no brackets
+                arr.set_str(&base, Value::string(val));
+            } else {
+                // Nested key — get-or-create the base sub-array, then recurse
+                let mut sub = if let Some(existing) = arr.get_str(&base) {
+                    existing.as_array().cloned().unwrap_or_else(PhpArray::new)
+                } else {
+                    PhpArray::new()
+                };
+                parse_str_set_nested(&mut sub, &segments, Value::string(val));
+                arr.set_str(&base, Value::array(sub));
+            }
+        }
+    }
+
+    unsafe { std::ptr::drop_in_place(out_ptr); out_ptr.write(Value::array(arr)); }
+    ret!(rv, Value::null());
+}
+
+/// Helper: percent-encode a string for URL query
+fn percent_encode_query(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(b as char);
+            }
+            b' ' => out.push('+'),
+            _ => {
+                out.push('%');
+                out.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
+                out.push(char::from_digit((b & 0xf) as u32, 16).unwrap().to_ascii_uppercase());
+            }
+        }
+    }
+    out
+}
+
+/// http_build_query($data, $numeric_prefix = "", $arg_separator = "&"): string
+fn fn_http_build_query(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let data = arg!(ed, 0);
+    let prefix = arg_opt!(ed, 1).map(|v| v.echo_to_string()).unwrap_or_default();
+    let sep = arg_opt!(ed, 2).map(|v| v.echo_to_string()).unwrap_or_else(|| "&".to_string());
+
+    fn build_pairs(arr: &PhpArray, parent_key: &str, prefix: &str, pairs: &mut Vec<String>) {
+        for (key, val) in arr.iter() {
+            // PHP: null values are omitted entirely
+            if val.value_type() == ValueType::Null {
+                continue;
+            }
+            let key_str = match &key {
+                ArrayKey::Int(i) => {
+                    if parent_key.is_empty() {
+                        format!("{}{}", prefix, i)
+                    } else {
+                        format!("{}[{}]", parent_key, i)
+                    }
+                }
+                ArrayKey::String(s) => {
+                    if parent_key.is_empty() {
+                        s.clone()
+                    } else {
+                        format!("{}[{}]", parent_key, s)
+                    }
+                }
+            };
+            if let Some(sub_arr) = val.as_array() {
+                build_pairs(&sub_arr, &key_str, prefix, pairs);
+            } else {
+                // PHP: booleans serialize as "1" / "0", not "1" / ""
+                let v = match val.value_type() {
+                    ValueType::True => "1".to_string(),
+                    ValueType::False => "0".to_string(),
+                    _ => val.echo_to_string(),
+                };
+                pairs.push(format!("{}={}", percent_encode_query(&key_str), percent_encode_query(&v)));
+            }
+        }
+    }
+
+    if let Some(arr) = data.as_array() {
+        let mut pairs = Vec::new();
+        build_pairs(&arr, "", &prefix, &mut pairs);
+        ret!(rv, Value::string(pairs.join(&sep)));
+    }
+
+    ret!(rv, Value::string(String::new()));
+}
+
+/// preg_match_all($pattern, $subject, &$matches = null): int
+fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let pattern_str = arg_str!(ed, 0);
+    let subject = arg_str!(ed, 1);
+
+    let has_matches = {
+        let raw = unsafe { (*ed).cv(2) };
+        !raw.is_undef()
+    };
+
+    let (pat, flags) = match parse_php_regex(&pattern_str) {
+        Ok(v) => v,
+        Err(_) => { ret!(rv, Value::long(0)); }
+    };
+    let re = match Regex::new(&pat, flags) {
+        Ok(r) => r,
+        Err(_) => { ret!(rv, Value::long(0)); }
+    };
+
+    let all_caps = re.captures_iter(&subject);
+    let count = all_caps.len() as i64;
+
+    if has_matches {
+        let matches_ptr = arg_mut!(ed, 2);
+        // PHP default: PREG_PATTERN_ORDER — matches[0] = all full matches, matches[1] = all group 1, etc.
+        let num_groups = if all_caps.is_empty() { 1 } else { all_caps[0].len() };
+        let mut result_arrays: Vec<PhpArray> = (0..num_groups).map(|_| PhpArray::new()).collect();
+        for caps in &all_caps {
+            for i in 0..num_groups {
+                match caps.get(i) {
+                    Some(m) => result_arrays[i].push(Value::string(m.as_str(&subject))),
+                    None => result_arrays[i].push(Value::string("")),
+                }
+            }
+        }
+        let mut out = PhpArray::new();
+        for arr in result_arrays {
+            out.push(Value::array(arr));
+        }
+        // Also add named groups as string-keyed entries at top level
+        if let Some(first_caps) = all_caps.first() {
+            for (name, &idx) in first_caps.named_groups() {
+                let mut named_arr = PhpArray::new();
+                for caps in &all_caps {
+                    match caps.get(idx) {
+                        Some(m) => named_arr.push(Value::string(m.as_str(&subject))),
+                        None => named_arr.push(Value::string("")),
+                    }
+                }
+                out.set_str(name, Value::array(named_arr));
+            }
+        }
+        unsafe { std::ptr::drop_in_place(matches_ptr); matches_ptr.write(Value::array(out)); }
+    }
+
+    ret!(rv, Value::long(count));
+}
+
+/// preg_split($pattern, $subject, $limit = -1): array|false
+fn fn_preg_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let pattern_str = arg_str!(ed, 0);
+    let subject = arg_str!(ed, 1);
+    let limit = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(-1);
+
+    let (pat, flags) = match parse_php_regex(&pattern_str) {
+        Ok(v) => v,
+        Err(_) => { ret!(rv, Value::bool(false)); }
+    };
+    let re = match Regex::new(&pat, flags) {
+        Ok(r) => r,
+        Err(_) => { ret!(rv, Value::bool(false)); }
+    };
+
+    let parts = re.split(&subject, limit);
+    let mut arr = PhpArray::new();
+    for part in parts {
+        arr.push(Value::string(part));
+    }
+    ret!(rv, Value::array(arr));
+}
+
+/// preg_replace_callback($pattern, $callback, $subject): string|null
+fn fn_preg_replace_callback(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let pattern_str = arg_str!(ed, 0);
+    let callback = arg!(ed, 1).clone();
+    let subject = arg_str!(ed, 2).into_owned();
+
+    let (pat, flags) = match parse_php_regex(&pattern_str) {
+        Ok(v) => v,
+        Err(_) => { ret!(rv, Value::null()); }
+    };
+    let re = match Regex::new(&pat, flags) {
+        Ok(r) => r,
+        Err(_) => { ret!(rv, Value::null()); }
+    };
+
+    // Collect all matches first, then replace (because callback needs &mut eg)
+    let all_caps = re.captures_iter(&subject);
+    if all_caps.is_empty() {
+        ret!(rv, Value::string(subject));
+    }
+
+    // Build match ranges and replacement strings
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    for caps in &all_caps {
+        let full_match = caps.get(0).unwrap();
+        // Build matches array for callback — numeric + named group keys (like PHP)
+        let mut matches_arr = PhpArray::new();
+        for i in 0..caps.len() {
+            match caps.get(i) {
+                Some(m) => matches_arr.push(Value::string(m.as_str(&subject))),
+                None => matches_arr.push(Value::string("")),
+            }
+        }
+        // Add named capture groups as string-keyed entries
+        for (name, &idx) in caps.named_groups() {
+            if let Some(m) = caps.get(idx) {
+                matches_arr.set_str(name, Value::string(m.as_str(&subject)));
+            }
+        }
+        let cb_result = invoke_callback(eg, &callback, &[Value::array(matches_arr)], ed)?;
+        if eg.exception.is_some() { return Ok(()); }
+        replacements.push((full_match.start, full_match.end, cb_result.echo_to_string()));
+    }
+
+    // Apply replacements in reverse order to preserve indices
+    let mut result = subject.clone();
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        result.replace_range(start..end, &replacement);
+    }
+
+    ret!(rv, Value::string(result));
 }

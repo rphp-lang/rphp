@@ -11,6 +11,10 @@
 
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::function::CallStrategy;
 
 // ══════════════════════════════════════════════════════════════════════
 // 1. Promotion: scalar recursion enters hot executor
@@ -52,6 +56,103 @@ for ($i = 0; $i < 100; $i++) {
 }
 echo $sum;
 "), "4950");
+}
+
+#[test]
+fn test_direct_scalar_call_chain_gets_fast_scalar_plan() {
+    let source = "<?php
+function leaf($x) { return $x + 1; }
+function chain($x) { return leaf($x); }
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let chain = result
+        .functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("chain"))
+        .map(|(_, function)| function)
+        .unwrap();
+
+    assert!(!chain.op_array.may_access_globals);
+    assert_eq!(chain.common.plan.call, CallStrategy::FastScalar);
+}
+
+#[test]
+fn test_transitive_global_chain_stays_conservative() {
+    let source = "<?php
+function reader() { global $value; return $value; }
+function chain() { return reader(); }
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let chain = result
+        .functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("chain"))
+        .map(|(_, function)| function)
+        .unwrap();
+
+    assert!(chain.op_array.may_access_globals);
+    assert_ne!(chain.common.plan.call, CallStrategy::FastScalar);
+}
+
+#[test]
+fn test_leaf_scalar_method_gets_fast_scalar_plan() {
+    let source = "<?php
+class Math {
+    public function add($a, $b) { return $a + $b; }
+}
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let method = &result.class_defs[0].methods[0].4;
+
+    assert_eq!(method.common.sig.this_offset, 1);
+    assert_eq!(method.common.sig.public_arity(), 2);
+    assert_eq!(method.common.plan.call, CallStrategy::FastScalar);
+    assert!(method.common.plan.borrow_this);
+}
+
+#[test]
+fn test_method_with_dynamic_dispatch_stays_conservative() {
+    let source = "<?php
+class Wrapper {
+    public function run($other, $value) { return $other->apply($value); }
+}
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let method = &result.class_defs[0].methods[0].4;
+
+    assert!(method.op_array.may_access_globals);
+    assert_ne!(method.common.plan.call, CallStrategy::FastScalar);
+}
+
+#[test]
+fn test_method_returning_this_keeps_owned_receiver() {
+    let source = "<?php
+class Identity {
+    public function me() { return $this; }
+}
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let method = &result.class_defs[0].methods[0].4;
+
+    assert_eq!(method.common.plan.call, CallStrategy::FastScalar);
+    assert!(!method.common.plan.borrow_this);
+    assert_eq!(run_php("<?php
+class Identity {
+    public function me() { return $this; }
+}
+$object = new Identity();
+echo $object->me() === $object ? 'same' : 'different';
+"), "same");
 }
 
 // ══════════════════════════════════════════════════════════════════════

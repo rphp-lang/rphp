@@ -9,6 +9,7 @@ use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
 use crate::compiler::compile::ClassDef;
 use crate::parser::Visibility;
+use crate::value::ObjectLayout;
 
 /// Mangle a private property name: `ClassName\0propname`.
 /// Public/protected properties are stored under their plain name.
@@ -317,6 +318,19 @@ impl ExecutorGlobals {
                 }
             }
         }
+
+        // Property order is now final. Build one shared storage-key → slot
+        // layout for every object instance of this class.
+        let property_keys = class_def.properties.iter()
+            .map(|(name, _default, visibility, declaring)| {
+                if *visibility == Visibility::Private {
+                    mangle_private_prop(declaring, name)
+                } else {
+                    name.clone()
+                }
+            })
+            .collect();
+        class_def.property_layout = std::rc::Rc::new(ObjectLayout::new(property_keys));
 
         // Box to get stable heap address for function pointers
         self.class_table.insert(class_name.clone(), Box::new(class_def));

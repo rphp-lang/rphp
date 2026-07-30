@@ -207,6 +207,139 @@ impl Regex {
         }
         result
     }
+
+    /// Find all non-overlapping matches, returning a vector of Captures.
+    pub fn captures_iter(&self, subject: &str) -> Vec<Captures> {
+        let chars: Vec<char> = subject.chars().collect();
+        let mut results = Vec::new();
+        let mut pos = 0;
+
+        while pos <= chars.len() {
+            let mut groups = vec![None; self.num_groups + 1];
+            let mut ctx = MatchCtx {
+                chars: &chars,
+                input: subject,
+                flags: self.flags,
+                groups: &mut groups,
+                named_groups: &self.named_groups,
+            };
+            if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
+                let match_start = char_offset(subject, &chars, pos);
+                let match_end = char_offset(subject, &chars, end);
+                ctx.groups[0] = Some(Match { start: match_start, end: match_end });
+                results.push(Captures {
+                    groups: groups.clone(),
+                    named_groups: self.named_groups.clone(),
+                });
+                if end == pos {
+                    pos += 1; // avoid infinite loop on zero-length match
+                } else {
+                    pos = end;
+                }
+            } else {
+                pos += 1;
+            }
+        }
+        results
+    }
+
+    /// Split subject by regex.  `limit` < 0 means no limit.
+    pub fn split(&self, subject: &str, limit: i64) -> Vec<String> {
+        let chars: Vec<char> = subject.chars().collect();
+        let mut parts = Vec::new();
+        let mut last_end = 0usize; // char index of end of last match
+        let mut splits = 0i64;
+        let effective_limit = if limit <= 0 { i64::MAX } else { limit };
+
+        let mut scan = 0;
+        while scan <= chars.len() {
+            if splits + 1 >= effective_limit {
+                break;
+            }
+            // Try matching at every position starting from `scan`
+            let mut found = false;
+            for try_start in scan..=chars.len() {
+                let mut groups = vec![None; self.num_groups + 1];
+                let mut ctx = MatchCtx {
+                    chars: &chars,
+                    input: subject,
+                    flags: self.flags,
+                    groups: &mut groups,
+                    named_groups: &self.named_groups,
+                };
+                if let Some(end) = match_seq_from(&self.ast, &[], try_start, &mut ctx) {
+                    let match_start_byte = char_offset(subject, &chars, try_start);
+                    // Don't split on zero-length match at same position
+                    if end == try_start && try_start == last_end && try_start < chars.len() {
+                        continue;
+                    }
+                    // Push text from last_end to match_start
+                    let last_end_byte = char_offset(subject, &chars, last_end);
+                    parts.push(subject[last_end_byte..match_start_byte].to_string());
+                    splits += 1;
+                    last_end = end;
+                    scan = if end == try_start { end + 1 } else { end };
+                    found = true;
+                    break;
+                }
+            }
+            if !found {
+                break;
+            }
+        }
+        // Push remainder
+        let last_end_byte = char_offset(subject, &chars, last_end);
+        parts.push(subject[last_end_byte..].to_string());
+        parts
+    }
+
+    /// Replace all occurrences, calling a closure for each match to produce the replacement.
+    pub fn replace_all_with<F>(&self, subject: &str, mut replacer: F) -> String
+    where
+        F: FnMut(&Captures, &str) -> String,
+    {
+        let chars: Vec<char> = subject.chars().collect();
+        let mut result = String::new();
+        let mut pos = 0;
+
+        while pos <= chars.len() {
+            let mut groups = vec![None; self.num_groups + 1];
+            let mut ctx = MatchCtx {
+                chars: &chars,
+                input: subject,
+                flags: self.flags,
+                groups: &mut groups,
+                named_groups: &self.named_groups,
+            };
+            if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
+                let match_start = char_offset(subject, &chars, pos);
+                let match_end = char_offset(subject, &chars, end);
+                ctx.groups[0] = Some(Match { start: match_start, end: match_end });
+
+                result.push_str(&subject[char_offset(subject, &chars, pos)..match_start]);
+                let caps = Captures {
+                    groups: groups.clone(),
+                    named_groups: self.named_groups.clone(),
+                };
+                result.push_str(&replacer(&caps, subject));
+
+                if end == pos {
+                    if pos < chars.len() {
+                        result.push(chars[pos]);
+                    }
+                    pos += 1;
+                } else {
+                    pos = end;
+                }
+            } else {
+                if pos < chars.len() {
+                    result.push(chars[pos]);
+                }
+                pos += 1;
+            }
+        }
+        result
+    }
 }
 
 // ── Helper: expand replacement backreferences ───────────────────────────────

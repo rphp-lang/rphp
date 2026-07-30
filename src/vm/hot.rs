@@ -465,6 +465,15 @@ pub fn execute_hot_frame(
                         }
                     }
                 }
+                if next.opcode == OpCode::SendVal
+                    && unsafe {
+                        super::execute::try_send_scalar_arg(frame, call, op_array, next)
+                    }
+                {
+                    // InitFcall + scalar SendVal fusion.
+                    opline_ptr = unsafe { opline_ptr.add(2) };
+                    continue;
+                }
                 // No peek-ahead match — advance normally
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
@@ -818,15 +827,12 @@ pub fn execute_hot_frame(
                 let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let ic = &op_array.cache[ip];
                 // Inline cache check: public property (bit 0) + same class
-                if ic.prop_flags & 1 == 0 || ic.class_id != obj_class_id || obj_class_id == 0 {
+                if ic.property_flags() & 1 == 0 || ic.class_id != obj_class_id || obj_class_id == 0 {
                     return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
                 }
-                let prop_name = &op_array.literals()[opline.op2 as usize];
-                let name = prop_name.as_str().unwrap_or("");
-                let prop_ptr = unsafe { obj_val.object_property_unchecked(name) };
-                if prop_ptr.is_null() {
-                    return bailout(frame, opline_ptr, HotBailReason::ObjPropertyMissing);
-                }
+                let prop_ptr = unsafe {
+                    obj_val.object_property_slot_unchecked(ic.property_slot())
+                };
                 let prop_val = unsafe { &*prop_ptr };
                 // Scalar-only: bail if property value is heap type
                 if prop_val.needs_cleanup() || prop_val.is_reference() {
@@ -841,7 +847,7 @@ pub fn execute_hot_frame(
             }
 
             // ── AssignObjProp — scalar-safe property write ──
-            // Contract: cache hit (prop_flags==3) + scalar source value only.
+            // Contract: cache hit (read-safe + write-safe) + scalar source value only.
             // Bails on: cache miss, non-object, heap source.
             OpCode::AssignObjProp => {
                 // op1 = CV (object), op2 = Const (property name), result = source value
@@ -854,7 +860,7 @@ pub fn execute_hot_frame(
                 let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let ic = &op_array.cache[ip];
                 // Need both read-safe (bit 0) and write-safe (bit 1)
-                if ic.prop_flags != 3 || ic.class_id != obj_class_id || obj_class_id == 0 {
+                if ic.property_flags() != 3 || ic.class_id != obj_class_id || obj_class_id == 0 {
                     return bailout(frame, opline_ptr, HotBailReason::ObjAssignCacheMiss);
                 }
                 // Read the source value
@@ -872,12 +878,12 @@ pub fn execute_hot_frame(
                 if src_val.needs_cleanup() || src_val.is_reference() {
                     return bailout(frame, opline_ptr, HotBailReason::ObjAssignHeapSrc);
                 }
-                let prop_name = &op_array.literals()[opline.op2 as usize];
-                let name = prop_name.as_str().unwrap_or("");
-                // Write scalar value to property — raw_copy to construct Value, then insert
+                // Write scalar value directly to the cached declared-property slot.
                 let mut new_val = Value::undef();
                 unsafe { Value::raw_copy(src_val as *const Value, &mut new_val as *mut Value) };
-                unsafe { obj_val.object_set_property_unchecked(name, new_val) };
+                unsafe {
+                    obj_val.object_set_property_slot_unchecked(ic.property_slot(), new_val)
+                };
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
             }
@@ -900,6 +906,7 @@ pub fn execute_hot_frame(
                     return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
                 }
                 let func_ptr = ic.func;
+                let func_common = unsafe { &*func_ptr };
                 let num_args = opline.extended_value;
                 let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
                 unsafe {
@@ -907,18 +914,42 @@ pub fn execute_hot_frame(
                     (*call).prev_execute_data = frame;
                     (*call).call = (*frame).call;
                     (*frame).call = call;
-                    // Write $this into CV[0] — clone the object Rc handle
-                    let this_clone = obj_val.clone();
                     let this_ptr = (call as *mut Value).add(CALL_FRAME_SLOTS);
-                    this_ptr.write(this_clone);
-                    // Mark frame: $this is heap (Object) — cleanup on Return
-                    (*call).has_heap_slots = true;
-                    let total = (*call).num_cvs + (*call).num_temps;
-                    if total <= 64 {
-                        (*call).heap_bitmap |= 1u64; // bit 0 = CV[0] = $this
+                    if func_common.plan.borrow_this {
+                        // The caller owns the object for the complete nested
+                        // call; do not add this borrowed slot to cleanup.
+                        Value::raw_copy(obj_val as *const Value, this_ptr);
+                    } else {
+                        this_ptr.write(obj_val.clone());
+                        (*call).has_heap_slots = true;
+                        let total = (*call).num_cvs + (*call).num_temps;
+                        if total <= 64 {
+                            (*call).heap_bitmap |= 1u64;
+                        }
                     }
                 }
-                opline_ptr = unsafe { opline_ptr.add(1) };
+
+                // Bind the contiguous scalar argument prefix. A nested
+                // expression stops the scan and is handled normally.
+                let mut next = unsafe { opline_ptr.add(1) };
+                let end = unsafe { next.add(num_args as usize) };
+                while next < end {
+                    let send = unsafe { &*next };
+                    if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                        || !unsafe {
+                            super::execute::try_send_scalar_method_arg(
+                                frame,
+                                call,
+                                op_array,
+                                send,
+                            )
+                        }
+                    {
+                        break;
+                    }
+                    next = unsafe { next.add(1) };
+                }
+                opline_ptr = next;
                 continue;
             }
 

@@ -1,13 +1,12 @@
-/// Shared test helpers for end-to-end PHP tests.
-
-use rphp::lexer::Lexer;
-use rphp::parser::Parser;
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
-use rphp::vm::execute;
-use rphp::vm::function::FunctionCommon;
+/// Shared test helpers for end-to-end PHP tests.
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
 use rphp::runtime::ExecutorGlobals;
 use rphp::stdlib;
+use rphp::vm::execute;
+use rphp::vm::function::FunctionCommon;
 
 pub fn make_eg_with_capture() -> (ExecutorGlobals, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
     let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -40,10 +39,7 @@ pub fn run_php(source: &str) -> String {
 }
 
 #[allow(dead_code)]
-pub fn run_php_with_functions(
-    source: &str,
-    register: impl FnOnce(&mut ExecutorGlobals),
-) -> String {
+pub fn run_php_with_functions(source: &str, register: impl FnOnce(&mut ExecutorGlobals)) -> String {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts).unwrap();
@@ -53,7 +49,8 @@ pub fn run_php_with_functions(
     let _stdlib = stdlib::register_stdlib(&mut eg);
     // Register user-declared functions
     for (name, func) in &result.functions {
-        eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
+        eg.register_function(name, &func.common as *const FunctionCommon)
+            .unwrap();
     }
     // Register class definitions
     for class_def in result.class_defs {
@@ -74,7 +71,8 @@ pub fn run_php_silent(source: &str) {
     let (mut eg, _buf) = make_eg_with_capture();
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
-        eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
+        eg.register_function(name, &func.common as *const FunctionCommon)
+            .unwrap();
     }
     for class_def in result.class_defs {
         eg.register_class(class_def).unwrap();
@@ -108,7 +106,8 @@ impl PreparedPhp {
         let (mut eg, buf) = make_eg_with_capture();
         let stdlib = stdlib::register_stdlib(&mut eg);
         for (name, func) in &result.functions {
-            eg.register_function(name, &func.common as *const FunctionCommon).unwrap();
+            eg.register_function(name, &func.common as *const FunctionCommon)
+                .unwrap();
         }
         for class_def in result.class_defs {
             eg.register_class(class_def).unwrap();

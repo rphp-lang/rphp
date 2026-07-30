@@ -1,7 +1,7 @@
 pub mod compile;
 
 use crate::value::Value;
-use crate::vm::instruction::{Instruction, InlineCache};
+use crate::vm::instruction::{Instruction, InlineCache, OpType};
 use std::cell::Cell;
 use crate::vm::function::{
     FunctionCommon, FunctionType, UserFunction, ParamTypeHint,
@@ -40,10 +40,9 @@ pub struct OpArray {
     pub cache: Vec<InlineCache>,
     /// True if this function or any transitive callee may read/write eg.globals.
     /// Used by DoFcall to skip caller→globals sync when callee can't reach globals.
-    /// Computed conservatively:
-    ///   - true if function has `global $x;` bindings
-    ///   - true if function calls any user function (may transitively reach `global`)
-    ///   - false only for leaf functions with no calls and no global bindings
+    /// Direct user-function calls are refined through the compilation unit's
+    /// call graph. Dynamic, virtual, unknown and include-loaded targets remain
+    /// conservative.
     pub may_access_globals: bool,
     /// Basic block metadata, computed once after instruction finalization.
     pub block_info: Vec<BlockInfo>,
@@ -421,7 +420,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout { num_cvs, num_temps, total_slots },
-            plan: CallPlan { call, ret, cleanup },
+            plan: CallPlan { call, ret, cleanup, borrow_this: false },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -500,7 +499,7 @@ pub fn make_user_function_typed(
                 return_type_hint,
             },
             frame: FrameLayout { num_cvs, num_temps, total_slots },
-            plan: CallPlan { call, ret, cleanup },
+            plan: CallPlan { call, ret, cleanup, borrow_this: false },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -531,12 +530,57 @@ pub fn make_internal_function(
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
-            plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            plan: CallPlan {
+                call: CallStrategy::Full,
+                ret: ReturnStrategy::Full,
+                cleanup: CleanupMode::ScanAll,
+                borrow_this: false,
+            },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
     }
+}
+
+/// Finalize a non-static user method after `$this` has been reserved at CV 0.
+///
+/// `make_user_function_typed()` cannot classify a method as FastScalar while
+/// `this_offset` is still zero: `num_args` already includes the hidden `$this`
+/// slot while `required_num_args` intentionally counts only public arguments.
+/// Re-run that classification once the public signature is known.
+pub fn finalize_user_method(mut function: UserFunction) -> UserFunction {
+    function.common.sig.this_offset = 1;
+
+    let common = &function.common;
+    let has_no_type_hints = common
+        .sig
+        .param_type_hints
+        .iter()
+        .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
+    let has_no_return_type =
+        matches!(common.sig.return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+    let can_use_fast_scalar = !common.sig.is_variadic
+        && common.sig.ref_args == 0
+        && common.sig.public_arity() == common.sig.required_num_args
+        && function.op_array.global_vars.is_empty()
+        && function.op_array.static_vars.is_empty()
+        && function.op_array.try_entries.is_empty()
+        && !function.op_array.is_generator
+        && !function.op_array.may_access_globals
+        && has_no_type_hints
+        && has_no_return_type;
+
+    if can_use_fast_scalar {
+        function.common.plan.call = CallStrategy::FastScalar;
+        function.common.plan.borrow_this = !function.op_array.instructions.iter().any(|instruction| {
+            instruction.opcode == OpCode::Return
+                && instruction.op1_type == OpType::Cv
+                && instruction.op1 == 0
+        });
+    }
+
+    function
 }
 
 /// Create an InternalFunction for a method (with $this in CV 0).
@@ -563,7 +607,12 @@ pub fn make_internal_method(
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
-            plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            plan: CallPlan {
+                call: CallStrategy::Full,
+                ret: ReturnStrategy::Full,
+                cleanup: CleanupMode::ScanAll,
+                borrow_this: false,
+            },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -595,7 +644,12 @@ pub fn make_internal_function_ref(
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
-            plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            plan: CallPlan {
+                call: CallStrategy::Full,
+                ret: ReturnStrategy::Full,
+                cleanup: CleanupMode::ScanAll,
+                borrow_this: false,
+            },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -626,7 +680,12 @@ pub fn make_internal_function_variadic(
                 return_type_hint: ParamTypeHint::None,
             },
             frame: FrameLayout { num_cvs, num_temps: 0, total_slots },
-            plan: CallPlan { call: CallStrategy::Full, ret: ReturnStrategy::Full, cleanup: CleanupMode::ScanAll },
+            plan: CallPlan {
+                call: CallStrategy::Full,
+                ret: ReturnStrategy::Full,
+                cleanup: CleanupMode::ScanAll,
+                borrow_this: false,
+            },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },

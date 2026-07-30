@@ -1,11 +1,51 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::marker::PhantomData;
 use std::rc::Rc;
-use std::cell::RefCell;
 
 use crate::vm::stats;
 use crate::vm::generator::GeneratorRef;
 use crate::vm::function::FunctionCommon;
+
+/// Shared declared-property layout for all instances of a class.
+///
+/// Names are resolved only on cold/cache-miss paths. Hot property access stores
+/// the numeric slot in the instruction inline cache and indexes `property_values`
+/// directly.
+#[derive(Debug, Default)]
+pub struct ObjectLayout {
+    keys: Vec<String>,
+    slots: HashMap<String, usize>,
+}
+
+impl ObjectLayout {
+    pub fn new(keys: Vec<String>) -> Self {
+        let mut slots = HashMap::with_capacity(keys.len());
+        for (slot, key) in keys.iter().enumerate() {
+            slots.insert(key.clone(), slot);
+        }
+        Self { keys, slots }
+    }
+
+    pub fn empty() -> Self {
+        Self::default()
+    }
+
+    #[inline]
+    pub fn slot(&self, key: &str) -> Option<usize> {
+        self.slots.get(key).copied()
+    }
+
+    #[inline]
+    pub fn key(&self, slot: usize) -> Option<&str> {
+        self.keys.get(slot).map(String::as_str)
+    }
+
+    #[inline]
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+}
 
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
@@ -13,9 +53,155 @@ pub struct PhpObject {
     pub class_name: String,
     /// Stable numeric class ID — matches ClassDef.class_id. Used for inline cache keying.
     pub class_id: u32,
-    pub properties: HashMap<String, Value>,
+    /// Shared name → slot mapping owned by the class definition.
+    pub property_layout: Rc<ObjectLayout>,
+    /// Declared properties in compact numeric slots.
+    pub property_values: Vec<Value>,
+    /// Dynamic properties are uncommon and allocated lazily.
+    pub dynamic_properties: Option<Box<HashMap<String, Value>>>,
     /// If this object is a Generator, holds the generator state
     pub generator: Option<GeneratorRef>,
+}
+
+impl PhpObject {
+    pub fn with_layout(
+        class_name: String,
+        class_id: u32,
+        property_layout: Rc<ObjectLayout>,
+        property_values: Vec<Value>,
+    ) -> Self {
+        debug_assert_eq!(property_layout.len(), property_values.len());
+        Self {
+            class_name,
+            class_id,
+            property_layout,
+            property_values,
+            dynamic_properties: None,
+            generator: None,
+        }
+    }
+
+    pub fn dynamic(
+        class_name: String,
+        class_id: u32,
+        properties: HashMap<String, Value>,
+    ) -> Self {
+        Self {
+            class_name,
+            class_id,
+            property_layout: Rc::new(ObjectLayout::empty()),
+            property_values: Vec::new(),
+            dynamic_properties: if properties.is_empty() {
+                None
+            } else {
+                Some(Box::new(properties))
+            },
+            generator: None,
+        }
+    }
+
+    #[inline]
+    pub fn property_slot(&self, key: &str) -> Option<usize> {
+        self.property_layout.slot(key)
+    }
+
+    #[inline]
+    pub fn get_property_slot(&self, slot: usize) -> Option<&Value> {
+        self.property_values.get(slot)
+    }
+
+    #[inline]
+    pub fn get_property_slot_mut(&mut self, slot: usize) -> Option<&mut Value> {
+        self.property_values.get_mut(slot)
+    }
+
+    #[inline]
+    pub fn get_property(&self, key: &str) -> Option<&Value> {
+        if let Some(slot) = self.property_layout.slot(key) {
+            self.property_values.get(slot)
+        } else {
+            self.dynamic_properties.as_ref()?.get(key)
+        }
+    }
+
+    #[inline]
+    pub fn get_property_mut(&mut self, key: &str) -> Option<&mut Value> {
+        if let Some(slot) = self.property_layout.slot(key) {
+            self.property_values.get_mut(slot)
+        } else {
+            self.dynamic_properties.as_mut()?.get_mut(key)
+        }
+    }
+
+    #[inline]
+    pub fn contains_property(&self, key: &str) -> bool {
+        self.property_layout.slot(key).is_some()
+            || self
+                .dynamic_properties
+                .as_ref()
+                .is_some_and(|props| props.contains_key(key))
+    }
+
+    /// Set a declared slot or create/update a dynamic property.
+    /// Returns the declared slot when one exists.
+    #[inline]
+    pub fn set_property(&mut self, key: &str, value: Value) -> Option<usize> {
+        if let Some(slot) = self.property_layout.slot(key) {
+            self.property_values[slot] = value;
+            Some(slot)
+        } else {
+            self.dynamic_properties
+                .get_or_insert_with(|| Box::new(HashMap::new()))
+                .insert(key.to_string(), value);
+            None
+        }
+    }
+
+    pub fn for_each_property(&self, mut visitor: impl FnMut(&str, &Value)) {
+        for (slot, value) in self.property_values.iter().enumerate() {
+            if let Some(key) = self.property_layout.key(slot) {
+                visitor(key, value);
+            }
+        }
+        if let Some(dynamic) = &self.dynamic_properties {
+            for (key, value) in dynamic.iter() {
+                visitor(key, value);
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod object_tests {
+    use super::{ObjectLayout, PhpObject, Value};
+    use std::rc::Rc;
+
+    #[test]
+    fn declared_properties_use_shared_slots() {
+        let layout = Rc::new(ObjectLayout::new(vec!["count".to_string()]));
+        let mut object =
+            PhpObject::with_layout("Counter".to_string(), 7, layout.clone(), vec![Value::long(1)]);
+
+        assert_eq!(object.set_property("count", Value::long(2)), Some(0));
+        assert_eq!(object.get_property("count").and_then(Value::as_long), Some(2));
+        assert!(object.dynamic_properties.is_none());
+        assert!(Rc::ptr_eq(&object.property_layout, &layout));
+    }
+
+    #[test]
+    fn dynamic_properties_are_allocated_lazily() {
+        let mut object = PhpObject::with_layout(
+            "Dynamic".to_string(),
+            8,
+            Rc::new(ObjectLayout::empty()),
+            Vec::new(),
+        );
+
+        assert!(object.dynamic_properties.is_none());
+        assert_eq!(object.set_property("extra", Value::long(9)), None);
+        assert_eq!(object.get_property("extra").and_then(Value::as_long), Some(9));
+        assert!(object.dynamic_properties.is_some());
+    }
 }
 
 /// PHP array — ordered hash map with integer and string keys.
@@ -727,10 +913,21 @@ impl Value {
         debug_assert!(self.value_type() == ValueType::Object);
         let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
         let obj = &*refcell.as_ptr();
-        match obj.properties.get(name) {
+        match obj.get_property(name) {
             Some(v) => v as *const Value,
             None => std::ptr::null(),
         }
+    }
+
+    /// Read a declared property by cached numeric slot.
+    /// SAFETY: caller must validate object class_id against the cache entry.
+    #[inline(always)]
+    pub unsafe fn object_property_slot_unchecked(&self, slot: usize) -> *const Value {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &*refcell.as_ptr();
+        debug_assert!(slot < obj.property_values.len());
+        obj.property_values.as_ptr().add(slot)
     }
 
     /// Write a scalar value to a property of an Object without RefCell borrow.
@@ -741,12 +938,18 @@ impl Value {
         debug_assert!(self.value_type() == ValueType::Object);
         let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
         let obj = &mut *refcell.as_ptr();
-        // Fast path: if property already exists, overwrite in-place (no String alloc).
-        if let Some(slot) = obj.properties.get_mut(name) {
-            *slot = val;
-        } else {
-            obj.properties.insert(name.to_string(), val);
-        }
+        obj.set_property(name, val);
+    }
+
+    /// Write a declared property by cached numeric slot.
+    /// SAFETY: caller must validate object class_id against the cache entry.
+    #[inline(always)]
+    pub unsafe fn object_set_property_slot_unchecked(&self, slot: usize, val: Value) {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &mut *refcell.as_ptr();
+        debug_assert!(slot < obj.property_values.len());
+        *obj.property_values.get_unchecked_mut(slot) = val;
     }
 
     /// Get string reference. Only valid for String values.
@@ -1123,12 +1326,11 @@ impl Drop for Value {
 pub fn make_error_value(class_name: &str, message: &str) -> Value {
     let mut props = std::collections::HashMap::new();
     props.insert("message".to_string(), Value::string(message));
-    Value::object(PhpObject {
-        class_name: class_name.to_string(),
-        class_id: 0, // error objects don't need cache-valid class_id
-        properties: props,
-        generator: None,
-    })
+    Value::object(PhpObject::dynamic(
+        class_name.to_string(),
+        0, // error objects don't need cache-valid class_id
+        props,
+    ))
 }
 
 impl std::fmt::Debug for Value {
