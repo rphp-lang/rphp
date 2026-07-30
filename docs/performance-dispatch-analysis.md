@@ -942,3 +942,62 @@ invariant-string, or conditional scalar loops. Validation now includes eleven
 quick-plan tests and 38 quick-loop end-to-end tests. The new cases cover the
 exact stride graph, successful key/accumulator state, a non-long fetch side
 exit, and accumulator overflow after the hot threshold.
+
+## Phase 2j result: guard-time integer lookup routing
+
+Profiling the Phase 2i kernel showed that an irregular integer read still
+entered `PhpArray::get_int()` on every iteration. That general method first
+tries the validated ordered-entry position and only then enters the integer
+hash index. The stride-7 workload therefore paid for a positional probe that
+was known to fail for the entire immutable guarded region.
+
+`PhpArray` now exposes two separate pieces of that existing contract:
+
+- `prefers_positional_int_lookup()` classifies hash storage from its ordered
+  entry prefix. It is a routing hint, not a correctness assumption;
+- `get_indexed_int()` performs the canonical integer-index lookup directly.
+
+At quick-region activation, hash-array inputs are classified once. Packed and
+positionally useful hash arrays retain the original array-stride runner
+unchanged. Only an irregular hash input selects a separate indexed runner,
+which skips the failed positional probe inside the loop. That runner preserves
+the same checked additions, dirty-slot commits, exact resume IPs, interrupt
+handling, and missing/non-long side exits as Phase 2i.
+
+Two broader implementations were measured and rejected:
+
+- replacing `HashMap` with a custom open-addressed integer table reduced the
+  lookup median from `0.02978 s` to `0.02720 s` (about 8.7%) but increased the
+  full construction CPU time from roughly `0.07 s` to `0.09 s` (about 29%);
+- inlining all packed, positional, and indexed layouts into a widened common
+  runner improved irregular reads but created measurable register pressure in
+  the packed hot loop.
+
+The retained design changes neither the array representation nor construction.
+It also deliberately keeps the established packed/positional machine-code
+path separate from the new irregular-index path.
+
+Twenty-one final rounds rotated Phase 2j, the saved Phase 2i binary, and PHP
+process order:
+
+| Engine | Median | Relative to Phase 2i |
+|---|---:|---:|
+| Phase 2i rphp | 0.02990 s | 1.000x |
+| Phase 2j rphp | 0.02277 s | 0.761x |
+| PHP 8.4.12, CLI opcache disabled | 0.00694 s | 0.232x |
+
+Guard-time routing therefore removes another 23.9% from the irregular
+recurrence. The remaining rphp/PHP gap falls from 4.12x in the Phase 2i
+measurement to about 3.28x here. The result also confirms the conceptual
+diagnosis: a material part of the remaining cost was not hashing itself, but
+repeating a layout decision after the layout had already become stable.
+
+Twenty-one-pair acceptance medians versus the saved Phase 2i binary were
+`0.988x` for packed reads, `1.030x` for contiguous-hash reads, `0.950x` for
+invariant string reads, `1.008x` for the branch loop, and `1.007x` for the
+modulo-branch loop. These small sub-millisecond differences are within the
+observed process-level noise and show no broad regression. Full tests pass
+with default features and with `--no-default-features`; dedicated array tests
+cover both routing classes and direct indexed hits/misses, while the Phase 2i
+end-to-end tests continue to exercise successful execution and exact
+non-long/overflow deoptimization on the newly routed path.

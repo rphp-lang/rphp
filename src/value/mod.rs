@@ -437,6 +437,38 @@ impl PhpArray {
         }
     }
 
+    /// Whether hash storage is likely to satisfy integer reads through the
+    /// validated ordered-entry fast path.
+    ///
+    /// This is only a routing hint: `get_int()` still validates the exact key
+    /// at the derived position and falls back to the hash index on mismatch.
+    #[inline]
+    pub fn prefers_positional_int_lookup(&self) -> bool {
+        let ArrayStorage::Hash { entries, .. } = &self.storage else {
+            return false;
+        };
+        match entries.as_slice() {
+            [(ArrayKey::Int(_), _)] => true,
+            [(ArrayKey::Int(first), _), (ArrayKey::Int(second), _), ..] => {
+                first.checked_add(1) == Some(*second)
+            }
+            _ => false,
+        }
+    }
+
+    /// Integer lookup that deliberately skips the ordered-entry fast path.
+    /// Guarded quick regions use this for arrays classified as irregular once
+    /// at activation instead of repeating a known-to-fail positional probe.
+    #[inline]
+    pub fn get_indexed_int(&self, key: i64) -> Option<&Value> {
+        match &self.storage {
+            ArrayStorage::Hash { entries, int_index, .. } => {
+                int_index.get(&key).map(|&idx| &entries[idx].1)
+            }
+            ArrayStorage::Packed(_) => None,
+        }
+    }
+
     /// Get by string key — O(1), zero allocation.
     /// Uses `HashMap<String, usize>::get(&str)` via `Borrow<str>` trait.
     #[inline]
@@ -711,6 +743,30 @@ impl std::fmt::Debug for PhpArray {
 #[cfg(test)]
 mod php_array_tests {
     use super::{ArrayKey, PhpArray, Value};
+
+    #[test]
+    fn integer_lookup_routing_distinguishes_contiguous_and_irregular_hashes() {
+        let mut contiguous = PhpArray::new();
+        contiguous.set_int(100, Value::long(1));
+        contiguous.set_int(101, Value::long(2));
+        contiguous.set_str("sentinel", Value::long(3));
+        assert!(contiguous.prefers_positional_int_lookup());
+
+        let mut irregular = PhpArray::new();
+        irregular.set_int(100, Value::long(4));
+        irregular.set_int(107, Value::long(5));
+        irregular.set_int(-3, Value::long(6));
+        assert!(!irregular.prefers_positional_int_lookup());
+        assert_eq!(
+            irregular.get_indexed_int(107).and_then(Value::as_long),
+            Some(5)
+        );
+        assert_eq!(
+            irregular.get_indexed_int(-3).and_then(Value::as_long),
+            Some(6)
+        );
+        assert!(irregular.get_indexed_int(101).is_none());
+    }
 
     #[test]
     fn integer_index_handles_offset_and_irregular_hash_keys() {
