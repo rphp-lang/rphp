@@ -12,8 +12,6 @@
 
 use std::borrow::Cow;
 
-use crate::regex::{Regex, parse_php_regex};
-
 use crate::value::{Value, ValueType, PhpArray, ArrayKey};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
@@ -2239,7 +2237,7 @@ fn fn_generator_get_return(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Execu
 // ============================================================================
 
 /// preg_match($pattern, $subject [, &$matches]) -> int (0 or 1)
-fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
 
@@ -2248,19 +2246,17 @@ fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
         !raw.is_undef()
     };
 
-    let (pat, flags) = match parse_php_regex(&pattern_str) {
-        Ok(v) => v,
+    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
+        Ok(regex) => regex,
         Err(_e) => {
             // PHP emits a warning and returns false for invalid patterns
             ret!(rv, Value::bool(false));
         }
     };
-    let re = match Regex::new(&pat, flags) {
-        Ok(r) => r,
-        Err(_e) => {
-            ret!(rv, Value::bool(false));
-        }
-    };
+
+    if !has_matches {
+        ret!(rv, Value::long(re.is_match(&subject) as i64));
+    }
 
     match re.captures(&subject) {
         Some(caps) => {
@@ -2294,19 +2290,13 @@ fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
 }
 
 /// preg_replace($pattern, $replacement, $subject) -> string
-fn fn_preg_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_replace(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let replacement = arg_str!(ed, 1);
     let subject = arg_str!(ed, 2);
 
-    let (pat, flags) = match parse_php_regex(&pattern_str) {
-        Ok(v) => v,
-        Err(_e) => {
-            ret!(rv, Value::null());
-        }
-    };
-    let re = match Regex::new(&pat, flags) {
-        Ok(r) => r,
+    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
+        Ok(regex) => regex,
         Err(_e) => {
             ret!(rv, Value::null());
         }
@@ -4320,7 +4310,7 @@ fn fn_http_build_query(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorG
 }
 
 /// preg_match_all($pattern, $subject, &$matches = null): int
-fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
 
@@ -4329,12 +4319,8 @@ fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlo
         !raw.is_undef()
     };
 
-    let (pat, flags) = match parse_php_regex(&pattern_str) {
-        Ok(v) => v,
-        Err(_) => { ret!(rv, Value::long(0)); }
-    };
-    let re = match Regex::new(&pat, flags) {
-        Ok(r) => r,
+    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
+        Ok(regex) => regex,
         Err(_) => { ret!(rv, Value::long(0)); }
     };
 
@@ -4378,17 +4364,13 @@ fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlo
 }
 
 /// preg_split($pattern, $subject, $limit = -1): array|false
-fn fn_preg_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_split(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
     let limit = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(-1);
 
-    let (pat, flags) = match parse_php_regex(&pattern_str) {
-        Ok(v) => v,
-        Err(_) => { ret!(rv, Value::bool(false)); }
-    };
-    let re = match Regex::new(&pat, flags) {
-        Ok(r) => r,
+    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
+        Ok(regex) => regex,
         Err(_) => { ret!(rv, Value::bool(false)); }
     };
 
@@ -4406,12 +4388,8 @@ fn fn_preg_replace_callback(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execu
     let callback = arg!(ed, 1).clone();
     let subject = arg_str!(ed, 2).into_owned();
 
-    let (pat, flags) = match parse_php_regex(&pattern_str) {
-        Ok(v) => v,
-        Err(_) => { ret!(rv, Value::null()); }
-    };
-    let re = match Regex::new(&pat, flags) {
-        Ok(r) => r,
+    let re = match eg.regex_cache.get_or_compile(&pattern_str) {
+        Ok(regex) => regex,
         Err(_) => { ret!(rv, Value::null()); }
     };
 

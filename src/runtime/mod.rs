@@ -56,6 +56,9 @@ pub struct ExecutorGlobals {
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
+    /// Parsed and compiled regular expressions shared by all preg_* calls for
+    /// the lifetime of this executor.
+    pub regex_cache: crate::regex::RegexCache,
     /// Exception being thrown — None = no exception
     pub exception: Option<crate::value::Value>,
     /// Reverse map: func_ptr → declaring class name (for visibility scope resolution)
@@ -95,6 +98,7 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             method_declaring_class: HashMap::new(),
 
@@ -121,6 +125,7 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             constant_table: std::cell::RefCell::new(HashMap::new()),
+            regex_cache: crate::regex::RegexCache::default(),
             exception: None,
             method_declaring_class: HashMap::new(),
 

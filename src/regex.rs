@@ -13,7 +13,13 @@
 //!
 //! Flags: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended/comments), `U` (ungreedy)
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
+
+/// Keep the cache bounded so scripts generating regexes dynamically cannot
+/// retain an unbounded amount of compiled AST data for the lifetime of the
+/// executor. The cache is shared by every preg_* function in that executor.
+pub const DEFAULT_REGEX_CACHE_CAPACITY: usize = 1024;
 
 // ── AST ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +90,63 @@ pub struct Regex {
     num_groups: usize,
     /// Named group name → group index
     named_groups: HashMap<String, usize>,
+    /// Literal that every match must start with, when it can be proven from
+    /// the AST. Used to skip impossible start positions before backtracking.
+    start_literal: Option<char>,
+}
+
+/// Per-executor cache of parsed and compiled PHP regular expressions.
+///
+/// Entries are evicted in insertion order. This keeps lookup O(1) on the hot
+/// path without adding per-hit list maintenance; a repeated static pattern
+/// remains cached until enough distinct patterns displace it.
+pub struct RegexCache {
+    capacity: usize,
+    entries: HashMap<String, Rc<Regex>>,
+    insertion_order: VecDeque<String>,
+}
+
+impl RegexCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity,
+            entries: HashMap::with_capacity(capacity),
+            insertion_order: VecDeque::with_capacity(capacity),
+        }
+    }
+
+    /// Return a shared compiled regex, compiling and caching it on a miss.
+    /// Invalid patterns are not cached so callers preserve their existing
+    /// false/null error behavior and no failed entry consumes cache capacity.
+    pub fn get_or_compile(&mut self, php_pattern: &str) -> Result<Rc<Regex>, String> {
+        if let Some(regex) = self.entries.get(php_pattern) {
+            return Ok(Rc::clone(regex));
+        }
+
+        let (pattern, flags) = parse_php_regex(php_pattern)?;
+        let regex = Rc::new(Regex::new(&pattern, flags)?);
+
+        if self.capacity == 0 {
+            return Ok(regex);
+        }
+
+        if self.entries.len() == self.capacity {
+            if let Some(oldest) = self.insertion_order.pop_front() {
+                self.entries.remove(&oldest);
+            }
+        }
+
+        let cache_key = php_pattern.to_string();
+        self.entries.insert(cache_key.clone(), Rc::clone(&regex));
+        self.insertion_order.push_back(cache_key);
+        Ok(regex)
+    }
+}
+
+impl Default for RegexCache {
+    fn default() -> Self {
+        Self::new(DEFAULT_REGEX_CACHE_CAPACITY)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -129,20 +192,36 @@ impl Regex {
     pub fn new(pattern: &str, flags: RegexFlags) -> Result<Self, String> {
         let mut parser = Parser::new(pattern, flags);
         let ast = parser.parse()?;
+        let start_literal = required_start_literal(&ast);
         Ok(Self {
             ast,
             flags,
             num_groups: parser.group_count,
             named_groups: parser.named_groups,
+            start_literal,
         })
     }
 
-    /// Find first match in subject.  Returns captures (group 0 = whole match).
-    pub fn captures(&self, subject: &str) -> Option<Captures> {
+    /// Test whether the pattern matches without materializing capture output.
+    /// Internal capture slots are still retained when the pattern needs them
+    /// for groups or backreferences.
+    pub fn is_match(&self, subject: &str) -> bool {
         let chars: Vec<char> = subject.chars().collect();
-        // Try matching at every position
+        let mut groups = if self.num_groups == 0 {
+            Vec::new()
+        } else {
+            vec![None; self.num_groups + 1]
+        };
+
         for start in 0..=chars.len() {
-            let mut groups = vec![None; self.num_groups + 1];
+            if let Some(literal) = self.start_literal {
+                if start == chars.len()
+                    || !chars_equal(chars[start], literal, self.flags.case_insensitive)
+                {
+                    continue;
+                }
+            }
+            groups.fill(None);
             let mut ctx = MatchCtx {
                 chars: &chars,
                 input: subject,
@@ -150,8 +229,39 @@ impl Regex {
                 groups: &mut groups,
                 named_groups: &self.named_groups,
             };
-            if let Some(end) = match_seq_from(&self.ast, &[], start, &mut ctx) {
-                ctx.groups[0] = Some(Match {
+            if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Find first match in subject.  Returns captures (group 0 = whole match).
+    pub fn captures(&self, subject: &str) -> Option<Captures> {
+        let chars: Vec<char> = subject.chars().collect();
+        let mut groups = vec![None; self.num_groups + 1];
+        // Try matching at every position
+        for start in 0..=chars.len() {
+            if let Some(literal) = self.start_literal {
+                if start == chars.len()
+                    || !chars_equal(chars[start], literal, self.flags.case_insensitive)
+                {
+                    continue;
+                }
+            }
+            groups.fill(None);
+            let end = {
+                let mut ctx = MatchCtx {
+                    chars: &chars,
+                    input: subject,
+                    flags: self.flags,
+                    groups: &mut groups,
+                    named_groups: &self.named_groups,
+                };
+                match_seq_from(&self.ast, &[], start, &mut ctx)
+            };
+            if let Some(end) = end {
+                groups[0] = Some(Match {
                     start: char_offset(subject, &chars, start),
                     end: char_offset(subject, &chars, end),
                 });
@@ -342,6 +452,39 @@ impl Regex {
     }
 }
 
+/// Find a literal that must occur at the first consumed position. Returning
+/// None is always safe; Some is returned only when the AST proves the prefix.
+fn required_start_literal(node: &Node) -> Option<char> {
+    match node {
+        Node::Literal(ch) => Some(*ch),
+        Node::Sequence(nodes) => {
+            for node in nodes {
+                match node {
+                    // These nodes consume no input, so the required literal can
+                    // still come from the next node in the sequence.
+                    Node::Anchor(_)
+                    | Node::WordBoundary(_)
+                    | Node::Lookahead { .. }
+                    | Node::Lookbehind { .. } => continue,
+                    _ => return required_start_literal(node),
+                }
+            }
+            None
+        }
+        Node::Group { inner, .. } => required_start_literal(inner),
+        Node::Alternation(branches) => {
+            let first = required_start_literal(branches.first()?)?;
+            branches
+                .iter()
+                .skip(1)
+                .all(|branch| required_start_literal(branch) == Some(first))
+                .then_some(first)
+        }
+        Node::Quantifier { inner, min, .. } if *min > 0 => required_start_literal(inner),
+        _ => None,
+    }
+}
+
 // ── Helper: expand replacement backreferences ───────────────────────────────
 
 fn expand_replacement(repl: &str, groups: &[Option<Match>], input: &str) -> String {
@@ -429,6 +572,12 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             // Flatten: match first element with rest = remaining + outer rest
             if nodes.is_empty() {
                 return match_rest(rest, pos, ctx);
+            }
+            if nodes.len() == 1 {
+                return match_seq_from(&nodes[0], rest, pos, ctx);
+            }
+            if rest.is_empty() {
+                return match_seq_from(&nodes[0], &nodes[1..], pos, ctx);
             }
             // Build combined rest: nodes[1..] ++ rest
             let mut combined: Vec<Node> = nodes[1..].to_vec();
@@ -714,50 +863,124 @@ fn match_backref_by_index(n: usize, rest: &[Node], pos: usize, ctx: &mut MatchCt
     }
 }
 
+#[inline]
+fn chars_equal(left: char, right: char, case_insensitive: bool) -> bool {
+    if case_insensitive {
+        left.to_lowercase().eq(right.to_lowercase())
+    } else {
+        left == right
+    }
+}
+
 fn match_quantifier(
     inner: &Node, min: usize, max: Option<usize>, greedy: bool,
     rest: &[Node], pos: usize, ctx: &mut MatchCtx,
 ) -> Option<usize> {
-    // Collect all possible (reps, end_position, saved_groups) tuples
     let limit = max.unwrap_or(usize::MAX);
-    let mut states: Vec<(usize, usize, Vec<Option<Match>>)> = Vec::new();
+
+    // With no continuation there is nothing to backtrack into. Consume
+    // directly to the greedy maximum (or lazy minimum) instead of allocating,
+    // cloning and sorting every intermediate state.
+    if rest.is_empty() {
+        let tracks_captures = ctx.groups.len() > 1;
+        let initial_groups = tracks_captures.then(|| ctx.groups.clone());
+        let mut current_pos = pos;
+        let mut repetitions = 0usize;
+
+        if !greedy && min == 0 {
+            return Some(pos);
+        }
+
+        while repetitions < limit {
+            let saved_groups = tracks_captures.then(|| ctx.groups.clone());
+            match match_seq_from(inner, &[], current_pos, ctx) {
+                Some(next_pos) if next_pos != current_pos => {
+                    current_pos = next_pos;
+                    repetitions += 1;
+                    if !greedy && repetitions >= min {
+                        return Some(current_pos);
+                    }
+                }
+                _ => {
+                    if let Some(saved_groups) = saved_groups {
+                        *ctx.groups = saved_groups;
+                    }
+                    break;
+                }
+            }
+        }
+
+        if repetitions >= min {
+            return Some(current_pos);
+        }
+        if let Some(initial_groups) = initial_groups {
+            *ctx.groups = initial_groups;
+        }
+        return None;
+    }
+
+    // Collect all possible (reps, end_position, saved_groups) tuples when a
+    // continuation may require the quantifier to give characters back.
+    let tracks_captures = ctx.groups.len() > 1;
+    let mut states: Vec<(usize, usize, Option<Vec<Option<Match>>>)> = Vec::new();
 
     fn collect_states(
         inner: &Node, min: usize, limit: usize, pos: usize,
-        current_reps: usize, ctx: &mut MatchCtx,
-        states: &mut Vec<(usize, usize, Vec<Option<Match>>)>,
+        current_reps: usize, tracks_captures: bool, ctx: &mut MatchCtx,
+        states: &mut Vec<(usize, usize, Option<Vec<Option<Match>>>)>,
     ) {
         if current_reps >= min {
-            states.push((current_reps, pos, ctx.groups.clone()));
+            let groups = tracks_captures.then(|| ctx.groups.clone());
+            states.push((current_reps, pos, groups));
         }
         if current_reps >= limit { return; }
-        let saved = ctx.groups.clone();
+        let saved = tracks_captures.then(|| ctx.groups.clone());
         // Try one more repetition
         if let Some(np) = match_seq_from(inner, &[], pos, ctx) {
             if np == pos {
                 // Zero-width match — don't recurse to avoid infinite loop
-                *ctx.groups = saved;
+                if let Some(saved) = saved {
+                    *ctx.groups = saved;
+                }
                 return;
             }
-            collect_states(inner, min, limit, np, current_reps + 1, ctx, states);
+            collect_states(
+                inner,
+                min,
+                limit,
+                np,
+                current_reps + 1,
+                tracks_captures,
+                ctx,
+                states,
+            );
         }
-        *ctx.groups = saved;
+        if let Some(saved) = saved {
+            *ctx.groups = saved;
+        }
     }
 
-    collect_states(inner, min, limit, pos, 0, ctx, &mut states);
+    collect_states(inner, min, limit, pos, 0, tracks_captures, ctx, &mut states);
 
-    // Sort by greedy preference
+    // collect_states records states in increasing repetition order, so the
+    // greedy path can iterate backwards without sorting.
     if greedy {
-        states.sort_by(|a, b| b.0.cmp(&a.0)); // most reps first
+        for (_, end_pos, saved_groups) in states.into_iter().rev() {
+            if let Some(saved_groups) = saved_groups {
+                *ctx.groups = saved_groups;
+            }
+            if let Some(final_pos) = match_rest(rest, end_pos, ctx) {
+                return Some(final_pos);
+            }
+        }
     } else {
-        states.sort_by(|a, b| a.0.cmp(&b.0)); // fewest reps first
-    }
-
-    // Try each state against rest
-    for (_, end_pos, saved_groups) in states {
-        *ctx.groups = saved_groups;
-        if let Some(final_pos) = match_rest(rest, end_pos, ctx) {
-            return Some(final_pos);
+        for (_, end_pos, saved_groups) in states {
+            if let Some(saved_groups) = saved_groups {
+                *ctx.groups = saved_groups;
+            }
+            if let Some(final_pos) = match_rest(rest, end_pos, ctx) {
+                return Some(final_pos);
+            }
         }
     }
     None
@@ -1301,12 +1524,32 @@ mod tests {
     }
 
     #[test]
+    fn test_terminal_quantifier_greedy_lazy_and_minimum() {
+        let greedy = Regex::new("a+", RegexFlags::default()).unwrap();
+        let lazy = Regex::new("a+?", RegexFlags::default()).unwrap();
+        let minimum = Regex::new("a{2}", RegexFlags::default()).unwrap();
+
+        assert_eq!(greedy.captures("aaa").unwrap().get(0).unwrap().as_str("aaa"), "aaa");
+        assert_eq!(lazy.captures("aaa").unwrap().get(0).unwrap().as_str("aaa"), "a");
+        assert!(minimum.captures("a").is_none());
+        assert!(minimum.captures("aa").is_some());
+    }
+
+    #[test]
     fn test_capture_group() {
         let re = Regex::new("(\\d+)-(\\d+)", RegexFlags::default()).unwrap();
         let caps = re.captures("foo 123-456 bar").unwrap();
         assert_eq!(caps.get(0).unwrap().as_str("foo 123-456 bar"), "123-456");
         assert_eq!(caps.get(1).unwrap().as_str("foo 123-456 bar"), "123");
         assert_eq!(caps.get(2).unwrap().as_str("foo 123-456 bar"), "456");
+    }
+
+    #[test]
+    fn test_is_match_preserves_groups_needed_by_backreferences() {
+        let re = Regex::new("(a)\\1", RegexFlags::default()).unwrap();
+
+        assert!(re.is_match("aa"));
+        assert!(!re.is_match("ab"));
     }
 
     #[test]
@@ -1329,6 +1572,28 @@ mod tests {
         let flags = RegexFlags { case_insensitive: true, ..Default::default() };
         let re = Regex::new("hello", flags).unwrap();
         assert!(re.captures("HELLO").is_some());
+    }
+
+    #[test]
+    fn test_required_start_literal_skips_zero_width_prefixes() {
+        let re = Regex::new("^hello", RegexFlags::default()).unwrap();
+        assert_eq!(re.start_literal, Some('h'));
+        assert!(re.captures("hello").is_some());
+        assert!(re.captures("xhello").is_none());
+    }
+
+    #[test]
+    fn test_required_start_literal_handles_groups_and_alternation() {
+        let common = Regex::new("(hello|hi)", RegexFlags::default()).unwrap();
+        let different = Regex::new("hello|world", RegexFlags::default()).unwrap();
+        let optional = Regex::new("a?hello", RegexFlags::default()).unwrap();
+
+        assert_eq!(common.start_literal, Some('h'));
+        assert_eq!(different.start_literal, None);
+        assert_eq!(optional.start_literal, None);
+        assert!(common.captures("say hi").is_some());
+        assert!(different.captures("world").is_some());
+        assert!(optional.captures("hello").is_some());
     }
 
     #[test]
@@ -1362,6 +1627,61 @@ mod tests {
         let (pattern, flags) = parse_php_regex("/hello/i").unwrap();
         assert_eq!(pattern, "hello");
         assert!(flags.case_insensitive);
+    }
+
+    // ── Compiled regex cache ──────────────────────────────────────────────
+
+    #[test]
+    fn test_regex_cache_reuses_compiled_pattern() {
+        let mut cache = RegexCache::new(2);
+        let first = cache.get_or_compile("/hello/").unwrap();
+        let second = cache.get_or_compile("/hello/").unwrap();
+
+        assert!(std::rc::Rc::ptr_eq(&first, &second));
+        assert_eq!(cache.entries.len(), 1);
+    }
+
+    #[test]
+    fn test_regex_cache_distinguishes_modifiers() {
+        let mut cache = RegexCache::new(2);
+        let case_sensitive = cache.get_or_compile("/hello/").unwrap();
+        let case_insensitive = cache.get_or_compile("/hello/i").unwrap();
+
+        assert!(!std::rc::Rc::ptr_eq(&case_sensitive, &case_insensitive));
+        assert!(case_sensitive.captures("HELLO").is_none());
+        assert!(case_insensitive.captures("HELLO").is_some());
+    }
+
+    #[test]
+    fn test_regex_cache_evicts_oldest_entry_at_capacity() {
+        let mut cache = RegexCache::new(2);
+        let first = cache.get_or_compile("/first/").unwrap();
+        cache.get_or_compile("/second/").unwrap();
+        cache.get_or_compile("/third/").unwrap();
+        let recompiled_first = cache.get_or_compile("/first/").unwrap();
+
+        assert!(!std::rc::Rc::ptr_eq(&first, &recompiled_first));
+        assert_eq!(cache.entries.len(), 2);
+        assert_eq!(cache.insertion_order.len(), 2);
+    }
+
+    #[test]
+    fn test_regex_cache_does_not_store_invalid_patterns() {
+        let mut cache = RegexCache::new(2);
+
+        assert!(cache.get_or_compile("/(/").is_err());
+        assert!(cache.entries.is_empty());
+        assert!(cache.insertion_order.is_empty());
+    }
+
+    #[test]
+    fn test_zero_capacity_disables_regex_caching() {
+        let mut cache = RegexCache::new(0);
+        let first = cache.get_or_compile("/hello/").unwrap();
+        let second = cache.get_or_compile("/hello/").unwrap();
+
+        assert!(!std::rc::Rc::ptr_eq(&first, &second));
+        assert!(cache.entries.is_empty());
     }
 
     // ── P1: Backtracking through sequence ──────────────────────────────────
