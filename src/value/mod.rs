@@ -674,6 +674,19 @@ impl PhpArray {
         PhpArrayIter { inner }
     }
 
+    /// Iterate over values without materializing public array keys.
+    ///
+    /// Hash arrays keep string keys in a compact shared representation. The
+    /// general `iter()` API converts those keys to owned `ArrayKey` values;
+    /// value-only operations should use this iterator to avoid that allocation.
+    pub fn values(&self) -> PhpArrayValues<'_> {
+        let inner = match &self.storage {
+            ArrayStorage::Packed(values) => PhpArrayValuesInner::Packed(values.iter()),
+            ArrayStorage::Hash { entries, .. } => PhpArrayValuesInner::Hash(entries.iter()),
+        };
+        PhpArrayValues { inner }
+    }
+
     /// Materialize public keys for cold callers that need the complete entry
     /// list. Internal hash storage keeps a smaller key representation.
     /// If array is in packed mode, transitions to hash mode first.
@@ -872,6 +885,48 @@ impl<'a> Iterator for PhpArrayIter<'a> {
 
 impl<'a> ExactSizeIterator for PhpArrayIter<'a> {}
 
+/// Value-only PHP array iterator. Unlike `PhpArrayIter`, this never clones or
+/// allocates string keys for hash-backed arrays.
+pub struct PhpArrayValues<'a> {
+    inner: PhpArrayValuesInner<'a>,
+}
+
+enum PhpArrayValuesInner<'a> {
+    Packed(std::slice::Iter<'a, Value>),
+    Hash(std::slice::Iter<'a, (ArrayEntryKey, Value)>),
+}
+
+impl<'a> Iterator for PhpArrayValues<'a> {
+    type Item = &'a Value;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            PhpArrayValuesInner::Packed(iter) => iter.next(),
+            PhpArrayValuesInner::Hash(iter) => iter.next().map(|(_, value)| value),
+        }
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        match &self.inner {
+            PhpArrayValuesInner::Packed(iter) => iter.size_hint(),
+            PhpArrayValuesInner::Hash(iter) => iter.size_hint(),
+        }
+    }
+}
+
+impl DoubleEndedIterator for PhpArrayValues<'_> {
+    #[inline]
+    fn next_back(&mut self) -> Option<Self::Item> {
+        match &mut self.inner {
+            PhpArrayValuesInner::Packed(iter) => iter.next_back(),
+            PhpArrayValuesInner::Hash(iter) => iter.next_back().map(|(_, value)| value),
+        }
+    }
+}
+
+impl ExactSizeIterator for PhpArrayValues<'_> {}
+
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
         let cloned_storage = match &self.storage {
@@ -933,6 +988,27 @@ mod php_array_tests {
         };
         let index_key = str_index.keys().next().unwrap();
         assert!(Rc::ptr_eq(&entry_key.0, &index_key.0));
+    }
+
+    #[test]
+    fn value_iterator_preserves_order_for_packed_and_hash_arrays() {
+        let mut packed = PhpArray::new();
+        packed.push(Value::long(1));
+        packed.push(Value::long(2));
+        assert_eq!(
+            packed.values().filter_map(Value::as_long).collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+
+        let mut hash = PhpArray::new();
+        hash.set_int(7, Value::long(3));
+        hash.set_str("name", Value::long(4));
+        hash.set_int(-2, Value::long(5));
+        assert_eq!(
+            hash.values().filter_map(Value::as_long).collect::<Vec<_>>(),
+            vec![3, 4, 5]
+        );
+        assert_eq!(hash.values().next_back().and_then(Value::as_long), Some(5));
     }
 
     #[test]
