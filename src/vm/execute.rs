@@ -13,7 +13,7 @@ use super::quick::{
     QuickArrayIndex, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
-    QUICK_LOOP_HOT_THRESHOLD,
+    QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
 };
 // Planner module is kept as scaffolding for future hot-executor architecture.
 // Not used in baseline dispatch loop — will be integrated via function-entry dispatch.
@@ -3024,6 +3024,170 @@ enum QuickLongArray {
 
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
+struct QuickStringFetchCacheEntry {
+    key_data: *const u8,
+    key_len: usize,
+    array_slot: u16,
+    value: i64,
+    valid: bool,
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickStringFetchCacheEntry {
+    const EMPTY: Self = Self {
+        key_data: std::ptr::null(),
+        key_len: 0,
+        array_slot: 0,
+        value: 0,
+        valid: false,
+    };
+}
+
+#[cfg(feature = "quick-loops")]
+struct QuickStringFetchCache {
+    entries: [QuickStringFetchCacheEntry; QUICK_STRING_FETCH_CACHE_LIMIT],
+    capacity: usize,
+    next: usize,
+}
+
+/// Retained string CV state for one closed quick region. The frame keeps the
+/// original string alive while the region runs; assignments only redirect a
+/// slot to immutable OpArray literals. Drop commits every dirty CV on all
+/// completion and deoptimization returns.
+#[cfg(feature = "quick-loops")]
+struct QuickStringSlotState {
+    slot_base: *mut Value,
+    values: [*const Value; 64],
+    dirty_mask: u64,
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickStringSlotState {
+    #[inline]
+    unsafe fn new(slot_base: *mut Value, mut input_mask: u64) -> Self {
+        let mut values = [std::ptr::null(); 64];
+        while input_mask != 0 {
+            let slot = input_mask.trailing_zeros() as usize;
+            input_mask &= input_mask - 1;
+            values[slot] = slot_base.add(slot);
+        }
+        Self {
+            slot_base,
+            values,
+            dirty_mask: 0,
+        }
+    }
+
+    #[inline(always)]
+    unsafe fn value(&self, slot: u16) -> &Value {
+        &*self.values[slot as usize]
+    }
+
+    #[inline(always)]
+    fn assign_literal(&mut self, slot: u16, value: *const Value) {
+        debug_assert!(!value.is_null());
+        self.values[slot as usize] = value;
+        self.dirty_mask |= 1u64 << slot;
+    }
+
+    #[inline]
+    unsafe fn commit(&mut self) {
+        while self.dirty_mask != 0 {
+            let slot = self.dirty_mask.trailing_zeros() as usize;
+            self.dirty_mask &= self.dirty_mask - 1;
+            let value = (&*self.values[slot]).clone();
+            debug_assert_eq!(value.value_type(), ValueType::String);
+            slot_set(self.slot_base.add(slot), value);
+        }
+    }
+}
+
+#[cfg(feature = "quick-loops")]
+impl Drop for QuickStringSlotState {
+    fn drop(&mut self) {
+        unsafe { self.commit() };
+    }
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickStringFetchCache {
+    #[inline]
+    const fn new(capacity: u8) -> Self {
+        Self {
+            entries: [QuickStringFetchCacheEntry::EMPTY; QUICK_STRING_FETCH_CACHE_LIMIT],
+            capacity: capacity as usize,
+            next: 0,
+        }
+    }
+
+    /// Cache a successful long fetch by immutable string allocation identity.
+    /// The planner proves that both the array slot and string key can only be
+    /// read or replaced by immutable literals for the lifetime of this region.
+    #[inline(always)]
+    unsafe fn long_at(
+        &mut self,
+        array_slot: u16,
+        array: QuickLongArray,
+        key: &str,
+    ) -> Option<i64> {
+        let key_data = key.as_ptr();
+        let key_len = key.len();
+        if self.capacity != 0
+            && self.entries[0].valid
+            && self.entries[0].array_slot == array_slot
+            && self.entries[0].key_data == key_data
+            && self.entries[0].key_len == key_len
+        {
+            return Some(self.entries[0].value);
+        }
+        if self.capacity > 1
+            && self.entries[1].valid
+            && self.entries[1].array_slot == array_slot
+            && self.entries[1].key_data == key_data
+            && self.entries[1].key_len == key_len
+        {
+            return Some(self.entries[1].value);
+        }
+        if self.capacity > 2
+            && self.entries[2].valid
+            && self.entries[2].array_slot == array_slot
+            && self.entries[2].key_data == key_data
+            && self.entries[2].key_len == key_len
+        {
+            return Some(self.entries[2].value);
+        }
+        if self.capacity > 3
+            && self.entries[3].valid
+            && self.entries[3].array_slot == array_slot
+            && self.entries[3].key_data == key_data
+            && self.entries[3].key_len == key_len
+        {
+            return Some(self.entries[3].value);
+        }
+
+        let value = match canonical_decimal_array_key(key) {
+            Some(key) => array.long_at_int(key),
+            None => array.long_at_str(key),
+        }?;
+        if self.capacity != 0 {
+            self.entries[self.next] = QuickStringFetchCacheEntry {
+                key_data,
+                key_len,
+                array_slot,
+                value,
+                valid: true,
+            };
+            self.next += 1;
+            if self.next == self.capacity {
+                self.next = 0;
+            }
+        }
+        Some(value)
+    }
+}
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
 struct QuickLongIntPositionHint {
     first_key: i64,
     stride: i64,
@@ -3207,7 +3371,7 @@ struct QuickLongArrayLoopKernel {
 fn quick_long_array_loop_kernel(
     plan: &QuickLongOpsLoop,
 ) -> Option<(QuickLongArrayLoopKernel, QuickLongArrayBodyKernel)> {
-    if plan.entry_op != 0 {
+    if plan.entry_op != 0 || plan.string_input_mask != 0 || plan.string_output_mask != 0 {
         return None;
     }
 
@@ -4610,7 +4774,7 @@ unsafe fn run_quick_long_ops_loop(
     if (*frame).num_cvs != op_array.num_cvs
         || (*frame).num_cvs + (*frame).num_temps > 64
         || (*frame).heap_bitmap
-            & (plan.involved_mask & !plan.array_input_mask)
+            & (plan.involved_mask & !(plan.array_input_mask | plan.string_input_mask))
             != 0
     {
         stats::inc_quick_loop_guard_failed();
@@ -4629,6 +4793,16 @@ unsafe fn run_quick_long_ops_loop(
             return Ok(QuickLoopOutcome::GuardFailed);
         }
         slots[slot] = (*value).raw_long();
+    }
+
+    let mut string_mask = plan.string_input_mask;
+    while string_mask != 0 {
+        let slot = string_mask.trailing_zeros() as usize;
+        string_mask &= string_mask - 1;
+        if (*slot_base.add(slot)).value_type() != ValueType::String {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
     }
 
     if let Some((kernel, body)) = quick_long_conditional_kernel(plan) {
@@ -4677,6 +4851,8 @@ unsafe fn run_quick_long_ops_loop(
         );
     }
 
+    let mut string_fetch_cache = QuickStringFetchCache::new(plan.string_cache_capacity);
+    let mut string_state = QuickStringSlotState::new(slot_base, plan.string_input_mask);
     let mut dirty_long_mask = 0u64;
     let mut dirty_bool_mask = 0u64;
     let mut iterations = 0u64;
@@ -4755,7 +4931,13 @@ unsafe fn run_quick_long_ops_loop(
                 next_target,
                 resume_ip,
             } => {
-                let fetched = arrays[array as usize].long_at(index, &slots, op_array);
+                let fetched = match index {
+                    QuickArrayIndex::ValueSlot(slot) => {
+                        let key = string_state.value(slot).as_str().unwrap_unchecked();
+                        string_fetch_cache.long_at(array, arrays[array as usize], key)
+                    }
+                    _ => arrays[array as usize].long_at(index, &slots, op_array),
+                };
                 let Some(fetched) = fetched else {
                     commit_quick_long_ops_slots(
                         slot_base,
@@ -4947,6 +5129,16 @@ unsafe fn run_quick_long_ops_loop(
                 dirty_long_mask |= 1u64 << destination;
                 next_target
             }
+            QuickLongOp::AssignStringLiteral {
+                destination,
+                literal,
+                next_target,
+            } => {
+                let value = op_array.literals.as_ptr().add(literal as usize);
+                debug_assert_eq!((*value).value_type(), ValueType::String);
+                string_state.assign_literal(destination, value);
+                next_target
+            }
             QuickLongOp::PostInc {
                 value,
                 result,
@@ -5034,6 +5226,7 @@ unsafe fn run_quick_long_ops_loop(
                     dirty_long_mask,
                     dirty_bool_mask,
                 );
+                string_state.commit();
                 let next_ip = plan.target_ip(next_target).unwrap_unchecked();
                 (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
                 handle_interrupt(eg)?;

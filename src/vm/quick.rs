@@ -17,6 +17,8 @@ pub const QUICK_LOOP_FAILURE_LIMIT: u32 = 3;
 /// Counter states reserve one full hotness interval per failed activation.
 pub const QUICK_LOOP_COUNTER_STRIDE: u32 = QUICK_LOOP_HOT_THRESHOLD + 1;
 pub const QUICK_LOOP_DISABLED: u32 = u32::MAX;
+/// Maximum allocation-free inline-cache width for changing string array keys.
+pub(super) const QUICK_STRING_FETCH_CACHE_LIMIT: usize = 4;
 
 #[derive(Debug, Clone, Copy)]
 pub enum QuickLongBound {
@@ -265,6 +267,12 @@ pub enum QuickLongOp {
         source: u16,
         next_target: QuickLongTarget,
     },
+    /// Assign a string literal to a CV retained as a dynamic array key.
+    AssignStringLiteral {
+        destination: u16,
+        literal: u16,
+        next_target: QuickLongTarget,
+    },
     PostInc {
         value: u16,
         result: Option<u16>,
@@ -324,6 +332,7 @@ impl QuickLongOp {
             | Self::ConditionalAddAssign { next_target, .. }
             | Self::AddAddAssign { next_target, .. }
             | Self::Assign { next_target, .. }
+            | Self::AssignStringLiteral { next_target, .. }
             | Self::PostInc { next_target, .. } => resolve(next_target),
             Self::PostIncJump { target, .. } | Self::Jump { target } => resolve(target),
             Self::PostIncLoopLt {
@@ -338,7 +347,8 @@ impl QuickLongOp {
     }
 }
 
-/// A prevalidated typed program for a closed long-only scalar loop.
+/// A prevalidated typed program for a closed scalar loop. Arithmetic state is
+/// long/bool; selected string CVs may be retained solely as dynamic array keys.
 #[derive(Debug, Clone)]
 pub struct QuickLongOpsLoop {
     pub header_ip: usize,
@@ -350,6 +360,9 @@ pub struct QuickLongOpsLoop {
     pub long_output_mask: u64,
     pub bool_output_mask: u64,
     pub array_input_mask: u64,
+    pub string_input_mask: u64,
+    pub string_output_mask: u64,
+    pub string_cache_capacity: u8,
     pub involved_mask: u64,
 }
 
@@ -908,10 +921,43 @@ pub fn detect_long_ops_loop(
     let mut long_output_mask = 0u64;
     let mut bool_output_mask = 0u64;
     let mut array_input_mask = 0u64;
+    let mut string_input_mask = 0u64;
+    let mut string_output_mask = 0u64;
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_post_inc = false;
     let mut ip = header_ip;
+
+    // A CV is eligible for retained string state only when this closed region
+    // visibly assigns a string literal to it. This keeps all existing dynamic
+    // integer index plans on their established long-specialized path.
+    let mut string_literal_assignment_mask = 0u64;
+    let mut string_cache_literals = [u16::MAX; QUICK_STRING_FETCH_CACHE_LIMIT];
+    let mut string_cache_capacity = 0usize;
+    for instruction in &op_array.instructions[header_ip..=backedge_ip] {
+        if instruction.opcode == OpCode::AssignCv
+            && instruction.op1_type == OpType::Cv
+            && instruction.op2_type == OpType::Const
+            && instruction.result_type == OpType::Unused
+            && op_array
+                .literals
+                .get(instruction.op2 as usize)
+                .and_then(Value::as_str)
+                .is_some()
+        {
+            add_mask_slot(
+                &mut string_literal_assignment_mask,
+                instruction.op1,
+                total_slots,
+            )?;
+            if !string_cache_literals[..string_cache_capacity].contains(&instruction.op2)
+                && string_cache_capacity < string_cache_literals.len()
+            {
+                string_cache_literals[string_cache_capacity] = instruction.op2;
+                string_cache_capacity += 1;
+            }
+        }
+    }
 
     while ip <= backedge_ip {
         let instruction = op_array.instructions[ip];
@@ -1104,8 +1150,15 @@ pub fn detect_long_ops_loop(
                 }
                 let index = match instruction.op2_type {
                     OpType::Cv | OpType::Tmp => {
-                        add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
-                        QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
+                        if instruction.op2_type == OpType::Cv
+                            && string_literal_assignment_mask & (1u64 << instruction.op2) != 0
+                        {
+                            add_mask_slot(&mut string_input_mask, instruction.op2, total_slots)?;
+                            QuickArrayIndex::ValueSlot(instruction.op2)
+                        } else {
+                            add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
+                            QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
+                        }
                     }
                     OpType::Const => array_literal_index(op_array, instruction.op2)?,
                     _ => return None,
@@ -1333,15 +1386,32 @@ pub fn detect_long_ops_loop(
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
                 }
-                let source = long_slot(instruction.op2_type, instruction.op2)?;
-                add_mask_slot(&mut long_input_mask, source, total_slots)?;
-                add_mask_slot(&mut long_output_mask, instruction.op1, total_slots)?;
-                has_assign = true;
-                ip += 1;
-                QuickLongOp::Assign {
-                    destination: instruction.op1,
-                    source,
-                    next_target: QuickLongTarget::unresolved(ip)?,
+                if instruction.op2_type == OpType::Const
+                    && op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_some()
+                {
+                    add_mask_slot(&mut string_output_mask, instruction.op1, total_slots)?;
+                    has_assign = true;
+                    ip += 1;
+                    QuickLongOp::AssignStringLiteral {
+                        destination: instruction.op1,
+                        literal: instruction.op2,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                    }
+                } else {
+                    let source = long_slot(instruction.op2_type, instruction.op2)?;
+                    add_mask_slot(&mut long_input_mask, source, total_slots)?;
+                    add_mask_slot(&mut long_output_mask, instruction.op1, total_slots)?;
+                    has_assign = true;
+                    ip += 1;
+                    QuickLongOp::Assign {
+                        destination: instruction.op1,
+                        source,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                    }
                 }
             }
             OpCode::PostInc => {
@@ -1419,6 +1489,7 @@ pub fn detect_long_ops_loop(
                 first_resume_ip, ..
             } => first_resume_ip,
             QuickLongOp::Assign { .. } => ip - 1,
+            QuickLongOp::AssignStringLiteral { .. } => ip - 1,
             QuickLongOp::Jump { .. } => ip - 1,
         };
         let relative = op_ip - header_ip;
@@ -1494,11 +1565,17 @@ pub fn detect_long_ops_loop(
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
         || array_input_mask & (long_mask | bool_output_mask) != 0
+        || string_input_mask & (long_mask | bool_output_mask | array_input_mask) != 0
+        || string_output_mask & !string_input_mask != 0
     {
         return None;
     }
-    let involved_mask =
-        long_input_mask | long_output_mask | bool_output_mask | array_input_mask;
+    let involved_mask = long_input_mask
+        | long_output_mask
+        | bool_output_mask
+        | array_input_mask
+        | string_input_mask
+        | string_output_mask;
 
     Some(QuickLongOpsLoop {
         header_ip,
@@ -1510,6 +1587,9 @@ pub fn detect_long_ops_loop(
         long_output_mask,
         bool_output_mask,
         array_input_mask,
+        string_input_mask,
+        string_output_mask,
+        string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
     })
 }
@@ -2096,5 +2176,66 @@ for ($i = 0; $i < $n; $i++) {
                 ..
             }
         )));
+    }
+
+    #[test]
+    fn detects_dynamic_string_array_key_state() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['left' => 3, 'right' => 5];
+$key = 'left';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = 'right';
+    } else {
+        $key = 'left';
+    }
+}
+",
+        );
+        assert!(plan.string_input_mask != 0);
+        assert_eq!(plan.string_input_mask, plan.string_output_mask);
+        assert_eq!(plan.string_cache_capacity, 2);
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            QuickLongOp::FetchArrayLong {
+                index: QuickArrayIndex::ValueSlot(_),
+                ..
+            }
+        )));
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|op| matches!(op, QuickLongOp::AssignStringLiteral { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn sizes_dynamic_string_cache_from_distinct_loop_literals() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['left' => 3, 'right' => 5, 'middle' => 7];
+$key = 'left';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    $remainder = $i % 3;
+    if ($remainder == 0) {
+        $key = 'right';
+    } else {
+        if ($remainder == 1) {
+            $key = 'middle';
+        } else {
+            $key = 'left';
+        }
+    }
+}
+",
+        );
+        assert_eq!(plan.string_cache_capacity, 3);
     }
 }

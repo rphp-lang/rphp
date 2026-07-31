@@ -686,6 +686,91 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_array_tracks_dynamic_string_key_state() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['left' => 3, 'right' => 5];
+$key = 'left';
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = 'right';
+    } else {
+        $key = 'left';
+    }
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4000|left|1000"
+    );
+}
+
+#[test]
+fn quick_hash_array_tracks_dynamic_numeric_string_keys() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [7 => 3, 8 => 5, 'sentinel' => 0];
+$key = '7';
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = '8';
+    } else {
+        $key = '7';
+    }
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4000|7|1000"
+    );
+}
+
+#[test]
+fn quick_dynamic_string_key_deoptimizes_non_long_fetch_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['left' => 1, 'right' => 'marker'];
+$key = 'left';
+$last = 0;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $last = $values[$key];
+    $sum += $i;
+    if ($i == 98) {
+        $key = 'right';
+    } else {
+        $key = 'left';
+    }
+}
+echo $sum;
+echo '|';
+echo $last;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|marker|left|100"
+    );
+}
+
+#[test]
 fn quick_hash_array_string_read_works_in_general_typed_loop() {
     assert_eq!(
         run_php(

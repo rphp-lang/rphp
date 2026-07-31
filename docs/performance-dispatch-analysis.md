@@ -1557,3 +1557,80 @@ string keys plus final materialization, and normalization tests lock canonical
 and noncanonical decimal behavior. The quick-loop end-to-end suite now has 57
 tests. The complete suite passes with all features and with
 `--no-default-features`; warning-free checks pass for both configurations.
+
+## Phase 2s result: retained changing string-key state
+
+Phase 2r removed allocation from the baseline string-offset conversion and
+hoisted invariant runtime keys, but a key assigned inside the loop still ran
+every bytecode instruction. The remaining cost was no longer string ownership
+alone: each iteration dispatched the fetch, arithmetic, modulo, branches, and
+assignment, cloned or dropped the selected string, wrote it back to the frame,
+and repeated a hash lookup. That made the changing-key workload about 2.72x
+slower than PHP even though the same invariant lookup was already much faster.
+
+Phase 2s extends the existing closed typed region instead of adding a special
+loop for one benchmark. Before building the plan, the detector finds CVs
+assigned string literals within the region. A CV is accepted as retained string
+state only when it is also read as an array index, remains disjoint from every
+long, bool, and array slot, and every string output is a guarded string input.
+Conflicting assignments, calls, aliases, unsupported instructions, or an
+initial non-string value reject the fast activation and preserve the baseline
+path.
+
+The runner represents each accepted string CV as a pointer to either its live
+frame value or an immutable OpArray literal. `AssignCv` therefore redirects a
+pointer and marks the CV dirty; it does not clone, drop, or rewrite an `Rc`
+string on every iteration. Dirty strings are committed on normal completion,
+interrupt handling, and every deoptimization return. The existing long and
+bool commit masks remain independent, so the baseline instruction can resume
+with the exact completed state.
+
+Changing keys also use a region-local successful-fetch cache keyed by the
+immutable string allocation identity, length, and source array slot. The
+planner proves that the source array cannot change within the closed region,
+and both frame inputs and OpArray literals remain alive while cached identities
+can be observed. A cache miss still performs canonical decimal-string
+normalization followed by the ordinary integer or string lookup. Missing keys
+and non-long values are deliberately not cached and deoptimize at the original
+`FetchDimR` instruction.
+
+The inline cache has no allocation and a hard four-entry storage bound, but its
+active width is selected from the distinct string literals in the loop plan.
+A two-way branch checks two entries; a three-way branch checks three. Explicit
+inline probes avoid imposing a general cache loop on the common two-key case.
+More than four literal identities retain exact behavior and use round-robin
+replacement after a miss.
+
+Fifty-one rounds rotated Phase 2s, the saved Phase 2r binary, and PHP process
+order. The second workload is a separate three-literal control using the same
+general planner:
+
+| Workload | Phase 2r | Phase 2s | PHP 8.4.12, no CLI opcache | Phase 2s / Phase 2r |
+|---|---:|---:|---:|---:|
+| Two changing string keys, 1M reads | 0.059482 s | 0.024049 s | 0.022045 s | 0.404x |
+| Three changing string keys, 1M reads | 0.065926 s | 0.028546 s | 0.025647 s | 0.433x |
+
+The permanent two-key recurrence is about 59.6% faster than Phase 2r and now
+9.1% behind PHP rather than 172% behind it. The three-key control improves by
+56.7% and remains 11.3% behind PHP, showing that the result is not tied to one
+pair of key names. At these durations normal process-level variance is several
+percent, so the defensible boundary is a high-single- to low-double-digit PHP
+gap rather than one exact percentage.
+
+The 31-round non-target acceptance ratios against Phase 2r were `0.997x` for
+an invariant runtime string key, `0.998x` for a literal string key, `0.997x`
+for a materialized literal fetch, `0.969x` for materialized integer-hash reads,
+`1.011x` for the sparse hash filter, and `1.006x` for hash foreach. Twenty-pass
+controls measured `0.998x` for packed foreach and `0.957x` for hash foreach.
+No established path has a retained regression outside normal short-run noise.
+
+Planner tests lock both typed string selection and cache sizing from two and
+three distinct loop literals. End-to-end cases cover ordinary string keys,
+canonical numeric string keys, final string materialization, and an exact
+non-long fetch side exit. The quick-loop end-to-end suite now has 60 tests.
+The complete suite passes with all features and with `--no-default-features`;
+warning-free checks pass for both configurations.
+Arbitrary strings produced by calls, array reads, concatenation, or other
+unsupported operations are intentionally not retained yet; supporting those
+requires a broader string-producing typed IR rather than weakening these
+guards.
