@@ -322,12 +322,20 @@ impl OpArray {
             if header_ip >= backedge_ip {
                 continue;
             }
-            let plan = crate::vm::quick::detect_long_accumulate_loop(
+            let plan = crate::vm::quick::detect_long_induction_loop(
                 self,
                 header_ip,
                 backedge_ip,
             )
-            .map(BlockPlan::QuickLongAccumulate)
+            .map(BlockPlan::QuickLongInduction)
+            .or_else(|| {
+                crate::vm::quick::detect_long_accumulate_loop(
+                    self,
+                    header_ip,
+                    backedge_ip,
+                )
+                .map(BlockPlan::QuickLongAccumulate)
+            })
             .or_else(|| {
                 crate::vm::quick::detect_foreach_long_accumulate_loop(
                     self,

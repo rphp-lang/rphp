@@ -112,6 +112,26 @@ pub struct QuickLongAccumulateLoop {
     pub increment_ip: usize,
 }
 
+/// Guarded induction-only loop:
+///
+/// ```php
+/// for ($i = $start; $i < $bound; $i++) {
+/// }
+/// ```
+///
+/// The same region also covers `while` and prefix increment syntax.
+#[derive(Debug, Clone, Copy)]
+pub struct QuickLongInductionLoop {
+    pub header_ip: usize,
+    pub exit_ip: usize,
+    pub induction_cv: u16,
+    pub bound: QuickLongBound,
+    pub condition_tmp: Option<u16>,
+    pub increment_kind: QuickIncrementKind,
+    pub increment_tmp: Option<u16>,
+    pub increment_ip: usize,
+}
+
 /// Guarded value-only foreach recurrence:
 ///
 /// ```php
@@ -509,6 +529,125 @@ pub fn detect_foreach_long_accumulate_loop(
         accumulator_cv,
         sum_tmp: sum.result,
         sum_ip: header_ip + 2,
+    })
+}
+
+/// Recognize a side-effect-free loop whose only body operation increments the
+/// induction variable.
+pub fn detect_long_induction_loop(
+    op_array: &OpArray,
+    header_ip: usize,
+    backedge_ip: usize,
+) -> Option<QuickLongInductionLoop> {
+    if header_ip.checked_add(3)? != backedge_ip
+        || backedge_ip >= op_array.instructions.len()
+    {
+        return None;
+    }
+
+    let condition = op_array.instructions[header_ip];
+    let branch = op_array.instructions[header_ip + 1];
+    let backedge = op_array.instructions[backedge_ip];
+    let (induction_cv, bound, condition_tmp, exit_ip) = match condition.opcode {
+        OpCode::IsSmaller
+            if condition.op1_type == OpType::Cv
+                && condition.op2_type == OpType::Cv
+                && condition.result_type == OpType::Tmp
+                && branch.opcode == OpCode::JmpZ
+                && branch.op1_type == OpType::Tmp
+                && branch.op1 == condition.result =>
+        {
+            (
+                condition.op1,
+                QuickLongBound::Cv(condition.op2),
+                Some(condition.result),
+                branch.op2 as usize,
+            )
+        }
+        OpCode::IsSmaller_CvConst
+            if condition.op1_type == OpType::Cv
+                && condition.op2_type == OpType::Const
+                && condition.result_type == OpType::Tmp
+                && branch.opcode == OpCode::JmpZ
+                && branch.op1_type == OpType::Tmp
+                && branch.op1 == condition.result =>
+        {
+            (
+                condition.op1,
+                QuickLongBound::Const(long_literal(op_array, condition.op2)?),
+                Some(condition.result),
+                branch.op2 as usize,
+            )
+        }
+        OpCode::JmpZ_Lt_CvConst
+            if condition.op1_type == OpType::Cv
+                && condition.op2_type == OpType::Const
+                && condition.result_type == OpType::Unused
+                && branch.opcode == OpCode::JmpZ
+                && branch.op1_type == OpType::Tmp
+                && branch.op2_type == OpType::Unused
+                && branch.op2 == condition.result =>
+        {
+            (
+                condition.op1,
+                QuickLongBound::Const(long_literal(op_array, condition.op2)?),
+                None,
+                condition.result as usize,
+            )
+        }
+        _ => return None,
+    };
+
+    if exit_ip <= backedge_ip || exit_ip >= op_array.instructions.len() {
+        return None;
+    }
+
+    let increment_ip = header_ip + 2;
+    let increment = op_array.instructions[increment_ip];
+    let increment_kind = match increment.opcode {
+        OpCode::PreInc => QuickIncrementKind::Pre,
+        OpCode::PostInc => QuickIncrementKind::Post,
+        _ => return None,
+    };
+    if increment.op1_type != OpType::Cv || increment.op1 != induction_cv {
+        return None;
+    }
+    let increment_tmp = match increment.result_type {
+        OpType::Unused => None,
+        OpType::Tmp => Some(increment.result),
+        _ => return None,
+    };
+
+    if !matches!(backedge.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+        || backedge.op1 as usize != header_ip
+        || matches!(bound, QuickLongBound::Cv(cv) if cv == induction_cv)
+    {
+        return None;
+    }
+
+    if condition_tmp.is_some() && condition_tmp == increment_tmp {
+        return None;
+    }
+
+    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+    if total_slots > 64
+        || induction_cv as u32 >= op_array.num_cvs
+        || matches!(bound, QuickLongBound::Cv(cv) if cv as u32 >= op_array.num_cvs)
+        || condition_tmp.is_some_and(|slot| slot as u32 >= total_slots)
+        || increment_tmp.is_some_and(|slot| slot as u32 >= total_slots)
+    {
+        return None;
+    }
+
+    Some(QuickLongInductionLoop {
+        header_ip,
+        exit_ip,
+        induction_cv,
+        bound,
+        condition_tmp,
+        increment_kind,
+        increment_tmp,
+        increment_ip,
     })
 }
 
@@ -1808,6 +1947,26 @@ mod tests {
         detect_long_accumulate_loop(&main.op_array, header, backedge).unwrap()
     }
 
+    fn induction_plan(source: &str) -> QuickLongInductionLoop {
+        let main = compile_main(source);
+        main.op_array
+            .instructions
+            .iter()
+            .enumerate()
+            .filter(|(ip, instruction)| {
+                matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                    && (instruction.op1 as usize) < *ip
+            })
+            .find_map(|(backedge, instruction)| {
+                detect_long_induction_loop(
+                    &main.op_array,
+                    instruction.op1 as usize,
+                    backedge,
+                )
+            })
+            .expect("source should contain an induction-only quick loop")
+    }
+
     fn long_ops_plan(source: &str) -> QuickLongOpsLoop {
         let main = compile_main(source);
         main.op_array
@@ -2004,6 +2163,38 @@ for ($i = 0; $i < 100; ++$i) {{
                 QuickLongTerm::AbsLong { operand_cv, .. }
                     if operand_cv == if expression == "abs($i)" { 2 } else { 0 }
             ));
+        }
+    }
+
+    #[test]
+    fn detects_prefix_and_postfix_induction_only_loops() {
+        let postfix = induction_plan("<?php
+$limit = 100;
+$i = 0;
+while ($i < $limit) {
+    $i++;
+}
+");
+        assert!(matches!(postfix.bound, QuickLongBound::Cv(0)));
+        assert_eq!(postfix.increment_kind, QuickIncrementKind::Post);
+
+        let prefix = induction_plan("<?php
+for ($i = 0; $i < 100; ++$i) {
+}
+");
+        assert!(matches!(prefix.bound, QuickLongBound::Const(100)));
+        assert_eq!(prefix.increment_kind, QuickIncrementKind::Pre);
+
+        #[cfg(feature = "quick-loops")]
+        {
+            let main = compile_main("<?php
+for ($i = 0; $i < 100; ++$i) {
+}
+");
+            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
+                plan,
+                crate::vm::planner::BlockPlan::QuickLongInduction(_)
+            )));
         }
     }
 

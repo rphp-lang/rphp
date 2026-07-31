@@ -19,7 +19,8 @@ use crate::vm::function::{FunctionCommon, FunctionType, UserFunction, CallStrate
 use crate::vm::instruction::{Instruction, OpType};
 use crate::vm::opcode::OpCode;
 use crate::vm::quick::{
-    QuickForeachLongAccumulateLoop, QuickLongAccumulateLoop, QuickLongOpsLoop,
+    QuickForeachLongAccumulateLoop, QuickLongAccumulateLoop, QuickLongInductionLoop,
+    QuickLongOpsLoop,
 };
 use crate::runtime::ExecutorGlobals;
 
@@ -40,6 +41,8 @@ pub enum BlockPlan {
     Deoptimized,
     /// Guarded scalar loop region selected by the no-JIT quick executor.
     QuickLongAccumulate(QuickLongAccumulateLoop),
+    /// Guarded induction-only `for` or `while` loop.
+    QuickLongInduction(QuickLongInductionLoop),
     /// Guarded value-only foreach accumulation over long array values.
     QuickForeachLongAccumulate(QuickForeachLongAccumulateLoop),
     /// Typed scalar operations for a closed loop not covered by a superinstruction.

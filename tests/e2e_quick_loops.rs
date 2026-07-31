@@ -269,6 +269,54 @@ echo $i;
 }
 
 #[test]
+fn quick_induction_only_for_loop_supports_prefix_increment() {
+    assert_eq!(
+        run_php(
+            "<?php
+for ($i = 0; $i < 10000; ++$i) {
+}
+echo $i;
+"
+        ),
+        "10000"
+    );
+}
+
+#[test]
+fn quick_induction_only_while_loop_supports_postincrement() {
+    assert_eq!(
+        run_php(
+            "<?php
+$limit = 10000;
+$i = 0;
+while ($i < $limit) {
+    $i++;
+}
+echo $i;
+"
+        ),
+        "10000"
+    );
+}
+
+#[test]
+fn quick_induction_only_guard_falls_back_for_double_bound() {
+    assert_eq!(
+        run_php(
+            "<?php
+$limit = 1000.5;
+$i = 0;
+while ($i < $limit) {
+    $i++;
+}
+echo $i;
+"
+        ),
+        "1001"
+    );
+}
+
+#[test]
 fn quick_long_loop_supports_fused_constant_bound() {
     assert_eq!(
         run_php(
