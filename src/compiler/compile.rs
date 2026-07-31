@@ -80,6 +80,8 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
                     }
                 }
                 OpCode::InitDynamicCall
+                | OpCode::InitUserCall
+                | OpCode::CallUserFuncArray
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
                 | OpCode::Include => {
@@ -562,7 +564,7 @@ impl Compiler {
                 let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                 let may_access_globals = !func_compiler.global_vars.is_empty()
                     || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
                         | OpCode::InitMethodCall | OpCode::InitStaticCall
                         | OpCode::Include));
                 let op_array = OpArray {
@@ -1312,7 +1314,7 @@ impl Compiler {
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
                     || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
                         | OpCode::InitMethodCall | OpCode::InitStaticCall
                         | OpCode::Include));
                     let op_array = OpArray {
@@ -1420,7 +1422,7 @@ impl Compiler {
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
                     || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
                         | OpCode::InitMethodCall | OpCode::InitStaticCall
                         | OpCode::Include));
                     let op_array = OpArray {
@@ -1491,7 +1493,7 @@ impl Compiler {
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
                     || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
                         | OpCode::InitMethodCall | OpCode::InitStaticCall
                         | OpCode::Include));
                     let op_array = OpArray {
@@ -1584,7 +1586,7 @@ impl Compiler {
                     let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
                     || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
                         | OpCode::InitMethodCall | OpCode::InitStaticCall
                         | OpCode::Include));
                     let op_array = OpArray {
@@ -2184,6 +2186,79 @@ impl Compiler {
                 (one_lit, OpType::Const)
             }
             Expr::FunctionCall { name, args } => {
+                if self.is_global_builtin_call(name, "call_user_func") {
+                    if let Some((CallArg::Positional(callback), forwarded)) = args.split_first() {
+                        if forwarded.iter().all(|arg| matches!(arg, CallArg::Positional(_))) {
+                            let (callback_op, callback_type) = self.compile_expr(callback);
+                            let mut init = Instruction::new(OpCode::InitUserCall);
+                            init.op1 = callback_op;
+                            init.op1_type = callback_type;
+                            init.extended_value = forwarded.len() as u32;
+                            self.instructions.push(init);
+
+                            self.emit_user_call_args(forwarded);
+
+                            let tmp = self.alloc_tmp();
+                            let mut do_fcall = Instruction::new(OpCode::DoFcall);
+                            do_fcall.result = tmp;
+                            do_fcall.result_type = OpType::Tmp;
+                            self.instructions.push(do_fcall);
+                            return (tmp, OpType::Tmp);
+                        }
+                    }
+                }
+
+                if self.is_global_builtin_call(name, "call_user_func_array") {
+                    if let [CallArg::Positional(callback), CallArg::Positional(array)] = args.as_slice() {
+                        if let Expr::ArrayLiteral(elements) = array {
+                            if elements.iter().all(|element| element.key.is_none()) {
+                                // A temporary packed literal cannot be observed by PHP
+                                // code. Forward its values directly and avoid allocating,
+                                // filling and dropping a PhpArray for every invocation.
+                                let (callback_op, callback_type) = self.compile_expr(callback);
+                                let mut init = Instruction::new(OpCode::InitUserCall);
+                                init.op1 = callback_op;
+                                init.op1_type = callback_type;
+                                init.extended_value = elements.len() as u32;
+                                self.instructions.push(init);
+
+                                for (index, element) in elements.iter().enumerate() {
+                                    let (op, op_type) = self.compile_expr(&element.value);
+                                    let mut send = Instruction::new(OpCode::SendUser);
+                                    send.op1 = op;
+                                    send.op1_type = op_type;
+                                    send.op2 = index as u16;
+                                    send.extended_value = index as u32;
+                                    self.instructions.push(send);
+                                }
+
+                                let tmp = self.alloc_tmp();
+                                let mut do_fcall = Instruction::new(OpCode::DoFcall);
+                                do_fcall.result = tmp;
+                                do_fcall.result_type = OpType::Tmp;
+                                self.instructions.push(do_fcall);
+                                return (tmp, OpType::Tmp);
+                            }
+                        }
+
+                        // PHP treats call_user_func_array as a call construct. Compile both
+                        // operands in source order, then resolve and invoke the callback
+                        // directly instead of entering the variadic stdlib wrapper.
+                        let (callback_op, callback_type) = self.compile_expr(callback);
+                        let (array_op, array_type) = self.compile_expr(array);
+                        let tmp = self.alloc_tmp();
+                        let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                        call.op1 = callback_op;
+                        call.op1_type = callback_type;
+                        call.op2 = array_op;
+                        call.op2_type = array_type;
+                        call.result = tmp;
+                        call.result_type = OpType::Tmp;
+                        self.instructions.push(call);
+                        return (tmp, OpType::Tmp);
+                    }
+                }
+
                 let resolved = self.resolve_name(name);
                 let ref_args = self.lookup_ref_args(&resolved);
                 let name_idx = self.add_literal(Value::string(resolved));
@@ -2527,7 +2602,7 @@ impl Compiler {
                 let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
                 let may_access_globals = !func_compiler.global_vars.is_empty()
                     || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall
+                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
                         | OpCode::InitMethodCall | OpCode::InitStaticCall
                         | OpCode::Include));
                 let op_array = OpArray {
@@ -2874,6 +2949,18 @@ impl Compiler {
         idx
     }
 
+    /// Whether a source-level function name unambiguously addresses a global
+    /// builtin. An unqualified name inside a namespace must retain the normal
+    /// fallback lookup because a namespaced user function may shadow it.
+    fn is_global_builtin_call(&self, name: &str, builtin: &str) -> bool {
+        if let Some(fully_qualified) = name.strip_prefix('\\') {
+            return fully_qualified.eq_ignore_ascii_case(builtin);
+        }
+        self.current_namespace.is_none()
+            && !name.contains('\\')
+            && name.eq_ignore_ascii_case(builtin)
+    }
+
     fn resolve_cv(&mut self, name: &str) -> u16 {
         if let Some(&idx) = self.cv_table.get(name) {
             idx as u16
@@ -2946,6 +3033,24 @@ impl Compiler {
                     self.instructions.push(send);
                 }
             }
+        }
+    }
+
+    /// Emit arguments for compiler-lowered call_user_func. Unlike an ordinary
+    /// dynamic call, the callback may resolve to a method, so the VM computes
+    /// the hidden `$this` CV offset from the resolved signature.
+    fn emit_user_call_args(&mut self, args: &[CallArg]) {
+        for (index, arg) in args.iter().enumerate() {
+            let CallArg::Positional(expr) = arg else {
+                unreachable!("user-call lowering only accepts positional arguments");
+            };
+            let (op, op_type) = self.compile_expr(expr);
+            let mut send = Instruction::new(OpCode::SendUser);
+            send.op1 = op;
+            send.op1_type = op_type;
+            send.op2 = index as u16;
+            send.extended_value = index as u32;
+            self.instructions.push(send);
         }
     }
 

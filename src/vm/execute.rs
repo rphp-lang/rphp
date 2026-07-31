@@ -1888,6 +1888,87 @@ fn op_init_static_call<'a>(
 }
 
 #[inline(never)]
+fn op_init_user_call<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let callback_raw = unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    };
+    let callback = if callback_raw.is_reference() {
+        unsafe { &*callback_raw.as_ref_ptr() }
+    } else {
+        callback_raw
+    };
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let cache_slot = unsafe {
+        op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
+    };
+    let caller_class = get_caller_class(frame, eg);
+    let resolved = match crate::stdlib::resolve_callback_with_cache(
+        callback,
+        eg,
+        caller_class.as_deref(),
+        Some(cache_slot),
+    ) {
+        Some(resolved) => resolved,
+        None => {
+            let description = callback.echo_to_string();
+            let error = make_error_value("TypeError", &format!(
+                "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
+                description,
+            ));
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+    };
+
+    let explicit_args = opline.extended_value;
+    let signature = unsafe { &(*resolved.func_ptr).sig };
+    let public_end = signature.this_offset + explicit_args;
+    let capture_end = signature.num_args + resolved.use_vars.len() as u32;
+    let storage_slots = public_end.max(capture_end);
+    let call = eg.vm_stack.push_call_frame(resolved.func_ptr, storage_slots);
+    unsafe {
+        // DoFcall validates only the public arguments. Hidden `$this` and
+        // closure captures occupy CV slots but are not part of public arity.
+        (*call).num_args = explicit_args;
+        (*call).prev_execute_data = frame;
+        (*call).call = (*frame).call;
+        (*frame).call = call;
+    }
+
+    // push_call_frame leaves the whole requested argument prefix
+    // uninitialized. Optional declared parameters between the supplied
+    // arguments and closure captures must remain readable Undef slots.
+    for index in public_end..signature.num_args {
+        let destination = unsafe { (*call).cv_mut(index) } as *mut Value;
+        unsafe { destination.write(Value::undef()) };
+    }
+
+    for (index, value) in resolved.prepend_args.into_iter().enumerate() {
+        let destination = unsafe { (*call).cv_mut(index as u32) } as *mut Value;
+        unsafe { frame_slot_init(call, destination, value) };
+    }
+
+    let capture_offset = signature.num_args;
+    for (index, value) in resolved.use_vars.into_iter().enumerate() {
+        let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) } as *mut Value;
+        unsafe { frame_slot_init(call, destination, value) };
+    }
+
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
 fn op_init_dynamic_call(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -6239,6 +6320,82 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             }
 
+            OpCode::CallUserFuncArray => {
+                // Compiler-lowered call_user_func_array(callback, args). The
+                // callback is resolved at this opcode's own call site and the
+                // packed-array/direct-internal path can therefore avoid both
+                // the stdlib wrapper frame and the callback frame.
+                let callback_raw = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let callback = if callback_raw.is_reference() {
+                    unsafe { &*callback_raw.as_ref_ptr() }
+                } else {
+                    callback_raw
+                };
+                let args_raw = unsafe {
+                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                };
+                let args = if args_raw.is_reference() {
+                    unsafe { &*args_raw.as_ref_ptr() }
+                } else {
+                    args_raw
+                };
+
+                let ip = unsafe {
+                    (opline as *const Instruction)
+                        .offset_from(op_array.instructions.as_ptr()) as usize
+                };
+                let cache_slot = unsafe {
+                    op_array.cache.as_ptr().add(ip)
+                        as *mut crate::vm::instruction::InlineCache
+                };
+                let caller_class = get_caller_class(frame, eg);
+                let result = crate::stdlib::invoke_call_user_func_array(
+                    callback,
+                    args,
+                    eg,
+                    caller_class.as_deref(),
+                    Some(cache_slot),
+                )?;
+
+                if let Some(exc) = eg.exception.take() {
+                    match throw_in_frame(eg, frame, exc) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue;
+                        }
+                        ThrowResult::Unhandled(thrown) => {
+                            eg.exception = Some(thrown);
+                            return Ok(());
+                        }
+                    }
+                }
+
+                if opline.result_type != OpType::Unused {
+                    let result_ptr = unsafe {
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    };
+                    unsafe { slot_set(result_ptr, result) };
+                }
+            }
+
+            OpCode::InitUserCall => {
+                match op_init_user_call(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
+                    }
+                    ColdResult::Unhandled(thrown) => {
+                        eg.exception = Some(thrown);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
+            }
+
             OpCode::InitFcall => {
                 // op1 = num_args
                 // op2 = CONST index pointing to function name string
@@ -6427,6 +6584,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
                 }
+            }
+
+            OpCode::SendUser => {
+                let call = unsafe { (*frame).call };
+                debug_assert!(!call.is_null());
+                let func_common = unsafe { &*(*call).func };
+                let destination_index = func_common
+                    .sig
+                    .param_cv_index(opline.extended_value);
+                let value = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                // call_user_func forwards ordinary arguments by value. Follow
+                // an existing reference for the read, but do not create a new
+                // reference merely because the callback parameter is by-ref.
+                let value = if value.is_reference() {
+                    unsafe { &*value.as_ref_ptr() }
+                } else {
+                    value
+                };
+                let destination = unsafe { (*call).cv_mut(destination_index) };
+                unsafe { frame_slot_init(call, destination as *mut Value, value.clone()) };
             }
 
             OpCode::SendNamed => {

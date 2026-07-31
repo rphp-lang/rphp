@@ -1,5 +1,22 @@
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::opcode::OpCode;
+
+fn main_opcodes(source: &str) -> Vec<OpCode> {
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    Compiler::new()
+        .compile(&statements)
+        .unwrap()
+        .main
+        .instructions
+        .iter()
+        .map(|instruction| instruction.opcode)
+        .collect()
+}
 
 // -- call_user_func with string callback --
 
@@ -37,6 +54,13 @@ echo call_user_func('add', 3, 7);
     assert_eq!(out, "10");
 }
 
+#[test]
+fn test_call_user_func_is_lowered_without_wrapper_call() {
+    let opcodes = main_opcodes("<?php call_user_func('strlen', 'abc');");
+    assert!(opcodes.contains(&OpCode::InitUserCall));
+    assert!(opcodes.contains(&OpCode::SendUser));
+}
+
 // -- call_user_func_array callback and argument shapes --
 
 #[test]
@@ -51,7 +75,8 @@ echo call_user_func_array('add_array_args', [3, 7]);
 #[test]
 fn test_direct_internal_callback_matches_hash_frame_fallback() {
     let out = run_php(r#"<?php
-$packed = call_user_func_array('chunk_split', ['abcd', 2, '|']);
+$packed_args = ['abcd', 2, '|'];
+$packed = call_user_func_array('chunk_split', $packed_args);
 $hash = call_user_func_array('chunk_split', [4 => 'abcd', 8 => 2, 12 => '|']);
 echo $packed . ':' . $hash;
 "#);
@@ -61,11 +86,58 @@ echo $packed . ':' . $hash;
 #[test]
 fn test_direct_internal_callback_preserves_scalar_coercion() {
     let out = run_php(r#"<?php
-echo call_user_func_array('strlen', [12345]);
+$strlen_args = [12345];
+echo call_user_func_array('strlen', $strlen_args);
 echo ':';
-echo call_user_func_array('abs', [-7]);
+$abs_args = [-7];
+echo call_user_func_array('abs', $abs_args);
 "#);
     assert_eq!(out, "5:7");
+}
+
+#[test]
+fn test_call_user_func_array_prebuilt_and_literal_use_distinct_lowerings() {
+    let prebuilt = main_opcodes("<?php $args = ['abc']; call_user_func_array('strlen', $args);");
+    assert!(prebuilt.contains(&OpCode::CallUserFuncArray));
+
+    let literal = main_opcodes("<?php call_user_func_array('strlen', ['abc']);");
+    assert!(literal.contains(&OpCode::InitUserCall));
+    assert!(literal.contains(&OpCode::SendUser));
+    assert!(!literal.contains(&OpCode::CallUserFuncArray));
+}
+
+#[test]
+fn test_lowered_callback_calls_preserve_argument_evaluation_order() {
+    let out = run_php(r#"<?php
+function make_callback() { echo 'C'; return 'strlen'; }
+function make_argument() { echo 'A'; return 'abc'; }
+echo call_user_func(make_callback(), make_argument());
+echo ':';
+echo call_user_func_array(make_callback(), [make_argument()]);
+"#);
+    assert_eq!(out, "CA3:CA3");
+}
+
+#[test]
+fn test_namespaced_shadow_keeps_normal_function_call() {
+    let out = run_php(r#"<?php
+namespace CallbackShadow {
+    function call_user_func_array($callback, $args) { return 'shadow'; }
+    echo call_user_func_array('strlen', ['abc']);
+}
+"#);
+    assert_eq!(out, "shadow");
+}
+
+#[test]
+fn test_lowered_call_user_func_keeps_by_value_semantics() {
+    let out = run_php(r#"<?php
+function bump_callback(&$value) { $value = $value + 1; }
+$value = 1;
+call_user_func('bump_callback', $value);
+echo $value;
+"#);
+    assert_eq!(out, "1");
 }
 
 #[test]
@@ -262,6 +334,20 @@ $fn = function($x) { return $x * 3; };
 echo call_user_func($fn, 4);
 "#);
     assert_eq!(out, "12");
+}
+
+#[test]
+fn test_lowered_closure_call_keeps_optional_gap_before_capture() {
+    let out = run_php(r#"<?php
+$prefix = 'P';
+$format = function($value, $suffix = '!') use ($prefix) {
+    return $prefix . $value . $suffix;
+};
+echo call_user_func($format, 'x');
+echo ':';
+echo call_user_func_array($format, ['y']);
+"#);
+    assert_eq!(out, "Px!:Py!");
 }
 
 #[test]

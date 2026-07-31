@@ -27,6 +27,15 @@ pub enum OpCode {
     SendRef = 64,
     SendVarEx = 65,  // Runtime check: send by-ref if callee expects it, else by-val
     SendNamed = 66,  // Named argument: op1=value, op2=CONST name string; resolved to CV slot at runtime
+    /// Compiler-lowered call_user_func_array(): op1=callback, op2=args array.
+    /// Resolves and invokes the callback without entering the stdlib wrapper.
+    CallUserFuncArray = 67,
+    /// Compiler-lowered call_user_func(): resolve callback and create its real
+    /// call frame directly, without the variadic stdlib wrapper frame.
+    InitUserCall = 68,
+    /// Send a call_user_func argument by value. The target is known only at
+    /// runtime, so a hidden method `$this` offset comes from its signature.
+    SendUser = 69,
 
     // Comparison
     IsEqual = 15,

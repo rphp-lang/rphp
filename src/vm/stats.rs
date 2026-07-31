@@ -233,6 +233,8 @@ mod inner {
             62 => Some("Return"), 63 => Some("SendVal"),
             64 => Some("SendRef"), 65 => Some("SendVarEx"),
             66 => Some("SendNamed"),
+            67 => Some("CallUserFuncArray"),
+            68 => Some("InitUserCall"), 69 => Some("SendUser"),
             70 => Some("InitArray"), 71 => Some("AddArrayElement"),
             72 => Some("FetchDimR"), 73 => Some("AssignDim"),
             74 => Some("ArrayPushOp"), 75 => Some("UnsetDim"),

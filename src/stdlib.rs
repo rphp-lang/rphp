@@ -2523,15 +2523,15 @@ fn find_method_in_class_hierarchy<'a>(
 }
 
 /// Result of resolving a callback: func pointer + args to prepend (e.g. $this, use_vars).
-struct ResolvedCallback {
-    func_ptr: *const FunctionCommon,
+pub(crate) struct ResolvedCallback {
+    pub(crate) func_ptr: *const FunctionCommon,
     /// Args to prepend before user-supplied args.
     /// For plain functions: empty.
     /// For method calls: [$this].
     /// For closures: use_vars (appended after user args, not prepended).
-    prepend_args: Vec<Value>,
+    pub(crate) prepend_args: Vec<Value>,
     /// Captured use_vars for closures (appended after all params).
-    use_vars: Vec<Value>,
+    pub(crate) use_vars: Vec<Value>,
 }
 
 /// Get the calling scope's class name from an ExecuteData frame.
@@ -2728,17 +2728,17 @@ fn cache_resolved_string_callback(
     unsafe { (*cache_slot).set_callback_string(name_ptr, resolved.func_ptr) };
 }
 
-/// Resolve a callback at a PHP call site. Only array callbacks can need the
-/// caller's class scope for method visibility, so plain function strings,
-/// closures and invokable objects avoid allocating a scope `String`.
+/// Resolve a callback using an optional monomorphic string cache owned by the
+/// PHP instruction that performs the call.
 #[inline]
-fn resolve_callback_at_callsite(
+pub(crate) fn resolve_callback_with_cache(
     val: &Value,
     eg: &ExecutorGlobals,
-    ed: *mut ExecuteData,
+    caller_class: Option<&str>,
+    cache_slot: Option<*mut InlineCache>,
 ) -> Option<ResolvedCallback> {
     let mut cache_slot = if val.value_type() == ValueType::String {
-        callback_cache_slot(ed)
+        cache_slot
     } else {
         None
     };
@@ -2761,17 +2761,33 @@ fn resolve_callback_at_callsite(
         }
     }
 
-    let resolved = if val.value_type() == ValueType::Array {
-        let caller_class = get_calling_scope_class(ed, eg);
-        resolve_callback(val, eg, caller_class)
+    let resolution_scope = if val.value_type() == ValueType::Array {
+        caller_class
     } else {
-        resolve_callback(val, eg, None)
+        None
     };
+    let resolved = resolve_callback(val, eg, resolution_scope);
 
     if let (Some(slot), Some(resolved)) = (cache_slot, resolved.as_ref()) {
         cache_resolved_string_callback(val, resolved, slot);
     }
     resolved
+}
+
+/// Resolve a callback from the legacy stdlib wrapper. Only array callbacks
+/// need the caller's lexical class for visibility checks.
+#[inline]
+fn resolve_callback_at_callsite(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Option<ResolvedCallback> {
+    let caller_class = if val.value_type() == ValueType::Array {
+        get_calling_scope_class(ed, eg)
+    } else {
+        None
+    };
+    resolve_callback_with_cache(val, eg, caller_class, callback_cache_slot(ed))
 }
 
 /// Invoke a resolved callback with positional values from a PHP array.
@@ -2798,6 +2814,128 @@ fn call_resolved_with_array(
             .chain(args.values())
             .chain(resolved.use_vars.iter()),
     )
+}
+
+/// Invoke an already-resolved callback with PHP 8 call_user_func_array
+/// positional/named argument semantics.
+fn call_resolved_with_php_array(
+    eg: &mut ExecutorGlobals,
+    resolved: ResolvedCallback,
+    args: &PhpArray,
+) -> Result<Value, VmError> {
+    if !args.has_string_keys() {
+        return call_resolved_with_array(eg, &resolved, args);
+    }
+
+    let sig = unsafe { &(*resolved.func_ptr).sig };
+    let param_names = &sig.param_names;
+    let num_params = sig.public_arity() as usize;
+    let required = sig.required_num_args as usize;
+
+    let mut positional = vec![Value::undef(); num_params];
+    let mut extra_positional: Vec<Value> = Vec::new();
+    let mut pos_cursor = 0usize;
+    let mut seen_named = false;
+
+    for (key, val) in args.iter() {
+        match key {
+            ArrayKey::String(name) => {
+                seen_named = true;
+                if let Some(idx) = param_names.iter().position(|p| p == name.as_str()) {
+                    if idx < num_params {
+                        if !positional[idx].is_undef() {
+                            eg.exception = Some(crate::value::make_error_value("Error",
+                                &format!("Named parameter ${} overwrites previous argument", name)));
+                            return Ok(Value::null());
+                        }
+                        positional[idx] = val.clone();
+                    } else {
+                        extra_positional.push(val.clone());
+                    }
+                } else {
+                    eg.exception = Some(crate::value::make_error_value("Error",
+                        &format!("Unknown named parameter ${}", name)));
+                    return Ok(Value::null());
+                }
+            }
+            ArrayKey::Int(_) => {
+                if seen_named {
+                    eg.exception = Some(crate::value::make_error_value("Error",
+                        "Cannot use positional argument after named argument"));
+                    return Ok(Value::null());
+                }
+                if pos_cursor < num_params {
+                    positional[pos_cursor] = val.clone();
+                    pos_cursor += 1;
+                } else {
+                    extra_positional.push(val.clone());
+                }
+            }
+        }
+    }
+
+    for i in 0..required {
+        if positional[i].is_undef() {
+            let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
+            eg.exception = Some(crate::value::make_error_value("ArgumentCountError",
+                &format!("call_user_func_array(): Argument #{} (${}): not passed", i + 1, name)));
+            return Ok(Value::null());
+        }
+    }
+
+    let mut normalized: Vec<Value> = positional.into_iter().collect();
+    while normalized.last().map_or(false, |v| v.is_undef()) {
+        normalized.pop();
+    }
+    normalized.extend(extra_positional);
+
+    let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
+    call_function_owned_iter(
+        eg,
+        resolved.func_ptr,
+        num_args,
+        resolved.prepend_args.into_iter()
+            .chain(normalized)
+            .chain(resolved.use_vars),
+    )
+}
+
+/// VM entry for compiler-lowered call_user_func_array. It shares all callback
+/// and named-argument semantics with the public stdlib function but skips its
+/// variadic call frame entirely.
+pub(crate) fn invoke_call_user_func_array(
+    callback: &Value,
+    args_value: &Value,
+    eg: &mut ExecutorGlobals,
+    caller_class: Option<&str>,
+    cache_slot: Option<*mut InlineCache>,
+) -> Result<Value, VmError> {
+    let args = match args_value.as_array() {
+        Some(args) => args,
+        None => {
+            eg.exception = Some(crate::value::make_error_value("TypeError",
+                "call_user_func_array(): Argument #2 ($args) must be of type array, given non-array"));
+            return Ok(Value::null());
+        }
+    };
+
+    let resolved = match resolve_callback_with_cache(
+        callback,
+        eg,
+        caller_class,
+        cache_slot,
+    ) {
+        Some(resolved) => resolved,
+        None => {
+            let desc = callback.echo_to_string();
+            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
+                "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable", desc
+            )));
+            return Ok(Value::null());
+        }
+    };
+
+    call_resolved_with_php_array(eg, resolved, args)
 }
 
 /// call_user_func($callback, ...$args)
@@ -4142,118 +4280,14 @@ fn fn_ctype_lower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
     let args_val = arg!(ed, 1);
-
-    // PHP 8: $args must be an array — TypeError otherwise
-    let arr = match args_val.as_array() {
-        Some(a) => a,
-        None => {
-            eg.exception = Some(crate::value::make_error_value("TypeError",
-                "call_user_func_array(): Argument #2 ($args) must be of type array, given non-array"));
-            return Ok(());
-        }
-    };
-
-    // Resolve callback first — we need its signature for named-arg resolution
-    let resolved = match resolve_callback_at_callsite(callback, eg, ed) {
-        Some(r) => r,
-        None => {
-            let desc = callback.echo_to_string();
-            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
-                "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable", desc
-            )));
-            return Ok(());
-        }
-    };
-
-    // Check if the array contains any string keys (named arguments)
-    let has_named = arr.has_string_keys();
-
-    let result = if has_named {
-        // PHP 8 named-argument semantics:
-        //  - positional (int-key) args must all come before any named (string-key) arg
-        //  - named args are mapped to parameter positions by name
-        //  - a named arg must not overwrite a slot already filled by a positional arg
-        //  - all required params must be covered
-        let sig = unsafe { &(*resolved.func_ptr).sig };
-        let param_names = &sig.param_names;
-        let num_params = sig.public_arity() as usize;
-        let required = sig.required_num_args as usize;
-
-        let mut positional = vec![Value::undef(); num_params];
-        let mut extra_positional: Vec<Value> = Vec::new();
-        let mut pos_cursor = 0usize;
-        let mut seen_named = false;
-
-        for (key, val) in arr.iter() {
-            match key {
-                ArrayKey::String(name) => {
-                    seen_named = true;
-                    if let Some(idx) = param_names.iter().position(|p| p == name.as_str()) {
-                        if idx < num_params {
-                            // Must not overwrite a slot already filled by a positional arg
-                            if !positional[idx].is_undef() {
-                                eg.exception = Some(crate::value::make_error_value("Error",
-                                    &format!("Named parameter ${} overwrites previous argument", name)));
-                                return Ok(());
-                            }
-                            positional[idx] = val.clone();
-                        } else {
-                            extra_positional.push(val.clone());
-                        }
-                    } else {
-                        eg.exception = Some(crate::value::make_error_value("Error",
-                            &format!("Unknown named parameter ${}", name)));
-                        return Ok(());
-                    }
-                }
-                ArrayKey::Int(_) => {
-                    if seen_named {
-                        eg.exception = Some(crate::value::make_error_value("Error",
-                            "Cannot use positional argument after named argument"));
-                        return Ok(());
-                    }
-                    if pos_cursor < num_params {
-                        positional[pos_cursor] = val.clone();
-                        pos_cursor += 1;
-                    } else {
-                        extra_positional.push(val.clone());
-                    }
-                }
-            }
-        }
-
-        // Check all required params are filled
-        for i in 0..required {
-            if positional[i].is_undef() {
-                let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
-                eg.exception = Some(crate::value::make_error_value("ArgumentCountError",
-                    &format!("call_user_func_array(): Argument #{} (${}): not passed", i + 1, name)));
-                return Ok(());
-            }
-        }
-
-        // Trim trailing undefs (unfilled optional params)
-        let mut result: Vec<Value> = positional.into_iter().collect();
-        while result.last().map_or(false, |v| v.is_undef()) {
-            result.pop();
-        }
-        result.extend(extra_positional);
-
-        // Normalization already owns these values. Move them and the resolved
-        // receiver/captures directly into the callback frame.
-        let num_args = resolved.prepend_args.len() + result.len() + resolved.use_vars.len();
-        call_function_owned_iter(
-            eg,
-            resolved.func_ptr,
-            num_args,
-            resolved.prepend_args.into_iter()
-                .chain(result.into_iter())
-                .chain(resolved.use_vars.into_iter()),
-        )?
-    } else {
-        // All integer keys — stream values directly from packed or hash array.
-        call_resolved_with_array(eg, &resolved, arr)?
-    };
+    let caller_class = get_calling_scope_class(ed, eg).map(str::to_owned);
+    let result = invoke_call_user_func_array(
+        callback,
+        args_val,
+        eg,
+        caller_class.as_deref(),
+        callback_cache_slot(ed),
+    )?;
     if eg.exception.is_some() { return Ok(()); }
     ret!(rv, result);
 }
