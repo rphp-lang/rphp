@@ -19,7 +19,7 @@ use crate::vm::function::FunctionCommon;
 use crate::runtime::ExecutorGlobals;
 use crate::compiler::{make_internal_function, make_internal_function_ref, make_internal_function_variadic, make_internal_method};
 use crate::vm::function::InternalFunction;
-use crate::vm::execute::{call_function, VmError};
+use crate::vm::execute::{call_function_iter, call_function_owned_iter, call_function_readback_arg0_iter, VmError};
 use crate::parser::Visibility;
 
 // ============================================================================
@@ -1141,7 +1141,7 @@ fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
     if let Some(arr) = arr_val.as_array() {
         let mut result = PhpArray::new();
         for (key, val) in arr.iter() {
-            let mapped = call_function(eg, func_ptr, &[val.clone()])?;
+            let mapped = call_function_iter(eg, func_ptr, 1, std::iter::once(val))?;
             if eg.exception.is_some() { return Ok(()); }
             result.set(key, mapped);
         }
@@ -1173,7 +1173,7 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
                     }
                 };
                 for (key, val) in arr.iter() {
-                    let ret_val = call_function(eg, func_ptr, &[val.clone()])?;
+                    let ret_val = call_function_iter(eg, func_ptr, 1, std::iter::once(val))?;
                     if eg.exception.is_some() { return Ok(()); }
                     if ret_val.is_truthy() {
                         result.set(key, val.clone());
@@ -1698,7 +1698,7 @@ fn fn_get_class(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
         let caller_class = get_calling_scope_class(ed, eg);
         if let Some(cls) = caller_class {
             eg.write_output(b"Deprecated: Calling get_class() without arguments is deprecated\n");
-            ret!(rv, Value::string(&cls));
+            ret!(rv, Value::string(cls));
         }
         // Outside class scope: PHP throws Error
         eg.exception = Some(crate::value::make_error_value(
@@ -2360,36 +2360,62 @@ fn fn_preg_replace(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
 // Callable functions
 // ============================================================================
 
-/// Search for a method in a class hierarchy (own methods + parent chain + trait uses).
-/// Returns Some((visibility, is_static)) if found.
-/// Returns (visibility, is_static, declaring_class_lower) for a method in the hierarchy.
-fn find_method_in_class_hierarchy(
-    eg: &ExecutorGlobals,
+/// Find a class without allocating a normalized name. Runtime-originated names
+/// (for example an object's class name) hit the exact lookup; unusual casing
+/// falls back to a case-insensitive scan for PHP compatibility.
+#[inline]
+fn find_class_case_insensitive<'a>(
+    eg: &'a ExecutorGlobals,
+    class_name: &str,
+) -> Option<&'a crate::compiler::compile::ClassDef> {
+    eg.class_table.get(class_name).map(|class| class.as_ref()).or_else(|| {
+        eg.class_table.iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case(class_name))
+            .map(|(_, class)| class.as_ref())
+    })
+}
+
+/// Search for a method in a class hierarchy and return its direct function
+/// pointer. This avoids rebuilding `class::method` strings and looking the
+/// method up a second time in the global function table.
+fn find_method_in_class_hierarchy<'a>(
+    eg: &'a ExecutorGlobals,
     class_name: &str,
     method_name: &str,
-) -> Option<(Visibility, bool, String)> {
-    let method_lower = method_name.to_ascii_lowercase();
-    let mut current = Some(class_name.to_ascii_lowercase());
-    while let Some(ref cls) = current {
-        let entry = eg.class_table.iter().find(|(k, _)| k.to_ascii_lowercase() == *cls);
-        if let Some((_, cd)) = entry {
-            // Check own methods
-            if let Some((_, vis, is_static, _, _)) = cd.methods.iter().find(|(m, _, _, _, _)| m.to_ascii_lowercase() == method_lower) {
-                return Some((*vis, *is_static, cls.clone()));
-            }
-            // Check trait-composed methods
-            for trait_name in &cd.uses {
-                let trait_lower = trait_name.to_ascii_lowercase();
-                if let Some((_, trait_def)) = eg.class_table.iter().find(|(k, _)| k.to_ascii_lowercase() == trait_lower) {
-                    if let Some((_, vis, is_static, _, _)) = trait_def.methods.iter().find(|(m, _, _, _, _)| m.to_ascii_lowercase() == method_lower) {
-                        return Some((*vis, *is_static, cls.clone()));
-                    }
-                }
-            }
-            current = cd.parent.as_ref().map(|p| p.to_ascii_lowercase());
-        } else {
-            break;
+) -> Option<(Visibility, bool, *const FunctionCommon, &'a str)> {
+    let mut current = find_class_case_insensitive(eg, class_name);
+    while let Some(class) = current {
+        if let Some((_, visibility, is_static, _, function)) = class.methods.iter()
+            .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+        {
+            return Some((
+                *visibility,
+                *is_static,
+                &function.common as *const FunctionCommon,
+                class.name.as_str(),
+            ));
         }
+
+        // Trait methods keep the using class as their visibility scope, which
+        // matches the previous resolver and PHP's composed-method semantics.
+        for trait_name in &class.uses {
+            let Some(trait_def) = find_class_case_insensitive(eg, trait_name) else {
+                continue;
+            };
+            if let Some((_, visibility, is_static, _, function)) = trait_def.methods.iter()
+                .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
+            {
+                return Some((
+                    *visibility,
+                    *is_static,
+                    &function.common as *const FunctionCommon,
+                    class.name.as_str(),
+                ));
+            }
+        }
+
+        current = class.parent.as_deref()
+            .and_then(|parent| find_class_case_insensitive(eg, parent));
     }
     None
 }
@@ -2408,14 +2434,17 @@ struct ResolvedCallback {
 
 /// Get the calling scope's class name from an ExecuteData frame.
 /// Walks prev_execute_data to find the caller's declaring class.
-fn get_calling_scope_class(ed: *mut crate::vm::frame::ExecuteData, eg: &ExecutorGlobals) -> Option<String> {
+fn get_calling_scope_class<'a>(
+    ed: *mut crate::vm::frame::ExecuteData,
+    eg: &'a ExecutorGlobals,
+) -> Option<&'a str> {
     if ed.is_null() { return None; }
     // ed is the stdlib function's own frame; the caller is prev_execute_data
     let caller = unsafe { (*ed).prev_execute_data };
     if caller.is_null() { return None; }
     let func = unsafe { (*caller).func };
     if func.is_null() { return None; }
-    eg.declaring_class_of(func).map(|s| s.to_string())
+    eg.declaring_class_of(func)
 }
 
 /// Resolve a callback value to a function pointer.
@@ -2462,85 +2491,50 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
             if let Some(obj) = obj_val.as_object() {
                 // Instance method: [$obj, "method"]
                 // Public: always callable. Private/protected: only from declaring scope.
-                let class_name = obj.class_name.clone();
-                drop(obj);
-                match find_method_in_class_hierarchy(eg, &class_name, method_name) {
-                    Some((Visibility::Public, _, _)) => {}
-                    Some((Visibility::Protected, _, _)) => {
+                let class_name = obj.class_name.as_str();
+                let (visibility, _, func_ptr, declaring) =
+                    find_method_in_class_hierarchy(eg, class_name, method_name)?;
+                match visibility {
+                    Visibility::Public => {}
+                    Visibility::Protected => {
                         // Protected: caller must be in the same hierarchy
                         let allowed = caller_class.map_or(false, |cc| {
-                            eg.class_is_a(&class_name, cc) || eg.class_is_a(cc, &class_name)
+                            eg.class_is_a(class_name, cc) || eg.class_is_a(cc, class_name)
                         });
                         if !allowed { return None; }
                     }
-                    Some((Visibility::Private, _, ref declaring)) => {
+                    Visibility::Private => {
                         // Private: caller must be exactly the declaring class
-                        let allowed = caller_class.map_or(false, |cc| {
-                            cc.to_ascii_lowercase() == *declaring
-                        });
+                        let allowed = caller_class
+                            .map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
                         if !allowed { return None; }
                     }
-                    _ => return None,
                 }
-                let full = format!("{}::{}", class_name, method_name).to_lowercase();
-                // Try exact class first, then walk parents for function_table lookup
-                let func_ptr = eg.function_table.get(&full).copied()
-                    .or_else(|| {
-                        // Walk parent chain for the function_table entry
-                        let mut cur = eg.class_table.iter()
-                            .find(|(k, _)| k.to_ascii_lowercase() == class_name.to_ascii_lowercase())
-                            .and_then(|(_, cd)| cd.parent.clone());
-                        while let Some(ref parent) = cur {
-                            let key = format!("{}::{}", parent, method_name).to_lowercase();
-                            if let Some(&ptr) = eg.function_table.get(&key) {
-                                return Some(ptr);
-                            }
-                            cur = eg.class_table.iter()
-                                .find(|(k, _)| k.to_ascii_lowercase() == parent.to_ascii_lowercase())
-                                .and_then(|(_, cd)| cd.parent.clone());
-                        }
-                        None
-                    });
-                func_ptr.map(|ptr| ResolvedCallback {
-                    func_ptr: ptr, prepend_args: vec![obj_val.clone()], use_vars: vec![],
+                drop(obj);
+                Some(ResolvedCallback {
+                    func_ptr, prepend_args: vec![obj_val.clone()], use_vars: vec![],
                 })
             } else if let Some(class_str) = obj_val.as_str() {
                 // Static method: ["ClassName", "method"] — must be static; visibility depends on scope
-                match find_method_in_class_hierarchy(eg, class_str, method_name) {
-                    Some((Visibility::Public, true, _)) => {}
-                    Some((Visibility::Protected, true, _)) => {
+                let (visibility, is_static, func_ptr, declaring) =
+                    find_method_in_class_hierarchy(eg, class_str, method_name)?;
+                if !is_static { return None; }
+                match visibility {
+                    Visibility::Public => {}
+                    Visibility::Protected => {
                         let allowed = caller_class.map_or(false, |cc| {
                             eg.class_is_a(class_str, cc) || eg.class_is_a(cc, class_str)
                         });
                         if !allowed { return None; }
                     }
-                    Some((Visibility::Private, true, ref declaring)) => {
-                        let allowed = caller_class.map_or(false, |cc| {
-                            cc.to_ascii_lowercase() == *declaring
-                        });
+                    Visibility::Private => {
+                        let allowed = caller_class
+                            .map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
                         if !allowed { return None; }
                     }
-                    _ => return None,
                 }
-                let full = format!("{}::{}", class_str, method_name).to_lowercase();
-                let func_ptr = eg.function_table.get(&full).copied()
-                    .or_else(|| {
-                        let mut cur = eg.class_table.iter()
-                            .find(|(k, _)| k.to_ascii_lowercase() == class_str.to_ascii_lowercase())
-                            .and_then(|(_, cd)| cd.parent.clone());
-                        while let Some(ref parent) = cur {
-                            let key = format!("{}::{}", parent, method_name).to_lowercase();
-                            if let Some(&ptr) = eg.function_table.get(&key) {
-                                return Some(ptr);
-                            }
-                            cur = eg.class_table.iter()
-                                .find(|(k, _)| k.to_ascii_lowercase() == parent.to_ascii_lowercase())
-                                .and_then(|(_, cd)| cd.parent.clone());
-                        }
-                        None
-                    });
-                func_ptr.map(|ptr| ResolvedCallback {
-                    func_ptr: ptr, prepend_args: vec![Value::null()], use_vars: vec![],
+                Some(ResolvedCallback {
+                    func_ptr, prepend_args: vec![Value::null()], use_vars: vec![],
                 })
             } else {
                 None
@@ -2548,13 +2542,31 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
         }
         ValueType::Object => {
             let obj = val.as_object()?;
-            let full = format!("{}::__invoke", obj.class_name).to_lowercase();
+            let (_, _, func_ptr, _) =
+                find_method_in_class_hierarchy(eg, &obj.class_name, "__invoke")?;
             drop(obj);
-            eg.function_table.get(&full).map(|&ptr| ResolvedCallback {
-                func_ptr: ptr, prepend_args: vec![val.clone()], use_vars: vec![],
+            Some(ResolvedCallback {
+                func_ptr, prepend_args: vec![val.clone()], use_vars: vec![],
             })
         }
         _ => None,
+    }
+}
+
+/// Resolve a callback at a PHP call site. Only array callbacks can need the
+/// caller's class scope for method visibility, so plain function strings,
+/// closures and invokable objects avoid allocating a scope `String`.
+#[inline]
+fn resolve_callback_at_callsite(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    ed: *mut ExecuteData,
+) -> Option<ResolvedCallback> {
+    if val.value_type() == ValueType::Array {
+        let caller_class = get_calling_scope_class(ed, eg);
+        resolve_callback(val, eg, caller_class)
+    } else {
+        resolve_callback(val, eg, None)
     }
 }
 
@@ -2562,18 +2574,10 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
 /// CV 0 = callback, CV 1 = variadic array of extra args
 fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
-    let caller_class = get_calling_scope_class(ed, eg);
     // Variadic args packed at CV(1)
     let variadic_val = arg!(ed, 1);
-    let extra_args: Vec<Value> = if let Some(arr) = variadic_val.as_array() {
-        arr.values().cloned().collect()
-    } else if variadic_val.value_type() != ValueType::Undef {
-        vec![variadic_val.clone()]
-    } else {
-        vec![]
-    };
 
-    let resolved = match resolve_callback(callback, eg, caller_class.as_deref()) {
+    let resolved = match resolve_callback_at_callsite(callback, eg, ed) {
         Some(r) => r,
         None => {
             let desc = callback.echo_to_string();
@@ -2584,13 +2588,39 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
         }
     };
 
-    // Build args: prepend_args (e.g. $this) + user args + use_vars (closure captures)
-    let mut args = Vec::with_capacity(resolved.prepend_args.len() + extra_args.len() + resolved.use_vars.len());
-    args.extend(resolved.prepend_args);
-    args.extend(extra_args);
-    args.extend(resolved.use_vars);
-
-    let result = call_function(eg, resolved.func_ptr, &args)?;
+    // Stream prepend args (e.g. $this), variadic values and closure captures
+    // directly into the callback frame. No intermediate argument vectors.
+    let result = if let Some(arr) = variadic_val.as_array() {
+        let num_args = resolved.prepend_args.len() + arr.len() + resolved.use_vars.len();
+        call_function_iter(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.iter()
+                .chain(arr.values())
+                .chain(resolved.use_vars.iter()),
+        )?
+    } else if variadic_val.value_type() != ValueType::Undef {
+        let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
+        call_function_iter(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.iter()
+                .chain(std::iter::once(variadic_val))
+                .chain(resolved.use_vars.iter()),
+        )?
+    } else {
+        let num_args = resolved.prepend_args.len() + resolved.use_vars.len();
+        call_function_iter(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.iter()
+                .chain(std::iter::empty())
+                .chain(resolved.use_vars.iter()),
+        )?
+    };
     if eg.exception.is_some() { return Ok(()); }
     ret!(rv, result);
 }
@@ -2598,8 +2628,7 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
 /// is_callable($value) — check if value is callable
 fn fn_is_callable(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let val = arg!(ed, 0);
-    let caller_class = get_calling_scope_class(ed, eg);
-    let callable = resolve_callback(val, eg, caller_class.as_deref()).is_some();
+    let callable = resolve_callback_at_callsite(val, eg, ed).is_some();
     ret!(rv, Value::bool(callable));
 }
 
@@ -3228,24 +3257,18 @@ fn fn_chunk_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 // Missing common array functions
 // ============================================================================
 
-/// Helper: resolve a callback Value and call it with given args.
-fn invoke_callback(eg: &mut ExecutorGlobals, cb_val: &Value, user_args: &[Value], ed: *mut ExecuteData) -> Result<Value, VmError> {
-    let caller_class = get_calling_scope_class(ed, eg);
-    let resolved = match resolve_callback(cb_val, eg, caller_class.as_deref()) {
-        Some(r) => r,
-        None => {
-            let desc = cb_val.echo_to_string();
-            return Err(VmError::Fatal(format!(
-                "Callback must be a valid callable, function \"{}\" not found", desc
-            )));
-        }
-    };
-    let mut args = Vec::with_capacity(resolved.prepend_args.len() + user_args.len() + resolved.use_vars.len());
-    args.extend(resolved.prepend_args);
-    args.extend_from_slice(user_args);
-    args.extend(resolved.use_vars);
-    let result = call_function(eg, resolved.func_ptr, &args)?;
-    Ok(result)
+/// Resolve callback consumers once, before entering their iteration loop.
+fn resolve_callback_or_fatal(
+    eg: &ExecutorGlobals,
+    cb_val: &Value,
+    ed: *mut ExecuteData,
+) -> Result<ResolvedCallback, VmError> {
+    resolve_callback_at_callsite(cb_val, eg, ed).ok_or_else(|| {
+        let desc = cb_val.echo_to_string();
+        VmError::Fatal(format!(
+            "Callback must be a valid callable, function \"{}\" not found", desc
+        ))
+    })
 }
 
 /// array_reduce($array, $callback, $initial = null): mixed
@@ -3256,9 +3279,21 @@ fn fn_array_reduce(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
 
     if let Some(arr) = arr_val.as_array() {
         let items: Vec<Value> = arr.values().cloned().collect();
+        let resolved = resolve_callback_or_fatal(eg, &callback, ed)?;
         let mut carry = initial;
         for item in items {
-            carry = invoke_callback(eg, &callback, &[carry.clone(), item], ed)?;
+            // Carry and item are already owned: move both straight into the
+            // callback frame while cloning only persistent receiver/captures.
+            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+            carry = call_function_owned_iter(
+                eg,
+                resolved.func_ptr,
+                num_args,
+                resolved.prepend_args.iter().cloned()
+                    .chain(std::iter::once(carry))
+                    .chain(std::iter::once(item))
+                    .chain(resolved.use_vars.iter().cloned()),
+            )?;
             if eg.exception.is_some() { return Ok(()); }
         }
         ret!(rv, carry);
@@ -3281,8 +3316,7 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             None => { ret!(rv, Value::bool(false)); }
         }
     };
-    let caller_class = get_calling_scope_class(ed, eg);
-    let resolved = match resolve_callback(&callback, eg, caller_class.as_deref()) {
+    let resolved = match resolve_callback_at_callsite(&callback, eg, ed) {
         Some(r) => r,
         None => {
             eg.exception = Some(crate::value::make_error_value("TypeError",
@@ -3299,12 +3333,16 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     for i in 1..len {
         let mut j = i;
         while j > 0 {
-            let mut args = Vec::with_capacity(prepend.len() + 2 + use_vars.len());
-            args.extend(prepend.iter().cloned());
-            args.push(items[j - 1].clone());
-            args.push(items[j].clone());
-            args.extend(use_vars.iter().cloned());
-            let result = call_function(eg, func_ptr, &args)?;
+            let num_args = prepend.len() + 2 + use_vars.len();
+            let result = call_function_iter(
+                eg,
+                func_ptr,
+                num_args,
+                prepend.iter()
+                    .chain(std::iter::once(&items[j - 1]))
+                    .chain(std::iter::once(&items[j]))
+                    .chain(use_vars.iter()),
+            )?;
             if eg.exception.is_some() { return Ok(()); }
             if result.to_long_val() <= 0 { break; }
             items.swap(j - 1, j);
@@ -3365,7 +3403,6 @@ fn fn_array_intersect(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGl
 /// array_walk(&$array, $callback): bool
 /// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
 fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    use crate::vm::execute::call_function_readback_arg0;
     let callback = arg!(ed, 1).clone();
     let arr_ptr: *mut Value = arg_mut!(ed, 0);
 
@@ -3375,8 +3412,7 @@ fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
         None => { ret!(rv, Value::bool(false)); }
     };
 
-    let caller_class = get_calling_scope_class(ed, eg);
-    let resolved = match resolve_callback(&callback, eg, caller_class.as_deref()) {
+    let resolved = match resolve_callback_at_callsite(&callback, eg, ed) {
         Some(r) => r,
         None => {
             eg.exception = Some(crate::value::make_error_value("TypeError",
@@ -3396,12 +3432,16 @@ fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
                 ArrayKey::Int(i) => Value::long(*i),
                 ArrayKey::String(s) => Value::string(s.clone()),
             };
-            let mut args = Vec::with_capacity(resolved.prepend_args.len() + 2 + resolved.use_vars.len());
-            args.extend(resolved.prepend_args.iter().cloned());
-            args.push(v.clone());
-            args.push(key_val);
-            args.extend(resolved.use_vars.iter().cloned());
-            let (_ret, modified_val) = call_function_readback_arg0(eg, resolved.func_ptr, &args)?;
+            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+            let (_ret, modified_val) = call_function_readback_arg0_iter(
+                eg,
+                resolved.func_ptr,
+                num_args,
+                resolved.prepend_args.iter()
+                    .chain(std::iter::once(&v))
+                    .chain(std::iter::once(&key_val))
+                    .chain(resolved.use_vars.iter()),
+            )?;
             if eg.exception.is_some() { return Ok(()); }
             mutations.push((k, modified_val));
         }
@@ -3420,12 +3460,16 @@ fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
                 ArrayKey::Int(i) => Value::long(*i),
                 ArrayKey::String(s) => Value::string(s.clone()),
             };
-            let mut args = Vec::with_capacity(resolved.prepend_args.len() + 2 + resolved.use_vars.len());
-            args.extend(resolved.prepend_args.iter().cloned());
-            args.push(v.clone());
-            args.push(key_val);
-            args.extend(resolved.use_vars.iter().cloned());
-            call_function(eg, resolved.func_ptr, &args)?;
+            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+            call_function_iter(
+                eg,
+                resolved.func_ptr,
+                num_args,
+                resolved.prepend_args.iter()
+                    .chain(std::iter::once(&v))
+                    .chain(std::iter::once(&key_val))
+                    .chain(resolved.use_vars.iter()),
+            )?;
             if eg.exception.is_some() { return Ok(()); }
         }
     }
@@ -3839,7 +3883,6 @@ fn fn_ctype_lower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
     let args_val = arg!(ed, 1);
-    let caller_class = get_calling_scope_class(ed, eg);
 
     // PHP 8: $args must be an array — TypeError otherwise
     let arr = match args_val.as_array() {
@@ -3852,7 +3895,7 @@ fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execut
     };
 
     // Resolve callback first — we need its signature for named-arg resolution
-    let resolved = match resolve_callback(callback, eg, caller_class.as_deref()) {
+    let resolved = match resolve_callback_at_callsite(callback, eg, ed) {
         Some(r) => r,
         None => {
             let desc = callback.echo_to_string();
@@ -3864,9 +3907,9 @@ fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execut
     };
 
     // Check if the array contains any string keys (named arguments)
-    let has_named = arr.iter().any(|(k, _)| matches!(k, ArrayKey::String(_)));
+    let has_named = arr.has_string_keys();
 
-    let extra_args: Vec<Value> = if has_named {
+    let result = if has_named {
         // PHP 8 named-argument semantics:
         //  - positional (int-key) args must all come before any named (string-key) arg
         //  - named args are mapped to parameter positions by name
@@ -3875,7 +3918,7 @@ fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execut
         let sig = unsafe { &(*resolved.func_ptr).sig };
         let param_names = &sig.param_names;
         let num_params = sig.public_arity() as usize;
-        let required = (sig.required_num_args - sig.this_offset) as usize;
+        let required = sig.required_num_args as usize;
 
         let mut positional = vec![Value::undef(); num_params];
         let mut extra_positional: Vec<Value> = Vec::new();
@@ -3936,18 +3979,30 @@ fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execut
             result.pop();
         }
         result.extend(extra_positional);
-        result
+
+        // Normalization already owns these values. Move them and the resolved
+        // receiver/captures directly into the callback frame.
+        let num_args = resolved.prepend_args.len() + result.len() + resolved.use_vars.len();
+        call_function_owned_iter(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.into_iter()
+                .chain(result.into_iter())
+                .chain(resolved.use_vars.into_iter()),
+        )?
     } else {
-        // All integer keys — simple positional pass-through
-        arr.values().cloned().collect()
+        // All integer keys — stream values directly from packed or hash array.
+        let num_args = resolved.prepend_args.len() + arr.len() + resolved.use_vars.len();
+        call_function_iter(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.iter()
+                .chain(arr.values())
+                .chain(resolved.use_vars.iter()),
+        )?
     };
-
-    let mut args = Vec::with_capacity(resolved.prepend_args.len() + extra_args.len() + resolved.use_vars.len());
-    args.extend(resolved.prepend_args);
-    args.extend(extra_args);
-    args.extend(resolved.use_vars);
-
-    let result = call_function(eg, resolved.func_ptr, &args)?;
     if eg.exception.is_some() { return Ok(()); }
     ret!(rv, result);
 }
@@ -4446,6 +4501,7 @@ fn fn_preg_replace_callback(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execu
     if all_caps.is_empty() {
         ret!(rv, Value::string(subject));
     }
+    let resolved = resolve_callback_or_fatal(eg, &callback, ed)?;
 
     // Build match ranges and replacement strings
     let mut replacements: Vec<(usize, usize, String)> = Vec::new();
@@ -4465,7 +4521,15 @@ fn fn_preg_replace_callback(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execu
                 matches_arr.set_str(name, Value::string(m.as_str(&subject)));
             }
         }
-        let cb_result = invoke_callback(eg, &callback, &[Value::array(matches_arr)], ed)?;
+        let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
+        let cb_result = call_function_owned_iter(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            resolved.prepend_args.iter().cloned()
+                .chain(std::iter::once(Value::array(matches_arr)))
+                .chain(resolved.use_vars.iter().cloned()),
+        )?;
         if eg.exception.is_some() { return Ok(()); }
         replacements.push((full_match.start, full_match.end, cb_result.echo_to_string()));
     }

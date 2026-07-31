@@ -687,6 +687,19 @@ impl PhpArray {
         PhpArrayValues { inner }
     }
 
+    /// Whether the array contains at least one string key.
+    ///
+    /// This inspects the private hash index directly, avoiding the owned public
+    /// key materialization performed by `iter()`. Packed arrays can never have
+    /// string keys.
+    #[inline]
+    pub fn has_string_keys(&self) -> bool {
+        match &self.storage {
+            ArrayStorage::Packed(_) => false,
+            ArrayStorage::Hash { str_index, .. } => !str_index.is_empty(),
+        }
+    }
+
     /// Materialize public keys for cold callers that need the complete entry
     /// list. Internal hash storage keeps a smaller key representation.
     /// If array is in packed mode, transitions to hash mode first.
@@ -1009,6 +1022,20 @@ mod php_array_tests {
             vec![3, 4, 5]
         );
         assert_eq!(hash.values().next_back().and_then(Value::as_long), Some(5));
+    }
+
+    #[test]
+    fn string_key_detection_uses_array_storage_metadata() {
+        let mut packed = PhpArray::new();
+        packed.push(Value::long(1));
+        assert!(!packed.has_string_keys());
+
+        let mut integer_hash = PhpArray::new();
+        integer_hash.set_int(7, Value::long(2));
+        assert!(!integer_hash.has_string_keys());
+
+        integer_hash.set_str("name", Value::long(3));
+        assert!(integer_hash.has_string_keys());
     }
 
     #[test]

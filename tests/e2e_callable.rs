@@ -37,6 +37,119 @@ echo call_user_func('add', 3, 7);
     assert_eq!(out, "10");
 }
 
+// -- call_user_func_array callback and argument shapes --
+
+#[test]
+fn test_call_user_func_array_function_packed_args() {
+    let out = run_php(r#"<?php
+function add_array_args($a, $b) { return $a + $b; }
+echo call_user_func_array('add_array_args', [3, 7]);
+"#);
+    assert_eq!(out, "10");
+}
+
+#[test]
+fn test_call_user_func_array_closure_with_capture() {
+    let out = run_php(r#"<?php
+$factor = 4;
+$multiply = function($value) use ($factor) { return $value * $factor; };
+echo call_user_func_array($multiply, [6]);
+"#);
+    assert_eq!(out, "24");
+}
+
+#[test]
+fn test_call_user_func_array_instance_and_static_methods() {
+    let out = run_php(r#"<?php
+class CallbackMath {
+    public function add($a, $b) { return $a + $b; }
+    public static function multiply($a, $b) { return $a * $b; }
+}
+$math = new CallbackMath();
+echo call_user_func_array([$math, 'add'], [2, 5]);
+echo ':';
+echo call_user_func_array(['CallbackMath', 'multiply'], [3, 4]);
+"#);
+    assert_eq!(out, "7:12");
+}
+
+#[test]
+fn test_call_user_func_array_invokable_object() {
+    let out = run_php(r#"<?php
+class InvokableCallback {
+    public function __invoke($value) { return $value * 5; }
+}
+$callback = new InvokableCallback();
+echo call_user_func_array($callback, [3]);
+"#);
+    assert_eq!(out, "15");
+}
+
+#[test]
+fn test_call_user_func_array_trait_method() {
+    let out = run_php(r#"<?php
+trait CallbackTrait {
+    public function triple($value) { return $value * 3; }
+}
+class TraitCallback {
+    use CallbackTrait;
+}
+$callback = new TraitCallback();
+echo call_user_func_array([$callback, 'triple'], [4]);
+"#);
+    assert_eq!(out, "12");
+}
+
+#[test]
+fn test_call_user_func_array_named_method_args() {
+    let out = run_php(r#"<?php
+class NamedCallback {
+    public function format($left, $right) { return $left . ':' . $right; }
+}
+$callback = new NamedCallback();
+echo call_user_func_array([$callback, 'format'], ['right' => 'R', 'left' => 'L']);
+"#);
+    assert_eq!(out, "L:R");
+}
+
+#[test]
+fn test_call_user_func_array_sparse_integer_keys_stay_positional() {
+    let out = run_php(r#"<?php
+function sparse_args($first, $second) { return $first . ':' . $second; }
+echo call_user_func_array('sparse_args', [7 => 'A', 11 => 'B']);
+"#);
+    assert_eq!(out, "A:B");
+}
+
+#[test]
+fn test_call_user_func_array_exception_cleans_callback_frame() {
+    let out = run_php(r#"<?php
+function callback_boom($value) { throw new Exception('boom'); }
+function callback_ok($value) { return $value + 1; }
+try {
+    call_user_func_array('callback_boom', [1]);
+} catch (Throwable $e) {
+    echo 'caught:';
+}
+echo call_user_func_array('callback_ok', [4]);
+"#);
+    assert_eq!(out, "caught:5");
+}
+
+#[test]
+fn test_array_walk_method_reads_back_first_public_argument() {
+    let out = run_php(r#"<?php
+class Walker {
+    public function bump(&$value, $key) { $value += 10; }
+}
+$walker = new Walker();
+$values = [1, 2];
+array_walk($values, [$walker, 'bump']);
+echo implode(',', $values);
+"#);
+    assert_eq!(out, "11,12");
+}
+
 // -- is_callable with string --
 
 #[test]

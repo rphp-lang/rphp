@@ -699,71 +699,127 @@ pub fn call_function(
     func_ptr: *const FunctionCommon,
     args: &[Value],
 ) -> Result<Value, VmError> {
+    call_function_iter(eg, func_ptr, args.len(), args.iter())
+}
+
+/// Call a PHP function from borrowed arguments without first materializing an
+/// intermediate `Vec<Value>`. Each value is cloned exactly once, directly into
+/// its destination CV slot in the new call frame.
+pub fn call_function_iter<'a, I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let (return_value, _) =
+        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args.cloned())?;
+    Ok(return_value)
+}
+
+/// Call a PHP function from owned arguments, moving every value directly into
+/// the new frame. This is used after named-argument normalization and by
+/// callback consumers that already own their temporary arguments.
+pub fn call_function_owned_iter<I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) =
+        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args)?;
+    Ok(return_value)
+}
+
+/// Shared callback invocation path. `READBACK_ARG0` keeps the ordinary path
+/// free of the extra first-public-argument clone required by `array_walk`.
+fn call_function_value_iter<I, const READBACK_ARG0: bool>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    mut args: I,
+) -> Result<(Value, Option<Value>), VmError>
+where
+    I: Iterator<Item = Value>,
+{
     let saved_execute_data = eg.current_execute_data.get();
-    let frame = eg.vm_stack.push_call_frame(func_ptr, args.len() as u32);
+    let frame = eg.vm_stack.push_call_frame(func_ptr, num_args as u32);
     let mut return_value = Value::null();
 
     unsafe {
         (*frame).return_value = &mut return_value;
         // prev=null so Return exits execute_ex instead of continuing in caller
         (*frame).prev_execute_data = std::ptr::null_mut();
-        (*frame).num_args = args.len() as u32;
+        (*frame).num_args = num_args as u32;
     }
 
     // Write args into CV slots — fresh uninitialized slots, use init (no drop).
-    for (i, arg) in args.iter().enumerate() {
+    for i in 0..num_args {
+        let arg = args
+            .next()
+            .expect("callback argument iterator shorter than declared length");
         let slot = unsafe { (*frame).cv_mut(i as u32) };
-        unsafe { frame_slot_init(frame, slot as *mut Value, arg.clone()) };
+        unsafe { frame_slot_init(frame, slot as *mut Value, arg) };
     }
+    debug_assert!(
+        args.next().is_none(),
+        "callback argument iterator longer than declared length"
+    );
 
     let func = unsafe { Function::from_common_ptr(func_ptr) };
-    match func.fn_type() {
+    let execution_result = match func.fn_type() {
         FunctionType::User => {
             let user = unsafe { func.as_user() };
             unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
             eg.current_execute_data.set(frame);
-            execute_ex(eg, frame)?;
-            // Exception from callback stays in eg.exception for DoFcall to handle.
-            // Bail early so caller stops iterating, but don't convert to Err.
-            if eg.exception.is_some() {
-                eg.current_execute_data.set(saved_execute_data);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                return Ok(Value::null());
-            }
+            execute_ex(eg, frame)
         }
         FunctionType::Internal => {
             let internal = unsafe { func.as_internal() };
             unsafe { std::ptr::drop_in_place(&mut return_value as *mut Value) };
-            if let Err(e) = (internal.handler)(frame, &mut return_value, eg) {
-                eg.current_execute_data.set(saved_execute_data);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                return Err(e);
-            }
-            // Exception from callback stays in eg.exception for DoFcall to handle.
-            if eg.exception.is_some() {
-                eg.current_execute_data.set(saved_execute_data);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                return Ok(Value::null());
-            }
+            (internal.handler)(frame, &mut return_value, eg)
         }
         FunctionType::Undef => {
-            eg.current_execute_data.set(saved_execute_data);
             eg.exception = Some(make_error_value("Error", "Call to undefined function"));
-            return Ok(Value::null());
+            Ok(())
         }
-    }
+    };
 
+    let arg0 = if READBACK_ARG0 {
+        let arg0_cv = unsafe { (*func_ptr).sig.param_cv_index(0) } as usize;
+        Some(if num_args > arg0_cv {
+            unsafe { (*frame).cv(arg0_cv as u32).clone() }
+        } else {
+            Value::null()
+        })
+    } else {
+        None
+    };
+    let callback_threw = eg.exception.is_some();
+
+    // Always restore and pop the callback frame, including fatal/error paths.
     eg.current_execute_data.set(saved_execute_data);
     unsafe { cleanup_frame_slots(frame) };
     eg.vm_stack.pop_call_frame(frame);
 
-    Ok(return_value)
+    execution_result?;
+
+    // A PHP exception stays in ExecutorGlobals for the calling opcode to
+    // handle. Callback consumers stop iterating and ignore the partial return.
+    if callback_threw {
+        Ok((Value::null(), arg0))
+    } else {
+        Ok((return_value, arg0))
+    }
 }
 
-/// Like `call_function`, but reads back CV(0) before frame cleanup.
+/// Like `call_function`, but reads back the first public argument before frame
+/// cleanup (CV(0) for functions, CV(1) after a method's hidden `$this`).
 /// Used by `array_walk` to capture mutations made by `function (&$val, $key)` callbacks.
 /// Returns `(return_value, modified_arg0)`.
 pub fn call_function_readback_arg0(
@@ -771,66 +827,22 @@ pub fn call_function_readback_arg0(
     func_ptr: *const FunctionCommon,
     args: &[Value],
 ) -> Result<(Value, Value), VmError> {
-    let saved_execute_data = eg.current_execute_data.get();
-    let frame = eg.vm_stack.push_call_frame(func_ptr, args.len() as u32);
-    let mut return_value = Value::null();
+    call_function_readback_arg0_iter(eg, func_ptr, args.len(), args.iter())
+}
 
-    unsafe {
-        (*frame).return_value = &mut return_value;
-        (*frame).prev_execute_data = std::ptr::null_mut();
-        (*frame).num_args = args.len() as u32;
-    }
-    for (i, arg) in args.iter().enumerate() {
-        let slot = unsafe { (*frame).cv_mut(i as u32) };
-        unsafe { frame_slot_init(frame, slot as *mut Value, arg.clone()) };
-    }
-
-    let func = unsafe { Function::from_common_ptr(func_ptr) };
-    match func.fn_type() {
-        FunctionType::User => {
-            let user = unsafe { func.as_user() };
-            unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
-            eg.current_execute_data.set(frame);
-            execute_ex(eg, frame)?;
-            if eg.exception.is_some() {
-                let arg0 = unsafe { (*frame).cv(0).clone() };
-                eg.current_execute_data.set(saved_execute_data);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                return Ok((Value::null(), arg0));
-            }
-        }
-        FunctionType::Internal => {
-            let internal = unsafe { func.as_internal() };
-            unsafe { std::ptr::drop_in_place(&mut return_value as *mut Value) };
-            if let Err(e) = (internal.handler)(frame, &mut return_value, eg) {
-                eg.current_execute_data.set(saved_execute_data);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                return Err(e);
-            }
-            if eg.exception.is_some() {
-                let arg0 = unsafe { (*frame).cv(0).clone() };
-                eg.current_execute_data.set(saved_execute_data);
-                unsafe { cleanup_frame_slots(frame) };
-                eg.vm_stack.pop_call_frame(frame);
-                return Ok((Value::null(), arg0));
-            }
-        }
-        FunctionType::Undef => {
-            eg.current_execute_data.set(saved_execute_data);
-            eg.exception = Some(make_error_value("Error", "Call to undefined function"));
-            return Ok((Value::null(), if !args.is_empty() { args[0].clone() } else { Value::null() }));
-        }
-    }
-
-    // Read CV(0) BEFORE cleanup — captures mutations from by-ref callbacks.
-    let arg0 = unsafe { (*frame).cv(0).clone() };
-    eg.current_execute_data.set(saved_execute_data);
-    unsafe { cleanup_frame_slots(frame) };
-    eg.vm_stack.pop_call_frame(frame);
-
-    Ok((return_value, arg0))
+/// Borrowed-argument form of `call_function_readback_arg0`.
+pub fn call_function_readback_arg0_iter<'a, I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<(Value, Value), VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let (return_value, arg0) =
+        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args.cloned())?;
+    Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
 /// Resume a generator: set up frame, copy state, execute until yield/return.
