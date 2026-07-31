@@ -16,12 +16,13 @@ cd "$(dirname "$0")/.."
 
 PROFDATA_DIR="/tmp/pgo-data"
 PROFDATA_MERGED="/tmp/pgo-merged.profdata"
-LLVM_PROFDATA=$(find ~/.rustup/toolchains/*/lib/rustlib/*/bin/llvm-profdata 2>/dev/null | head -1)
 
 if [ "$1" = "--no-pgo" ]; then
     echo "=== Building rphp (release, no PGO) ==="
     cargo build --release 2>&1 | tail -1
 else
+    RPHP_RUST_SYSROOT=$(rustc --print sysroot)
+    LLVM_PROFDATA=$(find "$RPHP_RUST_SYSROOT/lib/rustlib" -type f -name llvm-profdata -print -quit 2>/dev/null || true)
     echo "=== PGO Step 1/3: Instrumented build ==="
     rm -rf "$PROFDATA_DIR" && mkdir -p "$PROFDATA_DIR"
     RUSTFLAGS="-Cprofile-generate=$PROFDATA_DIR" cargo build --release 2>&1 | tail -1

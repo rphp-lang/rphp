@@ -1285,3 +1285,61 @@ successful materialized fetch. The planner suite now has 14 focused tests and
 the quick-loop end-to-end suite has 49 tests. The complete suite passes with
 default features and with `--no-default-features`; warning-free checks also
 pass for the minimal and all-feature builds.
+
+## Phase 2o result: regular suffix position routing
+
+A fresh non-PGO audit exposed one remaining array outlier:
+`bench_hash_irregular_prefix_int_array_transform.php` was about 4.81x slower
+than PHP even though the million timed keys form the same stride-7 progression
+that Phase 2l handles efficiently. The array deliberately inserts eight
+irregular metadata keys before that progression. Phase 2l inspected only the
+first eight ordered entries, rejected the layout, and sent every timed read to
+the integer hash index.
+
+Phase 2o keeps guard-time classification constant-time but checks two bounded
+windows: at most eight entries at the prefix and, only when that fails, at
+most eight entries at the suffix. A regular suffix may begin at any ordered
+entry position. Rather than widening `QuickLongIntPositionHint`, the classifier
+derives the virtual key that would occupy entry position zero:
+
+```text
+position_zero_key = anchor_key - stride * anchor_position
+position          = (requested_key - position_zero_key) / stride
+```
+
+The runtime hint therefore remains the same two `i64` values as Phase 2l and
+does not add hot-loop state or register pressure. The derived position is
+still only a prediction: `get_positioned_int()` bounds-checks the entry and
+compares its stored integer key with the requested key before returning it.
+Holes, separators, removals, arithmetic failure, and unrelated keys retain
+the canonical integer-index fallback.
+
+The benchmark runner itself also had a pre-audit failure: under `pipefail`,
+its unconditional `find ... | head -1` lookup could terminate the
+`--no-pgo` path before printing output. LLVM-tool discovery now runs only for
+PGO builds, uses the active Rust sysroot, and stops through `find -print -quit`
+without a SIGPIPE pipeline.
+
+Fifty-one rounds rotated Phase 2o, the saved Phase 2n binary, and PHP process
+order:
+
+| Workload | Phase 2n | Phase 2o | PHP 8.4.12, no CLI opcache | Phase 2o / Phase 2n |
+|---|---:|---:|---:|---:|
+| Regular sparse suffix after irregular prefix, 1M reads | 0.07468 s | 0.01492 s | 0.01981 s | 0.200x |
+| Irregular prefix and deliberately irregular suffix, 1M reads | 0.06471 s | 0.06455 s | 0.01965 s | 0.998x |
+
+Suffix routing removes about 80.0% from the target recurrence and makes rphp
+about 24.7% faster than PHP without JIT. The negative classifier workload is
+effectively unchanged, proving that a suffix which does not establish a
+progression stays on the Phase 2n indexed path.
+
+The same acceptance run measured `0.996x` for the original sparse transform,
+`0.982x` for the sparse filter, `0.988x` for the exact sparse loop, `0.994x`
+for dynamic materialized hash reads, and `1.001x` for packed materialized
+reads. Unit coverage verifies virtual-origin derivation and rejection after a
+suffix outlier. End-to-end coverage adds an interleaved string separator: the
+regular tail takes the positional route while earlier keys miss the predicted
+position and fall back exactly to the hash index. The quick-loop end-to-end
+suite now has 50 tests. The complete suite passes with default features and
+with `--no-default-features`; warning-free checks also pass for the minimal
+and all-feature builds.

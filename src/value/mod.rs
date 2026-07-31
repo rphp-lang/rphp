@@ -456,36 +456,55 @@ impl PhpArray {
         }
     }
 
-    /// Derive an ordered-entry position hint from the first integer keys.
+    /// Derive an ordered-entry position hint from a short integer-key window.
     ///
     /// The hint never establishes correctness on its own. Guarded readers
     /// validate the key stored at the derived position and retain the integer
-    /// index as a fallback for holes, interleaved string keys, and later
-    /// irregular entries.
+    /// index as a fallback for holes, interleaved string keys, and irregular
+    /// entries. Prefix classification preserves the common hash-transition
+    /// path; a suffix window also recognizes regularly appended data after a
+    /// short metadata prefix without scanning the complete array.
     #[cfg(any(feature = "quick-loops", test))]
     #[inline]
     pub(crate) fn integer_position_hint(&self) -> Option<(i64, i64)> {
         let ArrayStorage::Hash { entries, .. } = &self.storage else {
             return None;
         };
-        match entries.as_slice() {
-            [(ArrayKey::Int(first), _)] => Some((*first, 1)),
-            [(ArrayKey::Int(first), _), (ArrayKey::Int(second), _), ..] => {
-                let stride = second
-                    .checked_sub(*first)
-                    .filter(|stride| *stride != 0)?;
-                for (position, (key, _)) in entries.iter().take(8).enumerate() {
-                    let expected = stride
-                        .checked_mul(position as i64)
-                        .and_then(|offset| first.checked_add(offset))?;
-                    if !matches!(key, ArrayKey::Int(found) if *found == expected) {
-                        return None;
-                    }
-                }
-                Some((*first, stride))
-            }
-            _ => None,
+        if let [(ArrayKey::Int(first), _)] = entries.as_slice() {
+            return Some((*first, 1));
         }
+
+        let window_hint = |start: usize| {
+            let window = entries.get(start..start.saturating_add(8).min(entries.len()))?;
+            let [(ArrayKey::Int(first), _), (ArrayKey::Int(second), _), ..] = window else {
+                return None;
+            };
+            let stride = second
+                .checked_sub(*first)
+                .filter(|stride| *stride != 0)?;
+            for (offset, (key, _)) in window.iter().enumerate() {
+                let expected = stride
+                    .checked_mul(offset as i64)
+                    .and_then(|delta| first.checked_add(delta))?;
+                if !matches!(key, ArrayKey::Int(found) if *found == expected) {
+                    return None;
+                }
+            }
+
+            // Encode the anchor as the key that would occupy entry position 0.
+            // This keeps the hot hint at two i64 values even for suffix-derived
+            // progressions: position = (key - position_zero_key) / stride.
+            let start = i64::try_from(start).ok()?;
+            let position_zero_key = stride
+                .checked_mul(start)
+                .and_then(|delta| first.checked_sub(delta))?;
+            Some((position_zero_key, stride))
+        };
+
+        window_hint(0).or_else(|| {
+            let suffix_start = entries.len().saturating_sub(8);
+            (suffix_start != 0).then(|| window_hint(suffix_start)).flatten()
+        })
     }
 
     /// Integer lookup through a preclassified ordered-entry progression.
@@ -862,7 +881,7 @@ mod php_array_tests {
     }
 
     #[test]
-    fn integer_position_hint_accepts_negative_stride_and_rejects_irregular_prefix() {
+    fn integer_position_hint_accepts_negative_stride_and_rejects_irregular_layout() {
         let mut descending = PhpArray::new();
         for key in [100, 93, 86, 79, 72, 65, 58, 51] {
             descending.set_int(key, Value::long(key));
@@ -880,6 +899,42 @@ mod php_array_tests {
             irregular.set_int(key, Value::long(key));
         }
         assert_eq!(irregular.integer_position_hint(), None);
+    }
+
+    #[test]
+    fn integer_position_hint_routes_regular_suffix_after_irregular_prefix() {
+        let mut array = PhpArray::new();
+        for key in [11, 30, 31, 70, -4, 900, 2, 88] {
+            array.set_int(key, Value::long(-1));
+        }
+        for key in [100, 107, 114, 121, 128, 135, 142, 149] {
+            array.set_int(key, Value::long(key));
+        }
+
+        // The regular suffix starts at entry position 8, so its virtual key
+        // at entry position 0 is 100 - 8 * 7 = 44.
+        assert_eq!(array.integer_position_hint(), Some((44, 7)));
+        assert_eq!(
+            array
+                .get_positioned_int(100, 44, 7)
+                .and_then(Value::as_long),
+            Some(100)
+        );
+        assert_eq!(
+            array
+                .get_positioned_int(149, 44, 7)
+                .and_then(Value::as_long),
+            Some(149)
+        );
+        assert_eq!(
+            array
+                .get_positioned_int(30, 44, 7)
+                .and_then(Value::as_long),
+            Some(-1)
+        );
+
+        array.set_int(9_999, Value::long(-1));
+        assert_eq!(array.integer_position_hint(), None);
     }
 
     #[test]

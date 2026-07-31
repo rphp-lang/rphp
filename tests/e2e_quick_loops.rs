@@ -942,6 +942,48 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_position_hint_routes_suffix_and_falls_back_before_separator() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+foreach ([11, 30, 31, 70, -4, 900, 2, 88] as $prefix) {
+    $values[$prefix] = -1;
+}
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    if ($i == 50) {
+        $values['separator'] = 0;
+    }
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$one = 1;
+$key = $start;
+$sum = 0;
+$adjusted = 0;
+for ($i = 0; $i < 100; $i++) {
+    $value = $values[$key];
+    $sum += $value;
+    $adjusted += $value + $one;
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo $adjusted;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|5050|800|100"
+    );
+}
+
+#[test]
 fn quick_hash_position_hint_falls_back_after_reordered_entry() {
     assert_eq!(
         run_php(
