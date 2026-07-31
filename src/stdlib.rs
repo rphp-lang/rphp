@@ -1303,8 +1303,21 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
 // ============================================================================
 
 #[inline(always)]
+pub(crate) fn direct_strlen_len(argument: &Value) -> i64 {
+    let argument = if argument.is_reference() {
+        unsafe { &*argument.as_ref_ptr() }
+    } else {
+        argument
+    };
+    match argument.as_str() {
+        Some(string) => string.len() as i64,
+        None => argument.echo_to_string().len() as i64,
+    }
+}
+
+#[inline(always)]
 fn direct_strlen(args: &[Value]) -> Result<Value, VmError> {
-    Ok(Value::long(direct_arg_str(args, 0).len() as i64))
+    Ok(Value::long(direct_strlen_len(&args[0])))
 }
 
 fn fn_strlen(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {

@@ -6350,6 +6350,37 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::Strlen => {
+                let argument = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let length = crate::stdlib::direct_strlen_len(argument);
+
+                if opline.result_type != OpType::Unused {
+                    let result_ptr = unsafe {
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    };
+                    if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                        unsafe { Value::write_long(result_ptr, length) };
+                    } else {
+                        unsafe { slot_set(result_ptr, Value::long(length)) };
+                    }
+                }
+            }
+
+            OpCode::Strlen_Cv => {
+                let argument = unsafe { (*frame).cv(opline.op1 as u32) };
+                let length = crate::stdlib::direct_strlen_len(argument);
+
+                if opline.result_type != OpType::Unused {
+                    let result_ptr = unsafe {
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    };
+                    debug_assert!(matches!(opline.result_type, OpType::Tmp | OpType::Var));
+                    unsafe { Value::write_long(result_ptr, length) };
+                }
+            }
+
             OpCode::CallUserFuncArray => {
                 // Compiler-lowered call_user_func_array(callback, args). The
                 // callback is resolved at this opcode's own call site and the

@@ -19,6 +19,12 @@ pub enum DirectInternalKind {
     Exp,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectInternalLowering {
+    Generic,
+    Strlen,
+}
+
 impl DirectInternalKind {
     #[inline(always)]
     pub fn from_id(id: u32) -> Option<Self> {
@@ -47,6 +53,14 @@ impl DirectInternalKind {
             self,
             Self::Strtolower | Self::Strtoupper | Self::ChunkSplit
         )
+    }
+
+    #[inline(always)]
+    pub fn lowering(self) -> DirectInternalLowering {
+        match self {
+            Self::Strlen => DirectInternalLowering::Strlen,
+            _ => DirectInternalLowering::Generic,
+        }
     }
 }
 
@@ -103,5 +117,7 @@ mod tests {
         assert!(!supports_direct_internal_call("substr", 1));
         assert!(!DirectInternalKind::Strlen.result_may_need_cleanup());
         assert!(DirectInternalKind::Strtolower.result_may_need_cleanup());
+        assert_eq!(DirectInternalKind::Strlen.lowering(), DirectInternalLowering::Strlen);
+        assert_eq!(DirectInternalKind::Abs.lowering(), DirectInternalLowering::Generic);
     }
 }

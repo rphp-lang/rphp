@@ -256,6 +256,7 @@ mod inner {
             127 => Some("CloneObj"),
             128 => Some("CreateClosure"), 129 => Some("ClosureUseVar"),
             130 => Some("DirectInternalCall1"),
+            131 => Some("Strlen"),
             200 => Some("Add_TmpTmp"), 201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"), 203 => Some("IsSmallerOrEqual_CvConst"),
             204 => Some("Add_CvTmp"), 205 => Some("Sub_TmpTmp"),
@@ -264,6 +265,7 @@ mod inner {
             210 => Some("IsEqual_CvConst"),
             211 => Some("JmpZ_Eq_CvConst"), 212 => Some("JmpNZ_Eq_CvConst"),
             213 => Some("QuickLongLoopJmp"),
+            214 => Some("Strlen_Cv"),
             _ => None,
         }
     }

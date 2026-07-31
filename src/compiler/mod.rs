@@ -417,6 +417,8 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::Echo
                 | OpCode::InitFcall
                 | OpCode::DirectInternalCall1
+                | OpCode::Strlen
+                | OpCode::Strlen_Cv
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
                 | OpCode::InitDynamicCall

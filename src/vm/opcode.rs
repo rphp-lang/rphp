@@ -121,6 +121,8 @@ pub enum OpCode {
     /// Frame-free call to a known pure internal function with one positional
     /// argument: op1=argument, extended_value=handler ID, result=return value.
     DirectInternalCall1 = 130,
+    /// Dedicated strlen(): op1=argument, result=byte length.
+    Strlen = 131,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.
@@ -171,5 +173,8 @@ pub enum OpCode {
     /// Backward jump for a precomputed guarded scalar loop region.
     /// `op1` remains the baseline target; `extended_value` is block index + 1.
     QuickLongLoopJmp = 213,
+
+    /// strlen(CV) → TMP/Unused without generic operand dispatch.
+    Strlen_Cv = 214,
 
 }

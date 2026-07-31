@@ -68,10 +68,13 @@ fn test_call_user_func_is_lowered_without_wrapper_call() {
 #[test]
 fn test_known_unary_builtin_is_lowered_to_frame_free_call() {
     let opcodes = main_opcodes("<?php $value = 'abc'; strlen($value);");
-    assert!(opcodes.contains(&OpCode::DirectInternalCall1));
+    assert!(opcodes.contains(&OpCode::Strlen_Cv));
     assert!(!opcodes.contains(&OpCode::InitFcall));
     assert!(!opcodes.contains(&OpCode::SendVal));
     assert!(!opcodes.contains(&OpCode::DoFcall));
+
+    let generic = main_opcodes("<?php $value = -7; abs($value);");
+    assert!(generic.contains(&OpCode::DirectInternalCall1));
 }
 
 #[test]
@@ -81,7 +84,7 @@ fn test_discarded_direct_builtin_skips_tmp_result_write() {
         .main
         .instructions
         .iter()
-        .find(|instruction| instruction.opcode == OpCode::DirectInternalCall1)
+        .find(|instruction| instruction.opcode == OpCode::Strlen_Cv)
         .unwrap();
     assert_eq!(direct.result_type, OpType::Unused);
 
@@ -90,7 +93,7 @@ fn test_discarded_direct_builtin_skips_tmp_result_write() {
         .main
         .instructions
         .iter()
-        .find(|instruction| instruction.opcode == OpCode::DirectInternalCall1)
+        .find(|instruction| instruction.opcode == OpCode::Strlen)
         .unwrap();
     assert_eq!(direct.result_type, OpType::Tmp);
 }
@@ -108,6 +111,8 @@ fn test_direct_builtin_result_kind_controls_frame_cleanup() {
 fn test_named_builtin_argument_keeps_regular_call_protocol() {
     let opcodes = main_opcodes("<?php strlen(string: 'abc');");
     assert!(!opcodes.contains(&OpCode::DirectInternalCall1));
+    assert!(!opcodes.contains(&OpCode::Strlen));
+    assert!(!opcodes.contains(&OpCode::Strlen_Cv));
     assert!(opcodes.contains(&OpCode::InitFcall));
     assert!(opcodes.contains(&OpCode::SendNamed));
     assert!(opcodes.contains(&OpCode::DoFcall));
@@ -132,13 +137,15 @@ namespace DirectBuiltinShadow {
 }
 "#);
     assert!(!shadowed.contains(&OpCode::DirectInternalCall1));
+    assert!(!shadowed.contains(&OpCode::Strlen));
+    assert!(!shadowed.contains(&OpCode::Strlen_Cv));
 
     let global = main_opcodes(r#"<?php
 namespace DirectBuiltinGlobal {
     \strlen('abc');
 }
 "#);
-    assert!(global.contains(&OpCode::DirectInternalCall1));
+    assert!(global.contains(&OpCode::Strlen));
 }
 
 // -- call_user_func_array callback and argument shapes --

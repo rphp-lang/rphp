@@ -2200,12 +2200,26 @@ impl Compiler {
                     if let Some(direct_kind) = direct_kind {
                         let (argument_op, argument_type) = self.compile_expr(argument);
                         let tmp = self.alloc_tmp();
-                        let mut call = Instruction::new(OpCode::DirectInternalCall1);
+                        let opcode = match direct_kind.lowering() {
+                            crate::builtin_metadata::DirectInternalLowering::Generic => {
+                                OpCode::DirectInternalCall1
+                            }
+                            crate::builtin_metadata::DirectInternalLowering::Strlen => {
+                                if argument_type == OpType::Cv {
+                                    OpCode::Strlen_Cv
+                                } else {
+                                    OpCode::Strlen
+                                }
+                            }
+                        };
+                        let mut call = Instruction::new(opcode);
                         call.op1 = argument_op;
                         call.op1_type = argument_type;
                         call.result = tmp;
                         call.result_type = OpType::Tmp;
-                        call.extended_value = direct_kind as u32;
+                        if opcode == OpCode::DirectInternalCall1 {
+                            call.extended_value = direct_kind as u32;
+                        }
                         self.instructions.push(call);
                         return (tmp, OpType::Tmp);
                     }
@@ -2981,7 +2995,10 @@ impl Compiler {
             return;
         }
         if let Some(instruction) = self.instructions.last_mut() {
-            if instruction.opcode == OpCode::DirectInternalCall1
+            if matches!(
+                instruction.opcode,
+                OpCode::DirectInternalCall1 | OpCode::Strlen | OpCode::Strlen_Cv
+            )
                 && instruction.result == result
                 && instruction.result_type == OpType::Tmp
             {
