@@ -255,6 +255,7 @@ mod inner {
             125 => Some("Include"), 126 => Some("NullSafeCheck"),
             127 => Some("CloneObj"),
             128 => Some("CreateClosure"), 129 => Some("ClosureUseVar"),
+            130 => Some("DirectInternalCall1"),
             200 => Some("Add_TmpTmp"), 201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"), 203 => Some("IsSmallerOrEqual_CvConst"),
             204 => Some("Add_CvTmp"), 205 => Some("Sub_TmpTmp"),

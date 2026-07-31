@@ -157,6 +157,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     macro_rules! reg_direct {
         ($name:expr, $handler:expr, $direct:expr, $max_args:expr, $min_args:expr, $($pnames:expr),*) => {{
+            debug_assert_eq!(
+                crate::builtin_metadata::direct_internal_spec($name)
+                    .map(|spec| (spec.max_args, spec.required_args)),
+                Some(($max_args, $min_args)),
+                "direct builtin metadata must match stdlib registration",
+            );
             let f = Box::new(make_direct_internal_function(
                 $handler,
                 $direct,
@@ -169,6 +175,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             funcs.push(f);
         }};
         ($name:expr, $handler:expr, $direct:expr, $max_args:expr, $min_args:expr) => {{
+            debug_assert_eq!(
+                crate::builtin_metadata::direct_internal_spec($name)
+                    .map(|spec| (spec.max_args, spec.required_args)),
+                Some(($max_args, $min_args)),
+                "direct builtin metadata must match stdlib registration",
+            );
             let f = Box::new(make_direct_internal_function(
                 $handler,
                 $direct,

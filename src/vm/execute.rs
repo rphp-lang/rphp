@@ -6320,6 +6320,97 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             }
 
+            OpCode::DirectInternalCall1 => {
+                // The compiler only emits this for names present in the
+                // direct-internal metadata. Resolve once per call site, then
+                // invoke the read-only handler without allocating a PHP frame.
+                let ip = unsafe {
+                    (opline as *const Instruction)
+                        .offset_from(op_array.instructions.as_ptr()) as usize
+                };
+                let cached = op_array.cache[ip].func;
+                let func_ptr = if !cached.is_null() {
+                    cached
+                } else {
+                    let name_val = unsafe {
+                        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                    };
+                    let name = name_val
+                        .as_str()
+                        .expect("DirectInternalCall1: op2 must be a string");
+                    match eg.find_function(name) {
+                        Some(ptr) => {
+                            unsafe {
+                                (*(op_array.cache.as_ptr().add(ip)
+                                    as *mut crate::vm::instruction::InlineCache))
+                                    .func = ptr;
+                            }
+                            ptr
+                        }
+                        None => {
+                            let err = make_error_value(
+                                "Error",
+                                &format!("Call to undefined function {}()", name),
+                            );
+                            match throw_in_frame(eg, frame, err) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    eg.exception = Some(thrown);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                    }
+                };
+
+                let argument_raw = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let argument = if argument_raw.is_reference() {
+                    unsafe { &*argument_raw.as_ref_ptr() }
+                } else {
+                    argument_raw
+                };
+
+                let result = if unsafe { (*func_ptr).fn_type } == FunctionType::Internal {
+                    let internal = unsafe {
+                        &*(func_ptr as *const super::function::InternalFunction)
+                    };
+                    if let Some(handler) = internal.direct_handler {
+                        handler(std::slice::from_ref(argument))?
+                    } else {
+                        call_function(eg, func_ptr, std::slice::from_ref(argument))?
+                    }
+                } else {
+                    call_function(eg, func_ptr, std::slice::from_ref(argument))?
+                };
+
+                if let Some(exc) = eg.exception.take() {
+                    match throw_in_frame(eg, frame, exc) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue;
+                        }
+                        ThrowResult::Unhandled(thrown) => {
+                            eg.exception = Some(thrown);
+                            return Ok(());
+                        }
+                    }
+                }
+
+                if opline.result_type != OpType::Unused {
+                    let result_ptr = unsafe {
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    };
+                    unsafe { slot_set(result_ptr, result) };
+                }
+            }
+
             OpCode::CallUserFuncArray => {
                 // Compiler-lowered call_user_func_array(callback, args). The
                 // callback is resolved at this opcode's own call site and the

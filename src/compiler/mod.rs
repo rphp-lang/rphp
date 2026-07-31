@@ -405,6 +405,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::Spaceship
                 | OpCode::Echo
                 | OpCode::InitFcall
+                | OpCode::DirectInternalCall1
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
                 | OpCode::InitDynamicCall

@@ -61,6 +61,52 @@ fn test_call_user_func_is_lowered_without_wrapper_call() {
     assert!(opcodes.contains(&OpCode::SendUser));
 }
 
+#[test]
+fn test_known_unary_builtin_is_lowered_to_frame_free_call() {
+    let opcodes = main_opcodes("<?php $value = 'abc'; strlen($value);");
+    assert!(opcodes.contains(&OpCode::DirectInternalCall1));
+    assert!(!opcodes.contains(&OpCode::InitFcall));
+    assert!(!opcodes.contains(&OpCode::SendVal));
+    assert!(!opcodes.contains(&OpCode::DoFcall));
+}
+
+#[test]
+fn test_named_builtin_argument_keeps_regular_call_protocol() {
+    let opcodes = main_opcodes("<?php strlen(string: 'abc');");
+    assert!(!opcodes.contains(&OpCode::DirectInternalCall1));
+    assert!(opcodes.contains(&OpCode::InitFcall));
+    assert!(opcodes.contains(&OpCode::SendNamed));
+    assert!(opcodes.contains(&OpCode::DoFcall));
+}
+
+#[test]
+fn test_direct_builtin_lowering_preserves_namespace_resolution() {
+    let out = run_php(r#"<?php
+namespace DirectBuiltinShadow {
+    function strlen($value) { return 99; }
+    echo strlen('abc');
+    echo ':';
+    echo \strlen('abc');
+}
+"#);
+    assert_eq!(out, "99:3");
+
+    let shadowed = main_opcodes(r#"<?php
+namespace DirectBuiltinShadow {
+    function strlen($value) { return 99; }
+    strlen('abc');
+}
+"#);
+    assert!(!shadowed.contains(&OpCode::DirectInternalCall1));
+
+    let global = main_opcodes(r#"<?php
+namespace DirectBuiltinGlobal {
+    \strlen('abc');
+}
+"#);
+    assert!(global.contains(&OpCode::DirectInternalCall1));
+}
+
 // -- call_user_func_array callback and argument shapes --
 
 #[test]

@@ -2186,6 +2186,30 @@ impl Compiler {
                 (one_lit, OpType::Const)
             }
             Expr::FunctionCall { name, args } => {
+                if let [CallArg::Positional(argument)] = args.as_slice() {
+                    let direct_name = self
+                        .unambiguous_global_function_name(name)
+                        .filter(|name| {
+                            crate::builtin_metadata::supports_direct_internal_call(name, 1)
+                        })
+                        .map(str::to_string);
+
+                    if let Some(direct_name) = direct_name {
+                        let (argument_op, argument_type) = self.compile_expr(argument);
+                        let name_literal = self.add_literal(Value::string(direct_name));
+                        let tmp = self.alloc_tmp();
+                        let mut call = Instruction::new(OpCode::DirectInternalCall1);
+                        call.op1 = argument_op;
+                        call.op1_type = argument_type;
+                        call.op2 = name_literal;
+                        call.op2_type = OpType::Const;
+                        call.result = tmp;
+                        call.result_type = OpType::Tmp;
+                        self.instructions.push(call);
+                        return (tmp, OpType::Tmp);
+                    }
+                }
+
                 if self.is_global_builtin_call(name, "call_user_func") {
                     if let Some((CallArg::Positional(callback), forwarded)) = args.split_first() {
                         if forwarded.iter().all(|arg| matches!(arg, CallArg::Positional(_))) {
@@ -2952,13 +2976,20 @@ impl Compiler {
     /// Whether a source-level function name unambiguously addresses a global
     /// builtin. An unqualified name inside a namespace must retain the normal
     /// fallback lookup because a namespaced user function may shadow it.
-    fn is_global_builtin_call(&self, name: &str, builtin: &str) -> bool {
+    fn unambiguous_global_function_name<'a>(&self, name: &'a str) -> Option<&'a str> {
         if let Some(fully_qualified) = name.strip_prefix('\\') {
-            return fully_qualified.eq_ignore_ascii_case(builtin);
+            return Some(fully_qualified);
         }
-        self.current_namespace.is_none()
-            && !name.contains('\\')
-            && name.eq_ignore_ascii_case(builtin)
+        if self.current_namespace.is_none() && !name.contains('\\') {
+            Some(name)
+        } else {
+            None
+        }
+    }
+
+    fn is_global_builtin_call(&self, name: &str, builtin: &str) -> bool {
+        self.unambiguous_global_function_name(name)
+            .is_some_and(|name| name.eq_ignore_ascii_case(builtin))
     }
 
     fn resolve_cv(&mut self, name: &str) -> u16 {
