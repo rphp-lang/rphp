@@ -798,6 +798,154 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_general_program_routes_irregular_integer_reads() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$one = 1;
+$key = $start;
+$sum = 0;
+$adjusted = 0;
+for ($i = 0; $i < 100; $i++) {
+    $value = $values[$key];
+    $sum += $value;
+    $adjusted += $value + $one;
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo $adjusted;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|5050|800|100"
+    );
+}
+
+#[test]
+fn quick_hash_general_program_deoptimizes_non_long_fetch_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$values[793] = 'marker';
+$one = 1;
+$key = $start;
+$sum = 0;
+$adjusted = 0;
+$last = 0;
+for ($i = 0; $i < 100; $i++) {
+    $last = $values[$key];
+    $sum += $i;
+    $adjusted += $i + $one;
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo $adjusted;
+echo '|';
+echo $last;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|5050|marker|800|100"
+    );
+}
+
+#[test]
+fn quick_hash_transform_deoptimizes_fused_add_without_replaying_prior_add() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = 1;
+    $key = $key + $stride;
+}
+$one = 1;
+$key = $start;
+$sum = 0;
+$adjusted = PHP_INT_MAX - 100;
+for ($i = 0; $i < 100; $i++) {
+    $value = $values[$key];
+    $sum += $value;
+    $adjusted += $value + $one;
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo is_float($adjusted) ? 'float' : 'int';
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "100|float|800|100"
+    );
+}
+
+#[test]
+fn quick_hash_filtered_program_routes_and_deoptimizes_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 500; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$cutoff = 500;
+$key = $start;
+$sum = PHP_INT_MAX - 20000;
+for ($i = 0; $i < 500; $i++) {
+    $value = $values[$key];
+    if ($value < $cutoff) {
+        $sum += $value;
+    }
+    $key = $key + $stride;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $value;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "float|499|3600|500"
+    );
+}
+
+#[test]
 fn quick_conditional_add_assign_deoptimizes_at_overflow() {
     assert_eq!(
         run_php(

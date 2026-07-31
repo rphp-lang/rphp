@@ -190,6 +190,7 @@ pub enum QuickLongOp {
         array: u16,
         index: QuickArrayIndex,
         result: u16,
+        destination: Option<u16>,
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
@@ -910,12 +911,27 @@ pub fn detect_long_ops_loop(
                 };
                 add_mask_slot(&mut array_input_mask, array, total_slots)?;
                 add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                let destination = op_array
+                    .instructions
+                    .get(ip + 1)
+                    .copied()
+                    .and_then(long_assign)
+                    .and_then(|(destination, source)| {
+                        (source == instruction.result).then_some(destination)
+                    });
                 let resume_ip = ip;
-                ip += 1;
+                if let Some(destination) = destination {
+                    add_mask_slot(&mut long_output_mask, destination, total_slots)?;
+                    has_assign = true;
+                    ip += 2;
+                } else {
+                    ip += 1;
+                }
                 QuickLongOp::FetchArrayLong {
                     array,
                     index,
                     result: instruction.result,
+                    destination,
                     next_target: QuickLongTarget::unresolved(ip)?,
                     resume_ip,
                 }
@@ -1352,7 +1368,12 @@ mod tests {
             .find_map(|(backedge, instruction)| {
                 detect_long_ops_loop(&main.op_array, instruction.op1 as usize, backedge)
             })
-            .expect("source should contain a typed long ops loop")
+            .unwrap_or_else(|| {
+                panic!(
+                    "source should contain a typed long ops loop; instructions: {:#?}",
+                    main.op_array.instructions
+                )
+            })
     }
 
     #[test]
@@ -1559,6 +1580,84 @@ for ($i = 0; $i < 3; $i++) {
                 QuickLongOp::PostIncLoopLt { .. },
             ]
         ));
+    }
+
+    #[test]
+    fn detects_materialized_hash_value_with_two_aggregates_as_typed_ops() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [100 => 3, 107 => 5, 114 => 7];
+$key = 100;
+$sum = 0;
+$adjusted = 0;
+$one = 1;
+$stride = 7;
+for ($i = 0; $i < 3; $i++) {
+    $value = $values[$key];
+    $sum += $value;
+    $adjusted += $value + $one;
+    $key = $key + $stride;
+}
+",
+        );
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|op| matches!(op, QuickLongOp::FetchArrayLong { .. }))
+                .count(),
+            1
+        );
+        assert!(plan
+            .ops
+            .iter()
+            .any(|op| matches!(
+                op,
+                QuickLongOp::FetchArrayLong {
+                    destination: Some(_),
+                    ..
+                }
+            )));
+    }
+
+    #[test]
+    fn detects_filtered_hash_aggregate_as_typed_ops() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [100 => 3, 107 => 5, 114 => 7];
+$key = 100;
+$sum = 0;
+$stride = 7;
+for ($i = 0; $i < 3; $i++) {
+    $value = $values[$key];
+    if ($value < 6) {
+        $sum += $value;
+    }
+    $key = $key + $stride;
+}
+",
+        );
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|op| matches!(op, QuickLongOp::FetchArrayLong { .. }))
+                .count(),
+            1
+        );
+        assert!(plan
+            .ops
+            .iter()
+            .any(|op| matches!(op, QuickLongOp::BranchUnlessLt { .. })));
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            QuickLongOp::FetchArrayLong {
+                destination: Some(_),
+                ..
+            }
+        )));
+        assert!(plan
+            .ops
+            .iter()
+            .any(|op| matches!(op, QuickLongOp::ConditionalAddAssign { .. })));
     }
 
     #[test]

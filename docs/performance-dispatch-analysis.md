@@ -1001,3 +1001,85 @@ with default features and with `--no-default-features`; dedicated array tests
 cover both routing classes and direct indexed hits/misses, while the Phase 2i
 end-to-end tests continue to exercise successful execution and exact
 non-long/overflow deoptimization on the newly routed path.
+
+## Phase 2k result: guard-time array-loop templates
+
+Phase 2j solved the exact stride recurrence, but realistic array code commonly
+materializes the fetched value, updates more than one aggregate, or filters the
+aggregate conditionally. Two new one-million-element workloads keep array
+construction outside the timed region and exercise those shapes:
+
+- `bench_hash_sparse_int_array_transform.php` assigns the fetched value and
+  updates two aggregates before stepping the irregular integer key;
+- `bench_hash_sparse_int_array_filter.php` assigns the fetched value and
+  conditionally updates an aggregate from the fetched data.
+
+Both workloads already entered the guarded typed program and completed
+999,967 iterations there after the hot threshold. A four-second sample of a
+100-pass transform attributed 3,073 of 3,263 hot samples (94.2%) to
+`run_quick_long_ops_loop` itself and only 190 samples (5.8%) to the hash lookup.
+The largest remaining cost was therefore dynamic typed-operation execution and
+slot traffic, not the integer hash function.
+
+Several attempts to make the generic runner cheaper were measured and
+rejected:
+
+- a per-fetch indexed-layout mask repeated a stable decision in the hot body
+  and did not improve the workloads;
+- duplicating the complete runner with a const-generic indexed mode increased
+  code size and caused broad 1–3% acceptance regressions;
+- cloning the typed program into runtime-specific fetch operations, including
+  a raw array pointer, did not improve the direct lookup after register
+  pressure was considered;
+- a sequential-target sentinel removed target decoding but made transform,
+  string, nested, and exact-stride measurements worse;
+- a general linear-body runner still interpreted each body operation and was
+  8.5% slower on transform, 18.2% slower on filter, and 4.9% slower on the
+  nested acceptance workload.
+
+The retained design instead selects a complete array-loop template once after
+the existing type and array guards. The template detector validates the entry
+branch, sequential body targets, shared exit, loop condition, backedge, fetch,
+and post-increment. It currently covers three structural typed bodies:
+
+1. a fetch followed by two checked assignments (the Phase 2j stride shape);
+2. a materialized fetch followed by an add, fused add-plus-add, and key step;
+3. a materialized fetch followed by a conditional add and key step.
+
+The common loop skeleton is monomorphized with the selected body and fetch
+layout, so no operation-kind dispatch remains inside those bodies. Irregular
+integer hash input continues to use the guard-time direct index route. The
+original two-add indexed shape retains a fully direct static body, while packed
+and other array layouts use the same validated template contract.
+
+`FetchDimR` followed immediately by `AssignCv` is also fused in the typed plan.
+The fetch operation records the optional destination and commits it only after
+a successful typed read. This peephole is general to every eligible compiled
+PHP loop; it does not depend on benchmark names, source variable names, or
+literal iteration counts.
+
+All arithmetic remains checked. Every template carries the original resume IP
+for fetch, each constituent addition, and post-increment. A side exit commits
+only the temporary/CV writes completed before that point. New end-to-end cases
+exercise a non-long fetched value, overflow in the fused transform body without
+replaying an earlier accumulator update, and conditional-filter overflow.
+
+Thirty-one final rounds rotated Phase 2k, the saved fusion-only binary, the
+saved Phase 2j binary, and PHP process order:
+
+| Workload | Phase 2j | Phase 2k | PHP 8.4.12, no CLI opcache | Phase 2k / Phase 2j |
+|---|---:|---:|---:|---:|
+| Materialized transform, 1M reads | 0.13700 s | 0.08067 s | 0.02510 s | 0.589x |
+| Conditional filter, 1M reads | 0.12403 s | 0.09066 s | 0.01951 s | 0.731x |
+
+The structural template removes about 41.1% from the transform and 26.9% from
+the filter. PHP remains 3.21x and 4.65x faster respectively, so the result
+reduces rather than closes the no-JIT gap.
+
+Twenty-one-round acceptance medians versus the saved Phase 2j binary were
+`0.999x` for the exact irregular stride loop, `0.981x` for packed reads,
+`1.001x` for nested scalar loops, and `1.003x` for the string workload. A
+100-pass exact-stride comparison also favored Phase 2k in both execution
+orders. The complete test suite passes with default features and with
+`--no-default-features`; the planner now has 13 focused tests and the quick-loop
+end-to-end suite has 42 tests.
