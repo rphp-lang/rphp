@@ -299,6 +299,22 @@ fn test_sprintf_percent() {
     assert_eq!(run_php(r#"<?php echo sprintf("100%%");"#), "100%");
 }
 
+#[test]
+fn test_sprintf_utf8_literals_and_arguments() {
+    assert_eq!(
+        run_php(r#"<?php echo sprintf("žluť %s %% %d", "kůň", 7);"#),
+        "žluť kůň % 7"
+    );
+}
+
+#[test]
+fn test_sprintf_numeric_formats_write_directly() {
+    assert_eq!(
+        run_php(r#"<?php echo sprintf("%f %o %b %c", 1.5, 8, 5, 65);"#),
+        "1.500000 10 101 A"
+    );
+}
+
 // === shuffle / array_rand (just ensure no crash) ===
 #[test]
 fn test_shuffle_runs() {
@@ -336,6 +352,38 @@ fn test_strtoupper_ascii() {
 }
 
 // ==========================================================================
+// === URL encoding ===
+
+#[test]
+fn test_urlencode_reserved_characters_and_space() {
+    assert_eq!(run_php(r#"<?php echo urlencode("a b+c/~");"#), "a+b%2Bc%2F%7E");
+}
+
+#[test]
+fn test_rawurlencode_reserved_characters_and_space() {
+    assert_eq!(run_php(r#"<?php echo rawurlencode("a b+c/~");"#), "a%20b%2Bc%2F~");
+}
+
+#[test]
+fn test_urlencode_utf8_bytes() {
+    assert_eq!(run_php(r#"<?php echo urlencode("žluť");"#), "%C5%BElu%C5%A5");
+}
+
+#[test]
+fn test_urldecode_accepts_lowercase_hex_and_preserves_invalid_escapes() {
+    assert_eq!(run_php(r#"<?php echo urldecode("a+b%2bc%2F%7e%ZZ%");"#), "a b+c/~%ZZ%");
+}
+
+#[test]
+fn test_rawurldecode_preserves_plus_and_invalid_escapes() {
+    assert_eq!(run_php(r#"<?php echo rawurldecode("a+b%2bc%2F~%ZZ%");"#), "a+b+c/~%ZZ%");
+}
+
+#[test]
+fn test_url_encoding_utf8_round_trip() {
+    assert_eq!(run_php(r#"<?php echo urldecode(urlencode("Příliš žluťoučký kůň"));"#), "Příliš žluťoučký kůň");
+}
+
 // Regression tests for code review findings
 // ==========================================================================
 

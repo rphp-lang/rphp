@@ -124,6 +124,14 @@ fn test_e2e_implode() {
 }
 
 #[test]
+fn test_e2e_implode_mixed_scalar_values() {
+    assert_eq!(
+        run_php("<?php echo implode('|', [null, false, true, 42, 1.5, 'x']);"),
+        "||1|42|1.5|x"
+    );
+}
+
+#[test]
 fn test_e2e_chain_scalar_stdlib() {
     // Chain two scalar stdlib calls
     assert_eq!(run_php("<?php $x = strlen('hello'); echo $x;"), "5");

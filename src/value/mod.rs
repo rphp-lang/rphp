@@ -1,6 +1,7 @@
 use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
 use std::ops::Deref;
@@ -1556,6 +1557,54 @@ impl Value {
                 format!("{} Object", obj.class_name)
             }
             _ => "<unsupported>".to_string(),
+        }
+    }
+
+    /// Append the PHP echo representation directly to an existing buffer.
+    /// This avoids allocating a temporary String in join/formatting paths.
+    pub fn append_echo_to(&self, output: &mut String) {
+        match self.value_type() {
+            ValueType::Undef | ValueType::Null | ValueType::False => {}
+            ValueType::True => output.push('1'),
+            ValueType::Long => {
+                let _ = write!(output, "{}", unsafe { self.data.long });
+            }
+            ValueType::Double => {
+                let d = unsafe { self.data.double };
+                if d == d.floor() && d.abs() < 1e15 {
+                    let _ = write!(output, "{}", d as i64);
+                } else {
+                    let _ = write!(output, "{}", d);
+                }
+            }
+            ValueType::String => {
+                output.push_str(unsafe { &*(self.data.ptr as *const String) });
+            }
+            ValueType::Array => output.push_str("Array"),
+            ValueType::Object => {
+                let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
+                let obj = refcell.borrow();
+                let _ = write!(output, "{} Object", obj.class_name);
+            }
+            _ => output.push_str("<unsupported>"),
+        }
+    }
+
+    /// Capacity hint for append_echo_to. Exact for fixed/string cases and a
+    /// small safe overestimate for numeric values.
+    pub fn echo_len_hint(&self) -> usize {
+        match self.value_type() {
+            ValueType::Undef | ValueType::Null | ValueType::False => 0,
+            ValueType::True => 1,
+            ValueType::Long => 20,
+            ValueType::Double => 24,
+            ValueType::String => unsafe { (&*(self.data.ptr as *const String)).len() },
+            ValueType::Array => 5,
+            ValueType::Object => {
+                let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
+                refcell.borrow().class_name.len() + 7
+            }
+            _ => 13,
         }
     }
 

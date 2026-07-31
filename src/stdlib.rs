@@ -11,6 +11,7 @@
 ///   - `ret!(rv, expr)` → writes to return_value with null check
 
 use std::borrow::Cow;
+use std::fmt::Write as _;
 
 use crate::value::{Value, ValueType, PhpArray, ArrayKey};
 use crate::vm::frame::ExecuteData;
@@ -1294,8 +1295,16 @@ fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
     let glue = arg_str!(ed, 0);
     let pieces = arg!(ed, 1);
     if let Some(arr) = pieces.as_array() {
-        let parts: Vec<String> = arr.iter().map(|(_, v)| v.echo_to_string()).collect();
-        ret!(rv, Value::string(parts.join(glue.as_ref())));
+        let glue_bytes = glue.len().saturating_mul(arr.len().saturating_sub(1));
+        let value_bytes = arr.iter().map(|(_, value)| value.echo_len_hint()).sum::<usize>();
+        let mut result = String::with_capacity(glue_bytes.saturating_add(value_bytes));
+        for (index, (_, value)) in arr.iter().enumerate() {
+            if index > 0 {
+                result.push_str(glue.as_ref());
+            }
+            value.append_echo_to(&mut result);
+        }
+        ret!(rv, Value::string(result));
     } else {
         ret!(rv, Value::string(""));
     }
@@ -1491,52 +1500,87 @@ fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
 fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     // Variadic: VM packs extra args into an array at CV(1)
-    // Read individual values from that array
+    // Read values directly from that array without cloning them into another Vec.
     let variadic_arr = arg!(ed, 1);
-    let args: Vec<Value> = if let Some(arr) = variadic_arr.as_array() {
-        arr.iter().map(|(_, v)| v.clone()).collect()
-    } else if variadic_arr.value_type() != ValueType::Undef {
-        // Single non-array arg (non-variadic call path)
-        vec![variadic_arr.clone()]
-    } else {
-        vec![]
-    };
+    let args = variadic_arr.as_array();
+    let args_count = args.map(|array| array.len()).unwrap_or_else(|| {
+        usize::from(variadic_arr.value_type() != ValueType::Undef)
+    });
 
-    let mut result = String::with_capacity(fmt.len());
-    let mut chars = fmt.chars().peekable();
+    let mut result = String::with_capacity(fmt.len().saturating_add(args_count * 8));
+    let bytes = fmt.as_bytes();
+    let mut literal_start = 0usize;
+    let mut index = 0usize;
     let mut arg_idx = 0;
-    while let Some(c) = chars.next() {
-        if c == '%' {
-            match chars.peek() {
-                Some('%') => { chars.next(); result.push('%'); }
-                Some(&spec) => {
-                    chars.next();
-                    let arg = args.get(arg_idx);
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            result.push_str(&fmt[literal_start..index]);
+            if index + 1 < bytes.len() {
+                let spec = bytes[index + 1] as char;
+                if spec == '%' {
+                    result.push('%');
+                } else {
+                    let arg = if let Some(args) = args {
+                        args.get_value_at(arg_idx)
+                    } else if arg_idx == 0 && variadic_arr.value_type() != ValueType::Undef {
+                        Some(variadic_arr)
+                    } else {
+                        None
+                    };
                     arg_idx += 1;
                     match spec {
-                        's' => result.push_str(&arg.map(|a| a.echo_to_string()).unwrap_or_default()),
-                        'd' => result.push_str(&arg.map(|a| a.to_long_val().to_string()).unwrap_or("0".into())),
-                        'f' => {
-                            let d = arg.map(|a| a.to_float_val()).unwrap_or(0.0);
-                            result.push_str(&format!("{:.6}", d));
+                        's' => {
+                            if let Some(arg) = arg {
+                                arg.append_echo_to(&mut result);
+                            }
                         }
-                        'x' => result.push_str(&format!("{:x}", arg.map(|a| a.to_long_val()).unwrap_or(0))),
-                        'X' => result.push_str(&format!("{:X}", arg.map(|a| a.to_long_val()).unwrap_or(0))),
-                        'o' => result.push_str(&format!("{:o}", arg.map(|a| a.to_long_val()).unwrap_or(0))),
-                        'b' => result.push_str(&format!("{:b}", arg.map(|a| a.to_long_val()).unwrap_or(0))),
+                        'd' => {
+                            let _ = write!(
+                                result,
+                                "{}",
+                                arg.map(|value| value.to_long_val()).unwrap_or(0)
+                            );
+                        }
+                        'f' => {
+                            let value = arg.map(|value| value.to_float_val()).unwrap_or(0.0);
+                            let _ = write!(result, "{value:.6}");
+                        }
+                        'x' => {
+                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+                            let _ = write!(result, "{value:x}");
+                        }
+                        'X' => {
+                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+                            let _ = write!(result, "{value:X}");
+                        }
+                        'o' => {
+                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+                            let _ = write!(result, "{value:o}");
+                        }
+                        'b' => {
+                            let value = arg.map(|value| value.to_long_val()).unwrap_or(0);
+                            let _ = write!(result, "{value:b}");
+                        }
                         'c' => {
-                            let code = arg.map(|a| a.to_long_val()).unwrap_or(0);
+                            let code = arg.map(|value| value.to_long_val()).unwrap_or(0);
                             result.push((code & 0xFF) as u8 as char);
                         }
                         _ => { result.push('%'); result.push(spec); arg_idx -= 1; }
                     }
                 }
-                None => result.push('%'),
+                index += 2;
+                literal_start = index;
+                continue;
+            } else {
+                result.push('%');
+                index += 1;
+                literal_start = index;
+                continue;
             }
-        } else {
-            result.push(c);
         }
+        index += 1;
     }
+    result.push_str(&fmt[literal_start..]);
     ret!(rv, Value::string(result));
 }
 
@@ -2984,12 +3028,17 @@ fn fn_htmlentities(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
 /// urlencode($string): string
 fn fn_urlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let mut out = String::with_capacity(s.len());
+    let extra_bytes = s
+        .bytes()
+        .filter(|b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b' '))
+        .count()
+        * 2;
+    let mut out = String::with_capacity(s.len() + extra_bytes);
     for b in s.as_bytes() {
         match *b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' => out.push(*b as char),
             b' ' => out.push('+'),
-            _ => { out.push_str(&format!("%{:02X}", b)); }
+            _ => push_percent_escape(&mut out, *b),
         }
     }
     ret!(rv, Value::string(out));
@@ -2998,37 +3047,22 @@ fn fn_urlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
 /// urldecode($string): string
 fn fn_urldecode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let mut out = Vec::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => { out.push(b' '); i += 1; }
-            b'%' if i + 2 < bytes.len() => {
-                if let Ok(val) = u8::from_str_radix(
-                    &String::from_utf8_lossy(&bytes[i+1..i+3]), 16
-                ) {
-                    out.push(val);
-                    i += 3;
-                } else {
-                    out.push(b'%');
-                    i += 1;
-                }
-            }
-            c => { out.push(c); i += 1; }
-        }
-    }
-    ret!(rv, Value::string(String::from_utf8_lossy(&out).into_owned()));
+    ret!(rv, Value::string(percent_decode_bytes(&s, true)));
 }
 
 /// rawurlencode($string): string — like urlencode but space → %20
 fn fn_rawurlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let mut out = String::with_capacity(s.len());
+    let extra_bytes = s
+        .bytes()
+        .filter(|b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~'))
+        .count()
+        * 2;
+    let mut out = String::with_capacity(s.len() + extra_bytes);
     for b in s.as_bytes() {
         match *b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
-            _ => { out.push_str(&format!("%{:02X}", b)); }
+            _ => push_percent_escape(&mut out, *b),
         }
     }
     ret!(rv, Value::string(out));
@@ -3037,26 +3071,7 @@ fn fn_rawurlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
 /// rawurldecode($string): string
 fn fn_rawurldecode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let mut out = Vec::with_capacity(s.len());
-    let bytes = s.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(val) = u8::from_str_radix(
-                &String::from_utf8_lossy(&bytes[i+1..i+3]), 16
-            ) {
-                out.push(val);
-                i += 3;
-            } else {
-                out.push(b'%');
-                i += 1;
-            }
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    ret!(rv, Value::string(String::from_utf8_lossy(&out).into_owned()));
+    ret!(rv, Value::string(percent_decode_bytes(&s, false)));
 }
 
 /// base64_encode($data): string
@@ -4100,18 +4115,36 @@ fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
     ret!(rv, Value::array(arr));
 }
 
-/// Helper: decode percent-encoded string
-fn percent_decode(s: &str) -> String {
+const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
+
+#[inline]
+fn push_percent_escape(out: &mut String, byte: u8) {
+    out.push('%');
+    out.push(HEX_UPPER[(byte >> 4) as usize] as char);
+    out.push(HEX_UPPER[(byte & 0x0f) as usize] as char);
+}
+
+#[inline]
+fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+fn percent_decode_bytes(s: &str, plus_as_space: bool) -> String {
     let bytes = s.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;
     while i < bytes.len() {
-        if bytes[i] == b'+' {
+        if plus_as_space && bytes[i] == b'+' {
             out.push(b' ');
             i += 1;
         } else if bytes[i] == b'%' && i + 2 < bytes.len() {
-            if let Ok(byte) = u8::from_str_radix(&s[i + 1..i + 3], 16) {
-                out.push(byte);
+            if let (Some(high), Some(low)) = (hex_nibble(bytes[i + 1]), hex_nibble(bytes[i + 2])) {
+                out.push((high << 4) | low);
                 i += 3;
             } else {
                 out.push(bytes[i]);
@@ -4122,7 +4155,15 @@ fn percent_decode(s: &str) -> String {
             i += 1;
         }
     }
-    String::from_utf8_lossy(&out).into_owned()
+    match String::from_utf8(out) {
+        Ok(decoded) => decoded,
+        Err(error) => String::from_utf8_lossy(error.as_bytes()).into_owned(),
+    }
+}
+
+/// Helper: decode an application/x-www-form-urlencoded string.
+fn percent_decode(s: &str) -> String {
+    percent_decode_bytes(s, true)
 }
 
 /// PHP normalizes dots and spaces in top-level query variable names to underscores.
@@ -4241,18 +4282,19 @@ fn fn_parse_str(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
 
 /// Helper: percent-encode a string for URL query
 fn percent_encode_query(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let extra_bytes = s
+        .bytes()
+        .filter(|b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' | b' '))
+        .count()
+        * 2;
+    let mut out = String::with_capacity(s.len() + extra_bytes);
     for b in s.bytes() {
         match b {
             b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
                 out.push(b as char);
             }
             b' ' => out.push('+'),
-            _ => {
-                out.push('%');
-                out.push(char::from_digit((b >> 4) as u32, 16).unwrap().to_ascii_uppercase());
-                out.push(char::from_digit((b & 0xf) as u32, 16).unwrap().to_ascii_uppercase());
-            }
+            _ => push_percent_escape(&mut out, b),
         }
     }
     out
