@@ -2986,6 +2986,13 @@ enum QuickLongArray {
     },
 }
 
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickLongIntPositionHint {
+    first_key: i64,
+    stride: i64,
+}
+
 #[cfg(feature = "quick-loops")]
 impl QuickLongArray {
     const EMPTY: Self = Self::Empty;
@@ -4149,12 +4156,44 @@ unsafe fn dispatch_quick_long_array_loop_kernel(
     slot_base: *mut Value,
     slots: [i64; 64],
     arrays: &[QuickLongArray; 64],
+    int_position_hints: &[Option<QuickLongIntPositionHint>; 64],
     indexed_int_array_mask: u64,
     kernel: QuickLongArrayLoopKernel,
     body: QuickLongArrayBodyKernel,
 ) -> Result<QuickLoopOutcome, VmError> {
     let array = arrays[kernel.array as usize];
+    let int_position_hint = int_position_hints[kernel.array as usize];
     if let QuickLongArrayBodyKernel::TwoAdds { first, second } = body {
+        if let (
+            Some(position_hint),
+            QuickLongArray::Hash { array },
+            QuickArrayIndex::Long(index),
+        ) = (int_position_hint, array, kernel.index)
+        {
+            return run_quick_long_array_two_adds_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                first,
+                second,
+                move |slots| {
+                    (*array)
+                        .get_positioned_int(
+                            quick_long_operand(slots, index),
+                            position_hint.first_key,
+                            position_hint.stride,
+                        )
+                        .and_then(|value| {
+                            (value.value_type() == ValueType::Long)
+                                .then(|| value.raw_long())
+                        })
+                },
+            );
+        }
         if indexed_int_array_mask & (1u64 << kernel.array) != 0 {
             if let (
                 QuickLongArray::Hash { array },
@@ -4213,6 +4252,36 @@ unsafe fn dispatch_quick_long_array_loop_kernel(
             first,
             second,
             move |slots| array.long_at(kernel.index, slots, op_array),
+        );
+    }
+
+    if let (
+        Some(position_hint),
+        QuickLongArray::Hash { array },
+        QuickArrayIndex::Long(index),
+    ) = (int_position_hint, array, kernel.index)
+    {
+        return dispatch_quick_long_array_body_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            kernel,
+            body,
+            move |slots| {
+                (*array)
+                    .get_positioned_int(
+                        quick_long_operand(slots, index),
+                        position_hint.first_key,
+                        position_hint.stride,
+                    )
+                    .and_then(|value| {
+                        (value.value_type() == ValueType::Long)
+                            .then(|| value.raw_long())
+                    })
+            },
         );
     }
 
@@ -4496,6 +4565,7 @@ unsafe fn run_quick_long_ops_loop(
     }
 
     let mut arrays = [QuickLongArray::EMPTY; 64];
+    let mut int_position_hints = [None; 64];
     let mut indexed_int_array_mask = 0u64;
     let mut array_mask = plan.array_input_mask;
     while array_mask != 0 {
@@ -4507,10 +4577,13 @@ unsafe fn run_quick_long_ops_loop(
             return Ok(QuickLoopOutcome::GuardFailed);
         };
         let quick_array = QuickLongArray::from_array(array);
-        if matches!(quick_array, QuickLongArray::Hash { .. })
-            && !array.prefers_positional_int_lookup()
-        {
-            indexed_int_array_mask |= 1u64 << slot;
+        if matches!(quick_array, QuickLongArray::Hash { .. }) {
+            if let Some((first_key, stride)) = array.integer_position_hint() {
+                int_position_hints[slot] =
+                    Some(QuickLongIntPositionHint { first_key, stride });
+            } else {
+                indexed_int_array_mask |= 1u64 << slot;
+            }
         }
         arrays[slot] = quick_array;
     }
@@ -4524,6 +4597,7 @@ unsafe fn run_quick_long_ops_loop(
             slot_base,
             slots,
             &arrays,
+            &int_position_hints,
             indexed_int_array_mask,
             kernel,
             body,

@@ -456,6 +456,73 @@ impl PhpArray {
         }
     }
 
+    /// Derive an ordered-entry position hint from the first integer keys.
+    ///
+    /// The hint never establishes correctness on its own. Guarded readers
+    /// validate the key stored at the derived position and retain the integer
+    /// index as a fallback for holes, interleaved string keys, and later
+    /// irregular entries.
+    #[cfg(any(feature = "quick-loops", test))]
+    #[inline]
+    pub(crate) fn integer_position_hint(&self) -> Option<(i64, i64)> {
+        let ArrayStorage::Hash { entries, .. } = &self.storage else {
+            return None;
+        };
+        match entries.as_slice() {
+            [(ArrayKey::Int(first), _)] => Some((*first, 1)),
+            [(ArrayKey::Int(first), _), (ArrayKey::Int(second), _), ..] => {
+                let stride = second
+                    .checked_sub(*first)
+                    .filter(|stride| *stride != 0)?;
+                for (position, (key, _)) in entries.iter().take(8).enumerate() {
+                    let expected = stride
+                        .checked_mul(position as i64)
+                        .and_then(|offset| first.checked_add(offset))?;
+                    if !matches!(key, ArrayKey::Int(found) if *found == expected) {
+                        return None;
+                    }
+                }
+                Some((*first, stride))
+            }
+            _ => None,
+        }
+    }
+
+    /// Integer lookup through a preclassified ordered-entry progression.
+    ///
+    /// The stored key is checked before returning the value. A failed
+    /// arithmetic candidate uses the canonical integer index, so this remains
+    /// exact even when only the prefix follows the hinted progression.
+    #[cfg(any(feature = "quick-loops", test))]
+    #[inline(always)]
+    pub(crate) fn get_positioned_int(
+        &self,
+        key: i64,
+        first_key: i64,
+        stride: i64,
+    ) -> Option<&Value> {
+        let ArrayStorage::Hash { entries, int_index, .. } = &self.storage else {
+            return None;
+        };
+        let position = key.checked_sub(first_key).and_then(|offset| {
+            if stride == 1 {
+                usize::try_from(offset).ok()
+            } else if stride != 0 && offset.checked_rem(stride) == Some(0) {
+                offset.checked_div(stride).and_then(|value| usize::try_from(value).ok())
+            } else {
+                None
+            }
+        });
+        if let Some(position) = position {
+            if let Some((ArrayKey::Int(found_key), value)) = entries.get(position) {
+                if *found_key == key {
+                    return Some(value);
+                }
+            }
+        }
+        int_index.get(&key).map(|&idx| &entries[idx].1)
+    }
+
     /// Integer lookup that deliberately skips the ordered-entry fast path.
     /// Guarded quick regions use this for arrays classified as irregular once
     /// at activation instead of repeating a known-to-fail positional probe.
@@ -757,15 +824,24 @@ mod php_array_tests {
         irregular.set_int(107, Value::long(5));
         irregular.set_int(-3, Value::long(6));
         assert!(!irregular.prefers_positional_int_lookup());
+        assert_eq!(irregular.integer_position_hint(), None);
         assert_eq!(
             irregular.get_indexed_int(107).and_then(Value::as_long),
             Some(5)
         );
         assert_eq!(
-            irregular.get_indexed_int(-3).and_then(Value::as_long),
+            irregular
+                .get_positioned_int(107, 100, 7)
+                .and_then(Value::as_long),
+            Some(5)
+        );
+        assert_eq!(
+            irregular
+                .get_positioned_int(-3, 100, 7)
+                .and_then(Value::as_long),
             Some(6)
         );
-        assert!(irregular.get_indexed_int(101).is_none());
+        assert!(irregular.get_positioned_int(101, 100, 7).is_none());
     }
 
     #[test]
@@ -783,6 +859,27 @@ mod php_array_tests {
         assert_eq!(array.get_int(-11).and_then(Value::as_long), Some(22));
         assert_eq!(array.get_int(9_000_007).and_then(Value::as_long), Some(33));
         assert!(array.get_int(1_000_101).is_none());
+    }
+
+    #[test]
+    fn integer_position_hint_accepts_negative_stride_and_rejects_irregular_prefix() {
+        let mut descending = PhpArray::new();
+        for key in [100, 93, 86, 79, 72, 65, 58, 51] {
+            descending.set_int(key, Value::long(key));
+        }
+        assert_eq!(descending.integer_position_hint(), Some((100, -7)));
+        assert_eq!(
+            descending
+                .get_positioned_int(58, 100, -7)
+                .and_then(Value::as_long),
+            Some(58)
+        );
+
+        let mut irregular = PhpArray::new();
+        for key in [10, 30, 31, 70, -4, 900, 2, 88] {
+            irregular.set_int(key, Value::long(key));
+        }
+        assert_eq!(irregular.integer_position_hint(), None);
     }
 
     #[test]

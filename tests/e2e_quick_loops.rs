@@ -798,6 +798,68 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_position_hint_supports_negative_stride() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 1000;
+$stride = -7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+$key = $start;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|300|100"
+    );
+}
+
+#[test]
+fn quick_hash_position_hint_falls_back_after_reordered_entry() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$start = 100;
+$stride = 7;
+$key = $start;
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $i;
+    $key = $key + $stride;
+}
+unset($values[450]);
+$values[450] = 50;
+$key = $start;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    $key = $key + $stride;
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|800|100"
+    );
+}
+
+#[test]
 fn quick_hash_general_program_routes_irregular_integer_reads() {
     assert_eq!(
         run_php(

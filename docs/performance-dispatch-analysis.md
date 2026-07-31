@@ -1083,3 +1083,77 @@ Twenty-one-round acceptance medians versus the saved Phase 2j binary were
 orders. The complete test suite passes with default features and with
 `--no-default-features`; the planner now has 13 focused tests and the quick-loop
 end-to-end suite has 42 tests.
+
+## Phase 2l result: validated sparse-position routing
+
+A fresh profile after Phase 2k changed the diagnosis substantially. In the
+100-pass transform, 2,404 of 3,995 hot samples (60.2%) were now inside the
+direct integer-index fetch closure and 1,591 (39.8%) were in the template body.
+The filter attributed 1,247 of 4,007 samples (31.1%) to fetch and 2,760 (68.9%)
+to its conditional body. Phase 2k had therefore removed the generic typed-op
+bottleneck; the next common cost was the hash index itself.
+
+Sparse PHP arrays are often inserted and scanned in a stable arithmetic key
+progression even though they cannot use packed storage. Phase 2l derives a
+guard-time `(first_key, stride)` hint from at most the first eight ordered
+integer entries. The short prefix check rejects genuinely irregular leading
+layouts without scanning the whole array or changing construction cost.
+Negative strides are supported.
+
+The hint is not a correctness assumption. Every read:
+
+1. computes an entry position with checked subtraction, remainder, division,
+   and integer conversion;
+2. bounds-checks the ordered entry and validates that its stored integer key is
+   exactly the requested key;
+3. falls back to the canonical integer hash index after any arithmetic,
+   bounds, key, hole, removal, or interleaved-entry mismatch.
+
+The array remains immutable only for the duration of the already guarded quick
+region. Existing copy-on-write and side-exit rules are unchanged. The hint is
+stored in a separate guard-time table rather than adding a variant to
+`QuickLongArray`. An initial implementation widened that enum and made the
+short packed benchmark about 11.5% slower; it was rejected. Keeping the old
+array view byte-for-byte unchanged isolated the new route from packed and
+generic execution.
+
+The array-loop dispatcher selects the validated-position fetch closure once
+before entering the template. Arrays whose eight-entry prefix is irregular
+retain the Phase 2k direct hash-index route. A permanent
+`bench_hash_irregular_prefix_int_array_transform.php` workload verifies that
+negative classification: its 31-round median was `0.05245 s` in Phase 2l and
+`0.05351 s` in Phase 2k (`0.980x`).
+
+Fifty-one final rounds rotated Phase 2l, the saved Phase 2k binary, and PHP
+process order:
+
+| Workload | Phase 2k | Phase 2l | PHP 8.4.12, no CLI opcache | Phase 2l / Phase 2k |
+|---|---:|---:|---:|---:|
+| Materialized transform, 1M reads | 0.05697 s | 0.01473 s | 0.02092 s | 0.259x |
+| Conditional filter, 1M reads | 0.05689 s | 0.01343 s | 0.01710 s | 0.236x |
+| Exact sparse stride, 1M reads | 0.03612 s | 0.01131 s | 0.01351 s | 0.313x |
+
+The transform is about 3.87x faster than Phase 2k and 29.6% faster than PHP.
+The filter is about 4.24x faster than Phase 2k and 21.4% faster than PHP. The
+exact sparse recurrence is about 3.19x faster than Phase 2k and 16.2% faster
+than PHP. These are interpreter results without JIT or CLI opcache.
+
+Forty-one-round short acceptance medians versus Phase 2k were `1.004x` for
+packed reads and `1.003x` for the string workload. Longer paired runs reduced
+the apparent short-run variance: a 500-pass contiguous-hash workload had
+median CPU times of `3.345 s` for Phase 2l and `3.370 s` for Phase 2k, while a
+1,000-pass nested scalar workload stayed within about 1–2% depending on order.
+
+Post-change profiles no longer contain the integer `HashMap` lookup as a
+separate hot symbol. The validated-position closure accounts for about 39.8%
+of transform samples and 40.7% of filter samples; their actual template bodies
+now account for roughly 60%. The next performance boundary is consequently
+checked positional arithmetic and scalar slot work, not hashing.
+
+New unit tests cover negative strides and rejection of irregular prefixes.
+Quick-loop end-to-end tests cover descending scans and exact hash fallback
+after removal/reinsertion changes ordered positions. The focused array suite
+now has four tests and the quick-loop end-to-end suite has 44 tests. The
+complete suite passes with default features and with
+`--no-default-features`; warning-free checks also pass for the minimal and
+all-feature builds.
