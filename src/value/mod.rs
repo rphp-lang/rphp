@@ -1,7 +1,9 @@
+use std::borrow::Borrow;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
+use std::ops::Deref;
 use std::rc::Rc;
 
 use crate::vm::stats;
@@ -212,7 +214,8 @@ mod object_tests {
 /// - **Packed**: `Vec<Value>` — keys are implicit 0..N-1. No per-element key storage.
 ///   Used for sequential integer-indexed arrays (`[1,2,3]`, `$a[] = x`).
 ///   Push = `Vec::push`. Read = `Vec[i]`. Clone = clone values only (no keys).
-/// - **Hash**: `Vec<(ArrayKey, Value)>` + split `HashMap` indexes.
+/// - **Hash**: ordered compact entries + split integer/string indexes.
+///   Integer keys stay inline; string entries and their index share one key allocation.
 ///   Used when string keys, sparse int keys, or structural mutations occur.
 ///
 /// Transition from packed→hash is one-way and happens automatically.
@@ -280,10 +283,62 @@ enum ArrayStorage {
     Packed(Vec<Value>),
     /// General ordered map — explicit keys + split hash indexes.
     Hash {
-        entries: Vec<(ArrayKey, Value)>,
-        str_index: HashMap<String, usize>,
+        entries: Vec<(ArrayEntryKey, Value)>,
+        str_index: HashMap<SharedStringKey, usize>,
         int_index: IntIndex,
     },
+}
+
+/// Thin shared string key used by hash entries and their string index.
+/// Keeping the `String` header behind one pointer makes `ArrayEntryKey` 16
+/// bytes while both structures share the same key allocation.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct SharedStringKey(Rc<String>);
+
+impl SharedStringKey {
+    #[inline]
+    fn new(value: &str) -> Self {
+        Self(Rc::new(value.to_string()))
+    }
+}
+
+impl Deref for SharedStringKey {
+    type Target = str;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        self.0.as_str()
+    }
+}
+
+impl Borrow<str> for SharedStringKey {
+    #[inline]
+    fn borrow(&self) -> &str {
+        self
+    }
+}
+
+impl AsRef<str> for SharedStringKey {
+    #[inline]
+    fn as_ref(&self) -> &str {
+        self
+    }
+}
+
+#[derive(Clone)]
+enum ArrayEntryKey {
+    Int(i64),
+    String(SharedStringKey),
+}
+
+impl ArrayEntryKey {
+    #[inline]
+    fn to_public(&self) -> ArrayKey {
+        match self {
+            Self::Int(value) => ArrayKey::Int(*value),
+            Self::String(value) => ArrayKey::String(value.to_string()),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -308,7 +363,7 @@ impl PhpArray {
             let mut int_index = int_index_with_capacity(len);
             for (i, val) in std::mem::take(values).into_iter().enumerate() {
                 int_index.insert(i as i64, i);
-                entries.push((ArrayKey::Int(i as i64), val));
+                entries.push((ArrayEntryKey::Int(i as i64), val));
             }
             *&mut self.storage = ArrayStorage::Hash {
                 entries,
@@ -329,7 +384,7 @@ impl PhpArray {
             }
             ArrayStorage::Hash { entries, int_index, .. } => {
                 let idx = entries.len();
-                entries.push((ArrayKey::Int(key), val));
+                entries.push((ArrayEntryKey::Int(key), val));
                 int_index.insert(key, idx);
             }
         }
@@ -361,7 +416,7 @@ impl PhpArray {
                 entries[idx].1 = val;
             } else {
                 let idx = entries.len();
-                entries.push((ArrayKey::Int(key), val));
+                entries.push((ArrayEntryKey::Int(key), val));
                 int_index.insert(key, idx);
                 if key >= self.next_int_key {
                     self.next_int_key = key + 1;
@@ -381,10 +436,10 @@ impl PhpArray {
                 // Key exists — overwrite value, no allocation for key
                 entries[idx].1 = val;
             } else {
-                // New key — allocate once for both entry and index
-                let owned = key.to_string();
+                // New key — one shared allocation for both entry and index.
+                let owned = SharedStringKey::new(key);
                 let idx = entries.len();
-                entries.push((ArrayKey::String(owned.clone()), val));
+                entries.push((ArrayEntryKey::String(owned.clone()), val));
                 str_index.insert(owned, idx);
             }
         }
@@ -414,19 +469,19 @@ impl PhpArray {
                 // after transitioning to hash storage. Derive the likely entry
                 // position from its first key and validate it; irregular
                 // layouts fall through to the general integer hash index.
-                if let Some((ArrayKey::Int(first_key), _)) = entries.first() {
+                if let Some((ArrayEntryKey::Int(first_key), _)) = entries.first() {
                     if let Some(position) = key
                         .checked_sub(*first_key)
                         .and_then(|offset| usize::try_from(offset).ok())
                     {
-                        if let Some((ArrayKey::Int(found_key), value)) = entries.get(position) {
+                        if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(position) {
                             if *found_key == key {
                                 return Some(value);
                             }
                         }
                     }
                 } else if key >= 0 {
-                    if let Some((ArrayKey::Int(found_key), value)) = entries.get(key as usize) {
+                    if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(key as usize) {
                         if *found_key == key {
                             return Some(value);
                         }
@@ -448,8 +503,8 @@ impl PhpArray {
             return false;
         };
         match entries.as_slice() {
-            [(ArrayKey::Int(_), _)] => true,
-            [(ArrayKey::Int(first), _), (ArrayKey::Int(second), _), ..] => {
+            [(ArrayEntryKey::Int(_), _)] => true,
+            [(ArrayEntryKey::Int(first), _), (ArrayEntryKey::Int(second), _), ..] => {
                 first.checked_add(1) == Some(*second)
             }
             _ => false,
@@ -470,13 +525,13 @@ impl PhpArray {
         let ArrayStorage::Hash { entries, .. } = &self.storage else {
             return None;
         };
-        if let [(ArrayKey::Int(first), _)] = entries.as_slice() {
+        if let [(ArrayEntryKey::Int(first), _)] = entries.as_slice() {
             return Some((*first, 1));
         }
 
         let window_hint = |start: usize| {
             let window = entries.get(start..start.saturating_add(8).min(entries.len()))?;
-            let [(ArrayKey::Int(first), _), (ArrayKey::Int(second), _), ..] = window else {
+            let [(ArrayEntryKey::Int(first), _), (ArrayEntryKey::Int(second), _), ..] = window else {
                 return None;
             };
             let stride = second
@@ -486,7 +541,7 @@ impl PhpArray {
                 let expected = stride
                     .checked_mul(offset as i64)
                     .and_then(|delta| first.checked_add(delta))?;
-                if !matches!(key, ArrayKey::Int(found) if *found == expected) {
+                if !matches!(key, ArrayEntryKey::Int(found) if *found == expected) {
                     return None;
                 }
             }
@@ -533,7 +588,7 @@ impl PhpArray {
             }
         });
         if let Some(position) = position {
-            if let Some((ArrayKey::Int(found_key), value)) = entries.get(position) {
+            if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(position) {
                 if *found_key == key {
                     return Some(value);
                 }
@@ -593,7 +648,7 @@ impl PhpArray {
                 values.get(pos).map(|v| (v, ArrayKey::Int(pos as i64)))
             }
             ArrayStorage::Hash { entries, .. } => {
-                entries.get(pos).map(|(k, v)| (v, k.clone()))
+                entries.get(pos).map(|(k, v)| (v, k.to_public()))
             }
         }
     }
@@ -611,22 +666,27 @@ impl PhpArray {
     /// No transition, no allocation for packed arrays.
     /// This is the preferred read-only iteration method.
     pub fn iter(&self) -> PhpArrayIter<'_> {
-        match &self.storage {
-            ArrayStorage::Packed(values) => PhpArrayIter::Packed(values.iter().enumerate()),
-            ArrayStorage::Hash { entries, .. } => PhpArrayIter::Hash(entries.iter()),
-        }
+        let inner = match &self.storage {
+            ArrayStorage::Packed(values) => PhpArrayIterInner::Packed(values.iter().enumerate()),
+            ArrayStorage::Hash { entries, .. } => PhpArrayIterInner::Hash(entries.iter()),
+        };
+        PhpArrayIter { inner }
     }
 
-    /// Access entries as `&[(ArrayKey, Value)]` — for stdlib iteration.
+    /// Materialize public keys for cold callers that need the complete entry
+    /// list. Internal hash storage keeps a smaller key representation.
     /// If array is in packed mode, transitions to hash mode first.
     /// This is a cold-path method — hot paths should use get_at() or get_value_at().
     ///
     /// Takes `&mut self` to safely transition packed→hash.
     /// Callers with `&PhpArray` should use get_at()/get_value_at()/iter() instead.
-    pub fn entries(&mut self) -> &[(ArrayKey, Value)] {
+    pub fn entries(&mut self) -> Vec<(ArrayKey, &Value)> {
         self.transition_to_hash();
         match &self.storage {
-            ArrayStorage::Hash { entries, .. } => entries,
+            ArrayStorage::Hash { entries, .. } => entries
+                .iter()
+                .map(|(key, value)| (key.to_public(), value))
+                .collect(),
             _ => unreachable!(),
         }
     }
@@ -643,10 +703,10 @@ impl PhpArray {
                 ArrayKey::String(s) => str_index.get(s.as_str()).copied(),
             };
             if let Some(idx) = found_idx {
-                entries.remove(idx);
-                match key {
-                    ArrayKey::Int(n) => { int_index.remove(n); }
-                    ArrayKey::String(s) => { str_index.remove(s.as_str()); }
+                let (removed_key, _) = entries.remove(idx);
+                match removed_key {
+                    ArrayEntryKey::Int(n) => { int_index.remove(&n); }
+                    ArrayEntryKey::String(s) => { str_index.remove(s.as_ref()); }
                 }
                 // Re-index entries after removed position
                 Self::reindex_entries(entries, int_index, str_index, idx);
@@ -671,15 +731,15 @@ impl PhpArray {
             ArrayStorage::Hash { entries, int_index, str_index, .. } => {
                 if let Some((key, val)) = entries.pop() {
                     match &key {
-                        ArrayKey::Int(n) => {
+                        ArrayEntryKey::Int(n) => {
                             int_index.remove(n);
                             // PHP: only decrement if popped key was the auto-index boundary
                             if *n == self.next_int_key - 1 {
                                 self.next_int_key -= 1;
                             }
                         }
-                        ArrayKey::String(s) => {
-                            str_index.remove(s.as_str());
+                        ArrayEntryKey::String(s) => {
+                            str_index.remove(s.as_ref());
                             // String key: next_int_key unchanged
                         }
                     }
@@ -706,12 +766,12 @@ impl PhpArray {
             str_index.clear();
             for (i, (key, _)) in entries.iter_mut().enumerate() {
                 match key {
-                    ArrayKey::Int(n) => {
+                    ArrayEntryKey::Int(n) => {
                         *n = new_int_counter;
                         int_index.insert(new_int_counter, i);
                         new_int_counter += 1;
                     }
-                    ArrayKey::String(s) => {
+                    ArrayEntryKey::String(s) => {
                         str_index.insert(s.clone(), i);
                     }
                 }
@@ -726,16 +786,16 @@ impl PhpArray {
 
     /// Rebuild index entries from position `from` onward (after remove/shift).
     fn reindex_entries(
-        entries: &[(ArrayKey, Value)],
+        entries: &[(ArrayEntryKey, Value)],
         int_index: &mut IntIndex,
-        str_index: &mut HashMap<String, usize>,
+        str_index: &mut HashMap<SharedStringKey, usize>,
         from: usize,
     ) {
         for (i, (k, _)) in entries.iter().enumerate() {
             if i >= from {
                 match k {
-                    ArrayKey::Int(n) => { int_index.insert(*n, i); }
-                    ArrayKey::String(s) => { str_index.insert(s.clone(), i); }
+                    ArrayEntryKey::Int(n) => { int_index.insert(*n, i); }
+                    ArrayEntryKey::String(s) => { str_index.insert(s.clone(), i); }
                 }
             }
         }
@@ -757,24 +817,33 @@ impl PhpArray {
         }
     }
 
-    /// Borrow ordered hash entries without changing the array representation.
-    /// Guarded quick regions use the stable slice for unchecked positional
-    /// reads after proving that their closed body cannot mutate the array.
+    /// Describe the ordered hash value layout without exposing its private key.
+    /// Guarded quick regions use the stable base address and stride for
+    /// positional reads after proving that their closed body cannot mutate it.
     #[cfg(feature = "quick-loops")]
     #[inline]
-    pub(crate) fn ordered_hash_entries(&self) -> Option<&[(ArrayKey, Value)]> {
-        match &self.storage {
-            ArrayStorage::Hash { entries, .. } => Some(entries),
-            _ => None,
-        }
+    pub(crate) fn ordered_hash_value_layout(&self) -> Option<(*const u8, usize)> {
+        let ArrayStorage::Hash { entries, .. } = &self.storage else {
+            return None;
+        };
+        entries.first().map(|entry| {
+            (
+                (&entry.1 as *const Value).cast(),
+                std::mem::size_of::<(ArrayEntryKey, Value)>(),
+            )
+        })
     }
 }
 
 /// Iterator over PhpArray entries — works for both packed and hash modes.
 /// Yields `(ArrayKey, &Value)` without allocating keys for packed arrays.
-pub enum PhpArrayIter<'a> {
+pub struct PhpArrayIter<'a> {
+    inner: PhpArrayIterInner<'a>,
+}
+
+enum PhpArrayIterInner<'a> {
     Packed(std::iter::Enumerate<std::slice::Iter<'a, Value>>),
-    Hash(std::slice::Iter<'a, (ArrayKey, Value)>),
+    Hash(std::slice::Iter<'a, (ArrayEntryKey, Value)>),
 }
 
 impl<'a> Iterator for PhpArrayIter<'a> {
@@ -782,20 +851,20 @@ impl<'a> Iterator for PhpArrayIter<'a> {
 
     #[inline]
     fn next(&mut self) -> Option<Self::Item> {
-        match self {
-            PhpArrayIter::Packed(iter) => {
+        match &mut self.inner {
+            PhpArrayIterInner::Packed(iter) => {
                 iter.next().map(|(i, v)| (ArrayKey::Int(i as i64), v))
             }
-            PhpArrayIter::Hash(iter) => {
-                iter.next().map(|(k, v)| (k.clone(), v))
+            PhpArrayIterInner::Hash(iter) => {
+                iter.next().map(|(k, v)| (k.to_public(), v))
             }
         }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        match self {
-            PhpArrayIter::Packed(iter) => iter.size_hint(),
-            PhpArrayIter::Hash(iter) => iter.size_hint(),
+        match &self.inner {
+            PhpArrayIterInner::Packed(iter) => iter.size_hint(),
+            PhpArrayIterInner::Hash(iter) => iter.size_hint(),
         }
     }
 }
@@ -840,7 +909,30 @@ impl std::fmt::Debug for PhpArray {
 
 #[cfg(test)]
 mod php_array_tests {
-    use super::{ArrayKey, PhpArray, Value};
+    use std::rc::Rc;
+
+    use super::{ArrayEntryKey, ArrayKey, ArrayStorage, PhpArray, Value};
+
+    #[test]
+    fn hash_entry_layout_stays_compact() {
+        assert_eq!(std::mem::size_of::<ArrayEntryKey>(), 16);
+        assert_eq!(std::mem::size_of::<(ArrayEntryKey, Value)>(), 32);
+    }
+
+    #[test]
+    fn hash_entry_and_string_index_share_key_allocation() {
+        let mut array = PhpArray::new();
+        array.set_str("shared", Value::long(7));
+
+        let ArrayStorage::Hash { entries, str_index, .. } = &array.storage else {
+            panic!("string key should select hash storage");
+        };
+        let ArrayEntryKey::String(entry_key) = &entries[0].0 else {
+            panic!("entry should retain its string key");
+        };
+        let index_key = str_index.keys().next().unwrap();
+        assert!(Rc::ptr_eq(&entry_key.0, &index_key.0));
+    }
 
     #[test]
     fn integer_lookup_routing_distinguishes_contiguous_and_irregular_hashes() {

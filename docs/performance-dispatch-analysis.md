@@ -1432,3 +1432,58 @@ completion, a non-integer side exit, overflow conversion, final accumulator,
 and final loop value. The quick-loop end-to-end suite now has 54 tests. The
 complete suite passes with all features and with `--no-default-features`;
 warning-free checks pass for both configurations.
+
+## Phase 2q result: compact shared hash keys
+
+Phase 2p removed interpreter dispatch from value-only `foreach`, but its hash
+scan remained about 22.3% slower than PHP. The release loop exposed the next
+structural limit: rphp advanced 40 bytes per `(ArrayKey, Value)` entry, while a
+64-bit Zend `Bucket` occupies 32 bytes. The public `ArrayKey::String(String)`
+representation is useful at the API boundary, but its three-word `String`
+header makes the enum 24 bytes even when the actual key is an integer.
+
+Phase 2q separates that public representation from the ordered hash storage.
+The internal entry uses a 16-byte `ArrayEntryKey`; an integer remains inline,
+while a string is held by the thin `SharedStringKey(Rc<String>)` handle. The
+ordered entry and string index clone only that handle, so they share the same
+immutable key allocation instead of allocating and copying the text twice.
+Together with the 16-byte `Value`, an ordered entry is now exactly 32 bytes:
+
+```text
+public boundary: ArrayKey::String(String)
+                         ^ materialized only when a public key is requested
+
+ordered entry:   [ ArrayEntryKey: 16 B ][ Value: 16 B ] = 32 B
+                            |
+                            +---- shared Rc<String> ---- string index
+```
+
+Public iteration still yields `(ArrayKey, &Value)` and therefore preserves the
+observable key type. `PhpArrayIter` is now an opaque wrapper so the compact
+private key cannot leak through its public variants. The guarded hash foreach
+runner obtains only the first value address and the private entry stride; it
+does not depend on, expose, or duplicate the key representation.
+
+Fifty-one rotated rounds compared Phase 2q with the saved Phase 2p binary and
+PHP. A longer repeated-scan control used 20 passes over the same array:
+
+| Workload | Phase 2p | Phase 2q | PHP 8.4.12, no CLI opcache | Phase 2q / Phase 2p |
+|---|---:|---:|---:|---:|
+| Hash value-only foreach, cold process scan | 0.003939 s | 0.003105 s | 0.003469 s | 0.788x |
+| Hash value-only foreach, 20 repeated scans | 0.018490 s | 0.017266 s | 0.065211 s | 0.934x |
+| Packed value-only foreach, 20 repeated scans | 0.014494 s | 0.013964 s | 0.080324 s | 0.963x |
+
+The denser entry removes about 21.2% from the cold hash scan and moves it from
+22.3% behind PHP in Phase 2p to about 10.5% ahead of PHP without JIT. Repeated
+hot-cache scans improve by 6.6%, as expected when memory traffic matters less.
+The packed control does not use the new entry representation and stays within
+normal process-level variance.
+
+Non-target acceptance measurements found no persistent regression. The sparse
+hash filter measured `0.929x`; materialized integer-hash reads measured
+`1.006x`; dynamic string-key reads measured `1.005x`; and invariant string-key
+reads measured `0.990x` against Phase 2p. Exact unit assertions lock the
+16-byte internal key and 32-byte entry sizes, and another assertion proves
+that the ordered entry and string index share the same allocation. The full
+suite passes with all features and with `--no-default-features`; warning-free
+checks pass for both configurations.

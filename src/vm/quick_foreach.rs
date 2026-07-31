@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 
 use crate::compiler::OpArray;
 use crate::runtime::ExecutorGlobals;
-use crate::value::{ArrayKey, PhpArray, Value, ValueType};
+use crate::value::{PhpArray, Value, ValueType};
 
 use super::execute::{QuickLoopOutcome, VmError, handle_interrupt, quick_loop_slot_has_heap};
 use super::frame::{CALL_FRAME_SLOTS, ExecuteData};
@@ -28,13 +28,12 @@ impl QuickForeachLongArray {
                 first_value: (value as *const Value).cast(),
                 stride: std::mem::size_of::<Value>(),
             }),
-            None => {
-                let entries = array.ordered_hash_entries().unwrap();
-                entries.first().map(|entry| Self {
-                    first_value: (&entry.1 as *const Value).cast(),
-                    stride: std::mem::size_of::<(ArrayKey, Value)>(),
-                })
-            }
+            None => array
+                .ordered_hash_value_layout()
+                .map(|(first_value, stride)| Self {
+                    first_value,
+                    stride,
+                }),
         }
     }
 
