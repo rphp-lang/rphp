@@ -236,11 +236,21 @@ pub type InternalFunctionHandler = fn(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), crate::vm::execute::VmError>;
 
+/// Frame-free ABI for pure, read-only built-ins.
+///
+/// A direct handler borrows positional arguments, returns an owned PHP value,
+/// and cannot access ExecutorGlobals. Built-ins that mutate arguments, retain
+/// borrows, depend on caller scope, or re-enter the VM must keep the ordinary
+/// ExecuteData ABI.
+pub type DirectInternalFunctionHandler =
+    fn(&[Value]) -> Result<Value, crate::vm::execute::VmError>;
+
 /// Internal (built-in) function — strlen, array_map, etc.
 #[repr(C)]
 pub struct InternalFunction {
     pub common: FunctionCommon,
     pub handler: InternalFunctionHandler,
+    pub direct_handler: Option<DirectInternalFunctionHandler>,
 }
 
 /// Safe wrapper over function pointer — dispatch via fn_type().

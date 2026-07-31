@@ -19,7 +19,7 @@ use crate::vm::function::{FunctionCommon, FunctionType};
 use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
 use crate::runtime::ExecutorGlobals;
-use crate::compiler::{make_internal_function, make_internal_function_ref, make_internal_function_variadic, make_internal_method};
+use crate::compiler::{make_direct_internal_function, make_internal_function, make_internal_function_ref, make_internal_function_variadic, make_internal_method};
 use crate::vm::function::InternalFunction;
 use crate::vm::execute::{call_function, call_function_iter, call_function_owned_iter, call_function_readback_arg0_iter, VmError};
 use crate::parser::Visibility;
@@ -90,6 +90,38 @@ macro_rules! ret {
     }};
 }
 
+/// Read a borrowed argument for the frame-free internal ABI, following PHP
+/// references with the same semantics as `arg!` on an ExecuteData frame.
+#[inline(always)]
+fn direct_arg(args: &[Value], index: usize) -> &Value {
+    let value = &args[index];
+    if value.is_reference() {
+        unsafe { &*value.as_ref_ptr() }
+    } else {
+        value
+    }
+}
+
+#[inline(always)]
+fn direct_arg_str(args: &[Value], index: usize) -> Cow<'_, str> {
+    let value = direct_arg(args, index);
+    match value.as_str() {
+        Some(string) => Cow::Borrowed(string),
+        None => Cow::Owned(value.echo_to_string()),
+    }
+}
+
+#[inline(always)]
+fn direct_arg_opt(args: &[Value], index: usize) -> Option<&Value> {
+    let value = args.get(index)?;
+    let value = if value.is_reference() {
+        unsafe { &*value.as_ref_ptr() }
+    } else {
+        value
+    };
+    (value.value_type() != ValueType::Undef).then_some(value)
+}
+
 // ============================================================================
 // Registration
 // ============================================================================
@@ -117,6 +149,33 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
         ($name:expr, $handler:expr, $max_args:expr, $min_args:expr) => {{
             let f = Box::new(make_internal_function($handler, $max_args, $min_args, vec![]));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+    }
+
+    macro_rules! reg_direct {
+        ($name:expr, $handler:expr, $direct:expr, $max_args:expr, $min_args:expr, $($pnames:expr),*) => {{
+            let f = Box::new(make_direct_internal_function(
+                $handler,
+                $direct,
+                $max_args,
+                $min_args,
+                pn![$($pnames),*],
+            ));
+            let ptr = &f.common as *const FunctionCommon;
+            eg.register_function($name, ptr).unwrap();
+            funcs.push(f);
+        }};
+        ($name:expr, $handler:expr, $direct:expr, $max_args:expr, $min_args:expr) => {{
+            let f = Box::new(make_direct_internal_function(
+                $handler,
+                $direct,
+                $max_args,
+                $min_args,
+                vec![],
+            ));
             let ptr = &f.common as *const FunctionCommon;
             eg.register_function($name, ptr).unwrap();
             funcs.push(f);
@@ -189,13 +248,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // compact() requires caller scope access (not yet implemented) — intentionally not registered
 
     // --- String functions ---
-    reg!("strlen", fn_strlen, 1, 1, "string");
+    reg_direct!("strlen", fn_strlen, direct_strlen, 1, 1, "string");
     reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
     reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
     reg!("str_replace", fn_str_replace, 3, 3, "search", "replace", "subject");
-    reg!("strtolower", fn_strtolower, 1, 1, "string");
-    reg!("strtoupper", fn_strtoupper, 1, 1, "string");
+    reg_direct!("strtolower", fn_strtolower, direct_strtolower, 1, 1, "string");
+    reg_direct!("strtoupper", fn_strtoupper, direct_strtoupper, 1, 1, "string");
     reg!("trim", fn_trim, 1, 1, "string");
     reg!("rtrim", fn_rtrim, 1, 1, "string");
     reg!("ltrim", fn_ltrim, 1, 1, "string");
@@ -216,7 +275,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("nl2br", fn_nl2br, 1, 1, "string");
     reg!("str_rev", fn_str_rev, 1, 1, "string");
     reg!("number_format", fn_number_format, 4, 1, "num", "decimals", "decimal_separator", "thousands_separator");
-    reg!("ord", fn_ord, 1, 1, "character");
+    reg_direct!("ord", fn_ord, direct_ord, 1, 1, "character");
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format");
 
@@ -249,14 +308,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("method_exists", fn_method_exists, 2, 2, "object_or_class", "method");
 
     // --- Math functions ---
-    reg!("abs", fn_abs, 1, 1, "num");
+    reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
     reg!("max", fn_max, 2, 2, "value1", "value2");
     reg!("min", fn_min, 2, 2, "value1", "value2");
-    reg!("floor", fn_floor, 1, 1, "num");
+    reg_direct!("floor", fn_floor, direct_floor, 1, 1, "num");
     reg!("ceil", fn_ceil, 1, 1, "num");
     reg!("round", fn_round, 2, 1, "num", "precision");
     reg!("pow", fn_pow, 2, 2, "base", "exponent");
-    reg!("sqrt", fn_sqrt, 1, 1, "num");
+    reg_direct!("sqrt", fn_sqrt, direct_sqrt, 1, 1, "num");
     reg!("intdiv", fn_intdiv, 2, 2, "dividend", "divisor");
     reg!("fmod", fn_fmod, 2, 2, "x", "y");
     reg!("log", fn_log, 1, 1, "num");
@@ -354,7 +413,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("str_ireplace", fn_str_ireplace, 3, 3, "search", "replace", "subject");
     reg!("substr_replace", fn_substr_replace, 4, 3, "string", "replacement", "start", "length");
     reg!("str_getcsv", fn_str_getcsv, 3, 1, "string", "separator", "enclosure");
-    reg!("chunk_split", fn_chunk_split, 3, 1, "string", "chunklen", "end");
+    reg_direct!("chunk_split", fn_chunk_split, direct_chunk_split, 3, 1, "string", "chunklen", "end");
 
     // --- Additional array functions ---
     reg!("array_reduce", fn_array_reduce, 3, 2, "array", "callback", "initial");
@@ -370,14 +429,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_key_last", fn_array_key_last, 1, 1, "array");
 
     // --- Math (trigonometric + friends) ---
-    reg!("sin", fn_sin, 1, 1, "num");
+    reg_direct!("sin", fn_sin, direct_sin, 1, 1, "num");
     reg!("cos", fn_cos, 1, 1, "num");
-    reg!("tan", fn_tan, 1, 1, "num");
-    reg!("asin", fn_asin, 1, 1, "num");
-    reg!("acos", fn_acos, 1, 1, "num");
-    reg!("atan", fn_atan, 1, 1, "num");
+    reg_direct!("tan", fn_tan, direct_tan, 1, 1, "num");
+    reg_direct!("asin", fn_asin, direct_asin, 1, 1, "num");
+    reg_direct!("acos", fn_acos, direct_acos, 1, 1, "num");
+    reg_direct!("atan", fn_atan, direct_atan, 1, 1, "num");
     reg!("atan2", fn_atan2, 2, 2, "y", "x");
-    reg!("exp", fn_exp, 1, 1, "num");
+    reg_direct!("exp", fn_exp, direct_exp, 1, 1, "num");
     reg!("sinh", fn_sinh, 1, 1, "num");
     reg!("cosh", fn_cosh, 1, 1, "num");
     reg!("tanh", fn_tanh, 1, 1, "num");
@@ -1143,7 +1202,7 @@ fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
     if let Some(arr) = arr_val.as_array() {
         let mut result = PhpArray::new();
         for (key, val) in arr.iter() {
-            let mapped = call_function_iter(eg, func_ptr, 1, std::iter::once(val))?;
+            let mapped = call_function(eg, func_ptr, std::slice::from_ref(val))?;
             if eg.exception.is_some() { return Ok(()); }
             result.set(key, mapped);
         }
@@ -1175,7 +1234,7 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
                     }
                 };
                 for (key, val) in arr.iter() {
-                    let ret_val = call_function_iter(eg, func_ptr, 1, std::iter::once(val))?;
+                    let ret_val = call_function(eg, func_ptr, std::slice::from_ref(val))?;
                     if eg.exception.is_some() { return Ok(()); }
                     if ret_val.is_truthy() {
                         result.set(key, val.clone());
@@ -1203,9 +1262,14 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
 // String functions
 // ============================================================================
 
+#[inline(always)]
+fn direct_strlen(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::long(direct_arg_str(args, 0).len() as i64))
+}
+
 fn fn_strlen(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::long(s.len() as i64));
+    let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 
 fn fn_substr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1253,19 +1317,31 @@ fn fn_str_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
     ret!(rv, Value::string(subject.replace(search.as_ref(), replace.as_ref())));
 }
 
-fn fn_strtolower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
+#[inline(always)]
+fn direct_strtolower(args: &[Value]) -> Result<Value, VmError> {
+    let s = direct_arg_str(args, 0);
     // PHP strtolower is ASCII-only — use make_ascii_lowercase for performance
     let mut bytes = s.as_bytes().to_vec();
     bytes.make_ascii_lowercase();
-    ret!(rv, Value::string(unsafe { String::from_utf8_unchecked(bytes) }));
+    Ok(Value::string(unsafe { String::from_utf8_unchecked(bytes) }))
+}
+
+fn fn_strtolower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let result = direct_strtolower(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
+}
+
+#[inline(always)]
+fn direct_strtoupper(args: &[Value]) -> Result<Value, VmError> {
+    let s = direct_arg_str(args, 0);
+    let mut bytes = s.as_bytes().to_vec();
+    bytes.make_ascii_uppercase();
+    Ok(Value::string(unsafe { String::from_utf8_unchecked(bytes) }))
 }
 
 fn fn_strtoupper(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let mut bytes = s.as_bytes().to_vec();
-    bytes.make_ascii_uppercase();
-    ret!(rv, Value::string(unsafe { String::from_utf8_unchecked(bytes) }));
+    let result = direct_strtoupper(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 
 fn fn_trim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1495,9 +1571,15 @@ fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
     ret!(rv, Value::string(result));
 }
 
+#[inline(always)]
+fn direct_ord(args: &[Value]) -> Result<Value, VmError> {
+    let s = direct_arg_str(args, 0);
+    Ok(Value::long(s.as_bytes().first().copied().unwrap_or(0) as i64))
+}
+
 fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    ret!(rv, Value::long(s.as_bytes().first().copied().unwrap_or(0) as i64));
+    let result = direct_ord(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 
 fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1745,13 +1827,19 @@ fn fn_method_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGloba
 // Math functions
 // ============================================================================
 
-fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let v = arg!(ed, 0);
-    ret!(rv, match v.value_type() {
-        ValueType::Long => Value::long(v.as_long().unwrap().abs()),
-        ValueType::Double => Value::double(v.as_double().unwrap().abs()),
+#[inline(always)]
+fn direct_abs(args: &[Value]) -> Result<Value, VmError> {
+    let value = direct_arg(args, 0);
+    Ok(match value.value_type() {
+        ValueType::Long => Value::long(value.as_long().unwrap().abs()),
+        ValueType::Double => Value::double(value.as_double().unwrap().abs()),
         _ => Value::long(0),
-    });
+    })
+}
+
+fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let result = direct_abs(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 
 fn fn_max(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1766,8 +1854,14 @@ fn fn_min(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
     ret!(rv, if compare_values(a, b) <= 0 { a.clone() } else { b.clone() });
 }
 
+#[inline(always)]
+fn direct_floor(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().floor()))
+}
+
 fn fn_floor(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).floor()));
+    let result = direct_floor(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 
 fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1796,8 +1890,14 @@ fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
     ret!(rv, Value::double(base.to_float_val().powf(exp.to_float_val())));
 }
 
+#[inline(always)]
+fn direct_sqrt(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().sqrt()))
+}
+
 fn fn_sqrt(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).sqrt()));
+    let result = direct_sqrt(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 
 fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -3360,10 +3460,10 @@ fn fn_str_getcsv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
 }
 
 /// chunk_split($string, $chunklen = 76, $end = "\r\n"): string
-fn fn_chunk_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    let chunklen = arg_opt!(ed, 1).map(|v| v.to_long_val() as usize).unwrap_or(76);
-    let end = arg_opt!(ed, 2).map(|v| v.echo_to_string()).unwrap_or_else(|| "\r\n".to_string());
+fn direct_chunk_split(args: &[Value]) -> Result<Value, VmError> {
+    let s = direct_arg_str(args, 0);
+    let chunklen = direct_arg_opt(args, 1).map(|v| v.to_long_val() as usize).unwrap_or(76);
+    let end = direct_arg_opt(args, 2).map(|v| v.echo_to_string()).unwrap_or_else(|| "\r\n".to_string());
     if chunklen == 0 {
         return Err(VmError::Fatal("chunk_split(): Argument #2 ($chunklen) must be greater than 0".into()));
     }
@@ -3372,7 +3472,13 @@ fn fn_chunk_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
         result.push_str(&String::from_utf8_lossy(chunk));
         result.push_str(&end);
     }
-    ret!(rv, Value::string(result));
+    Ok(Value::string(result))
+}
+
+fn fn_chunk_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let args = unsafe { std::slice::from_raw_parts((*ed).cv(0), 3) };
+    let result = direct_chunk_split(args)?;
+    ret!(rv, result);
 }
 
 // ============================================================================
@@ -3692,29 +3798,60 @@ fn fn_krsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) ->
 // Missing math functions
 // ============================================================================
 
+#[inline(always)]
+fn direct_sin(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().sin()))
+}
+
 fn fn_sin(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).sin()));
+    let result = direct_sin(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 fn fn_cos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).cos()));
 }
+#[inline(always)]
+fn direct_tan(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().tan()))
+}
 fn fn_tan(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).tan()));
+    let result = direct_tan(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
+}
+#[inline(always)]
+fn direct_asin(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().asin()))
 }
 fn fn_asin(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).asin()));
+    let result = direct_asin(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
+}
+#[inline(always)]
+fn direct_acos(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().acos()))
 }
 fn fn_acos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).acos()));
+    let result = direct_acos(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
+}
+#[inline(always)]
+fn direct_atan(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().atan()))
 }
 fn fn_atan(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).atan()));
+    let result = direct_atan(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 fn fn_atan2(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).atan2(arg_float!(ed, 1))));
 }
+#[inline(always)]
+fn direct_exp(args: &[Value]) -> Result<Value, VmError> {
+    Ok(Value::double(direct_arg(args, 0).to_float_val().exp()))
+}
 fn fn_exp(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).exp()));
+    let result = direct_exp(std::slice::from_ref(arg!(ed, 0)))?;
+    ret!(rv, result);
 }
 fn fn_sinh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).sinh()));

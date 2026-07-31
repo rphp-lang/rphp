@@ -5,7 +5,7 @@ use crate::vm::instruction::{Instruction, InlineCache, OpType};
 use std::cell::Cell;
 use crate::vm::function::{
     FunctionCommon, FunctionType, UserFunction, ParamTypeHint,
-    InternalFunction, InternalFunctionHandler,
+    DirectInternalFunctionHandler, InternalFunction, InternalFunctionHandler,
     SignatureInfo, FrameLayout, CallPlan,
     CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
 };
@@ -620,7 +620,29 @@ pub fn make_internal_function(
             hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
+        direct_handler: None,
     }
+}
+
+/// Create a fixed-arity internal function with an additional frame-free ABI.
+/// The ordinary handler remains the canonical path for normal PHP calls; the
+/// direct handler is selected only when a callback already exposes borrowed,
+/// packed positional arguments.
+pub fn make_direct_internal_function(
+    handler: InternalFunctionHandler,
+    direct_handler: DirectInternalFunctionHandler,
+    num_args: u32,
+    required_num_args: u32,
+    param_names: Vec<String>,
+) -> InternalFunction {
+    let mut function = make_internal_function(
+        handler,
+        num_args,
+        required_num_args,
+        param_names,
+    );
+    function.direct_handler = Some(direct_handler);
+    function
 }
 
 /// Finalize a non-static user method after `$this` has been reserved at CV 0.
@@ -697,6 +719,7 @@ pub fn make_internal_method(
             hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
+        direct_handler: None,
     }
 }
 
@@ -734,6 +757,7 @@ pub fn make_internal_function_ref(
             hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
+        direct_handler: None,
     }
 }
 
@@ -770,5 +794,6 @@ pub fn make_internal_function_variadic(
             hot_status: Cell::new(HotStatus::Cold),
         },
         handler,
+        direct_handler: None,
     }
 }

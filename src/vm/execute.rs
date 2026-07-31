@@ -716,6 +716,19 @@ pub fn call_function(
     func_ptr: *const FunctionCommon,
     args: &[Value],
 ) -> Result<Value, VmError> {
+    if unsafe { (*func_ptr).fn_type } == FunctionType::Internal {
+        let internal = unsafe {
+            &*(func_ptr as *const super::function::InternalFunction)
+        };
+        if let Some(handler) = internal.direct_handler {
+            let common = &internal.common;
+            let arity_ok = args.len() >= common.sig.required_num_args as usize
+                && (common.sig.is_variadic || args.len() <= common.sig.public_arity() as usize);
+            if arity_ok {
+                return handler(args);
+            }
+        }
+    }
     call_function_iter(eg, func_ptr, args.len(), args.iter())
 }
 

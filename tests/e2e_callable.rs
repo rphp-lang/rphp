@@ -49,6 +49,26 @@ echo call_user_func_array('add_array_args', [3, 7]);
 }
 
 #[test]
+fn test_direct_internal_callback_matches_hash_frame_fallback() {
+    let out = run_php(r#"<?php
+$packed = call_user_func_array('chunk_split', ['abcd', 2, '|']);
+$hash = call_user_func_array('chunk_split', [4 => 'abcd', 8 => 2, 12 => '|']);
+echo $packed . ':' . $hash;
+"#);
+    assert_eq!(out, "ab|cd|:ab|cd|");
+}
+
+#[test]
+fn test_direct_internal_callback_preserves_scalar_coercion() {
+    let out = run_php(r#"<?php
+echo call_user_func_array('strlen', [12345]);
+echo ':';
+echo call_user_func_array('abs', [-7]);
+"#);
+    assert_eq!(out, "5:7");
+}
+
+#[test]
 fn test_call_user_func_array_closure_with_capture() {
     let out = run_php(r#"<?php
 $factor = 4;
