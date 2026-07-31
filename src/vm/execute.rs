@@ -2669,7 +2669,7 @@ fn op_concat(
 }
 
 #[cfg(feature = "quick-loops")]
-enum QuickLoopOutcome {
+pub(super) enum QuickLoopOutcome {
     Completed,
     Deoptimized,
     GuardFailed,
@@ -2677,7 +2677,7 @@ enum QuickLoopOutcome {
 
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
-unsafe fn quick_loop_slot_has_heap(frame: *mut ExecuteData, slot: u16) -> bool {
+pub(super) unsafe fn quick_loop_slot_has_heap(frame: *mut ExecuteData, slot: u16) -> bool {
     (*frame).heap_bitmap & (1u64 << slot) != 0
 }
 
@@ -5071,6 +5071,11 @@ unsafe fn execute_quick_loop_backedge(
             let outcome = match plan {
                 super::planner::BlockPlan::QuickLongAccumulate(plan) => {
                     run_quick_long_accumulate_loop(eg, frame, op_array, *plan)?
+                }
+                super::planner::BlockPlan::QuickForeachLongAccumulate(plan) => {
+                    super::quick_foreach::run_quick_foreach_long_accumulate_loop(
+                        eg, frame, op_array, *plan,
+                    )?
                 }
                 super::planner::BlockPlan::QuickLongOps(plan) => {
                     run_quick_long_ops_loop(eg, frame, op_array, plan)?
@@ -7692,7 +7697,7 @@ fn values_identical(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn handle_interrupt(eg: &ExecutorGlobals) -> Result<(), VmError> {
+pub(super) fn handle_interrupt(eg: &ExecutorGlobals) -> Result<(), VmError> {
     eg.vm_interrupt.store(false, Ordering::Relaxed);
 
     if eg.timed_out.load(Ordering::Relaxed) {

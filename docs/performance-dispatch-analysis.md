@@ -1343,3 +1343,92 @@ position and fall back exactly to the hash index. The quick-loop end-to-end
 suite now has 50 tests. The complete suite passes with default features and
 with `--no-default-features`; warning-free checks also pass for the minimal
 and all-feature builds.
+
+## Phase 2p result: guarded value-only foreach accumulation
+
+The broad non-PGO audit after Phase 2o identified `foreach` as the largest
+remaining common loop gap. The existing `bench_foreach.php` workload was about
+2.95x slower than PHP even though indexed packed-array accumulation was already
+faster. The difference was structural. Every element still crossed the full
+baseline sequence:
+
+```text
+ForeachNext -> JmpZ -> Add -> AssignCv -> Jmp
+```
+
+That sequence repeatedly distinguished generators from arrays, decoded the
+array layout, cloned the current value, materialized position/value/done/sum
+VM slots, dispatched general arithmetic, and returned through the interpreter
+backedge. The actual integer load and addition were a small part of the work.
+
+Phase 2p recognizes the exact closed source shape:
+
+```php
+$sum = 0;
+foreach ($values as $value) {
+    $sum += $value;
+}
+```
+
+The detector is independent of variable names, array size, and packed versus
+hash storage. It requires a value-only `ForeachNext`, the matching conditional
+exit, one CV-to-CV `Add`, assignment back to that accumulator, and the immediate
+backedge. A key variable, additional body instruction, generator, reference,
+heap scalar, or different type keeps the ordinary interpreter path.
+
+After the existing 32-backedge hot threshold, the guarded runner keeps iterator
+position, current value, and accumulator in native Rust scalars. Packed arrays
+use the stable `Value` slice directly. Hash arrays expose their immutable ordered
+entry slice to the guarded region, allowing positional value reads without
+re-matching `ArrayStorage` or rechecking a slice boundary at every iteration.
+The foreach copy owns the source allocation for the region, and the proven body
+cannot call PHP or mutate it, so both views stay valid until completion or a
+side exit. The runner lives in a separate module/code-generation unit so its
+machine-code size does not disturb the established indexed-array kernels in
+the main executor.
+
+The optimization retains exact baseline resume points:
+
+- a non-integer element is not consumed; prior quick state is committed and
+  execution resumes at `ForeachNext`;
+- accumulator overflow commits the consumed position and current value, then
+  resumes at the original `Add`, which performs PHP's integer-to-float result;
+- interrupts commit the state after the completed body and retain the normal
+  interrupt handling bound;
+- normal exhaustion materializes the final position, value, done flag,
+  accumulator, and sum temporary exactly as the skipped baseline instructions
+  would have left them.
+
+Fifty-one rounds rotated Phase 2p, the saved Phase 2o binary, and PHP process
+order:
+
+| Workload | Phase 2o | Phase 2p | PHP 8.4.12, no CLI opcache | Phase 2p / Phase 2o |
+|---|---:|---:|---:|---:|
+| Packed value-only foreach, 500K values | 0.01151 s | 0.000759 s | 0.004205 s | 0.066x |
+| Hash value-only foreach, 500K + string-tail values | 0.01483 s | 0.004075 s | 0.003331 s | 0.275x |
+
+The packed recurrence is about 15.17x faster than Phase 2o and 5.54x faster
+than PHP without JIT. The ordered hash recurrence is about 3.64x faster than
+Phase 2o, but remains about 22.3% slower than PHP. Dispatch and VM-slot traffic
+are therefore no longer the hash bottleneck. The release assembly advances
+40 bytes per rphp `(ArrayKey, Value)` entry, while a 64-bit Zend `Bucket`
+occupies 32 bytes. The remaining ratio closely follows that extra memory
+traffic. Closing it requires a denser hash-entry representation or a separate
+contiguous value view, not more interpreter dispatch specialization. A
+permanent `bench_hash_foreach.php` workload now tracks this boundary.
+
+Keeping the first implementation in `execute.rs` caused up to an 8.4% code
+layout regression in an unchanged materialized hash loop. After module
+isolation, the final 31-round array acceptance ratios were `1.015x` for packed
+materialized reads, `1.015x` for hash materialized reads, and `1.010x` for the
+sparse filter. A separate 15-round audit measured `1.002x` for the basic loop,
+`0.973x` for the extended scalar loop, `0.994x` for calls, `1.008x` for
+properties, and `0.968x` for strings. No retained non-target slowdown exceeded
+about 1.6%.
+
+Focused planner coverage proves selection for value-only accumulation and
+rejection of key-value foreach. Four end-to-end cases cover packed and hash
+completion, a non-integer side exit, overflow conversion, final accumulator,
+and final loop value. The quick-loop end-to-end suite now has 54 tests. The
+complete suite passes with all features and with `--no-default-features`;
+warning-free checks pass for both configurations.

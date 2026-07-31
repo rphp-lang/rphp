@@ -78,6 +78,7 @@ BENCHMARKS=(
     "bench_string.php:String concat 200K"
     "bench_array.php:Array build+sum 500K"
     "bench_foreach.php:Foreach sum 500K"
+    "bench_hash_foreach.php:Hash foreach sum 500K"
     "bench_nested_loops.php:Nested 1500x1500"
     "bench_fib_method.php:Method fib(35) \$this"
     "bench_property.php:Property R/W 5M"

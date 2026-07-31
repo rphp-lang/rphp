@@ -329,6 +329,14 @@ impl OpArray {
             )
             .map(BlockPlan::QuickLongAccumulate)
             .or_else(|| {
+                crate::vm::quick::detect_foreach_long_accumulate_loop(
+                    self,
+                    header_ip,
+                    backedge_ip,
+                )
+                .map(BlockPlan::QuickForeachLongAccumulate)
+            })
+            .or_else(|| {
                 crate::vm::quick::detect_long_ops_loop(self, header_ip, backedge_ip)
                     .map(BlockPlan::QuickLongOps)
             });

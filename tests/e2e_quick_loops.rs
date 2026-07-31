@@ -1183,3 +1183,83 @@ echo $i;
         "float|1000"
     );
 }
+
+#[test]
+fn quick_foreach_long_accumulation_finishes_packed_array_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 1000);
+$sum = 0;
+foreach ($values as $value) {
+    $sum += $value;
+}
+echo $sum;
+echo '|';
+echo $value;
+"
+        ),
+        "500500|1000"
+    );
+}
+
+#[test]
+fn quick_foreach_long_accumulation_finishes_hash_array_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 1000);
+$values['last'] = 7;
+$sum = 0;
+foreach ($values as $value) {
+    $sum += $value;
+}
+echo $sum;
+echo '|';
+echo $value;
+"
+        ),
+        "500507|7"
+    );
+}
+
+#[test]
+fn quick_foreach_long_accumulation_deoptimizes_non_long_value_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 100);
+$values[80] = 1.5;
+$sum = 0;
+foreach ($values as $value) {
+    $sum += $value;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $sum;
+echo '|';
+echo $value;
+"
+        ),
+        "float|4970.5|100"
+    );
+}
+
+#[test]
+fn quick_foreach_long_accumulation_deoptimizes_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 100);
+$sum = PHP_INT_MAX - 1000;
+foreach ($values as $value) {
+    $sum += $value;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $value;
+"
+        ),
+        "float|100"
+    );
+}

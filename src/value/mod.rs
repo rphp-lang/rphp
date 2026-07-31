@@ -756,6 +756,18 @@ impl PhpArray {
             _ => None,
         }
     }
+
+    /// Borrow ordered hash entries without changing the array representation.
+    /// Guarded quick regions use the stable slice for unchecked positional
+    /// reads after proving that their closed body cannot mutate the array.
+    #[cfg(feature = "quick-loops")]
+    #[inline]
+    pub(crate) fn ordered_hash_entries(&self) -> Option<&[(ArrayKey, Value)]> {
+        match &self.storage {
+            ArrayStorage::Hash { entries, .. } => Some(entries),
+            _ => None,
+        }
+    }
 }
 
 /// Iterator over PhpArray entries — works for both packed and hash modes.

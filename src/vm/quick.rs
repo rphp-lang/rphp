@@ -87,6 +87,30 @@ pub struct QuickLongAccumulateLoop {
     pub post_inc_ip: usize,
 }
 
+/// Guarded value-only foreach recurrence:
+///
+/// ```php
+/// foreach ($array as $value) {
+///     $accumulator += $value;
+/// }
+/// ```
+///
+/// The array copy and iterator position have already been initialized by
+/// `ForeachInit` when the backedge becomes hot. The runner owns only the
+/// closed `ForeachNext` through backward-jump region.
+#[derive(Debug, Clone, Copy)]
+pub struct QuickForeachLongAccumulateLoop {
+    pub header_ip: usize,
+    pub exit_ip: usize,
+    pub array_tmp: u16,
+    pub position_tmp: u16,
+    pub value_cv: u16,
+    pub done_tmp: u16,
+    pub accumulator_cv: u16,
+    pub sum_tmp: u16,
+    pub sum_ip: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickLongOperand {
     Slot(u16),
@@ -357,6 +381,92 @@ fn array_literal_index(op_array: &OpArray, index: u16) -> Option<QuickArrayIndex
         }
     }
     Some(QuickArrayIndex::StringLiteral(index))
+}
+
+/// Recognize a value-only foreach loop whose complete body adds each long
+/// value to one long accumulator.
+pub fn detect_foreach_long_accumulate_loop(
+    op_array: &OpArray,
+    header_ip: usize,
+    backedge_ip: usize,
+) -> Option<QuickForeachLongAccumulateLoop> {
+    if header_ip.checked_add(4)? != backedge_ip || backedge_ip >= op_array.instructions.len() {
+        return None;
+    }
+
+    let next = op_array.instructions[header_ip];
+    let branch = op_array.instructions[header_ip + 1];
+    let sum = op_array.instructions[header_ip + 2];
+    let assign = op_array.instructions[header_ip + 3];
+    let backedge = op_array.instructions[backedge_ip];
+
+    if next.opcode != OpCode::ForeachNext
+        || next.op1_type != OpType::Tmp
+        || next.op2_type != OpType::Tmp
+        || next.result_type != OpType::Tmp
+        || next.extended_value >> 16 != 0
+        || branch.opcode != OpCode::JmpZ
+        || branch.op1_type != OpType::Tmp
+        || branch.op1 != next.result
+        || branch.op2_type != OpType::Unused
+        || sum.opcode != OpCode::Add
+        || sum.op1_type != OpType::Cv
+        || sum.op2_type != OpType::Cv
+        || sum.result_type != OpType::Tmp
+        || assign.opcode != OpCode::AssignCv
+        || assign.op1_type != OpType::Cv
+        || assign.op2_type != OpType::Tmp
+        || assign.op2 != sum.result
+        || assign.result_type != OpType::Unused
+        || !matches!(backedge.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+        || backedge.op1 as usize != header_ip
+    {
+        return None;
+    }
+
+    let value_cv = (next.extended_value & 0xffff) as u16;
+    let accumulator_cv = if sum.op1 == value_cv && sum.op2 != value_cv {
+        sum.op2
+    } else if sum.op2 == value_cv && sum.op1 != value_cv {
+        sum.op1
+    } else {
+        return None;
+    };
+    if assign.op1 != accumulator_cv || value_cv == accumulator_cv {
+        return None;
+    }
+
+    let exit_ip = branch.op2 as usize;
+    if exit_ip <= backedge_ip || exit_ip >= op_array.instructions.len() {
+        return None;
+    }
+
+    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+    let temporary_slots = [next.op1, next.op2, next.result, sum.result];
+    if total_slots > 64
+        || value_cv as u32 >= op_array.num_cvs
+        || accumulator_cv as u32 >= op_array.num_cvs
+        || temporary_slots
+            .iter()
+            .any(|slot| (*slot as u32) < op_array.num_cvs || (*slot as u32) >= total_slots)
+        || temporary_slots.iter().enumerate().any(|(index, slot)| {
+            temporary_slots[index + 1..].iter().any(|other| other == slot)
+        })
+    {
+        return None;
+    }
+
+    Some(QuickForeachLongAccumulateLoop {
+        header_ip,
+        exit_ip,
+        array_tmp: next.op1,
+        position_tmp: next.op2,
+        value_cv,
+        done_tmp: next.result,
+        accumulator_cv,
+        sum_tmp: sum.result,
+        sum_ip: header_ip + 2,
+    })
 }
 
 /// Recognize one side-effect-free scalar loop region.
@@ -1435,6 +1545,86 @@ mod tests {
                     main.op_array.instructions
                 )
             })
+    }
+
+    fn foreach_long_accumulate_plan(source: &str) -> QuickForeachLongAccumulateLoop {
+        let main = compile_main(source);
+        main.op_array
+            .instructions
+            .iter()
+            .enumerate()
+            .filter(|(ip, instruction)| {
+                matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                    && (instruction.op1 as usize) < *ip
+            })
+            .find_map(|(backedge, instruction)| {
+                detect_foreach_long_accumulate_loop(
+                    &main.op_array,
+                    instruction.op1 as usize,
+                    backedge,
+                )
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "source should contain a foreach long accumulation loop; instructions: {:#?}",
+                    main.op_array.instructions
+                )
+            })
+    }
+
+    #[test]
+    fn detects_value_only_foreach_long_accumulation() {
+        let source = "<?php
+$values = [1, 2, 3, 4];
+$sum = 0;
+foreach ($values as $value) {
+    $sum += $value;
+}
+";
+        let plan = foreach_long_accumulate_plan(source);
+        assert_eq!(plan.accumulator_cv, 1);
+        assert_eq!(plan.value_cv, 2);
+        assert_eq!(plan.sum_ip, plan.header_ip + 2);
+        assert_eq!(plan.exit_ip, plan.header_ip + 5);
+
+        #[cfg(feature = "quick-loops")]
+        {
+            let main = compile_main(source);
+            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
+                plan,
+                crate::vm::planner::BlockPlan::QuickForeachLongAccumulate(_)
+            )));
+        }
+    }
+
+    #[test]
+    fn rejects_key_value_foreach_long_accumulation() {
+        let main = compile_main(
+            "<?php
+$values = [1, 2, 3, 4];
+$sum = 0;
+foreach ($values as $key => $value) {
+    $sum += $value;
+}
+",
+        );
+        assert!(main
+            .op_array
+            .instructions
+            .iter()
+            .enumerate()
+            .filter(|(ip, instruction)| {
+                matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                    && (instruction.op1 as usize) < *ip
+            })
+            .all(|(backedge, instruction)| {
+                detect_foreach_long_accumulate_loop(
+                    &main.op_array,
+                    instruction.op1 as usize,
+                    backedge,
+                )
+                .is_none()
+            }));
     }
 
     #[test]
