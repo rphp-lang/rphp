@@ -3600,6 +3600,31 @@ enum QuickLongConditionalBody {
     },
 }
 
+const QUICK_LONG_BRANCH_CONDITION_LIMIT: usize = 8;
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickLongBranchCondition {
+    lhs: u16,
+    rhs: QuickLongOperand,
+    condition_tmp: Option<u16>,
+}
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickLongBranchOnlyKernel {
+    header_lhs: u16,
+    header_rhs: QuickLongOperand,
+    header_condition_tmp: Option<u16>,
+    conditions: [QuickLongBranchCondition; QUICK_LONG_BRANCH_CONDITION_LIMIT],
+    condition_count: u8,
+    post_value: u16,
+    post_result: Option<u16>,
+    post_resume_ip: usize,
+    body_target: QuickLongTarget,
+    exit_target: QuickLongTarget,
+}
+
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
 struct QuickLongAddAssignKernel {
@@ -3910,6 +3935,144 @@ fn quick_long_array_loop_kernel(
         },
         body,
     ))
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+fn quick_long_branch_only_kernel(
+    plan: &QuickLongOpsLoop,
+) -> Option<QuickLongBranchOnlyKernel> {
+    if plan.entry_op != 0 || plan.ops.len() < 3 {
+        return None;
+    }
+
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match *plan.ops.first()? {
+        QuickLongOp::BranchUnlessLt {
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
+            ..
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    header_false_target.exit_ip()?;
+
+    let post_index = plan.ops.len() - 1;
+    let (
+        post_value,
+        post_result,
+        post_header_lhs,
+        post_header_rhs,
+        post_header_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match *plan.ops.last()? {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+    if post_header_lhs != header_lhs
+        || post_header_rhs != header_rhs
+        || post_header_condition_tmp != header_condition_tmp
+        || header_next_target.op_index() != Some(1)
+        || body_target.op_index() != Some(1)
+        || exit_target != header_false_target
+    {
+        return None;
+    }
+
+    let empty_condition = QuickLongBranchCondition {
+        lhs: 0,
+        rhs: QuickLongOperand::Const(0),
+        condition_tmp: None,
+    };
+    let mut conditions = [empty_condition; QUICK_LONG_BRANCH_CONDITION_LIMIT];
+    let mut condition_count = 0usize;
+    let mut index = 1usize;
+    while index < post_index {
+        if condition_count == conditions.len() {
+            return None;
+        }
+        let (lhs, rhs, condition_tmp, false_target, true_target) =
+            match *plan.ops.get(index)? {
+                QuickLongOp::BranchUnlessEq {
+                    lhs,
+                    rhs,
+                    condition_tmp,
+                    false_target,
+                    next_target,
+                    ..
+                } => (lhs, rhs, condition_tmp, false_target, next_target),
+                _ => return None,
+            };
+        conditions[condition_count] = QuickLongBranchCondition {
+            lhs,
+            rhs,
+            condition_tmp,
+        };
+        condition_count += 1;
+
+        let false_index = false_target.op_index()?;
+        let true_index = true_target.op_index()?;
+        if true_index == post_index {
+            if false_index != post_index {
+                return None;
+            }
+            index = post_index;
+        } else {
+            if true_index != index + 1 || false_index != index + 2 {
+                return None;
+            }
+            match *plan.ops.get(true_index)? {
+                QuickLongOp::Jump { target }
+                    if target.op_index() == Some(post_index) => {}
+                _ => return None,
+            }
+            index = false_index;
+        }
+    }
+    if condition_count == 0 {
+        return None;
+    }
+
+    Some(QuickLongBranchOnlyKernel {
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        conditions,
+        condition_count: condition_count as u8,
+        post_value,
+        post_result,
+        post_resume_ip,
+        body_target,
+        exit_target,
+    })
 }
 
 #[inline(never)]
@@ -5007,6 +5170,102 @@ where
 
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
+unsafe fn run_quick_long_branch_only_kernel(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    mut slots: [i64; 64],
+    kernel: QuickLongBranchOnlyKernel,
+) -> Result<QuickLoopOutcome, VmError> {
+    let mut dirty_long_mask = 0u64;
+    let mut dirty_bool_mask = 0u64;
+    let mut iterations = 0u64;
+    let mut continue_loop =
+        slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+    if let Some(slot) = kernel.header_condition_tmp {
+        slots[slot as usize] = i64::from(continue_loop);
+        dirty_bool_mask |= 1u64 << slot;
+    }
+
+    while continue_loop {
+        for condition in &kernel.conditions[..kernel.condition_count as usize] {
+            let condition_result = slots[condition.lhs as usize]
+                == quick_long_operand(&slots, condition.rhs);
+            if let Some(slot) = condition.condition_tmp {
+                slots[slot as usize] = i64::from(condition_result);
+                dirty_bool_mask |= 1u64 << slot;
+            }
+            if condition_result {
+                break;
+            }
+        }
+
+        let incremented = match slots[kernel.post_value as usize].checked_add(1) {
+            Some(value) => value,
+            None => {
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    &slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(kernel.post_resume_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(QuickLoopOutcome::Deoptimized);
+            }
+        };
+        if let Some(result) = kernel.post_result {
+            slots[result as usize] = slots[kernel.post_value as usize];
+            dirty_long_mask |= 1u64 << result;
+        }
+        slots[kernel.post_value as usize] = incremented;
+        dirty_long_mask |= 1u64 << kernel.post_value;
+
+        continue_loop =
+            slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+        if let Some(slot) = kernel.header_condition_tmp {
+            slots[slot as usize] = i64::from(continue_loop);
+            dirty_bool_mask |= 1u64 << slot;
+        }
+        iterations += 1;
+
+        if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+            commit_quick_long_ops_slots(
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+            );
+            let next_target = if continue_loop {
+                kernel.body_target
+            } else {
+                kernel.exit_target
+            };
+            let next_ip = plan.target_ip(next_target).unwrap_unchecked();
+            (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+            handle_interrupt(eg)?;
+        }
+    }
+
+    commit_quick_long_ops_slots(
+        slot_base,
+        &slots,
+        dirty_long_mask,
+        dirty_bool_mask,
+    );
+    let next_ip = kernel.exit_target.exit_ip().unwrap_unchecked();
+    (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+    stats::inc_quick_loop_completed(iterations);
+    Ok(QuickLoopOutcome::Completed)
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
 unsafe fn dispatch_quick_long_conditional_kernel(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -5112,6 +5371,12 @@ unsafe fn run_quick_long_ops_loop(
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         }
+    }
+
+    if let Some(kernel) = quick_long_branch_only_kernel(plan) {
+        return run_quick_long_branch_only_kernel(
+            eg, frame, op_array, plan, slot_base, slots, kernel,
+        );
     }
 
     if let Some((kernel, body)) = quick_long_conditional_kernel(plan) {

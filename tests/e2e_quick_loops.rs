@@ -317,6 +317,24 @@ echo $i;
 }
 
 #[test]
+fn quick_branch_only_if_else_loop_finishes_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+for ($i = 0; $i < 10000; $i++) {
+    if ($i == -1) {
+    } elseif ($i == -2) {
+    } else if ($i == -3) {
+    }
+}
+echo $i;
+"
+        ),
+        "10000"
+    );
+}
+
+#[test]
 fn quick_long_loop_supports_fused_constant_bound() {
     assert_eq!(
         run_php(

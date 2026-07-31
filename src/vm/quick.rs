@@ -1843,8 +1843,13 @@ pub fn detect_long_ops_loop(
         }
     }
 
-    if !has_add
-        || !has_assign
+    let has_internal_branch = ops.iter().skip(1).any(|op| {
+        matches!(
+            op,
+            QuickLongOp::BranchUnlessLt { .. } | QuickLongOp::BranchUnlessEq { .. }
+        )
+    });
+    if !(has_add || has_assign || has_internal_branch)
         || !has_post_inc
         || !matches!(
             ops.first(),
@@ -2194,6 +2199,39 @@ for ($i = 0; $i < 100; ++$i) {
             assert!(main.op_array.block_plans.iter().any(|plan| matches!(
                 plan,
                 crate::vm::planner::BlockPlan::QuickLongInduction(_)
+            )));
+        }
+    }
+
+    #[test]
+    fn detects_branch_only_if_else_loop_as_typed_ops() {
+        let source = "<?php
+for ($i = 0; $i < 100; $i++) {
+    if ($i == -1) {
+    } elseif ($i == -2) {
+    } else if ($i == -3) {
+    }
+}
+";
+        let plan = long_ops_plan(source);
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|op| matches!(op, QuickLongOp::BranchUnlessEq { .. }))
+                .count(),
+            3
+        );
+        assert!(matches!(
+            plan.ops.last(),
+            Some(QuickLongOp::PostIncLoopLt { .. })
+        ));
+
+        #[cfg(feature = "quick-loops")]
+        {
+            let main = compile_main(source);
+            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
+                plan,
+                crate::vm::planner::BlockPlan::QuickLongOps(_)
             )));
         }
     }
