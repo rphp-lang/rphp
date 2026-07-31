@@ -1,27 +1,78 @@
 /// Compile-time metadata for pure internal functions that expose the
 /// frame-free `DirectInternalFunctionHandler` ABI.
+#[repr(u32)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DirectInternalKind {
+    Strlen,
+    Strtolower,
+    Strtoupper,
+    Ord,
+    Abs,
+    Floor,
+    Sqrt,
+    ChunkSplit,
+    Sin,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Exp,
+}
+
+impl DirectInternalKind {
+    #[inline(always)]
+    pub fn from_id(id: u32) -> Option<Self> {
+        match id {
+            0 => Some(Self::Strlen),
+            1 => Some(Self::Strtolower),
+            2 => Some(Self::Strtoupper),
+            3 => Some(Self::Ord),
+            4 => Some(Self::Abs),
+            5 => Some(Self::Floor),
+            6 => Some(Self::Sqrt),
+            7 => Some(Self::ChunkSplit),
+            8 => Some(Self::Sin),
+            9 => Some(Self::Tan),
+            10 => Some(Self::Asin),
+            11 => Some(Self::Acos),
+            12 => Some(Self::Atan),
+            13 => Some(Self::Exp),
+            _ => None,
+        }
+    }
+
+    #[inline(always)]
+    pub fn result_may_need_cleanup(self) -> bool {
+        matches!(
+            self,
+            Self::Strtolower | Self::Strtoupper | Self::ChunkSplit
+        )
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DirectInternalSpec {
     pub name: &'static str,
+    pub kind: DirectInternalKind,
     pub max_args: u32,
     pub required_args: u32,
 }
 
 pub const DIRECT_INTERNAL_SPECS: &[DirectInternalSpec] = &[
-    DirectInternalSpec { name: "strlen", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "strtolower", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "strtoupper", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "ord", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "abs", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "floor", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "sqrt", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "chunk_split", max_args: 3, required_args: 1 },
-    DirectInternalSpec { name: "sin", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "tan", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "asin", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "acos", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "atan", max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "exp", max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "strlen", kind: DirectInternalKind::Strlen, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "strtolower", kind: DirectInternalKind::Strtolower, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "strtoupper", kind: DirectInternalKind::Strtoupper, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "ord", kind: DirectInternalKind::Ord, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "abs", kind: DirectInternalKind::Abs, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "floor", kind: DirectInternalKind::Floor, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "sqrt", kind: DirectInternalKind::Sqrt, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "chunk_split", kind: DirectInternalKind::ChunkSplit, max_args: 3, required_args: 1 },
+    DirectInternalSpec { name: "sin", kind: DirectInternalKind::Sin, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "tan", kind: DirectInternalKind::Tan, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "asin", kind: DirectInternalKind::Asin, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "acos", kind: DirectInternalKind::Acos, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "atan", kind: DirectInternalKind::Atan, max_args: 1, required_args: 1 },
+    DirectInternalSpec { name: "exp", kind: DirectInternalKind::Exp, max_args: 1, required_args: 1 },
 ];
 
 #[inline]
@@ -50,5 +101,7 @@ mod tests {
         assert!(supports_direct_internal_call("chunk_split", 3));
         assert!(!supports_direct_internal_call("chunk_split", 4));
         assert!(!supports_direct_internal_call("substr", 1));
+        assert!(!DirectInternalKind::Strlen.result_may_need_cleanup());
+        assert!(DirectInternalKind::Strtolower.result_may_need_cleanup());
     }
 }

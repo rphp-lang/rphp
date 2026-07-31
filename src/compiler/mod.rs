@@ -381,6 +381,17 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
     }
 
     op_array.instructions.iter().all(|instr| {
+        if instr.opcode == OpCode::DirectInternalCall1 {
+            let Some(kind) = crate::builtin_metadata::DirectInternalKind::from_id(
+                instr.extended_value,
+            ) else {
+                return false;
+            };
+            if kind.result_may_need_cleanup() {
+                return false;
+            }
+        }
+
         matches!(
             instr.opcode,
             OpCode::Add

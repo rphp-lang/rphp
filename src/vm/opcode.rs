@@ -119,7 +119,7 @@ pub enum OpCode {
     /// Push captured value into closure: op1=TMP(closure), op2=CV(captured var).
     ClosureUseVar = 129,
     /// Frame-free call to a known pure internal function with one positional
-    /// argument: op1=argument, op2=CONST function name, result=return value.
+    /// argument: op1=argument, extended_value=handler ID, result=return value.
     DirectInternalCall1 = 130,
 
     // ── Specialized opcodes ──────────────────────────────────────────

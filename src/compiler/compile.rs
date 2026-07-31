@@ -611,7 +611,8 @@ impl Compiler {
             }
             Stmt::ExprStmt(expr) => {
                 // Compile expression for side effects (e.g. function call), discard result
-                self.compile_expr(expr);
+                let (result, result_type) = self.compile_expr(expr);
+                self.discard_direct_internal_result(result, result_type);
             }
             Stmt::While { condition, body } => {
                 // Loop start: compile condition
@@ -736,7 +737,8 @@ impl Compiler {
 
                 // Compile update expression (discard result)
                 if let Some(upd) = update {
-                    self.compile_expr(upd);
+                    let (result, result_type) = self.compile_expr(upd);
+                    self.discard_direct_internal_result(result, result_type);
                 }
 
                 // Jmp back to loop start
@@ -2187,24 +2189,23 @@ impl Compiler {
             }
             Expr::FunctionCall { name, args } => {
                 if let [CallArg::Positional(argument)] = args.as_slice() {
-                    let direct_name = self
+                    let direct_kind = self
                         .unambiguous_global_function_name(name)
-                        .filter(|name| {
-                            crate::builtin_metadata::supports_direct_internal_call(name, 1)
+                        .and_then(crate::builtin_metadata::direct_internal_spec)
+                        .filter(|spec| {
+                            spec.required_args <= 1 && spec.max_args >= 1
                         })
-                        .map(str::to_string);
+                        .map(|spec| spec.kind);
 
-                    if let Some(direct_name) = direct_name {
+                    if let Some(direct_kind) = direct_kind {
                         let (argument_op, argument_type) = self.compile_expr(argument);
-                        let name_literal = self.add_literal(Value::string(direct_name));
                         let tmp = self.alloc_tmp();
                         let mut call = Instruction::new(OpCode::DirectInternalCall1);
                         call.op1 = argument_op;
                         call.op1_type = argument_type;
-                        call.op2 = name_literal;
-                        call.op2_type = OpType::Const;
                         call.result = tmp;
                         call.result_type = OpType::Tmp;
+                        call.extended_value = direct_kind as u32;
                         self.instructions.push(call);
                         return (tmp, OpType::Tmp);
                     }
@@ -2971,6 +2972,22 @@ impl Compiler {
         let idx = self.literals.len() as u16;
         self.literals.push(val);
         idx
+    }
+
+    /// A pure direct builtin must still execute for argument evaluation and
+    /// PHP error semantics, but an expression statement needs no TMP write.
+    fn discard_direct_internal_result(&mut self, result: u16, result_type: OpType) {
+        if result_type != OpType::Tmp {
+            return;
+        }
+        if let Some(instruction) = self.instructions.last_mut() {
+            if instruction.opcode == OpCode::DirectInternalCall1
+                && instruction.result == result
+                && instruction.result_type == OpType::Tmp
+            {
+                instruction.result_type = OpType::Unused;
+            }
+        }
     }
 
     /// Whether a source-level function name unambiguously addresses a global

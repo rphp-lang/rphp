@@ -122,6 +122,34 @@ fn direct_arg_opt(args: &[Value], index: usize) -> Option<&Value> {
     (value.value_type() != ValueType::Undef).then_some(value)
 }
 
+/// Dispatch a compiler-identified pure builtin without resolving a runtime
+/// FunctionCommon or crossing the generic internal-function ABI.
+#[inline(always)]
+pub(crate) fn invoke_direct_internal1(
+    kind: crate::builtin_metadata::DirectInternalKind,
+    argument: &Value,
+) -> Result<Value, VmError> {
+    use crate::builtin_metadata::DirectInternalKind;
+
+    let args = std::slice::from_ref(argument);
+    match kind {
+        DirectInternalKind::Strlen => direct_strlen(args),
+        DirectInternalKind::Strtolower => direct_strtolower(args),
+        DirectInternalKind::Strtoupper => direct_strtoupper(args),
+        DirectInternalKind::Ord => direct_ord(args),
+        DirectInternalKind::Abs => direct_abs(args),
+        DirectInternalKind::Floor => direct_floor(args),
+        DirectInternalKind::Sqrt => direct_sqrt(args),
+        DirectInternalKind::ChunkSplit => direct_chunk_split(args),
+        DirectInternalKind::Sin => direct_sin(args),
+        DirectInternalKind::Tan => direct_tan(args),
+        DirectInternalKind::Asin => direct_asin(args),
+        DirectInternalKind::Acos => direct_acos(args),
+        DirectInternalKind::Atan => direct_atan(args),
+        DirectInternalKind::Exp => direct_exp(args),
+    }
+}
+
 // ============================================================================
 // Registration
 // ============================================================================

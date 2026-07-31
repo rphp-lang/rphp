@@ -3,14 +3,18 @@ use common::run_php;
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
+use rphp::vm::function::CleanupMode;
+use rphp::vm::instruction::OpType;
 use rphp::vm::opcode::OpCode;
 
-fn main_opcodes(source: &str) -> Vec<OpCode> {
+fn compile_source(source: &str) -> rphp::compiler::compile::CompileResult {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
-    Compiler::new()
-        .compile(&statements)
-        .unwrap()
+    Compiler::new().compile(&statements).unwrap()
+}
+
+fn main_opcodes(source: &str) -> Vec<OpCode> {
+    compile_source(source)
         .main
         .instructions
         .iter()
@@ -68,6 +72,36 @@ fn test_known_unary_builtin_is_lowered_to_frame_free_call() {
     assert!(!opcodes.contains(&OpCode::InitFcall));
     assert!(!opcodes.contains(&OpCode::SendVal));
     assert!(!opcodes.contains(&OpCode::DoFcall));
+}
+
+#[test]
+fn test_discarded_direct_builtin_skips_tmp_result_write() {
+    let compiled = compile_source("<?php $value = 'abc'; strlen($value);");
+    let direct = compiled
+        .main
+        .instructions
+        .iter()
+        .find(|instruction| instruction.opcode == OpCode::DirectInternalCall1)
+        .unwrap();
+    assert_eq!(direct.result_type, OpType::Unused);
+
+    let compiled = compile_source("<?php $length = strlen('abc');");
+    let direct = compiled
+        .main
+        .instructions
+        .iter()
+        .find(|instruction| instruction.opcode == OpCode::DirectInternalCall1)
+        .unwrap();
+    assert_eq!(direct.result_type, OpType::Tmp);
+}
+
+#[test]
+fn test_direct_builtin_result_kind_controls_frame_cleanup() {
+    let scalar = compile_source("<?php function scalar_direct($value) { return strlen($value); }");
+    assert_eq!(scalar.functions[0].1.common.plan.cleanup, CleanupMode::SkipScan);
+
+    let heap = compile_source("<?php function heap_direct($value) { return strtolower($value); }");
+    assert_eq!(heap.functions[0].1.common.plan.cleanup, CleanupMode::ScanAll);
 }
 
 #[test]
