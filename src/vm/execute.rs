@@ -1,5 +1,7 @@
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
+#[cfg(feature = "vm-stats")]
+use std::sync::OnceLock;
 
 use crate::value::{Value, PhpArray, PhpClosure, PhpObject, ArrayKey, ValueType, make_error_value};
 use crate::runtime::ExecutorGlobals;
@@ -18,6 +20,19 @@ use super::quick::{
 };
 // Planner module is kept as scaffolding for future hot-executor architecture.
 // Not used in baseline dispatch loop — will be integrated via function-entry dispatch.
+
+#[inline(always)]
+fn direct_user_calls_enabled() -> bool {
+    #[cfg(feature = "vm-stats")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_DIRECT_USER_CALLS").is_none())
+    }
+    #[cfg(not(feature = "vm-stats"))]
+    {
+        true
+    }
+}
 
 /// Get the current caller's **lexical** (declaring) class name from the frame.
 /// Uses the `method_declaring_class` map on EG rather than runtime $this,
@@ -1895,6 +1910,42 @@ fn op_init_user_call<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    let resolved = match resolve_user_call_at_opline(eg, frame, op_array, opline) {
+        Some(resolved) => resolved,
+        None => {
+            let callback_raw = unsafe {
+                &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+            };
+            let callback = if callback_raw.is_reference() {
+                unsafe { &*callback_raw.as_ref_ptr() }
+            } else {
+                callback_raw
+            };
+            let description = callback.echo_to_string();
+            let error = make_error_value("TypeError", &format!(
+                "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
+                description,
+            ));
+            return Ok(match throw_in_frame(eg, frame, error) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+    };
+
+    init_resolved_user_call(eg, frame, opline.extended_value, resolved);
+    Ok(ColdResult::Done)
+}
+
+#[inline]
+fn resolve_user_call_at_opline(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Option<crate::stdlib::ResolvedCallback> {
     let callback_raw = unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
     };
@@ -1910,29 +1961,21 @@ fn op_init_user_call<'a>(
         op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache
     };
     let caller_class = get_caller_class(frame, eg);
-    let resolved = match crate::stdlib::resolve_callback_with_cache(
+    crate::stdlib::resolve_callback_with_cache(
         callback,
         eg,
         caller_class.as_deref(),
         Some(cache_slot),
-    ) {
-        Some(resolved) => resolved,
-        None => {
-            let description = callback.echo_to_string();
-            let error = make_error_value("TypeError", &format!(
-                "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
-                description,
-            ));
-            return Ok(match throw_in_frame(eg, frame, error) {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-            });
-        }
-    };
+    )
+}
 
-    let explicit_args = opline.extended_value;
+#[inline]
+fn init_resolved_user_call(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    explicit_args: u32,
+    resolved: crate::stdlib::ResolvedCallback,
+) {
     let signature = unsafe { &(*resolved.func_ptr).sig };
     let public_end = signature.this_offset + explicit_args;
     let capture_end = signature.num_args + resolved.use_vars.len() as u32;
@@ -1965,8 +2008,6 @@ fn op_init_user_call<'a>(
         let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) } as *mut Value;
         unsafe { frame_slot_init(call, destination, value) };
     }
-
-    Ok(ColdResult::Done)
 }
 
 #[inline(never)]
@@ -6889,17 +6930,91 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::InitUserCall => {
-                match op_init_user_call(eg, frame, op_array, opline)? {
-                    ColdResult::NewFrame(new_frame, new_op_array) => {
-                        frame = new_frame;
-                        op_array = new_op_array;
-                        continue;
+                // A one-argument call_user_func()/call_user_func_array() with
+                // a simple argument compiles to an adjacent
+                // InitUserCall + SendUser + DoFcall sequence. Once its runtime
+                // callback names a pure direct-ABI internal function,
+                // invoke that handler on the caller's borrowed value and skip
+                // the callback frame and the next two VM dispatches entirely.
+                let next = unsafe { &*opline_ptr.add(1) };
+                let direct_shape = direct_user_calls_enabled()
+                    && opline.extended_value == 1
+                    && next.opcode == OpCode::SendUser
+                    && next.extended_value == 0
+                    && unsafe { (*opline_ptr.add(2)).opcode == OpCode::DoFcall };
+                let mut initialized = false;
+
+                if direct_shape {
+                    let next2 = unsafe { &*opline_ptr.add(2) };
+                    let callback_raw = unsafe {
+                        &*(*frame).get_op_ptr(
+                            opline.op1 as u32,
+                            opline.op1_type,
+                            op_array,
+                        )
+                    };
+                    let callback = if callback_raw.is_reference() {
+                        unsafe { &*callback_raw.as_ref_ptr() }
+                    } else {
+                        callback_raw
+                    };
+                    let direct_kind = callback.as_str().and_then(|name| {
+                        crate::builtin_metadata::direct_internal_spec(name)
+                            .filter(|spec| spec.required_args <= 1 && spec.max_args >= 1)
+                            .map(|spec| spec.kind)
+                    });
+
+                    if let Some(kind) = direct_kind {
+                        let argument = unsafe {
+                            &*(*frame).get_op_ptr(
+                                next.op1 as u32,
+                                next.op1_type,
+                                op_array,
+                            )
+                        };
+                        let result = crate::stdlib::invoke_direct_internal1(kind, argument)?;
+                        if next2.result_type != OpType::Unused {
+                            let result_ptr = unsafe {
+                                (*frame).get_op_mut(
+                                    next2.result as u32,
+                                    next2.result_type,
+                                )
+                            };
+                            if matches!(next2.result_type, OpType::Tmp | OpType::Var) {
+                                unsafe { frame_tmp_set(frame, result_ptr, result) };
+                            } else {
+                                unsafe { frame_slot_set(frame, result_ptr, result) };
+                            }
+                        }
+                        // Loop-bottom advance adds one more instruction.
+                        opline_ptr = unsafe { opline_ptr.add(2) };
+                        initialized = true;
+                    } else if let Some(resolved) =
+                        resolve_user_call_at_opline(eg, frame, op_array, opline)
+                    {
+                        init_resolved_user_call(
+                            eg,
+                            frame,
+                            opline.extended_value,
+                            resolved,
+                        );
+                        initialized = true;
                     }
-                    ColdResult::Unhandled(thrown) => {
-                        eg.exception = Some(thrown);
-                        return Ok(());
+                }
+
+                if !initialized {
+                    match op_init_user_call(eg, frame, op_array, opline)? {
+                        ColdResult::NewFrame(new_frame, new_op_array) => {
+                            frame = new_frame;
+                            op_array = new_op_array;
+                            continue;
+                        }
+                        ColdResult::Unhandled(thrown) => {
+                            eg.exception = Some(thrown);
+                            return Ok(());
+                        }
+                        _ => {}
                     }
-                    _ => {}
                 }
             }
 

@@ -91,10 +91,27 @@ pub const DIRECT_INTERNAL_SPECS: &[DirectInternalSpec] = &[
 
 #[inline]
 pub fn direct_internal_spec(name: &str) -> Option<DirectInternalSpec> {
-    DIRECT_INTERNAL_SPECS
-        .iter()
-        .copied()
-        .find(|spec| spec.name.eq_ignore_ascii_case(name))
+    // This lookup also runs at polymorphic dynamic-callback sites. Dispatch
+    // by length first so an unsupported name does not scan every direct
+    // builtin and supported names need only a handful of ASCII comparisons.
+    let index = match name.len() {
+        3 if name.eq_ignore_ascii_case("ord") => 3,
+        3 if name.eq_ignore_ascii_case("abs") => 4,
+        3 if name.eq_ignore_ascii_case("sin") => 8,
+        3 if name.eq_ignore_ascii_case("tan") => 9,
+        3 if name.eq_ignore_ascii_case("exp") => 13,
+        4 if name.eq_ignore_ascii_case("sqrt") => 6,
+        4 if name.eq_ignore_ascii_case("asin") => 10,
+        4 if name.eq_ignore_ascii_case("acos") => 11,
+        4 if name.eq_ignore_ascii_case("atan") => 12,
+        5 if name.eq_ignore_ascii_case("floor") => 5,
+        6 if name.eq_ignore_ascii_case("strlen") => 0,
+        10 if name.eq_ignore_ascii_case("strtolower") => 1,
+        10 if name.eq_ignore_ascii_case("strtoupper") => 2,
+        11 if name.eq_ignore_ascii_case("chunk_split") => 7,
+        _ => return None,
+    };
+    Some(DIRECT_INTERNAL_SPECS[index])
 }
 
 #[inline]
@@ -115,6 +132,11 @@ mod tests {
         assert!(supports_direct_internal_call("chunk_split", 3));
         assert!(!supports_direct_internal_call("chunk_split", 4));
         assert!(!supports_direct_internal_call("substr", 1));
+        assert_eq!(
+            direct_internal_spec("STRTOUPPER").map(|spec| spec.kind),
+            Some(DirectInternalKind::Strtoupper),
+        );
+        assert_eq!(direct_internal_spec("soundex"), None);
         assert!(!DirectInternalKind::Strlen.result_may_need_cleanup());
         assert!(DirectInternalKind::Strtolower.result_may_need_cleanup());
         assert_eq!(DirectInternalKind::Strlen.lowering(), DirectInternalLowering::Strlen);

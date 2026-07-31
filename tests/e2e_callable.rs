@@ -194,6 +194,20 @@ fn test_call_user_func_array_prebuilt_and_literal_use_distinct_lowerings() {
 }
 
 #[test]
+fn test_one_arg_callback_site_mixes_direct_and_framed_results() {
+    let out = run_php(r#"<?php
+function callback_passthrough($value) { return '<' . $value . '>'; }
+$callbacks = ['strtoupper', 'callback_passthrough', 'strlen', 'strtolower'];
+foreach ($callbacks as $callback) {
+    echo call_user_func_array($callback, ['AbC']);
+    echo ':';
+}
+echo call_user_func('ord', 'Z');
+"#);
+    assert_eq!(out, "ABC:<AbC>:3:abc:90");
+}
+
+#[test]
 fn test_lowered_callback_calls_preserve_argument_evaluation_order() {
     let out = run_php(r#"<?php
 function make_callback() { echo 'C'; return 'strlen'; }
