@@ -31,6 +31,24 @@ fn test_array_product_float() {
     assert_eq!(run_php("<?php echo array_product([2, 1.5]);"), "3");
 }
 
+// === number_format ===
+#[test]
+fn test_number_format_grouping_and_precision() {
+    assert_eq!(
+        run_php("<?php echo number_format(1234567.891, 2);"),
+        "1,234,567.89"
+    );
+    assert_eq!(run_php("<?php echo number_format(-1234.5, 2);"), "-1,234.50");
+}
+
+#[test]
+fn test_number_format_custom_multibyte_separators() {
+    assert_eq!(
+        run_php(r#"<?php echo number_format(1234567.891, 2, "DEC", "SEP");"#),
+        "1SEP234SEP567DEC89"
+    );
+}
+
 // === array_count_values ===
 #[test]
 fn test_array_count_values() {

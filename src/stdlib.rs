@@ -1459,31 +1459,37 @@ fn fn_str_rev(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let num = arg_float!(ed, 0);
     let decimals = match arg_opt!(ed, 1) { Some(v) => v.to_long_val().max(0) as usize, None => 0 };
-    let dec_point = match arg_opt!(ed, 2) { Some(v) => v.as_str().unwrap_or(".").to_string(), None => ".".to_string() };
-    let thousands_sep = match arg_opt!(ed, 3) { Some(v) => v.as_str().unwrap_or(",").to_string(), None => ",".to_string() };
+    let dec_point = arg_opt!(ed, 2).and_then(Value::as_str).unwrap_or(".");
+    let thousands_sep = arg_opt!(ed, 3).and_then(Value::as_str).unwrap_or(",");
 
-    let formatted = format!("{:.prec$}", num, prec = decimals);
-    let parts: Vec<&str> = formatted.split('.').collect();
-    let int_part = parts[0];
-    let negative = int_part.starts_with('-');
-    let digits = if negative { &int_part[1..] } else { int_part };
+    // Format and group in one owned buffer. Inserting separators from right
+    // to left keeps all yet-to-be-used byte positions stable and avoids the
+    // quadratic front insertion plus intermediate Strings of the old path.
+    let mut result = String::with_capacity(decimals.saturating_add(32));
+    let _ = write!(&mut result, "{:.prec$}", num, prec = decimals);
+    let decimal_position = result.find('.');
+    let integer_end = decimal_position.unwrap_or(result.len());
+    let digits_start = usize::from(result.as_bytes().first() == Some(&b'-'));
+    let digit_count = integer_end.saturating_sub(digits_start);
+    let separator_count = digit_count.saturating_sub(1) / 3;
+    let decimal_growth = decimal_position
+        .map(|_| dec_point.len().saturating_sub(1))
+        .unwrap_or(0);
+    result.reserve(
+        separator_count
+            .saturating_mul(thousands_sep.len())
+            .saturating_add(decimal_growth),
+    );
 
-    let mut with_sep = String::with_capacity(digits.len() + digits.len() / 3);
-    for (i, ch) in digits.chars().rev().enumerate() {
-        if i > 0 && i % 3 == 0 {
-            if let Some(sep_ch) = thousands_sep.chars().next() {
-                with_sep.insert(0, sep_ch);
-            }
-        }
-        with_sep.insert(0, ch);
+    if let Some(position) = decimal_position {
+        result.replace_range(position..position + 1, dec_point);
     }
-    if negative { with_sep.insert(0, '-'); }
+    let mut separator_position = integer_end;
+    while separator_position > digits_start + 3 {
+        separator_position -= 3;
+        result.insert_str(separator_position, thousands_sep);
+    }
 
-    let result = if decimals > 0 {
-        format!("{}{}{}", with_sep, dec_point, parts.get(1).unwrap_or(&""))
-    } else {
-        with_sep
-    };
     ret!(rv, Value::string(result));
 }
 
