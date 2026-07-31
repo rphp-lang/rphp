@@ -1491,6 +1491,30 @@ impl Value {
         }
     }
 
+    /// Raw identity of the Rc-backed string. Dynamic callback inline caches
+    /// retain this identity so later in-place mutations detach through COW.
+    #[inline(always)]
+    pub(crate) fn string_rc_ptr(&self) -> Option<*const String> {
+        if self.value_type() == ValueType::String {
+            Some(unsafe { self.data.ptr as *const String })
+        } else {
+            None
+        }
+    }
+
+    /// Add/remove the strong reference owned by a dynamic callback cache.
+    /// String retention is PHP-observable only as memory lifetime: unlike
+    /// objects, strings have no destructor side effects.
+    #[inline]
+    pub(crate) unsafe fn retain_cached_string(ptr: *const String) {
+        Rc::increment_strong_count(ptr);
+    }
+
+    #[inline]
+    pub(crate) unsafe fn release_cached_string(ptr: *const String) {
+        Rc::decrement_strong_count(ptr);
+    }
+
     /// Get mutable string reference with COW semantics.
     /// If sole owner (refcount == 1): returns mutable reference in place (no allocation).
     /// If shared (refcount > 1): detaches — clones the String into a new Rc, updates pointer.

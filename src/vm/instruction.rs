@@ -50,8 +50,9 @@ impl Instruction {
 }
 
 /// Monomorphic inline cache entry — one per instruction slot in OpArray.
-/// Only InitFcall/InitMethodCall/InitStaticCall use their cache entry;
-/// other instructions' entries stay zeroed (no overhead — just unused memory).
+/// InitFcall/InitMethodCall/InitStaticCall use their cache entry for normal
+/// dispatch. DoFcall can use its otherwise-idle entry for a dynamic string
+/// callback resolved by an internal callback helper.
 ///
 /// Mutated via raw pointer writes in the single-threaded VM dispatch loop.
 pub struct InlineCache {
@@ -75,6 +76,7 @@ unsafe impl Sync for InlineCache {}
 
 impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
+    const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
     pub fn empty() -> Self {
         Self {
@@ -100,5 +102,37 @@ impl InlineCache {
         debug_assert!(slot <= (u32::MAX >> 2) as usize);
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// String identity retained by a dynamic-callback DoFcall cache entry.
+    ///
+    /// DoFcall does not otherwise use `class_id` or `prop_info`, so their two
+    /// halves can hold the pointer without growing the 16-byte side table.
+    #[inline(always)]
+    pub fn callback_string(&self) -> *const String {
+        let raw = ((self.class_id as u64) << 32) | self.prop_info as u64;
+        raw as usize as *const String
+    }
+
+    #[inline(always)]
+    pub fn set_callback_string(&mut self, key: *const String, func: *const FunctionCommon) {
+        let raw = key as usize as u64;
+        self.func = func;
+        self.class_id = (raw >> 32) as u32;
+        self.prop_info = raw as u32;
+    }
+
+    #[inline(always)]
+    pub fn callback_string_cache_disabled(&self) -> bool {
+        self.func == Self::CALLBACK_CACHE_DISABLED
+    }
+
+    /// Permanently stop caching a polymorphic dynamic-callback call site.
+    /// The caller releases any retained string before entering this state.
+    #[inline(always)]
+    pub fn disable_callback_string_cache(&mut self) {
+        self.func = Self::CALLBACK_CACHE_DISABLED;
+        self.class_id = 0;
+        self.prop_info = 0;
     }
 }

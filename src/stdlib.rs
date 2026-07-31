@@ -15,11 +15,13 @@ use std::fmt::Write as _;
 
 use crate::value::{Value, ValueType, PhpArray, ArrayKey};
 use crate::vm::frame::ExecuteData;
-use crate::vm::function::FunctionCommon;
+use crate::vm::function::{FunctionCommon, FunctionType};
+use crate::vm::instruction::InlineCache;
+use crate::vm::opcode::OpCode;
 use crate::runtime::ExecutorGlobals;
 use crate::compiler::{make_internal_function, make_internal_function_ref, make_internal_function_variadic, make_internal_method};
 use crate::vm::function::InternalFunction;
-use crate::vm::execute::{call_function_iter, call_function_owned_iter, call_function_readback_arg0_iter, VmError};
+use crate::vm::execute::{call_function, call_function_iter, call_function_owned_iter, call_function_readback_arg0_iter, VmError};
 use crate::parser::Visibility;
 
 // ============================================================================
@@ -2553,6 +2555,79 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
     }
 }
 
+/// Return the otherwise-unused DoFcall inline-cache entry belonging to the PHP
+/// instruction that entered the current internal callback helper.
+#[inline(always)]
+fn callback_cache_slot(ed: *mut ExecuteData) -> Option<*mut InlineCache> {
+    if ed.is_null() { return None; }
+    let caller = unsafe { (*ed).prev_execute_data };
+    if caller.is_null() { return None; }
+
+    let func = unsafe { (*caller).func };
+    if func.is_null() || unsafe { (*func).fn_type } != FunctionType::User {
+        return None;
+    }
+
+    let op_array = unsafe { (*caller).op_array() };
+    let opline = unsafe { (*caller).opline };
+    let base = op_array.instructions.as_ptr();
+    let byte_offset = (opline as usize).checked_sub(base as usize)?;
+    if byte_offset % std::mem::size_of::<crate::vm::instruction::Instruction>() != 0 {
+        return None;
+    }
+    let ip = byte_offset / std::mem::size_of::<crate::vm::instruction::Instruction>();
+    if ip >= op_array.instructions.len() || unsafe { (*opline).opcode } != OpCode::DoFcall {
+        return None;
+    }
+
+    Some(unsafe { op_array.cache.as_ptr().add(ip) as *mut InlineCache })
+}
+
+/// Resolve a plain string callback through the call-site cache. The retained
+/// key makes a later mutation COW-detach, and the content comparison also
+/// handles an equal callback string coming from a different allocation.
+#[inline]
+fn resolve_cached_string_callback(
+    val: &Value,
+    cache_slot: *mut InlineCache,
+) -> Option<ResolvedCallback> {
+    let name = val.as_str()?;
+    let cached_name_ptr = unsafe { (*cache_slot).callback_string() };
+    if cached_name_ptr.is_null() {
+        return None;
+    }
+    let current_name_ptr = val.string_rc_ptr()?;
+    if current_name_ptr != cached_name_ptr && unsafe { &*cached_name_ptr }.as_str() != name {
+        return None;
+    }
+    let func_ptr = unsafe { (*cache_slot).func };
+    if func_ptr.is_null() {
+        return None;
+    }
+    Some(ResolvedCallback {
+        func_ptr,
+        prepend_args: vec![],
+        use_vars: vec![],
+    })
+}
+
+#[inline]
+fn cache_resolved_string_callback(
+    val: &Value,
+    resolved: &ResolvedCallback,
+    cache_slot: *mut InlineCache,
+) {
+    let Some(name_ptr) = val.string_rc_ptr() else { return; };
+    let old_ptr = unsafe { (*cache_slot).callback_string() };
+    if old_ptr != name_ptr {
+        unsafe { Value::retain_cached_string(name_ptr) };
+        if !old_ptr.is_null() {
+            unsafe { Value::release_cached_string(old_ptr) };
+        }
+    }
+    unsafe { (*cache_slot).set_callback_string(name_ptr, resolved.func_ptr) };
+}
+
 /// Resolve a callback at a PHP call site. Only array callbacks can need the
 /// caller's class scope for method visibility, so plain function strings,
 /// closures and invokable objects avoid allocating a scope `String`.
@@ -2562,12 +2637,67 @@ fn resolve_callback_at_callsite(
     eg: &ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Option<ResolvedCallback> {
-    if val.value_type() == ValueType::Array {
+    let mut cache_slot = if val.value_type() == ValueType::String {
+        callback_cache_slot(ed)
+    } else {
+        None
+    };
+    if let Some(slot) = cache_slot {
+        if unsafe { (*slot).callback_string_cache_disabled() } {
+            cache_slot = None;
+        } else {
+            let cached_name = unsafe { (*slot).callback_string() };
+            if !cached_name.is_null() {
+                if let Some(resolved) = resolve_cached_string_callback(val, slot) {
+                    return Some(resolved);
+                }
+
+                // A second callback name at one instruction makes this site
+                // polymorphic. Do not thrash the monomorphic cache forever.
+                unsafe { Value::release_cached_string(cached_name) };
+                unsafe { (*slot).disable_callback_string_cache() };
+                cache_slot = None;
+            }
+        }
+    }
+
+    let resolved = if val.value_type() == ValueType::Array {
         let caller_class = get_calling_scope_class(ed, eg);
         resolve_callback(val, eg, caller_class)
     } else {
         resolve_callback(val, eg, None)
+    };
+
+    if let (Some(slot), Some(resolved)) = (cache_slot, resolved.as_ref()) {
+        cache_resolved_string_callback(val, resolved, slot);
     }
+    resolved
+}
+
+/// Invoke a resolved callback with positional values from a PHP array.
+/// Plain functions over packed arrays use the backing Value slice directly;
+/// receivers, captures and hash arrays keep the general segmented iterator.
+#[inline]
+fn call_resolved_with_array(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    args: &PhpArray,
+) -> Result<Value, VmError> {
+    if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() {
+        if let Some(values) = args.packed_values() {
+            return call_function(eg, resolved.func_ptr, values);
+        }
+    }
+
+    let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
+    call_function_iter(
+        eg,
+        resolved.func_ptr,
+        num_args,
+        resolved.prepend_args.iter()
+            .chain(args.values())
+            .chain(resolved.use_vars.iter()),
+    )
 }
 
 /// call_user_func($callback, ...$args)
@@ -2591,15 +2721,7 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
     // Stream prepend args (e.g. $this), variadic values and closure captures
     // directly into the callback frame. No intermediate argument vectors.
     let result = if let Some(arr) = variadic_val.as_array() {
-        let num_args = resolved.prepend_args.len() + arr.len() + resolved.use_vars.len();
-        call_function_iter(
-            eg,
-            resolved.func_ptr,
-            num_args,
-            resolved.prepend_args.iter()
-                .chain(arr.values())
-                .chain(resolved.use_vars.iter()),
-        )?
+        call_resolved_with_array(eg, &resolved, arr)?
     } else if variadic_val.value_type() != ValueType::Undef {
         let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
         call_function_iter(
@@ -3993,15 +4115,7 @@ fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execut
         )?
     } else {
         // All integer keys — stream values directly from packed or hash array.
-        let num_args = resolved.prepend_args.len() + arr.len() + resolved.use_vars.len();
-        call_function_iter(
-            eg,
-            resolved.func_ptr,
-            num_args,
-            resolved.prepend_args.iter()
-                .chain(arr.values())
-                .chain(resolved.use_vars.iter()),
-        )?
+        call_resolved_with_array(eg, &resolved, arr)?
     };
     if eg.exception.is_some() { return Ok(()); }
     ret!(rv, result);

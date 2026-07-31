@@ -137,6 +137,44 @@ echo call_user_func_array('callback_ok', [4]);
 }
 
 #[test]
+fn test_call_user_func_array_cache_tracks_mutated_callback_name() {
+    let out = run_php(r#"<?php
+function callback_a($value) { return 'a' . $value; }
+function callback_ab($value) { return 'ab' . $value; }
+function invoke_at_one_site($callback, $value) {
+    return call_user_func_array($callback, [$value]);
+}
+$callback = 'callback_a';
+echo invoke_at_one_site($callback, 1);
+$callback .= 'b';
+echo ':';
+echo invoke_at_one_site($callback, 2);
+$callback = 'callback_a';
+echo ':';
+echo invoke_at_one_site($callback, 3);
+"#);
+    assert_eq!(out, "a1:ab2:a3");
+}
+
+#[test]
+fn test_call_user_func_array_same_closure_body_uses_current_captures() {
+    let out = run_php(r#"<?php
+function make_adder($amount) {
+    return function($value) use ($amount) { return $value + $amount; };
+}
+function invoke_closure_at_one_site($callback, $value) {
+    return call_user_func_array($callback, [$value]);
+}
+$add_two = make_adder(2);
+$add_ten = make_adder(10);
+echo invoke_closure_at_one_site($add_two, 5);
+echo ':';
+echo invoke_closure_at_one_site($add_ten, 5);
+"#);
+    assert_eq!(out, "7:15");
+}
+
+#[test]
 fn test_array_walk_method_reads_back_first_public_argument() {
     let out = run_php(r#"<?php
 class Walker {

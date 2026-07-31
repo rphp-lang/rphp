@@ -8,7 +8,7 @@ use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{Function, FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
 use super::quick::{
     QuickArrayIndex, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
@@ -263,6 +263,23 @@ unsafe fn frame_slot_init(frame: *mut ExecuteData, ptr: *mut Value, val: Value) 
     if heap {
         (*frame).has_heap_slots = true;
         bitmap_mark_heap(frame, ptr);
+    }
+}
+
+/// Initialize a sequential argument in a freshly pushed callback frame.
+/// The slot index is already known, so heap bookkeeping can set the bitmap
+/// directly instead of calling the outlined pointer-to-index slow path.
+#[inline(always)]
+unsafe fn callback_arg_init(frame: *mut ExecuteData, index: usize, val: Value) {
+    let heap = val.needs_cleanup();
+    stats::inc_write_frame_slot(heap);
+    let ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS + index);
+    ptr.write(val);
+    if heap {
+        (*frame).has_heap_slots = true;
+        if (*frame).num_cvs + (*frame).num_temps <= 64 {
+            (*frame).heap_bitmap |= 1u64 << index;
+        }
     }
 }
 
@@ -763,24 +780,24 @@ where
         let arg = args
             .next()
             .expect("callback argument iterator shorter than declared length");
-        let slot = unsafe { (*frame).cv_mut(i as u32) };
-        unsafe { frame_slot_init(frame, slot as *mut Value, arg) };
+        unsafe { callback_arg_init(frame, i, arg) };
     }
     debug_assert!(
         args.next().is_none(),
         "callback argument iterator longer than declared length"
     );
 
-    let func = unsafe { Function::from_common_ptr(func_ptr) };
-    let execution_result = match func.fn_type() {
+    let execution_result = match unsafe { (*func_ptr).fn_type } {
         FunctionType::User => {
-            let user = unsafe { func.as_user() };
+            let user = unsafe { &*(func_ptr as *const UserFunction) };
             unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
             eg.current_execute_data.set(frame);
             execute_ex(eg, frame)
         }
         FunctionType::Internal => {
-            let internal = unsafe { func.as_internal() };
+            let internal = unsafe {
+                &*(func_ptr as *const super::function::InternalFunction)
+            };
             unsafe { std::ptr::drop_in_place(&mut return_value as *mut Value) };
             (internal.handler)(frame, &mut return_value, eg)
         }

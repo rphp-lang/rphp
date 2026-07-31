@@ -356,6 +356,21 @@ impl OpArray {
     }
 }
 
+impl Drop for OpArray {
+    fn drop(&mut self) {
+        // A DoFcall cache may retain an Rc-backed callback-name string. Pair
+        // that reference here; all other cache kinds own no heap allocation.
+        for (instruction, cache) in self.instructions.iter().zip(&self.cache) {
+            if instruction.opcode == OpCode::DoFcall {
+                let callback_string = cache.callback_string();
+                if !callback_string.is_null() {
+                    unsafe { Value::release_cached_string(callback_string) };
+                }
+            }
+        }
+    }
+}
+
 fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
     if !op_array.global_vars.is_empty()
         || !op_array.static_vars.is_empty()
