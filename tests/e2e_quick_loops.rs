@@ -171,6 +171,83 @@ echo $i;
 }
 
 #[test]
+fn quick_long_loop_accumulates_invariant_abs() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = -7;
+$sum = 0;
+for ($i = 0; $i < 1000; ++$i) {
+    $sum += abs($value);
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "7000|1000"
+    );
+}
+
+#[test]
+fn quick_long_loop_computes_abs_of_induction() {
+    assert_eq!(
+        run_php(
+            "<?php
+$sum = 0;
+for ($i = -1000; $i < 1000; ++$i) {
+    $sum += abs($i);
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "1000000|1000"
+    );
+}
+
+#[test]
+fn quick_abs_guard_falls_back_for_double_value() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = -1.5;
+$sum = 0;
+for ($i = 0; $i < 1000; ++$i) {
+    $sum += abs($value);
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "float|1500|1000"
+    );
+}
+
+#[test]
+fn quick_abs_deoptimizes_accumulator_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = -7;
+$sum = PHP_INT_MAX - 350;
+for ($i = 0; $i < 100; ++$i) {
+    $sum += abs($value);
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|100"
+    );
+}
+
+#[test]
 fn quick_long_loop_supports_while_shape() {
     assert_eq!(
         run_php(

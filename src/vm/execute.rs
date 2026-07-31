@@ -2830,7 +2830,8 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
         | QuickLongTerm::ArrayIndex { term_tmp, .. }
-        | QuickLongTerm::StringLength { term_tmp, .. } => {
+        | QuickLongTerm::StringLength { term_tmp, .. }
+        | QuickLongTerm::AbsLong { term_tmp, .. } => {
             Some(slot_base.add(term_tmp as usize))
         }
     };
@@ -2845,7 +2846,8 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongTerm::Induction
         | QuickLongTerm::InductionPlusConst { .. }
         | QuickLongTerm::ArrayIndex { .. }
-        | QuickLongTerm::StringLength { .. } => None,
+        | QuickLongTerm::StringLength { .. }
+        | QuickLongTerm::AbsLong { .. } => None,
         QuickLongTerm::InductionPlusCv { addend_cv, .. } => {
             Some(slot_base.add(addend_cv as usize))
         }
@@ -2859,6 +2861,12 @@ unsafe fn run_quick_long_accumulate_loop(
     let string_ptr = match plan.term {
         QuickLongTerm::StringLength { string_cv, .. } => {
             Some(slot_base.add(string_cv as usize))
+        }
+        _ => None,
+    };
+    let abs_operand_ptr = match plan.term {
+        QuickLongTerm::AbsLong { operand_cv, .. } => {
+            Some(slot_base.add(operand_cv as usize))
         }
         _ => None,
     };
@@ -2883,12 +2891,18 @@ unsafe fn run_quick_long_accumulate_loop(
                 | QuickLongTerm::InductionPlusCv { term_tmp, .. }
                 | QuickLongTerm::ArrayIndex { term_tmp, .. }
                 | QuickLongTerm::StringLength { term_tmp, .. }
+                | QuickLongTerm::AbsLong { term_tmp, .. }
                 if quick_loop_slot_has_heap(frame, term_tmp)
         )
         || matches!(
             plan.term,
             QuickLongTerm::InductionPlusCv { addend_cv, .. }
                 if quick_loop_slot_has_heap(frame, addend_cv)
+        )
+        || matches!(
+            plan.term,
+            QuickLongTerm::AbsLong { operand_cv, .. }
+                if quick_loop_slot_has_heap(frame, operand_cv)
         )
         || matches!(
             plan.term,
@@ -2912,6 +2926,7 @@ unsafe fn run_quick_long_accumulate_loop(
         || addend_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || array_ptr.is_some_and(|ptr| (*ptr).as_array().is_none())
         || string_ptr.is_some_and(|ptr| (*ptr).as_str().is_none())
+        || abs_operand_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || (*sum_ptr).value_type() != ValueType::Long
         || increment_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || bound_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
@@ -2933,6 +2948,12 @@ unsafe fn run_quick_long_accumulate_loop(
     let invariant_string_length = string_ptr.map(|ptr| {
         (*ptr).as_str().unwrap_unchecked().len() as i64
     });
+    let invariant_abs = match plan.term {
+        QuickLongTerm::AbsLong { operand_cv, .. } if operand_cv != plan.induction_cv => {
+            (*abs_operand_ptr.unwrap_unchecked()).raw_long().checked_abs()
+        }
+        _ => Some(0),
+    };
     let invariant_array_term = match plan.term {
         QuickLongTerm::ArrayIndex {
             index: QuickArrayIndex::Long(QuickLongOperand::Const(index)),
@@ -2959,7 +2980,7 @@ unsafe fn run_quick_long_accumulate_loop(
         },
         _ => Some(0),
     };
-    if invariant_array_term.is_none() {
+    if invariant_array_term.is_none() || invariant_abs.is_none() {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
     }
@@ -3050,6 +3071,30 @@ unsafe fn run_quick_long_accumulate_loop(
             }
             QuickLongTerm::StringLength { .. } => {
                 invariant_string_length.unwrap_unchecked()
+            }
+            QuickLongTerm::AbsLong {
+                operand_cv,
+                term_ip,
+                ..
+            } => {
+                if operand_cv != plan.induction_cv {
+                    invariant_abs.unwrap_unchecked()
+                } else {
+                    match induction.checked_abs() {
+                        Some(value) => value,
+                        None => {
+                            Value::write_long(induction_ptr, induction);
+                            Value::write_long(accumulator_ptr, accumulator);
+                            if let Some(ptr) = condition_ptr {
+                                Value::write_bool(ptr, true);
+                            }
+                            (*frame).opline =
+                                op_array.instructions.as_ptr().add(term_ip);
+                            stats::inc_quick_loop_deoptimized(iterations);
+                            return Ok(QuickLoopOutcome::Deoptimized);
+                        }
+                    }
+                }
             }
         };
 

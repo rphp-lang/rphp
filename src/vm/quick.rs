@@ -70,6 +70,12 @@ pub enum QuickLongTerm {
         term_tmp: u16,
         term_ip: usize,
     },
+    /// Absolute value of a long CV, produced by DirectInternalCall1(abs).
+    AbsLong {
+        operand_cv: u16,
+        term_tmp: u16,
+        term_ip: usize,
+    },
 }
 
 /// Region for the compiler shapes produced by:
@@ -82,6 +88,7 @@ pub enum QuickLongTerm {
 ///     // or: $accumulator += $packed_array[$i];
 ///     // or: $value = $array['key']; $accumulator += $value;
 ///     // or: $accumulator += strlen($loop_invariant_string);
+///     // or: $accumulator += abs($long_cv);
 /// }
 /// ```
 ///
@@ -669,6 +676,17 @@ pub fn detect_long_accumulate_loop(
                     term_ip: header_ip + 2,
                 }
             }
+            (OpCode::DirectInternalCall1, OpType::Cv, OpType::Unused)
+                if crate::builtin_metadata::DirectInternalKind::from_id(
+                    first_body.extended_value,
+                ) == Some(crate::builtin_metadata::DirectInternalKind::Abs) =>
+            {
+                QuickLongTerm::AbsLong {
+                    operand_cv: first_body.op1,
+                    term_tmp: first_body.result,
+                    term_ip: header_ip + 2,
+                }
+            }
             _ => return None,
         };
         (sum.op1, term, sum.result, header_ip + 3, header_ip + 4)
@@ -771,6 +789,11 @@ pub fn detect_long_accumulate_loop(
         )
         || matches!(
             term,
+            QuickLongTerm::AbsLong { operand_cv, .. }
+                if operand_cv == accumulator_cv
+        )
+        || matches!(
+            term,
             QuickLongTerm::ArrayIndex {
                 array_cv,
                 index: QuickArrayIndex::ValueSlot(index_cv),
@@ -806,7 +829,8 @@ pub fn detect_long_accumulate_loop(
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
         | QuickLongTerm::ArrayIndex { term_tmp, .. }
-        | QuickLongTerm::StringLength { term_tmp, .. } => {
+        | QuickLongTerm::StringLength { term_tmp, .. }
+        | QuickLongTerm::AbsLong { term_tmp, .. } => {
             temporary_slots.push(term_tmp);
         }
     }
@@ -842,6 +866,11 @@ pub fn detect_long_accumulate_loop(
             term,
             QuickLongTerm::StringLength { string_cv, .. }
                 if string_cv as u32 >= op_array.num_cvs
+        )
+        || matches!(
+            term,
+            QuickLongTerm::AbsLong { operand_cv, .. }
+                if operand_cv as u32 >= op_array.num_cvs
         )
         || matches!(
             term,
@@ -1956,6 +1985,25 @@ for ($i = 0; $i < 100; {update}) {{
                     crate::vm::planner::BlockPlan::QuickLongAccumulate(_)
                 )));
             }
+        }
+    }
+
+    #[test]
+    fn detects_long_abs_as_accumulate_term() {
+        for expression in ["abs($value)", "abs($i)"] {
+            let source = format!("<?php
+$value = -7;
+$sum = 0;
+for ($i = 0; $i < 100; ++$i) {{
+    $sum += {expression};
+}}
+");
+            let plan = quick_plan(&source);
+            assert!(matches!(
+                plan.term,
+                QuickLongTerm::AbsLong { operand_cv, .. }
+                    if operand_cv == if expression == "abs($i)" { 2 } else { 0 }
+            ));
         }
     }
 
