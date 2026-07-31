@@ -592,7 +592,11 @@ pub fn make_internal_function(
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
             plan: CallPlan {
-                call: CallStrategy::Full,
+                // Fixed-arity internal functions have no VM-level type hints,
+                // references, or variadic packing. DoFcall can therefore run
+                // the handler after a compact arity/hole check and leave named
+                // or otherwise exceptional calls to the full path.
+                call: CallStrategy::Fast,
                 ret: ReturnStrategy::Full,
                 cleanup: CleanupMode::ScanAll,
                 borrow_this: false,
@@ -669,7 +673,7 @@ pub fn make_internal_method(
             },
             frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
             plan: CallPlan {
-                call: CallStrategy::Full,
+                call: CallStrategy::Fast,
                 ret: ReturnStrategy::Full,
                 cleanup: CleanupMode::ScanAll,
                 borrow_this: false,

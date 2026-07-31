@@ -6407,6 +6407,77 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // no variadics, no generator, no globals, no type hints, no return type.
                 // Runtime: only check fn_type + plan + no pending edge cases.
                 let func_common_fast = unsafe { &*(*call).func };
+
+                // ── Fast path for fixed-signature internal functions ──
+                // Internal handlers still receive their ordinary ExecuteData
+                // frame, so this changes no stdlib ABI or argument ownership.
+                // It only avoids the generic type/variadic/class validation
+                // path when the constructor proved those features absent.
+                if func_common_fast.fn_type == FunctionType::Internal
+                    && func_common_fast.plan.call == CallStrategy::Fast
+                    && eg.pending_invoke_this.is_none()
+                    && eg.pending_named_variadic.is_empty()
+                {
+                    let num_args_fast = unsafe { (*call).num_args };
+                    let arity_ok = num_args_fast >= func_common_fast.sig.required_num_args
+                        && num_args_fast <= func_common_fast.sig.public_arity();
+                    let required_args_present = !unsafe { (*call).named_args_used } || {
+                        let mut all_present = true;
+                        for i in 0..func_common_fast.sig.required_num_args {
+                            let cv_idx = func_common_fast.sig.param_cv_index(i);
+                            if unsafe { (*(*call).cv(cv_idx)).is_undef() } {
+                                all_present = false;
+                                break;
+                            }
+                        }
+                        all_present
+                    };
+
+                    if arity_ok && required_args_present {
+                        stats::inc_do_fcall_fast();
+                        let return_value_ptr = match opline.result_type {
+                            OpType::Tmp | OpType::Var => unsafe {
+                                (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                            },
+                            OpType::Unused => std::ptr::null_mut(),
+                            _ => unsafe {
+                                (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                            },
+                        };
+                        unsafe { (*call).return_value = return_value_ptr };
+
+                        let internal = unsafe {
+                            &*((*call).func as *const super::function::InternalFunction)
+                        };
+                        if !return_value_ptr.is_null() {
+                            unsafe { std::ptr::drop_in_place(return_value_ptr) };
+                        }
+                        let handler_result = (internal.handler)(call, return_value_ptr, eg);
+                        unsafe { cleanup_frame_slots(call) };
+                        eg.vm_stack.pop_call_frame(call);
+
+                        if let Some(exc) = eg.exception.take() {
+                            match throw_in_frame(eg, frame, exc) {
+                                ThrowResult::Handled(new_frame, new_op_array) => {
+                                    frame = new_frame;
+                                    op_array = new_op_array;
+                                    continue;
+                                }
+                                ThrowResult::Unhandled(thrown) => {
+                                    eg.exception = Some(thrown);
+                                    return Ok(());
+                                }
+                            }
+                        }
+                        if let Err(e) = handler_result {
+                            return Err(e);
+                        }
+
+                        unsafe { (*frame).opline = opline_ptr.add(1) };
+                        continue 'vm;
+                    }
+                }
+
                 if func_common_fast.fn_type == FunctionType::User
                     && func_common_fast.plan.call == CallStrategy::FastScalar
                     // FastScalar is fixed-arity by construction, so the
