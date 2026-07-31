@@ -27,6 +27,12 @@ pub enum QuickLongBound {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickIncrementKind {
+    Pre,
+    Post,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickArrayIndex {
     Long(QuickLongOperand),
     StringLiteral(u16),
@@ -58,22 +64,29 @@ pub enum QuickLongTerm {
         destination: Option<u16>,
         fetch_ip: usize,
     },
+    /// Byte length of an invariant string CV, produced by Strlen_Cv.
+    StringLength {
+        string_cv: u16,
+        term_tmp: u16,
+        term_ip: usize,
+    },
 }
 
 /// Region for the compiler shapes produced by:
 ///
 /// ```php
-/// for (...; $i < $limit; $i++) {
+/// for (...; $i < $limit; $i++) { // `++$i` is supported as well
 ///     $accumulator += $i;
 ///     // or: $accumulator += $i + INTEGER_CONSTANT;
 ///     // or: $accumulator += $i + $loop_invariant_cv;
 ///     // or: $accumulator += $packed_array[$i];
 ///     // or: $value = $array['key']; $accumulator += $value;
+///     // or: $accumulator += strlen($loop_invariant_string);
 /// }
 /// ```
 ///
 /// The baseline region contains comparison, conditional exit, accumulation,
-/// assignment, post-increment and backward jump, with an optional arithmetic
+/// assignment, increment and backward jump, with an optional arithmetic
 /// term instruction. All observable state is scalar and every deoptimization
 /// point has a precise baseline instruction.
 #[derive(Debug, Clone, Copy)]
@@ -86,9 +99,10 @@ pub struct QuickLongAccumulateLoop {
     pub condition_tmp: Option<u16>,
     pub term: QuickLongTerm,
     pub sum_tmp: u16,
-    pub post_tmp: Option<u16>,
+    pub increment_kind: QuickIncrementKind,
+    pub increment_tmp: Option<u16>,
     pub sum_ip: usize,
-    pub post_inc_ip: usize,
+    pub increment_ip: usize,
 }
 
 /// Guarded value-only foreach recurrence:
@@ -648,6 +662,13 @@ pub fn detect_long_accumulate_loop(
                     fetch_ip: header_ip + 2,
                 }
             }
+            (OpCode::Strlen_Cv, OpType::Cv, OpType::Unused) => {
+                QuickLongTerm::StringLength {
+                    string_cv: first_body.op1,
+                    term_tmp: first_body.result,
+                    term_ip: header_ip + 2,
+                }
+            }
             _ => return None,
         };
         (sum.op1, term, sum.result, header_ip + 3, header_ip + 4)
@@ -707,17 +728,21 @@ pub fn detect_long_accumulate_loop(
         return None;
     }
 
-    let post_inc_ip = assign_ip + 1;
-    let post_inc = op_array.instructions[post_inc_ip];
-    if post_inc.opcode != OpCode::PostInc
-        || post_inc.op1_type != OpType::Cv
-        || post_inc.op1 != induction_cv
+    let increment_ip = assign_ip + 1;
+    let increment = op_array.instructions[increment_ip];
+    let increment_kind = match increment.opcode {
+        OpCode::PreInc => QuickIncrementKind::Pre,
+        OpCode::PostInc => QuickIncrementKind::Post,
+        _ => return None,
+    };
+    if increment.op1_type != OpType::Cv
+        || increment.op1 != induction_cv
     {
         return None;
     }
-    let post_tmp = match post_inc.result_type {
+    let increment_tmp = match increment.result_type {
         OpType::Unused => None,
-        OpType::Tmp => Some(post_inc.result),
+        OpType::Tmp => Some(increment.result),
         _ => return None,
     };
 
@@ -738,6 +763,11 @@ pub fn detect_long_accumulate_loop(
             term,
             QuickLongTerm::ArrayIndex { array_cv, .. }
                 if array_cv == induction_cv || array_cv == accumulator_cv
+        )
+        || matches!(
+            term,
+            QuickLongTerm::StringLength { string_cv, .. }
+                if string_cv == induction_cv || string_cv == accumulator_cv
         )
         || matches!(
             term,
@@ -775,11 +805,12 @@ pub fn detect_long_accumulate_loop(
         QuickLongTerm::Induction => {}
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
-        | QuickLongTerm::ArrayIndex { term_tmp, .. } => {
+        | QuickLongTerm::ArrayIndex { term_tmp, .. }
+        | QuickLongTerm::StringLength { term_tmp, .. } => {
             temporary_slots.push(term_tmp);
         }
     }
-    if let Some(slot) = post_tmp {
+    if let Some(slot) = increment_tmp {
         temporary_slots.push(slot);
     }
     let temporary_slot_count = temporary_slots.len();
@@ -809,6 +840,11 @@ pub fn detect_long_accumulate_loop(
         )
         || matches!(
             term,
+            QuickLongTerm::StringLength { string_cv, .. }
+                if string_cv as u32 >= op_array.num_cvs
+        )
+        || matches!(
+            term,
             QuickLongTerm::ArrayIndex {
                 index: QuickArrayIndex::ValueSlot(index_cv),
                 ..
@@ -834,9 +870,10 @@ pub fn detect_long_accumulate_loop(
         condition_tmp,
         term,
         sum_tmp,
-        post_tmp,
+        increment_kind,
+        increment_tmp,
         sum_ip,
-        post_inc_ip,
+        increment_ip,
     })
 }
 
@@ -1882,6 +1919,43 @@ for ($i = 0; $i < 100; $i++) {{
                 plan.term,
                 QuickLongTerm::InductionPlusCv { addend_cv: 0, .. }
             ));
+        }
+    }
+
+    #[test]
+    fn detects_invariant_string_length_as_accumulate_term() {
+        for update in ["$i++", "++$i"] {
+            let source = format!("<?php
+$string = 'abcd';
+$sum = 0;
+for ($i = 0; $i < 100; {update}) {{
+    $sum += strlen($string);
+}}
+");
+            let plan = quick_plan(&source);
+            assert_eq!(plan.induction_cv, 2);
+            assert_eq!(plan.accumulator_cv, 1);
+            assert!(matches!(
+                plan.term,
+                QuickLongTerm::StringLength { string_cv: 0, .. }
+            ));
+            assert_eq!(
+                plan.increment_kind,
+                if update == "++$i" {
+                    QuickIncrementKind::Pre
+                } else {
+                    QuickIncrementKind::Post
+                }
+            );
+
+            #[cfg(feature = "quick-loops")]
+            {
+                let main = compile_main(&source);
+                assert!(main.op_array.block_plans.iter().any(|plan| matches!(
+                    plan,
+                    crate::vm::planner::BlockPlan::QuickLongAccumulate(_)
+                )));
+            }
         }
     }
 

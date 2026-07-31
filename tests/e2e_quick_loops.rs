@@ -100,6 +100,77 @@ echo $i;
 }
 
 #[test]
+fn quick_long_loop_accumulates_invariant_string_length() {
+    assert_eq!(
+        run_php(
+            "<?php
+$string = 'abcd';
+$sum = 0;
+for ($i = 0; $i < 1000; ++$i) {
+    $sum += strlen($string);
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "4000|1000"
+    );
+
+    assert_eq!(
+        run_php(
+            "<?php
+$string = 'ž';
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += strlen($string);
+}
+echo $sum;
+"
+        ),
+        "2000"
+    );
+}
+
+#[test]
+fn quick_string_length_guard_falls_back_for_non_string_value() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = 1234;
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += strlen($value);
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "4000|1000"
+    );
+}
+
+#[test]
+fn quick_string_length_deoptimizes_accumulator_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$string = 'abcd';
+$sum = PHP_INT_MAX - 200;
+for ($i = 0; $i < 100; ++$i) {
+    $sum += strlen($string);
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|100"
+    );
+}
+
+#[test]
 fn quick_long_loop_supports_while_shape() {
     assert_eq!(
         run_php(

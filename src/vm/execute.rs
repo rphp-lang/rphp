@@ -10,7 +10,7 @@ use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
 use super::quick::{
-    QuickArrayIndex, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
+    QuickArrayIndex, QuickIncrementKind, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
@@ -2829,7 +2829,8 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongTerm::Induction => None,
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
-        | QuickLongTerm::ArrayIndex { term_tmp, .. } => {
+        | QuickLongTerm::ArrayIndex { term_tmp, .. }
+        | QuickLongTerm::StringLength { term_tmp, .. } => {
             Some(slot_base.add(term_tmp as usize))
         }
     };
@@ -2843,7 +2844,8 @@ unsafe fn run_quick_long_accumulate_loop(
     let addend_ptr = match plan.term {
         QuickLongTerm::Induction
         | QuickLongTerm::InductionPlusConst { .. }
-        | QuickLongTerm::ArrayIndex { .. } => None,
+        | QuickLongTerm::ArrayIndex { .. }
+        | QuickLongTerm::StringLength { .. } => None,
         QuickLongTerm::InductionPlusCv { addend_cv, .. } => {
             Some(slot_base.add(addend_cv as usize))
         }
@@ -2854,8 +2856,16 @@ unsafe fn run_quick_long_accumulate_loop(
         }
         _ => None,
     };
+    let string_ptr = match plan.term {
+        QuickLongTerm::StringLength { string_cv, .. } => {
+            Some(slot_base.add(string_cv as usize))
+        }
+        _ => None,
+    };
     let sum_ptr = slot_base.add(plan.sum_tmp as usize);
-    let post_ptr = plan.post_tmp.map(|slot| slot_base.add(slot as usize));
+    let increment_ptr = plan
+        .increment_tmp
+        .map(|slot| slot_base.add(slot as usize));
 
     let bound_ptr = match plan.bound {
         QuickLongBound::Cv(slot) => Some(slot_base.add(slot as usize)),
@@ -2872,6 +2882,7 @@ unsafe fn run_quick_long_accumulate_loop(
             QuickLongTerm::InductionPlusConst { term_tmp, .. }
                 | QuickLongTerm::InductionPlusCv { term_tmp, .. }
                 | QuickLongTerm::ArrayIndex { term_tmp, .. }
+                | QuickLongTerm::StringLength { term_tmp, .. }
                 if quick_loop_slot_has_heap(frame, term_tmp)
         )
         || matches!(
@@ -2887,7 +2898,9 @@ unsafe fn run_quick_long_accumulate_loop(
             } if quick_loop_slot_has_heap(frame, destination)
         )
         || quick_loop_slot_has_heap(frame, plan.sum_tmp)
-        || plan.post_tmp.is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
+        || plan
+            .increment_tmp
+            .is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
         || matches!(plan.bound, QuickLongBound::Cv(slot) if quick_loop_slot_has_heap(frame, slot))
         || (*induction_ptr).value_type() != ValueType::Long
         || (*accumulator_ptr).value_type() != ValueType::Long
@@ -2898,8 +2911,9 @@ unsafe fn run_quick_long_accumulate_loop(
         || term_destination_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || addend_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || array_ptr.is_some_and(|ptr| (*ptr).as_array().is_none())
+        || string_ptr.is_some_and(|ptr| (*ptr).as_str().is_none())
         || (*sum_ptr).value_type() != ValueType::Long
-        || post_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+        || increment_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || bound_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
     {
         stats::inc_quick_loop_guard_failed();
@@ -2915,6 +2929,9 @@ unsafe fn run_quick_long_accumulate_loop(
     let invariant_addend = addend_ptr.map(|ptr| (*ptr).raw_long());
     let quick_array = array_ptr.map(|ptr| {
         QuickLongArray::from_array((*ptr).as_array().unwrap_unchecked())
+    });
+    let invariant_string_length = string_ptr.map(|ptr| {
+        (*ptr).as_str().unwrap_unchecked().len() as i64
     });
     let invariant_array_term = match plan.term {
         QuickLongTerm::ArrayIndex {
@@ -2948,7 +2965,7 @@ unsafe fn run_quick_long_accumulate_loop(
     }
     let mut iterations = 0u64;
     let mut last_term = 0i64;
-    let mut last_induction = 0i64;
+    let mut last_increment_result = 0i64;
     let mut completed_iteration = false;
 
     loop {
@@ -2966,8 +2983,8 @@ unsafe fn run_quick_long_accumulate_loop(
                     Value::write_long(ptr, last_term);
                 }
                 Value::write_long(sum_ptr, accumulator);
-                if let Some(ptr) = post_ptr {
-                    Value::write_long(ptr, last_induction);
+                if let Some(ptr) = increment_ptr {
+                    Value::write_long(ptr, last_increment_result);
                 }
             }
             (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
@@ -3031,6 +3048,9 @@ unsafe fn run_quick_long_accumulate_loop(
                 };
                 fetched
             }
+            QuickLongTerm::StringLength { .. } => {
+                invariant_string_length.unwrap_unchecked()
+            }
         };
 
         let next_accumulator = match accumulator.checked_add(term) {
@@ -3068,13 +3088,16 @@ unsafe fn run_quick_long_accumulate_loop(
                     Value::write_long(ptr, term);
                 }
                 Value::write_long(sum_ptr, next_accumulator);
-                (*frame).opline = op_array.instructions.as_ptr().add(plan.post_inc_ip);
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(QuickLoopOutcome::Deoptimized);
             }
         };
 
-        last_induction = induction;
+        last_increment_result = match plan.increment_kind {
+            QuickIncrementKind::Pre => next_induction,
+            QuickIncrementKind::Post => induction,
+        };
         last_term = term;
         induction = next_induction;
         accumulator = next_accumulator;
@@ -3097,8 +3120,8 @@ unsafe fn run_quick_long_accumulate_loop(
                 Value::write_long(ptr, last_term);
             }
             Value::write_long(sum_ptr, accumulator);
-            if let Some(ptr) = post_ptr {
-                Value::write_long(ptr, last_induction);
+            if let Some(ptr) = increment_ptr {
+                Value::write_long(ptr, last_increment_result);
             }
             (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
             handle_interrupt(eg)?;
