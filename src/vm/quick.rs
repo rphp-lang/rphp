@@ -273,6 +273,12 @@ pub enum QuickLongOp {
         literal: u16,
         next_target: QuickLongTarget,
     },
+    /// Redirect retained string state to another guarded string CV.
+    AssignStringSlot {
+        destination: u16,
+        source: u16,
+        next_target: QuickLongTarget,
+    },
     PostInc {
         value: u16,
         result: Option<u16>,
@@ -333,6 +339,7 @@ impl QuickLongOp {
             | Self::AddAddAssign { next_target, .. }
             | Self::Assign { next_target, .. }
             | Self::AssignStringLiteral { next_target, .. }
+            | Self::AssignStringSlot { next_target, .. }
             | Self::PostInc { next_target, .. } => resolve(next_target),
             Self::PostIncJump { target, .. } | Self::Jump { target } => resolve(target),
             Self::PostIncLoopLt {
@@ -845,6 +852,58 @@ fn long_slot(op_type: OpType, slot: u16) -> Option<u16> {
     matches!(op_type, OpType::Cv | OpType::Tmp).then_some(slot)
 }
 
+fn instruction_writes_cv(instruction: crate::vm::instruction::Instruction, cv: u16) -> bool {
+    if instruction.result_type == OpType::Cv && instruction.result == cv {
+        return true;
+    }
+    if instruction.opcode == OpCode::ForeachNext {
+        let value_cv = instruction.extended_value as u16;
+        let encoded_key = (instruction.extended_value >> 16) as u16;
+        return value_cv == cv || (encoded_key != 0 && encoded_key - 1 == cv);
+    }
+    matches!(
+        instruction.opcode,
+        OpCode::AssignCv
+            | OpCode::AssignConcat
+            | OpCode::PreInc
+            | OpCode::PreDec
+            | OpCode::PostInc
+            | OpCode::PostDec
+            | OpCode::BindGlobal
+            | OpCode::BindStatic
+    ) && instruction.op1_type == OpType::Cv
+        && instruction.op1 == cv
+}
+
+fn preheader_string_literal_cv(op_array: &OpArray, header_ip: usize, cv: u16) -> bool {
+    op_array.instructions[..header_ip]
+        .iter()
+        .rev()
+        .copied()
+        .find(|instruction| instruction_writes_cv(*instruction, cv))
+        .is_some_and(|instruction| {
+            instruction.opcode == OpCode::AssignCv
+                && instruction.op1_type == OpType::Cv
+                && instruction.op2_type == OpType::Const
+                && instruction.result_type == OpType::Unused
+                && op_array
+                    .literals
+                    .get(instruction.op2 as usize)
+                    .and_then(Value::as_str)
+                    .is_some()
+        })
+}
+
+fn cv_unmodified_in_region(
+    instructions: &[crate::vm::instruction::Instruction],
+    cv: u16,
+) -> bool {
+    instructions
+        .iter()
+        .copied()
+        .all(|instruction| !instruction_writes_cv(instruction, cv))
+}
+
 fn long_add(instruction: crate::vm::instruction::Instruction) -> Option<(u16, u16, u16)> {
     if !matches!(
         instruction.opcode,
@@ -928,36 +987,77 @@ pub fn detect_long_ops_loop(
     let mut has_post_inc = false;
     let mut ip = header_ip;
 
-    // A CV is eligible for retained string state only when this closed region
-    // visibly assigns a string literal to it. This keeps all existing dynamic
-    // integer index plans on their established long-specialized path.
-    let mut string_literal_assignment_mask = 0u64;
-    let mut string_cache_literals = [u16::MAX; QUICK_STRING_FETCH_CACHE_LIMIT];
-    let mut string_cache_capacity = 0usize;
-    for instruction in &op_array.instructions[header_ip..=backedge_ip] {
-        if instruction.opcode == OpCode::AssignCv
-            && instruction.op1_type == OpType::Cv
-            && instruction.op2_type == OpType::Const
-            && instruction.result_type == OpType::Unused
-            && op_array
-                .literals
-                .get(instruction.op2 as usize)
-                .and_then(Value::as_str)
-                .is_some()
-        {
-            add_mask_slot(
-                &mut string_literal_assignment_mask,
-                instruction.op1,
-                total_slots,
-            )?;
-            if !string_cache_literals[..string_cache_capacity].contains(&instruction.op2)
-                && string_cache_capacity < string_cache_literals.len()
-            {
-                string_cache_literals[string_cache_capacity] = instruction.op2;
-                string_cache_capacity += 1;
-            }
+    // String array-key state is selected only when every visible assignment to
+    // that key is either a string literal or an immutable CV whose last
+    // preheader definition is a string literal. Runtime guards still verify all
+    // selected CVs; ambiguous integer-key programs keep their established path.
+    let region = &op_array.instructions[header_ip..=backedge_ip];
+    let mut array_index_cv_mask = 0u64;
+    for instruction in region {
+        if instruction.opcode == OpCode::FetchDimR && instruction.op2_type == OpType::Cv {
+            add_mask_slot(&mut array_index_cv_mask, instruction.op2, total_slots)?;
         }
     }
+
+    let mut string_key_assignment_mask = 0u64;
+    let mut candidates = array_index_cv_mask;
+    while candidates != 0 {
+        let key = candidates.trailing_zeros() as u16;
+        candidates &= candidates - 1;
+        let mut has_assignment = false;
+        let mut valid = true;
+        for instruction in region.iter().filter(|instruction| {
+            instruction.opcode == OpCode::AssignCv
+                && instruction.op1_type == OpType::Cv
+                && instruction.op1 == key
+                && instruction.result_type == OpType::Unused
+        }) {
+            has_assignment = true;
+            valid &= match instruction.op2_type {
+                OpType::Const => op_array
+                    .literals
+                    .get(instruction.op2 as usize)
+                    .and_then(Value::as_str)
+                    .is_some(),
+                OpType::Cv => {
+                    preheader_string_literal_cv(op_array, header_ip, instruction.op2)
+                        && cv_unmodified_in_region(region, instruction.op2)
+                }
+                _ => false,
+            };
+        }
+        if has_assignment && valid {
+            add_mask_slot(&mut string_key_assignment_mask, key, total_slots)?;
+        }
+    }
+
+    let mut string_source_input_mask = 0u64;
+    let mut string_cache_literals = [u16::MAX; QUICK_STRING_FETCH_CACHE_LIMIT];
+    let mut string_cache_literal_count = 0usize;
+    for instruction in region.iter().filter(|instruction| {
+        instruction.opcode == OpCode::AssignCv
+            && instruction.op1_type == OpType::Cv
+            && string_key_assignment_mask & (1u64 << instruction.op1) != 0
+    }) {
+        match instruction.op2_type {
+            OpType::Cv => {
+                add_mask_slot(&mut string_source_input_mask, instruction.op2, total_slots)?;
+            }
+            OpType::Const
+                if !string_cache_literals[..string_cache_literal_count]
+                    .contains(&instruction.op2)
+                    && string_cache_literal_count < string_cache_literals.len() =>
+            {
+                string_cache_literals[string_cache_literal_count] = instruction.op2;
+                string_cache_literal_count += 1;
+            }
+            _ => {}
+        }
+    }
+    string_input_mask |= string_source_input_mask;
+    let string_cache_capacity = (string_source_input_mask.count_ones() as usize
+        + string_cache_literal_count)
+        .min(QUICK_STRING_FETCH_CACHE_LIMIT);
 
     while ip <= backedge_ip {
         let instruction = op_array.instructions[ip];
@@ -1151,7 +1251,7 @@ pub fn detect_long_ops_loop(
                 let index = match instruction.op2_type {
                     OpType::Cv | OpType::Tmp => {
                         if instruction.op2_type == OpType::Cv
-                            && string_literal_assignment_mask & (1u64 << instruction.op2) != 0
+                            && string_key_assignment_mask & (1u64 << instruction.op2) != 0
                         {
                             add_mask_slot(&mut string_input_mask, instruction.op2, total_slots)?;
                             QuickArrayIndex::ValueSlot(instruction.op2)
@@ -1386,20 +1486,25 @@ pub fn detect_long_ops_loop(
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
                 }
-                if instruction.op2_type == OpType::Const
-                    && op_array
-                        .literals
-                        .get(instruction.op2 as usize)
-                        .and_then(Value::as_str)
-                        .is_some()
-                {
+                if string_key_assignment_mask & (1u64 << instruction.op1) != 0 {
                     add_mask_slot(&mut string_output_mask, instruction.op1, total_slots)?;
                     has_assign = true;
                     ip += 1;
-                    QuickLongOp::AssignStringLiteral {
-                        destination: instruction.op1,
-                        literal: instruction.op2,
-                        next_target: QuickLongTarget::unresolved(ip)?,
+                    match instruction.op2_type {
+                        OpType::Const => QuickLongOp::AssignStringLiteral {
+                            destination: instruction.op1,
+                            literal: instruction.op2,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                        },
+                        OpType::Cv => {
+                            add_mask_slot(&mut string_input_mask, instruction.op2, total_slots)?;
+                            QuickLongOp::AssignStringSlot {
+                                destination: instruction.op1,
+                                source: instruction.op2,
+                                next_target: QuickLongTarget::unresolved(ip)?,
+                            }
+                        }
+                        _ => return None,
                     }
                 } else {
                     let source = long_slot(instruction.op2_type, instruction.op2)?;
@@ -1490,6 +1595,7 @@ pub fn detect_long_ops_loop(
             } => first_resume_ip,
             QuickLongOp::Assign { .. } => ip - 1,
             QuickLongOp::AssignStringLiteral { .. } => ip - 1,
+            QuickLongOp::AssignStringSlot { .. } => ip - 1,
             QuickLongOp::Jump { .. } => ip - 1,
         };
         let relative = op_ip - header_ip;
@@ -2237,5 +2343,66 @@ for ($i = 0; $i < 100; $i++) {
 ",
         );
         assert_eq!(plan.string_cache_capacity, 3);
+    }
+
+    #[test]
+    fn detects_dynamic_string_array_key_sources() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['left' => 3, 'right' => 5];
+$left = 'left';
+$right = 'right';
+$key = $left;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = $right;
+    } else {
+        $key = $left;
+    }
+}
+",
+        );
+        assert_eq!(plan.string_input_mask.count_ones(), 3);
+        assert_eq!(plan.string_output_mask.count_ones(), 1);
+        assert_eq!(plan.string_cache_capacity, 2);
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|op| matches!(op, QuickLongOp::AssignStringSlot { .. }))
+                .count(),
+            2
+        );
+    }
+
+    #[test]
+    fn keeps_dynamic_integer_key_sources_on_long_state() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [100 => 3, 107 => 5];
+$left = 100;
+$right = 107;
+$key = $left;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = $right;
+    } else {
+        $key = $left;
+    }
+}
+",
+        );
+        assert_eq!(plan.string_input_mask, 0);
+        assert_eq!(plan.string_output_mask, 0);
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|op| matches!(op, QuickLongOp::Assign { .. }))
+                .count(),
+            2
+        );
     }
 }

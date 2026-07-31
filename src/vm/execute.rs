@@ -3090,6 +3090,14 @@ impl QuickStringSlotState {
         self.dirty_mask |= 1u64 << slot;
     }
 
+    #[inline(always)]
+    fn assign_slot(&mut self, destination: u16, source: u16) {
+        let value = self.values[source as usize];
+        debug_assert!(!value.is_null());
+        self.values[destination as usize] = value;
+        self.dirty_mask |= 1u64 << destination;
+    }
+
     #[inline]
     unsafe fn commit(&mut self) {
         while self.dirty_mask != 0 {
@@ -5137,6 +5145,14 @@ unsafe fn run_quick_long_ops_loop(
                 let value = op_array.literals.as_ptr().add(literal as usize);
                 debug_assert_eq!((*value).value_type(), ValueType::String);
                 string_state.assign_literal(destination, value);
+                next_target
+            }
+            QuickLongOp::AssignStringSlot {
+                destination,
+                source,
+                next_target,
+            } => {
+                string_state.assign_slot(destination, source);
                 next_target
             }
             QuickLongOp::PostInc {

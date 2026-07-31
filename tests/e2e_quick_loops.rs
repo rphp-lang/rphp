@@ -771,6 +771,64 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_array_tracks_string_key_selected_from_cvs() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['left' => 3, 'right' => 5];
+$left = 'left';
+$right = 'right';
+$key = $left;
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = $right;
+    } else {
+        $key = $left;
+    }
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4000|left|1000"
+    );
+}
+
+#[test]
+fn quick_hash_array_normalizes_numeric_string_key_sources() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [7 => 3, 8 => 5, 'sentinel' => 0];
+$left = '7';
+$right = '8';
+$key = $left;
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = $right;
+    } else {
+        $key = $left;
+    }
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "4000|7|1000"
+    );
+}
+
+#[test]
 fn quick_hash_array_string_read_works_in_general_typed_loop() {
     assert_eq!(
         run_php(

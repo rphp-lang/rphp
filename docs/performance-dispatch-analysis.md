@@ -1634,3 +1634,76 @@ Arbitrary strings produced by calls, array reads, concatenation, or other
 unsupported operations are intentionally not retained yet; supporting those
 requires a broader string-producing typed IR rather than weakening these
 guards.
+
+## Phase 2t result: propagated immutable string-key CVs
+
+Phase 2s retained keys selected directly from string literals inside a loop,
+but the equivalent real-world form still stayed in baseline dispatch:
+
+```php
+$left = 'left';
+$right = 'right';
+$key = $left;
+for ($i = 0; $i < $n; $i++) {
+    $sum += $values[$key];
+    if (($i % 2) == 0) {
+        $key = $right;
+    } else {
+        $key = $left;
+    }
+}
+```
+
+The loop bytecode assigns one CV to another rather than assigning a literal.
+Treating every such assignment as a string would displace valid integer-key
+plans, while cloning the source `Value` on every iteration would reintroduce
+the ownership cost removed in Phase 2s.
+
+Phase 2t adds conservative preheader type propagation. For each CV used as a
+changing array key, the planner validates every visible assignment. A source CV
+is accepted only when its last definition before the loop is a direct string
+literal and no instruction in the closed region can write it. The write audit
+covers normal assignments, concat assignment, increment/decrement, global and
+static binding, direct CV results, and encoded foreach key/value destinations.
+All selected key and source CVs are still guarded as strings at activation.
+An ambiguous source, temporary expression, mutable source, conflicting scalar
+role, call, or alias therefore keeps the ordinary interpreter path.
+
+The typed program represents an accepted assignment as `AssignStringSlot`.
+The retained string state redirects the destination pointer to the already-live
+source frame value, marks only the destination dirty, and materializes the
+observable CV on completion or a side exit. It performs no per-iteration
+`Rc<String>` clone, drop, or frame write. Source identities also contribute to
+the existing allocation-free adaptive fetch-cache width, so two and three
+source CVs use two and three active entries respectively. Numeric strings still
+pass through canonical PHP array-key normalization on the first cache miss.
+
+Fifty-one rounds rotated Phase 2t, the saved Phase 2s binary, and PHP process
+order:
+
+| Workload | Phase 2s | Phase 2t | PHP 8.4.12, no CLI opcache | Phase 2t / Phase 2s |
+|---|---:|---:|---:|---:|
+| Two immutable string source CVs, 1M reads | 0.034719 s | 0.010903 s | 0.011729 s | 0.314x |
+| Three immutable string source CVs, 1M reads | 0.037828 s | 0.013634 s | 0.013704 s | 0.360x |
+
+The permanent two-source recurrence is about 68.6% faster than Phase 2s and
+7.0% faster than PHP without JIT. The three-source control improves by 64.0%
+and is effectively tied with PHP. Runtime statistics for both workloads report
+one quick entry, one completion, 999,967 quick iterations, and zero guard
+failures or deoptimizations.
+
+The 31-round acceptance ratios against Phase 2s were `0.932x` for the existing
+changing-literal string workload, `1.006x` for an invariant runtime string key,
+`1.007x` for a literal string key, `0.903x` for the equivalent changing integer
+source-CV program, and `1.005x` for the sparse hash filter. Longer twenty-pass
+controls measured `0.990x` for hash foreach, `1.000x` for packed foreach, and
+`0.991x` for materialized integer-hash reads.
+
+Planner coverage proves string-source propagation and separately locks the
+existing long selection for integer source CVs. End-to-end coverage verifies
+ordinary and canonical numeric string sources plus final key materialization.
+The quick-loop end-to-end suite now has 62 tests. The complete suite passes with
+all features and with `--no-default-features`; warning-free checks pass for both
+configurations. Parameters, values loaded from arrays or calls, concatenated
+strings, and temporary-producing expressions remain deliberately outside this
+proof until the typed IR can represent and guard their producers directly.
