@@ -1157,3 +1157,66 @@ now has four tests and the quick-loop end-to-end suite has 44 tests. The
 complete suite passes with default features and with
 `--no-default-features`; warning-free checks also pass for the minimal and
 all-feature builds.
+
+## Phase 2m result: general one-add array template
+
+The first Phase 2m measurement appeared to improve the existing
+`$sum += $values[$i]` benchmark by several percent. Inspection of plan
+selection disproved that interpretation: this exact short recurrence is
+claimed first by `QuickLongAccumulateLoop`, so the new typed-array template
+does not execute it. A 500-pass comparison subsequently put both binaries at
+about `5.045 s` of CPU time on the sparse transform, confirming that the
+apparent short-run regression elsewhere was also process noise.
+
+The real uncovered shape is equally common but structurally more general:
+
+```php
+$value = $values[$i];
+$sum += $value;
+```
+
+Materializing the fetched value adds a PHP assignment that the narrow
+accumulator plan cannot represent. The typed planner already fuses that
+assignment into `FetchArrayLong`, producing the stable four-operation graph
+`BranchUnlessLt -> FetchArrayLong -> AddAssign -> PostIncLoopLt`. Phase 2m
+recognizes this complete graph as a one-add array body and runs it through the
+same prevalidated array-loop skeleton used by the Phase 2k templates. The
+body no longer returns to the general typed-operation dispatcher on every
+iteration.
+
+This is a structural optimization, not a benchmark-specific rewrite. It is
+selected from the typed plan after the existing long and immutable-array
+guards, is independent of source variable names and loop bounds, and applies
+to packed, integer-hash, sparse-position, indexed-hash, and string-key fetch
+routes. Checked addition, the original fetch/add/post-increment resume
+positions, precise dirty-slot commits, interrupt handling, and non-long or
+overflow side exits remain shared with the existing template machinery.
+Direct non-materialized accumulations continue to use the older,
+more-specialized accumulator runner.
+
+Fifty-one rounds rotated Phase 2m, the saved Phase 2l binary, and PHP process
+order:
+
+| Workload | Phase 2l | Phase 2m | PHP 8.4.12, no CLI opcache | Phase 2m / Phase 2l |
+|---|---:|---:|---:|---:|
+| Contiguous integer hash, materialized value, 1M reads | 0.01929 s | 0.01372 s | 0.01233 s | 0.711x |
+| Packed array, materialized value, 1M reads | 0.01047 s | 0.00772 s | 0.00971 s | 0.737x |
+
+The general template removes about 28.9% from the integer-hash case and 26.3%
+from the packed case. Packed materialized reads are about 20.5% faster than
+PHP without JIT; the contiguous-hash gap is reduced to about 11.2%. A
+supplemental 31-round invariant string-key measurement improved from
+`0.27034 s` to `0.22157 s` (`0.820x`), although PHP remains about 1.35x faster
+on that materialized string shape.
+
+The same 51-round acceptance run measured `0.946x` for the sparse transform,
+`1.027x` for the conditional filter, and `1.009x` for the exact sparse loop
+relative to Phase 2l. The latter two sub-millisecond differences are within
+observed process noise, while all three workloads remain faster than PHP.
+Planner validation now proves both the fused-fetch graph and that the compiler
+actually selects `QuickLongOps` rather than the older accumulator plan for
+the materialized source. End-to-end cases exercise overflow deoptimization
+for integer-hash and string-key layouts while also validating the final
+materialized value. The quick-loop suite now has 46 tests, and the complete
+suite passes with default features and with `--no-default-features`;
+warning-free checks also pass for the minimal and all-feature builds.

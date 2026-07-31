@@ -3129,6 +3129,9 @@ struct QuickLongConditionalAddAssignKernel {
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
 enum QuickLongArrayBodyKernel {
+    OneAdd {
+        add: QuickLongAddAssignKernel,
+    },
     TwoAdds {
         first: QuickLongAddAssignKernel,
         second: QuickLongAddAssignKernel,
@@ -3206,6 +3209,24 @@ fn quick_long_array_loop_kernel(
 
     let post_index = plan.ops.len() - 1;
     let body = match body_ops {
+        [QuickLongOp::AddAssign {
+            lhs,
+            rhs,
+            result,
+            destination,
+            next_target,
+            add_resume_ip,
+        }] if next_target.op_index() == Some(post_index) => {
+            QuickLongArrayBodyKernel::OneAdd {
+                add: QuickLongAddAssignKernel {
+                    lhs: *lhs,
+                    rhs: *rhs,
+                    result: *result,
+                    destination: *destination,
+                    resume_ip: *add_resume_ip,
+                },
+            }
+        }
         [
             QuickLongOp::AddAssign {
                 lhs: first_lhs,
@@ -4062,6 +4083,21 @@ where
     Fetch: FnMut(&[i64; 64]) -> Option<i64>,
 {
     match body {
+        QuickLongArrayBodyKernel::OneAdd { add } => {
+            run_quick_long_array_loop_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                fetch,
+                move |slots, dirty_long_mask, _| {
+                    execute_quick_long_add_assign(slots, dirty_long_mask, add)
+                },
+            )
+        }
         QuickLongArrayBodyKernel::TwoAdds { first, second } => {
             run_quick_long_array_loop_kernel(
                 eg,

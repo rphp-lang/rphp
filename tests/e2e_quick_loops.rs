@@ -707,6 +707,51 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_one_add_kernel_deoptimizes_accumulator_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 100);
+$values['sentinel'] = 0;
+$sum = PHP_INT_MAX - 2000;
+for ($i = 0; $i < 100; $i++) {
+    $value = $values[$i];
+    $sum += $value;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $value;
+echo '|';
+echo $i;
+"
+        ),
+        "float|100|100"
+    );
+}
+
+#[test]
+fn quick_hash_string_one_add_kernel_deoptimizes_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['hot' => 100];
+$sum = PHP_INT_MAX - 4000;
+for ($i = 0; $i < 100; $i++) {
+    $value = $values['hot'];
+    $sum += $value;
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $value;
+echo '|';
+echo $i;
+"
+        ),
+        "float|100|100"
+    );
+}
+
+#[test]
 fn quick_hash_stride_kernel_updates_key_and_accumulator() {
     assert_eq!(
         run_php(

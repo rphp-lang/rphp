@@ -1507,20 +1507,43 @@ for ($i = 0; $i < 10; $i++) {
     }
 
     #[test]
-    fn detects_packed_array_long_read_as_typed_op() {
-        let plan = long_ops_plan(
-            "<?php
+    fn detects_materialized_array_long_read_as_selected_typed_ops() {
+        let source = "<?php
 $values = [1, 2, 3, 4];
 $sum = 0;
 for ($i = 0; $i < 4; $i++) {
-    $sum += $values[$i];
+    $value = $values[$i];
+    $sum += $value;
 }
-",
-        );
+";
+        let plan = long_ops_plan(source);
         assert!(plan
             .ops
             .iter()
-            .any(|op| matches!(op, QuickLongOp::FetchArrayLong { .. })));
+            .any(|op| matches!(
+                op,
+                QuickLongOp::FetchArrayLong {
+                    destination: Some(_),
+                    ..
+                }
+            )));
+        assert!(matches!(
+            plan.ops.as_slice(),
+            [
+                QuickLongOp::BranchUnlessLt { .. },
+                QuickLongOp::FetchArrayLong { .. },
+                QuickLongOp::AddAssign { .. },
+                QuickLongOp::PostIncLoopLt { .. },
+            ]
+        ));
+        #[cfg(feature = "quick-loops")]
+        {
+            let main = compile_main(source);
+            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
+                plan,
+                crate::vm::planner::BlockPlan::QuickLongOps(_)
+            )));
+        }
         assert_ne!(plan.array_input_mask, 0);
         assert_eq!(
             plan.array_input_mask
