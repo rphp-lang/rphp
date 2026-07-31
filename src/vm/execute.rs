@@ -2710,6 +2710,13 @@ unsafe fn run_quick_long_accumulate_loop(
             Some(slot_base.add(term_tmp as usize))
         }
     };
+    let term_destination_ptr = match plan.term {
+        QuickLongTerm::ArrayIndex {
+            destination: Some(destination),
+            ..
+        } => Some(slot_base.add(destination as usize)),
+        _ => None,
+    };
     let addend_ptr = match plan.term {
         QuickLongTerm::Induction
         | QuickLongTerm::InductionPlusConst { .. }
@@ -2749,6 +2756,13 @@ unsafe fn run_quick_long_accumulate_loop(
             QuickLongTerm::InductionPlusCv { addend_cv, .. }
                 if quick_loop_slot_has_heap(frame, addend_cv)
         )
+        || matches!(
+            plan.term,
+            QuickLongTerm::ArrayIndex {
+                destination: Some(destination),
+                ..
+            } if quick_loop_slot_has_heap(frame, destination)
+        )
         || quick_loop_slot_has_heap(frame, plan.sum_tmp)
         || plan.post_tmp.is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
         || matches!(plan.bound, QuickLongBound::Cv(slot) if quick_loop_slot_has_heap(frame, slot))
@@ -2758,6 +2772,7 @@ unsafe fn run_quick_long_accumulate_loop(
             !matches!((*ptr).value_type(), ValueType::True | ValueType::False)
         })
         || term_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
+        || term_destination_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || addend_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
         || array_ptr.is_some_and(|ptr| (*ptr).as_array().is_none())
         || (*sum_ptr).value_type() != ValueType::Long
@@ -2814,6 +2829,9 @@ unsafe fn run_quick_long_accumulate_loop(
             }
             if completed_iteration {
                 if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, last_term);
+                }
+                if let Some(ptr) = term_destination_ptr {
                     Value::write_long(ptr, last_term);
                 }
                 Value::write_long(sum_ptr, accumulator);
@@ -2894,6 +2912,9 @@ unsafe fn run_quick_long_accumulate_loop(
                 if let Some(ptr) = term_ptr {
                     Value::write_long(ptr, term);
                 }
+                if let Some(ptr) = term_destination_ptr {
+                    Value::write_long(ptr, term);
+                }
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(QuickLoopOutcome::Deoptimized);
@@ -2911,6 +2932,9 @@ unsafe fn run_quick_long_accumulate_loop(
                 if let Some(ptr) = term_ptr {
                     Value::write_long(ptr, term);
                 }
+                if let Some(ptr) = term_destination_ptr {
+                    Value::write_long(ptr, term);
+                }
                 Value::write_long(sum_ptr, next_accumulator);
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.post_inc_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
@@ -2925,9 +2949,9 @@ unsafe fn run_quick_long_accumulate_loop(
         completed_iteration = true;
         iterations += 1;
 
-        // One quick iteration represents seven baseline instructions. Checking
-        // every 32 iterations preserves approximately the same interrupt bound
-        // as execute_ex's 256-opcode batch.
+        // One quick iteration represents seven or eight baseline instructions.
+        // Checking every 32 iterations preserves approximately the same
+        // interrupt bound as execute_ex's 256-opcode batch.
         if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
             Value::write_long(induction_ptr, induction);
             Value::write_long(accumulator_ptr, accumulator);
@@ -2935,6 +2959,9 @@ unsafe fn run_quick_long_accumulate_loop(
                 Value::write_bool(ptr, true);
             }
             if let Some(ptr) = term_ptr {
+                Value::write_long(ptr, last_term);
+            }
+            if let Some(ptr) = term_destination_ptr {
                 Value::write_long(ptr, last_term);
             }
             Value::write_long(sum_ptr, accumulator);

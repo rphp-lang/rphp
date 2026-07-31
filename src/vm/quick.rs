@@ -51,6 +51,7 @@ pub enum QuickLongTerm {
         array_cv: u16,
         index: QuickArrayIndex,
         term_tmp: u16,
+        destination: Option<u16>,
         fetch_ip: usize,
     },
 }
@@ -63,6 +64,7 @@ pub enum QuickLongTerm {
 ///     // or: $accumulator += $i + INTEGER_CONSTANT;
 ///     // or: $accumulator += $i + $loop_invariant_cv;
 ///     // or: $accumulator += $packed_array[$i];
+///     // or: $value = $array['key']; $accumulator += $value;
 /// }
 /// ```
 ///
@@ -367,7 +369,7 @@ pub fn detect_long_accumulate_loop(
     backedge_ip: usize,
 ) -> Option<QuickLongAccumulateLoop> {
     if header_ip.checked_add(5)? > backedge_ip
-        || header_ip.checked_add(6)? < backedge_ip
+        || header_ip.checked_add(7)? < backedge_ip
         || backedge_ip >= op_array.instructions.len()
     {
         return None;
@@ -448,7 +450,7 @@ pub fn detect_long_accumulate_loop(
             header_ip + 2,
             header_ip + 3,
         )
-    } else {
+    } else if backedge_ip == header_ip + 6 {
         let sum = op_array.instructions[header_ip + 3];
         if first_body.result_type != OpType::Tmp
             || sum.opcode != OpCode::Add_CvTmp
@@ -497,6 +499,7 @@ pub fn detect_long_accumulate_loop(
                     array_cv: first_body.op1,
                     index: QuickArrayIndex::Long(QuickLongOperand::Slot(induction_cv)),
                     term_tmp: first_body.result,
+                    destination: None,
                     fetch_ip: header_ip + 2,
                 }
             }
@@ -505,12 +508,52 @@ pub fn detect_long_accumulate_loop(
                     array_cv: first_body.op1,
                     index: array_literal_index(op_array, first_body.op2)?,
                     term_tmp: first_body.result,
+                    destination: None,
                     fetch_ip: header_ip + 2,
                 }
             }
             _ => return None,
         };
         (sum.op1, term, sum.result, header_ip + 3, header_ip + 4)
+    } else {
+        let materialize = op_array.instructions[header_ip + 3];
+        let sum = op_array.instructions[header_ip + 4];
+        if first_body.opcode != OpCode::FetchDimR
+            || first_body.op1_type != OpType::Cv
+            || first_body.op2_type != OpType::Const
+            || first_body.result_type != OpType::Tmp
+            || materialize.opcode != OpCode::AssignCv
+            || materialize.op1_type != OpType::Cv
+            || materialize.op2_type != OpType::Tmp
+            || materialize.op2 != first_body.result
+            || materialize.result_type != OpType::Unused
+            || sum.opcode != OpCode::Add
+            || sum.op1_type != OpType::Cv
+            || sum.op2_type != OpType::Cv
+            || sum.result_type != OpType::Tmp
+        {
+            return None;
+        }
+        let accumulator_cv = if sum.op1 == materialize.op1 && sum.op2 != materialize.op1 {
+            sum.op2
+        } else if sum.op2 == materialize.op1 && sum.op1 != materialize.op1 {
+            sum.op1
+        } else {
+            return None;
+        };
+        (
+            accumulator_cv,
+            QuickLongTerm::ArrayIndex {
+                array_cv: first_body.op1,
+                index: array_literal_index(op_array, first_body.op2)?,
+                term_tmp: first_body.result,
+                destination: Some(materialize.op1),
+                fetch_ip: header_ip + 2,
+            },
+            sum.result,
+            header_ip + 4,
+            header_ip + 5,
+        )
     };
 
     let assign = op_array.instructions[assign_ip];
@@ -556,6 +599,17 @@ pub fn detect_long_accumulate_loop(
             QuickLongTerm::ArrayIndex { array_cv, .. }
                 if array_cv == induction_cv || array_cv == accumulator_cv
         )
+        || matches!(
+            term,
+            QuickLongTerm::ArrayIndex {
+                array_cv,
+                destination: Some(destination),
+                ..
+            } if destination == induction_cv
+                || destination == accumulator_cv
+                || destination == array_cv
+                || matches!(bound, QuickLongBound::Cv(bound_cv) if destination == bound_cv)
+        )
     {
         return None;
     }
@@ -599,6 +653,13 @@ pub fn detect_long_accumulate_loop(
             term,
             QuickLongTerm::ArrayIndex { array_cv, .. }
                 if array_cv as u32 >= op_array.num_cvs
+        )
+        || matches!(
+            term,
+            QuickLongTerm::ArrayIndex {
+                destination: Some(destination),
+                ..
+            } if destination as u32 >= op_array.num_cvs
         )
     {
         return None;
@@ -1458,6 +1519,34 @@ for ($i = 0; $i < 100; $i++) {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn detects_materialized_invariant_array_index_as_accumulate_term() {
+        for index in ["'hot'", "7"] {
+            let plan = quick_plan(&format!(
+                "<?php
+$values = ['hot' => 7, 7 => 9];
+$sum = 0;
+$value = 0;
+for ($i = 0; $i < 100; $i++) {{
+    $value = $values[{index}];
+    $sum += $value;
+}}
+"
+            ));
+            assert!(matches!(
+                plan.term,
+                QuickLongTerm::ArrayIndex {
+                    array_cv: 0,
+                    index:
+                        QuickArrayIndex::StringLiteral(_)
+                        | QuickArrayIndex::Long(QuickLongOperand::Const(7)),
+                    destination: Some(2),
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

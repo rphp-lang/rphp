@@ -1220,3 +1220,68 @@ for integer-hash and string-key layouts while also validating the final
 materialized value. The quick-loop suite now has 46 tests, and the complete
 suite passes with default features and with `--no-default-features`;
 warning-free checks also pass for the minimal and all-feature builds.
+
+## Phase 2n result: materialized invariant array accumulation
+
+Phase 2m removed typed-operation dispatch from a materialized one-add loop, but
+its general array template still performed a complete lookup on every
+iteration for a literal key:
+
+```php
+$value = $values['hot'];
+$sum += $value;
+```
+
+The guarded region already proves that the source array cannot change while
+the quick runner owns it. Repeating `get_str()` for the same array and literal
+therefore carried no new semantic information. The same issue applied to a
+literal integer index such as `$values[7]`.
+
+The first implementation cached the lookup in the general array-template
+dispatcher. It reduced the string workload to roughly `0.037 s`, but also
+introduced another wide generic closure instantiation. A 500-pass conditional
+filter comparison measured a `1.227x` regression against Phase 2m. Narrowing
+that approach reduced but did not reliably eliminate the layout effect, so
+the implementation was rejected.
+
+The retained design extends the older `QuickLongAccumulateLoop` instead. Its
+detector now accepts the eight-instruction materialized form only when the
+array index is a literal string or integer. `QuickLongTerm::ArrayIndex` records
+the optional materialized destination, while the existing accumulator runner
+performs its already established guard-time invariant fetch. Dynamic indexes
+continue to use the Phase 2m one-add template and Phase 2l position routing
+unchanged.
+
+The accumulator runner keeps induction, fetched term, and accumulator in Rust
+scalars. It writes the materialized PHP variable at every observable boundary:
+normal completion, checked-add or post-increment deoptimization, and interrupt
+handling. Missing or non-long values fail the guarded activation and resume
+the baseline loop. Planner checks prevent the destination from aliasing the
+array, induction, accumulator, or loop bound, and the existing heap/type
+guards cover the new destination slot.
+
+Fifty-one rounds rotated Phase 2n, the saved Phase 2m binary, and PHP process
+order:
+
+| Workload | Phase 2m | Phase 2n | PHP 8.4.12, no CLI opcache | Phase 2n / Phase 2m |
+|---|---:|---:|---:|---:|
+| Materialized invariant string key, 10M reads | 0.22808 s | 0.01543 s | 0.16910 s | 0.068x |
+| Materialized invariant integer key, 10M reads | 0.10616 s | 0.01803 s | 0.13936 s | 0.170x |
+
+The retained accumulator path removes about 93.2% from the string-key
+recurrence and 83.0% from the integer-key recurrence. It is approximately
+14.8x and 5.9x faster than Phase 2m respectively. Against PHP without JIT,
+rphp is about 11.0x faster on the materialized string key and 7.7x faster on
+the materialized integer key.
+
+The same 51-round acceptance run measured `0.937x` for the original direct
+string recurrence, `1.014x` for dynamic materialized integer-hash reads,
+`1.016x` for packed materialized reads, `1.008x` for the sparse transform,
+`1.009x` for the conditional filter, and `0.995x` for the exact sparse loop.
+All non-target differences are within 1.6% process-level variance. Focused
+tests cover selected string/integer plans, successful destination
+materialization, missing and non-long fallback, and overflow after a
+successful materialized fetch. The planner suite now has 14 focused tests and
+the quick-loop end-to-end suite has 49 tests. The complete suite passes with
+default features and with `--no-default-features`; warning-free checks also
+pass for the minimal and all-feature builds.

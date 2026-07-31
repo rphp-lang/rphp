@@ -639,6 +639,75 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_invariant_string_fetch_falls_back_for_missing_value_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$sum = 0;
+$last = 7;
+for ($i = 0; $i < 100; $i++) {
+    $last = $values['missing'];
+    $sum += $i;
+}
+echo $sum;
+echo '|';
+echo is_null($last) ? 'null' : 'value';
+echo '|';
+echo $i;
+"
+        ),
+        "4950|null|100"
+    );
+}
+
+#[test]
+fn quick_hash_invariant_string_fetch_falls_back_for_non_long_value_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['hot' => 'marker'];
+$sum = 0;
+$last = 7;
+for ($i = 0; $i < 100; $i++) {
+    $last = $values['hot'];
+    $sum += $i;
+}
+echo $sum;
+echo '|';
+echo $last;
+echo '|';
+echo $i;
+"
+        ),
+        "4950|marker|100"
+    );
+}
+
+#[test]
+fn quick_hash_invariant_integer_fetch_materializes_value_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [7 => 9, 'sentinel' => 0];
+$sum = 0;
+$value = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $value = $values[7];
+    $sum += $value;
+}
+echo $sum;
+echo '|';
+echo $value;
+echo '|';
+echo $i;
+"
+        ),
+        "9000|9|1000"
+    );
+}
+
+#[test]
 fn quick_hash_array_normalizes_numeric_string_literal_key() {
     assert_eq!(
         run_php(
@@ -730,7 +799,7 @@ echo $i;
 }
 
 #[test]
-fn quick_hash_string_one_add_kernel_deoptimizes_overflow_exactly() {
+fn quick_hash_string_materialized_accumulate_deoptimizes_overflow_exactly() {
     assert_eq!(
         run_php(
             "<?php
