@@ -1487,3 +1487,73 @@ reads measured `0.990x` against Phase 2p. Exact unit assertions lock the
 that the ordered entry and string index share the same allocation. The full
 suite passes with all features and with `--no-default-features`; warning-free
 checks pass for both configurations.
+
+## Phase 2r result: borrowed and invariant runtime string keys
+
+The Phase 2q follow-up audit separated literal and runtime string offsets. A
+literal such as `$values['hot']` was already hoisted by Phase 2n, but storing
+the same key in `$key` made the recurrence about 4.78x slower than PHP. The
+general `FetchDimR` path first converted the borrowed PHP string into an owned
+`ArrayKey::String`, allocating and copying it on every read, and the guarded
+accumulator recognized only literal string keys or integer index slots.
+
+Phase 2r fixes both layers without changing the public `ArrayKey` API. The
+interpreter normalizes offsets into a private borrowed `ArrayKeyRef`; ordinary
+reads now pass `&str` directly to `PhpArray::get_str()`. Canonical decimal key
+normalization also validates the byte syntax before `i64::parse()` and no
+longer allocates `i64::to_string()` merely to reject `01`, `+1`, whitespace,
+`-0`, or an out-of-range integer.
+
+The guarded accumulator adds `QuickArrayIndex::ValueSlot` for code such as:
+
+```php
+$key = get_runtime_key();
+for ($i = 0; $i < $n; $i++) {
+    $sum += $values[$key];
+}
+```
+
+The detector is independent of variable names and key contents. It proves
+that the key CV, source array, induction variable, bound, accumulator, and an
+optional materialized destination do not overlap. At hot activation the runner
+applies the ordinary PHP key normalization, performs one guarded array lookup,
+and verifies that the result is a long. The closed body cannot write the key
+or array, so the native loop can retain the fetched long just as it already did
+for literal keys. A missing key, illegal offset type, non-long result, alias,
+or unsupported body keeps the baseline instructions and their exact behavior.
+
+Thirty-one rounds rotated Phase 2r, the saved Phase 2q binary, and PHP process
+order:
+
+| Workload | Phase 2q | Phase 2r | PHP 8.4.12, no CLI opcache | Phase 2r / Phase 2q |
+|---|---:|---:|---:|---:|
+| Invariant runtime string key, 10M reads | 0.896637 s | 0.015345 s | 0.172879 s | 0.0171x |
+| String key changed inside loop, 1M reads | 0.105720 s | 0.060803 s | 0.022366 s | 0.5751x |
+| Existing literal string recurrence, 10M reads | 0.015501 s | 0.015415 s | 0.155887 s | 0.9944x |
+| Existing materialized literal recurrence, 10M reads | 0.015299 s | 0.015234 s | 0.167168 s | 0.9958x |
+
+Hoisting the proven invariant runtime lookup removes about 98.3% of its old
+time: it is approximately 58.4x faster than Phase 2q and 11.3x faster than PHP
+without JIT. Even when the key changes inside the loop and cannot be hoisted,
+the allocation-free interpreter read removes about 42.5%. That workload is
+still 2.72x slower than PHP because the current typed loop state carries longs
+and booleans, not mutable strings, so every iteration retains baseline dispatch
+and hashing. The two permanent CV and changing-key benchmarks keep both sides
+of this boundary visible.
+
+Two broader alternatives were measured and rejected. Replacing the standard
+string hasher with a seeded lightweight implementation slowed the changing-key
+workload by about 6%. A two-position cache in every hash array either enlarged
+the inlined invariant path enough to regress the established literal kernel by
+about 11%, or, when isolated, merely exchanged hashing for call overhead. The
+final implementation retains neither experiment.
+
+Acceptance ratios were `0.990x` for materialized integer-hash reads, `1.021x`
+for the sparse hash filter, and `0.994x` for hash foreach. A 51-round repeated
+scan control measured `0.980x` for packed foreach and `0.945x` for hash foreach,
+rejecting a noisy sub-millisecond short-run regression. Planner coverage proves
+direct and materialized CV selection; end-to-end cases cover string and numeric
+string keys plus final materialization, and normalization tests lock canonical
+and noncanonical decimal behavior. The quick-loop end-to-end suite now has 57
+tests. The complete suite passes with all features and with
+`--no-default-features`; warning-free checks pass for both configurations.

@@ -616,6 +616,76 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_array_reads_invariant_string_value_slot() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['hot' => 7];
+$key = 'hot';
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "7000|hot|1000"
+    );
+}
+
+#[test]
+fn quick_hash_array_materializes_invariant_string_value_slot() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = ['hot' => 7];
+$key = 'hot';
+$sum = 0;
+$value = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $value = $values[$key];
+    $sum += $value;
+}
+echo $sum;
+echo '|';
+echo $value;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "7000|7|hot|1000"
+    );
+}
+
+#[test]
+fn quick_hash_array_normalizes_invariant_numeric_string_value_slot() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [7 => 9, 'sentinel' => 0];
+$key = '7';
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[$key];
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "9000|7|1000"
+    );
+}
+
+#[test]
 fn quick_hash_array_string_read_works_in_general_typed_loop() {
     assert_eq!(
         run_php(

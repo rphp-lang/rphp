@@ -333,6 +333,14 @@ fn test_e2e_array_non_numeric_string_key_preserved() {
     );
 }
 
+#[test]
+fn test_e2e_array_noncanonical_numeric_strings_stay_strings() {
+    assert_eq!(
+        run_php("<?php $a = ['-0' => 'a', '+1' => 'b', ' 1' => 'c']; echo $a['-0']; echo $a['+1']; echo $a[' 1'];"),
+        "abc"
+    );
+}
+
 // === CR10 regression: string offset is byte-based ===
 
 #[test]

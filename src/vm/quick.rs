@@ -28,6 +28,8 @@ pub enum QuickLongBound {
 pub enum QuickArrayIndex {
     Long(QuickLongOperand),
     StringLiteral(u16),
+    /// Loop-invariant CV whose runtime value is normalized as an array key.
+    ValueSlot(u16),
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -604,10 +606,14 @@ pub fn detect_long_accumulate_loop(
                     term_ip: header_ip + 2,
                 }
             }
-            (OpCode::FetchDimR, OpType::Cv, OpType::Cv) if first_body.op2 == induction_cv => {
+            (OpCode::FetchDimR, OpType::Cv, OpType::Cv) => {
                 QuickLongTerm::ArrayIndex {
                     array_cv: first_body.op1,
-                    index: QuickArrayIndex::Long(QuickLongOperand::Slot(induction_cv)),
+                    index: if first_body.op2 == induction_cv {
+                        QuickArrayIndex::Long(QuickLongOperand::Slot(induction_cv))
+                    } else {
+                        QuickArrayIndex::ValueSlot(first_body.op2)
+                    },
                     term_tmp: first_body.result,
                     destination: None,
                     fetch_ip: header_ip + 2,
@@ -630,7 +636,7 @@ pub fn detect_long_accumulate_loop(
         let sum = op_array.instructions[header_ip + 4];
         if first_body.opcode != OpCode::FetchDimR
             || first_body.op1_type != OpType::Cv
-            || first_body.op2_type != OpType::Const
+            || !matches!(first_body.op2_type, OpType::Cv | OpType::Const)
             || first_body.result_type != OpType::Tmp
             || materialize.opcode != OpCode::AssignCv
             || materialize.op1_type != OpType::Cv
@@ -655,7 +661,11 @@ pub fn detect_long_accumulate_loop(
             accumulator_cv,
             QuickLongTerm::ArrayIndex {
                 array_cv: first_body.op1,
-                index: array_literal_index(op_array, first_body.op2)?,
+                index: match first_body.op2_type {
+                    OpType::Cv => QuickArrayIndex::ValueSlot(first_body.op2),
+                    OpType::Const => array_literal_index(op_array, first_body.op2)?,
+                    _ => unreachable!(),
+                },
                 term_tmp: first_body.result,
                 destination: Some(materialize.op1),
                 fetch_ip: header_ip + 2,
@@ -713,6 +723,19 @@ pub fn detect_long_accumulate_loop(
             term,
             QuickLongTerm::ArrayIndex {
                 array_cv,
+                index: QuickArrayIndex::ValueSlot(index_cv),
+                destination,
+                ..
+            } if index_cv == induction_cv
+                || index_cv == accumulator_cv
+                || index_cv == array_cv
+                || destination == Some(index_cv)
+                || matches!(bound, QuickLongBound::Cv(bound_cv) if index_cv == bound_cv)
+        )
+        || matches!(
+            term,
+            QuickLongTerm::ArrayIndex {
+                array_cv,
                 destination: Some(destination),
                 ..
             } if destination == induction_cv
@@ -763,6 +786,13 @@ pub fn detect_long_accumulate_loop(
             term,
             QuickLongTerm::ArrayIndex { array_cv, .. }
                 if array_cv as u32 >= op_array.num_cvs
+        )
+        || matches!(
+            term,
+            QuickLongTerm::ArrayIndex {
+                index: QuickArrayIndex::ValueSlot(index_cv),
+                ..
+            } if index_cv as u32 >= op_array.num_cvs
         )
         || matches!(
             term,
@@ -1709,6 +1739,33 @@ for ($i = 0; $i < 100; $i++) {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn detects_invariant_value_slot_array_index_as_accumulate_term() {
+        for body in [
+            "$sum += $values[$key];",
+            "$value = $values[$key];\n    $sum += $value;",
+        ] {
+            let plan = quick_plan(&format!(
+                "<?php
+$values = ['hot' => 7];
+$key = 'hot';
+$sum = 0;
+$value = 0;
+for ($i = 0; $i < 100; $i++) {{
+    {body}
+}}
+"
+            ));
+            assert!(matches!(
+                plan.term,
+                QuickLongTerm::ArrayIndex {
+                    index: QuickArrayIndex::ValueSlot(1),
+                    ..
+                }
+            ));
+        }
     }
 
     #[test]

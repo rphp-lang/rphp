@@ -2809,6 +2809,14 @@ unsafe fn run_quick_long_accumulate_loop(
                 .unwrap_unchecked();
             quick_array.unwrap_unchecked().long_at_str(key)
         }
+        QuickLongTerm::ArrayIndex {
+            index: QuickArrayIndex::ValueSlot(slot),
+            ..
+        } => match value_to_array_key_ref(&*slot_base.add(slot as usize)).ok() {
+            Some(ArrayKeyRef::Int(key)) => quick_array.unwrap_unchecked().long_at_int(key),
+            Some(ArrayKeyRef::String(key)) => quick_array.unwrap_unchecked().long_at_str(key),
+            None => None,
+        },
         _ => Some(0),
     };
     if invariant_array_term.is_none() {
@@ -2885,7 +2893,8 @@ unsafe fn run_quick_long_accumulate_loop(
                         quick_array.unwrap_unchecked().long_at_int(induction)
                     }
                     QuickArrayIndex::Long(QuickLongOperand::Const(_))
-                    | QuickArrayIndex::StringLiteral(_) => invariant_array_term,
+                    | QuickArrayIndex::StringLiteral(_)
+                    | QuickArrayIndex::ValueSlot(_) => invariant_array_term,
                 };
                 let Some(fetched) = fetched else {
                     Value::write_long(induction_ptr, induction);
@@ -3076,6 +3085,7 @@ impl QuickLongArray {
                     .as_str()
                     .unwrap_unchecked(),
             ),
+            QuickArrayIndex::ValueSlot(_) => None,
         }
     }
 }
@@ -6768,10 +6778,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
                 if let Some(arr) = arr_val.as_array() {
-                    let key = value_to_array_key(idx_val)?;
-                    let fetched = match &key {
-                        ArrayKey::Int(k) => arr.get_int(*k),
-                        ArrayKey::String(k) => arr.get_str(k),
+                    let fetched = match value_to_array_key_ref(idx_val)? {
+                        ArrayKeyRef::Int(key) => arr.get_int(key),
+                        ArrayKeyRef::String(key) => arr.get_str(key),
                     };
                     let val = fetched.cloned().unwrap_or(Value::null());
                     unsafe { slot_set(result_ptr, val) };
@@ -7637,28 +7646,81 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
     }
 }
 
+#[derive(Clone, Copy)]
+enum ArrayKeyRef<'a> {
+    Int(i64),
+    String(&'a str),
+}
+
+/// Normalize an array offset while borrowing string storage from the source
+/// `Value`. Read paths can therefore probe `PhpArray` without allocating an
+/// owned `ArrayKey` for every access.
+fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, VmError> {
+    match val.value_type() {
+        ValueType::Long => Ok(ArrayKeyRef::Int(val.as_long().unwrap())),
+        ValueType::String => {
+            let value = val.as_str().unwrap();
+            match canonical_decimal_array_key(value) {
+                Some(value) => Ok(ArrayKeyRef::Int(value)),
+                None => Ok(ArrayKeyRef::String(value)),
+            }
+        }
+        ValueType::Null => Ok(ArrayKeyRef::String("")),
+        ValueType::True => Ok(ArrayKeyRef::Int(1)),
+        ValueType::False => Ok(ArrayKeyRef::Int(0)),
+        ValueType::Double => Ok(ArrayKeyRef::Int(val.as_double().unwrap() as i64)),
+        other => Err(VmError::Fatal(format!("Illegal offset type {:?}", other))),
+    }
+}
+
+/// PHP converts only canonical decimal strings that fit in `i64` to integer
+/// array keys. Checking the syntax first avoids allocating `i64::to_string()`
+/// merely to reject leading zeroes, a plus sign, whitespace, or `-0`.
+#[inline]
+fn canonical_decimal_array_key(value: &str) -> Option<i64> {
+    let bytes = value.as_bytes();
+    let digits = match bytes {
+        [b'0'] => return Some(0),
+        [b'1'..=b'9', rest @ ..] => rest,
+        [b'-', b'1'..=b'9', rest @ ..] => rest,
+        _ => return None,
+    };
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    value.parse().ok()
+}
+
+#[cfg(test)]
+mod array_key_normalization_tests {
+    use super::canonical_decimal_array_key;
+
+    #[test]
+    fn canonical_decimal_keys_match_php_array_rules_without_allocation() {
+        for (source, expected) in [
+            ("0", Some(0)),
+            ("1", Some(1)),
+            ("-3", Some(-3)),
+            ("9223372036854775807", Some(i64::MAX)),
+            ("-9223372036854775808", Some(i64::MIN)),
+            ("", None),
+            ("01", None),
+            ("-0", None),
+            ("+1", None),
+            (" 1", None),
+            ("1a", None),
+            ("9223372036854775808", None),
+        ] {
+            assert_eq!(canonical_decimal_array_key(source), expected, "{source}");
+        }
+    }
+}
+
 /// Convert a Value to an ArrayKey.
 fn value_to_array_key(val: &Value) -> Result<ArrayKey, VmError> {
-    match val.value_type() {
-        ValueType::Long => Ok(ArrayKey::Int(val.as_long().unwrap())),
-        ValueType::String => {
-            let s = val.as_str().unwrap();
-            // PHP normalizes numeric-string keys to integers:
-            // "1" → Int(1), "-3" → Int(-3), but "01" or "1a" stay as String
-            if let Ok(n) = s.parse::<i64>() {
-                // Only normalize if the parsed integer stringifies back identically
-                // (rejects "01", "+1", " 1", etc.)
-                if n.to_string() == s {
-                    return Ok(ArrayKey::Int(n));
-                }
-            }
-            Ok(ArrayKey::String(s.to_string()))
-        }
-        ValueType::Null => Ok(ArrayKey::String(String::new())),
-        ValueType::True => Ok(ArrayKey::Int(1)),
-        ValueType::False => Ok(ArrayKey::Int(0)),
-        ValueType::Double => Ok(ArrayKey::Int(val.as_double().unwrap() as i64)),
-        other => Err(VmError::Fatal(format!("Illegal offset type {:?}", other))),
+    match value_to_array_key_ref(val)? {
+        ArrayKeyRef::Int(value) => Ok(ArrayKey::Int(value)),
+        ArrayKeyRef::String(value) => Ok(ArrayKey::String(value.to_string())),
     }
 }
 
