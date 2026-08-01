@@ -8,7 +8,8 @@
 use crate::compiler::OpArray;
 use crate::value::Value;
 use crate::vm::function::{
-    ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+    ScalarLongCallGuard, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram,
+    ScalarLongSource,
 };
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
@@ -84,7 +85,7 @@ pub enum QuickLongTerm {
     /// ordinary PHP operands in the baseline program; the quick runner reads
     /// their retained long values without constructing a call frame.
     ScalarFunctionCall {
-        call_ip: usize,
+        guard: ScalarLongCallGuard,
         do_fcall_ip: usize,
         long_input_mask: u64,
         argument_plan: Box<ScalarLongProgram>,
@@ -95,7 +96,7 @@ pub enum QuickLongTerm {
     /// Runtime validates each receiver class against the monomorphic method
     /// cache before executing any compiler-proven scalar body.
     ScalarMethodCall {
-        call_ip: usize,
+        guard: ScalarLongCallGuard,
         do_fcall_ip: usize,
         long_input_mask: u64,
         object_input_mask: u64,
@@ -1002,7 +1003,9 @@ pub fn detect_long_accumulate_loop(
         Some((
             sum.op1,
             QuickLongTerm::ScalarFunctionCall {
-                call_ip: header_ip + 2,
+                guard: ScalarLongCallGuard::FunctionCache {
+                    cache_ip: u32::try_from(header_ip + 2).ok()?,
+                },
                 do_fcall_ip,
                 long_input_mask,
                 argument_plan: Box::new(ScalarLongProgram {
@@ -1053,7 +1056,10 @@ pub fn detect_long_accumulate_loop(
         Some((
             sum.op1,
             QuickLongTerm::ScalarMethodCall {
-                call_ip,
+                guard: ScalarLongCallGuard::MethodCache {
+                    cache_ip: u32::try_from(call_ip).ok()?,
+                    receiver_slot: first_body.op1,
+                },
                 do_fcall_ip,
                 long_input_mask,
                 object_input_mask,
@@ -2481,11 +2487,12 @@ for ($i = 0; $i < 100; $i++) {
             QuickLongTerm::ScalarFunctionCall {
                 argument_count: 3,
                 long_input_mask,
-                call_ip,
+                guard,
                 do_fcall_ip,
                 ..
             } if long_input_mask == (1u64 << 0) | (1u64 << 2)
-                && do_fcall_ip == call_ip + 4
+                && matches!(guard, ScalarLongCallGuard::FunctionCache { .. })
+                && do_fcall_ip == guard.cache_ip() + 4
         ));
     }
 
@@ -2507,10 +2514,12 @@ for ($i = 0; $i < 100; $i++) {
             QuickLongTerm::ScalarFunctionCall {
                 argument_count: 2,
                 long_input_mask,
-                call_ip,
+                guard,
                 do_fcall_ip,
                 ..
-            } if long_input_mask == 1u64 << 1 && do_fcall_ip == call_ip + 4
+            } if long_input_mask == 1u64 << 1
+                && matches!(guard, ScalarLongCallGuard::FunctionCache { .. })
+                && do_fcall_ip == guard.cache_ip() + 4
         ));
     }
 
@@ -2570,12 +2579,16 @@ for ($i = 0; $i < 100; $i++) {
                 argument_count: 2,
                 long_input_mask,
                 object_input_mask,
-                call_ip,
+                guard,
                 do_fcall_ip,
                 ..
             } if long_input_mask == 1u64 << 2
                 && object_input_mask == 1u64 << 0
-                && do_fcall_ip == call_ip + 7
+                && matches!(guard, ScalarLongCallGuard::MethodCache {
+                    receiver_slot: 0,
+                    ..
+                })
+                && do_fcall_ip == guard.cache_ip() + 7
         ));
     }
 

@@ -401,6 +401,29 @@ echo total(new DoubleMath());
 }
 
 #[test]
+fn quick_scalar_method_reference_receiver_uses_canonical_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Math {
+    public function apply($value) { return $value + 1; }
+}
+function total(&$math) {
+    $sum = 0;
+    for ($i = 0; $i < 1000; $i++) {
+        $sum += $math->apply($i);
+    }
+    return $sum . '|' . $i;
+}
+$math = new Math();
+echo total($math);
+"
+        ),
+        "500500|1000"
+    );
+}
+
+#[test]
 fn quick_scalar_method_guard_preserves_impure_side_effects() {
     assert_eq!(
         run_php(

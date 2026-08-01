@@ -13,8 +13,8 @@ use crate::vm::function::{
     BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
     LongRecursiveCondition,
     ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall,
-    ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram,
-    ScalarLongSource,
+    ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
+    ScalarLongProgram, ScalarLongSource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -809,7 +809,7 @@ fn build_composed_scalar_long_function_plan(
         if instruction.opcode == OpCode::InitFcall {
             let num_args = instruction.op1 as usize;
             if num_args > SCALAR_LONG_PLAN_MAX_ARGS as usize
-                || ip > u16::MAX as usize
+                || ip > u32::MAX as usize
                 || operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
                 || ip + num_args + 1 >= op_array.instructions.len()
             {
@@ -840,7 +840,9 @@ fn build_composed_scalar_long_function_plan(
             }
             let result_index = operations.len() as u8;
             operations.push(ComposedScalarLongOp::Call(ScalarLongCall {
-                cache_ip: ip as u16,
+                guard: ScalarLongCallGuard::FunctionCache {
+                    cache_ip: ip as u32,
+                },
                 arguments: arguments.into_boxed_slice(),
             }));
             temporary_results.insert(do_fcall.result, result_index);

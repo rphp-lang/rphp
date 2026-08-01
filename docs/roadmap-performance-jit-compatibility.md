@@ -133,9 +133,17 @@ only their post-guard execution strategy differs. The no-PGO 31-workload result
 remains 26 RPHP wins, with the composed-call workload at approximately 0.076 s
 RPHP versus 0.100 s PHP.
 
-The next slice adds receiver-class and method-cache dispatch to the same guarded
-call contract, targeting the largest absolute remaining gap: application-like
-object dispatch.
+The third vertical slice adds `FunctionCache` and `MethodCache` dispatch to the
+same call guard. Quick scalar methods and nested scalar call trees now share the
+receiver-CV, receiver-reference, class-id, method-cache, target ABI, and arity
+checks. A mismatch exits before typed execution and resumes the canonical call
+initializer.
+
+This infrastructure alone does not close the application-like object-dispatch
+gap: that workload combines void property mutators, a scalar property getter,
+a modulo branch, and a conditional nested call. The next slice must describe
+that whole guarded object loop as a typed region instead of optimizing another
+isolated method-call shape.
 
 ## Phase 3: representative real-code corpus
 

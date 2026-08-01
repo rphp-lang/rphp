@@ -14,7 +14,9 @@ use common::run_php;
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
-use rphp::vm::function::{CallStrategy, ComposedScalarLongOp};
+use rphp::vm::function::{
+    CallStrategy, ComposedScalarLongOp, ScalarLongCallGuard,
+};
 
 // ══════════════════════════════════════════════════════════════════════
 // 1. Promotion: scalar recursion enters hot executor
@@ -262,6 +264,12 @@ function combine($a, $b) { return add1($a) + double($b); }
             .count(),
         2
     );
+    assert!(plan.program.operations.iter().all(|operation| match operation {
+        ComposedScalarLongOp::Arithmetic(_) => true,
+        ComposedScalarLongOp::Call(call) => {
+            matches!(call.guard, ScalarLongCallGuard::FunctionCache { .. })
+        }
+    }));
 }
 
 #[test]

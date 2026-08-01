@@ -12,7 +12,7 @@ use super::instruction::{
     Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
 use super::quick::{
     QuickArrayIndex, QuickIncrementKind, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget,
@@ -1393,6 +1393,63 @@ fn resolve_composed_body_source(
     }
 }
 
+#[inline(always)]
+unsafe fn guarded_scalar_user_target(
+    target: *const FunctionCommon,
+    argument_count: usize,
+) -> Option<*const UserFunction> {
+    if target.is_null() {
+        return None;
+    }
+    let common = &*target;
+    if common.fn_type != FunctionType::User
+        || common.plan.call != CallStrategy::FastScalar
+        || common.sig.public_arity() != argument_count as u32
+    {
+        return None;
+    }
+    Some(target as *const UserFunction)
+}
+
+#[inline(always)]
+unsafe fn guarded_cached_scalar_call_target(
+    op_array: &crate::compiler::OpArray,
+    guard: ScalarLongCallGuard,
+    receiver: Option<&Value>,
+    argument_count: usize,
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    let ip = guard.cache_ip();
+    let initializer = op_array.instructions.get(ip)?;
+    let cache = op_array.cache.get(ip)?;
+    let target = match guard {
+        ScalarLongCallGuard::FunctionCache { .. } => {
+            if initializer.opcode != OpCode::InitFcall {
+                return None;
+            }
+            cache.func
+        }
+        ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
+            if initializer.opcode != OpCode::InitMethodCall
+                || initializer.op1_type != OpType::Cv
+                || initializer.op1 != receiver_slot
+            {
+                return None;
+            }
+            let receiver = receiver?;
+            if receiver.value_type() != ValueType::Object || receiver.is_reference() {
+                return None;
+            }
+            let class_id = receiver.object_class_id_unchecked();
+            if class_id == 0 || cache.class_id != class_id {
+                return None;
+            }
+            cache.func
+        }
+    };
+    let user = guarded_scalar_user_target(target, argument_count)?;
+    Some((target, user))
+}
+
 /// Resolve and guard one IR `CallScalar` against the canonical inline cache.
 /// A successful result has the exact scalar ABI and arity required by the IR;
 /// every executor backend shares this identity contract.
@@ -1401,15 +1458,16 @@ unsafe fn guarded_scalar_call_target(
     owner: &UserFunction,
     call: &ScalarLongCall,
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
-    let ip = call.cache_ip as usize;
+    let ScalarLongCallGuard::FunctionCache { .. } = call.guard else {
+        return None;
+    };
+    let ip = call.guard.cache_ip();
     let initializer = owner.op_array.instructions.get(ip)?;
     if initializer.opcode != OpCode::InitFcall {
         return None;
     }
     let cache = owner.op_array.cache.get(ip)?;
-    let target = if !cache.func.is_null() {
-        cache.func
-    } else {
+    if cache.func.is_null() {
         let primary = owner
             .op_array
             .literals
@@ -1429,16 +1487,13 @@ unsafe fn guarded_scalar_call_target(
         let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
             as *mut crate::vm::instruction::InlineCache);
         cache_mut.func = resolved;
-        resolved
-    };
-    let common = &*target;
-    if common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
-        || common.sig.public_arity() != call.arguments.len() as u32
-    {
-        return None;
     }
-    Some((target, target as *const UserFunction))
+    guarded_cached_scalar_call_target(
+        &owner.op_array,
+        call.guard,
+        None,
+        call.arguments.len(),
+    )
 }
 
 unsafe fn evaluate_composed_scalar_body_plan(
@@ -1758,15 +1813,37 @@ unsafe fn composed_scalar_callee(
 ) -> Option<(*const FunctionCommon, *const ScalarLongFunctionPlan)> {
     let initializer = &*initializer_ptr;
     let ip = initializer_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
-    let cache = caller_op_array.cache.get(ip)?;
-    let func = match initializer.opcode {
-        OpCode::InitFcall => {
-            if cache.func.is_null() {
-                return None;
-            }
-            cache.func
+    let cache_ip = u32::try_from(ip).ok()?;
+    let public_num_args = match initializer.opcode {
+        OpCode::InitFcall => initializer.op1 as usize,
+        OpCode::InitMethodCall => initializer.extended_value as usize,
+        _ => return None,
+    };
+    let (func, user) = match initializer.opcode {
+        OpCode::InitFcall => guarded_cached_scalar_call_target(
+            caller_op_array,
+            ScalarLongCallGuard::FunctionCache { cache_ip },
+            None,
+            public_num_args,
+        )?,
+        OpCode::InitMethodCall if initializer.op1_type == OpType::Cv => {
+            let receiver = &*(*caller).get_op_ptr(
+                initializer.op1 as u32,
+                initializer.op1_type,
+                caller_op_array,
+            );
+            guarded_cached_scalar_call_target(
+                caller_op_array,
+                ScalarLongCallGuard::MethodCache {
+                    cache_ip,
+                    receiver_slot: initializer.op1,
+                },
+                Some(receiver),
+                public_num_args,
+            )?
         }
         OpCode::InitMethodCall => {
+            let cache = caller_op_array.cache.get(ip)?;
             let receiver = match initializer.op1_type {
                 OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
                     &*(*caller).get_op_ptr(
@@ -1784,25 +1861,12 @@ unsafe fn composed_scalar_callee(
             if class_id == 0 || cache.func.is_null() || cache.class_id != class_id {
                 return None;
             }
-            cache.func
+            let user = guarded_scalar_user_target(cache.func, public_num_args)?;
+            (cache.func, user)
         }
         _ => return None,
     };
-
-    let common = &*func;
-    let public_num_args = match initializer.opcode {
-        OpCode::InitFcall => initializer.op1 as u32,
-        OpCode::InitMethodCall => initializer.extended_value,
-        _ => unreachable!(),
-    };
-    if common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
-        || public_num_args != common.sig.public_arity()
-    {
-        return None;
-    }
-    let user = &*(func as *const UserFunction);
-    let plan = user.scalar_long_plan.as_deref()?;
+    let plan = (&*user).scalar_long_plan.as_deref()?;
     Some((func, plan as *const ScalarLongFunctionPlan))
 }
 
@@ -4815,6 +4879,34 @@ unsafe fn evaluate_quick_scalar_call_arguments(
     Some(arguments)
 }
 
+/// Resolve either direct-function or monomorphic-method dispatch for a quick
+/// scalar region. Method identity is valid only while the receiver's current
+/// class id matches the canonical method inline cache.
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn guarded_quick_scalar_call_target(
+    op_array: &crate::compiler::OpArray,
+    slot_base: *mut Value,
+    guard: ScalarLongCallGuard,
+    argument_count: u8,
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    if !direct_user_calls_enabled() {
+        return None;
+    }
+    let receiver = match guard {
+        ScalarLongCallGuard::FunctionCache { .. } => None,
+        ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
+            Some(&*slot_base.add(receiver_slot as usize))
+        }
+    };
+    guarded_cached_scalar_call_target(
+        op_array,
+        guard,
+        receiver,
+        argument_count as usize,
+    )
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_accumulate_loop(
@@ -5052,25 +5144,21 @@ unsafe fn run_quick_long_accumulate_loop(
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
     let mut quick_composed_leaf_body = false;
     if let QuickLongTerm::ScalarFunctionCall {
-        call_ip,
+        guard,
         argument_count,
         ..
     } = plan.term
     {
-        let cached = op_array.cache[call_ip].func;
-        if !direct_user_calls_enabled() || cached.is_null() {
+        let Some((cached, user)) = guarded_quick_scalar_call_target(
+            op_array,
+            slot_base,
+            guard,
+            argument_count,
+        ) else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
-        }
-        let common = &*cached;
-        if common.fn_type != FunctionType::User
-            || common.plan.call != CallStrategy::FastScalar
-            || common.sig.public_arity() != argument_count as u32
-        {
-            stats::inc_quick_loop_guard_failed();
-            return Ok(QuickLoopOutcome::GuardFailed);
-        }
-        let user = &*(cached as *const UserFunction);
+        };
+        let user = &*user;
         if let Some(scalar_plan) = user.scalar_long_plan.as_deref() {
             if scalar_plan.public_args != argument_count {
                 stats::inc_quick_loop_guard_failed();
@@ -5101,39 +5189,21 @@ unsafe fn run_quick_long_accumulate_loop(
         scalar_call_common = cached;
         scalar_call_user = user;
     } else if let QuickLongTerm::ScalarMethodCall {
-        call_ip,
+        guard,
         argument_count,
         ..
     } = plan.term
     {
-        let initializer = &op_array.instructions[call_ip];
-        let cache = &op_array.cache[call_ip];
-        if initializer.opcode != OpCode::InitMethodCall
-            || initializer.op1_type != OpType::Cv
-        {
+        let Some((cached, user)) = guarded_quick_scalar_call_target(
+            op_array,
+            slot_base,
+            guard,
+            argument_count,
+        ) else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
-        }
-        let receiver = &*slot_base.add(initializer.op1 as usize);
-        let class_id = receiver.object_class_id_unchecked();
-        let cached = cache.func;
-        if !direct_user_calls_enabled()
-            || class_id == 0
-            || cache.class_id != class_id
-            || cached.is_null()
-        {
-            stats::inc_quick_loop_guard_failed();
-            return Ok(QuickLoopOutcome::GuardFailed);
-        }
-        let common = &*cached;
-        if common.fn_type != FunctionType::User
-            || common.plan.call != CallStrategy::FastScalar
-            || common.sig.public_arity() != argument_count as u32
-        {
-            stats::inc_quick_loop_guard_failed();
-            return Ok(QuickLoopOutcome::GuardFailed);
-        }
-        let user = &*(cached as *const UserFunction);
+        };
+        let user = &*user;
         let Some(method_plan) = user.scalar_long_plan.as_deref() else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
@@ -5271,7 +5341,7 @@ unsafe fn run_quick_long_accumulate_loop(
                 }
             }
             QuickLongTerm::ScalarFunctionCall {
-                call_ip,
+                guard,
                 argument_plan,
                 argument_count,
                 ..
@@ -5341,7 +5411,7 @@ unsafe fn run_quick_long_accumulate_loop(
                     if let Some(ptr) = condition_ptr {
                         Value::write_bool(ptr, true);
                     }
-                    (*frame).opline = op_array.instructions.as_ptr().add(*call_ip);
+                    (*frame).opline = op_array.instructions.as_ptr().add(guard.cache_ip());
                     flush_quick_scalar_calls(
                         &scalar_call_targets,
                         scalar_call_target_count,
@@ -5353,7 +5423,7 @@ unsafe fn run_quick_long_accumulate_loop(
                 value
             }
             QuickLongTerm::ScalarMethodCall {
-                call_ip,
+                guard,
                 do_fcall_ip,
                 ..
             } => {
@@ -5366,7 +5436,7 @@ unsafe fn run_quick_long_accumulate_loop(
                 Value::write_long(accumulator_ptr, accumulator);
                 let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
                 let mut call_count = 0usize;
-                let initializer = op_array.instructions.as_ptr().add(*call_ip);
+                let initializer = op_array.instructions.as_ptr().add(guard.cache_ip());
                 let evaluated = match evaluate_composed_scalar_call(
                     frame,
                     op_array,
@@ -5398,7 +5468,7 @@ unsafe fn run_quick_long_accumulate_loop(
                     if let Some(ptr) = condition_ptr {
                         Value::write_bool(ptr, true);
                     }
-                    (*frame).opline = op_array.instructions.as_ptr().add(*call_ip);
+                    (*frame).opline = op_array.instructions.as_ptr().add(guard.cache_ip());
                     flush_quick_scalar_calls(
                         &scalar_call_targets,
                         scalar_call_target_count,

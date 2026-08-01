@@ -135,11 +135,29 @@ pub struct ScalarLongFunctionPlan {
     pub program: ScalarLongProgram<ScalarLongOp, 1>,
 }
 
-/// Guarded scalar call embedded in a typed program. The cache position is
-/// relative to the owning function's canonical bytecode and remains the source
-/// of truth for runtime function identity and namespace fallback resolution.
+/// Dispatch identity required by a typed scalar call. Cache positions are
+/// relative to the owning canonical bytecode. Method calls additionally bind
+/// the cache identity to the current class of an object CV.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongCallGuard {
+    FunctionCache { cache_ip: u32 },
+    MethodCache { cache_ip: u32, receiver_slot: u16 },
+}
+
+impl ScalarLongCallGuard {
+    #[inline(always)]
+    pub const fn cache_ip(self) -> usize {
+        match self {
+            Self::FunctionCache { cache_ip }
+            | Self::MethodCache { cache_ip, .. } => cache_ip as usize,
+        }
+    }
+}
+
+/// Guarded scalar call embedded in a typed program. The dispatch guard remains
+/// the source of truth for runtime function or method identity.
 pub struct ScalarLongCall {
-    pub cache_ip: u16,
+    pub guard: ScalarLongCallGuard,
     pub arguments: Box<[ScalarLongSource]>,
 }
 
