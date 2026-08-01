@@ -70,15 +70,16 @@ On the current machine, a no-PGO release run is approximately 0.078 s RPHP
 versus 0.101 s PHP for the composed function benchmark, and 0.090 s RPHP versus
 0.093 s PHP for the scalar-method benchmark. Scalar argument preparation is
 compiled once into a compact typed plan instead of rescanning argument bytecode
-inside each loop iteration. The current 31-workload suite has 30 strict RPHP
-wins and one PHP win, string append. These numbers are directional and must be
-remeasured after related runtime changes.
+inside each loop iteration. The current 31-workload suite has 31 strict RPHP
+wins and no PHP wins. These numbers are directional and must be remeasured after
+related runtime changes; completing the microbenchmark matrix is not a
+substitute for representative application coverage.
 
-In the published suite, the remaining gap is string append at about 0.0017 s
-RPHP versus 0.0012 s PHP. Isolated packed-array append still has structural
-headroom at approximately 0.0030 to 0.0036 s versus 0.0018 s, even though faster
-RPHP reads make the combined array build-and-sum workload a 0.0036 s versus
-0.0038 s RPHP win.
+Isolated packed-array append still has structural headroom at approximately
+0.0030 to 0.0036 s versus 0.0018 s, even though faster RPHP reads make the
+combined array build-and-sum workload a 0.0037 s versus 0.0040 s RPHP win. This
+is retained as a measured runtime cost, not as a reason to add a benchmark-only
+kernel before the real-code corpus establishes its importance.
 
 ## Phase 2: unified typed execution IR
 
@@ -194,6 +195,21 @@ benchmark appends execute in one guarded region with zero deoptimizations. The
 combined array build-and-sum workload improves from approximately 0.0060 s to
 0.0036 s RPHP versus 0.0038 s PHP, while the rest of the 31-workload suite
 retains its previous wins.
+
+The eighth vertical slice adds guarded string append to the same typed loop IR.
+Literal and loop-invariant string sources are accepted; destination strings are
+tracked separately from immutable string inputs. Runtime verifies type,
+reference state, and unique COW ownership once at region entry and retains the
+mutable `String` for direct `push_str` execution. Shared strings, references,
+non-string sources, and self-append retain canonical conversion and COW behavior
+through baseline fallback.
+
+Sampling attributed approximately 79 percent of the former string workload to
+the generic opcode executor and 9 percent to repeated COW checks, while buffer
+growth was negligible. In the no-PGO suite, 199,967 of 200,000 appends execute
+in one typed region with zero deoptimizations. String concat improves from
+approximately 0.0017 s RPHP versus 0.0012 s PHP to 0.0010 s versus 0.0013 s,
+bringing the current microbenchmark matrix to 31 strict RPHP wins out of 31.
 
 ## Phase 3: representative real-code corpus
 

@@ -1612,6 +1612,84 @@ echo $values[99];
 }
 
 #[test]
+fn quick_string_append_handles_literal_and_invariant_sources() {
+    assert_eq!(
+        run_php(
+            "<?php
+$literal_result = '';
+for ($i = 0; $i < 1000; $i++) {
+    $literal_result .= 'x';
+}
+$suffix = 'yz';
+$invariant_result = '';
+for ($i = 0; $i < 1000; $i++) {
+    $invariant_result .= $suffix;
+}
+echo strlen($literal_result);
+echo '|';
+echo strlen($invariant_result);
+echo '|';
+echo $suffix;
+echo '|';
+echo $i;
+"
+        ),
+        "1000|2000|yz|1000"
+    );
+}
+
+#[test]
+fn quick_string_append_preserves_cow_alias() {
+    assert_eq!(
+        run_php(
+            "<?php
+$value = 'base';
+$copy = $value;
+for ($i = 0; $i < 1000; $i++) {
+    $value .= 'x';
+}
+echo strlen($value);
+echo '|';
+echo $copy;
+"
+        ),
+        "1004|base"
+    );
+}
+
+#[test]
+fn quick_string_append_type_and_reference_guards_use_canonical_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php
+function append_by_reference(&$value) {
+    for ($i = 0; $i < 100; $i++) {
+        $value .= 'x';
+    }
+}
+$referenced = '';
+append_by_reference($referenced);
+$numeric_suffix = 7;
+$converted = '';
+for ($i = 0; $i < 100; $i++) {
+    $converted .= $numeric_suffix;
+}
+$self = 'x';
+for ($i = 0; $i < 5; $i++) {
+    $self .= $self;
+}
+echo strlen($referenced);
+echo '|';
+echo strlen($converted);
+echo '|';
+echo strlen($self);
+"
+        ),
+        "100|100|32"
+    );
+}
+
+#[test]
 fn quick_hash_invariant_string_fetch_falls_back_for_missing_value_exactly() {
     assert_eq!(
         run_php(

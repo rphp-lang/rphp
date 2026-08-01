@@ -230,6 +230,7 @@ mod inner {
         match op {
             1 => Some("Add"), 2 => Some("Sub"), 3 => Some("Mul"),
             4 => Some("Div"), 5 => Some("Mod"), 8 => Some("Concat"),
+            9 => Some("AssignConcat"),
             10 => Some("AssignCv"), 13 => Some("BoolNot"),
             15 => Some("IsEqual"), 16 => Some("IsNotEqual"),
             17 => Some("IsSmaller"), 18 => Some("IsSmallerOrEqual"),

@@ -1542,6 +1542,21 @@ impl Value {
         }
     }
 
+    /// Get a mutable string only when this Value is its sole COW owner.
+    /// Guarded regions use this before retaining a raw string pointer; shared
+    /// strings fall back so the canonical opcode performs the detach.
+    #[inline]
+    pub(crate) fn as_string_mut_if_unique(&mut self) -> Option<&mut String> {
+        if self.value_type() != ValueType::String {
+            return None;
+        }
+        unsafe {
+            let rc_ptr = self.data.ptr as *mut String;
+            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+            (Rc::strong_count(&rc) == 1).then(|| &mut *rc_ptr)
+        }
+    }
+
     /// Get array reference. Only valid for Array values.
     #[inline]
     pub fn as_array(&self) -> Option<&PhpArray> {

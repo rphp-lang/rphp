@@ -17,6 +17,7 @@ use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
+    QuickStringAppendSource,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
 };
@@ -7923,6 +7924,7 @@ unsafe fn run_quick_long_ops_loop(
                 & !(plan.array_input_mask
                     | plan.array_output_mask
                     | plan.string_input_mask
+                    | plan.string_append_mask
                     | plan.object_input_mask))
             != 0
     {
@@ -7978,6 +7980,19 @@ unsafe fn run_quick_long_ops_loop(
         return dispatch_quick_long_conditional_kernel(
             eg, frame, op_array, plan, slot_base, slots, kernel, body,
         );
+    }
+
+    let mut mutable_strings = [std::ptr::null_mut(); 64];
+    let mut string_append_mask = plan.string_append_mask;
+    while string_append_mask != 0 {
+        let slot = string_append_mask.trailing_zeros() as usize;
+        string_append_mask &= string_append_mask - 1;
+        let value = &mut *slot_base.add(slot);
+        let Some(string) = value.as_string_mut_if_unique() else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        mutable_strings[slot] = string;
     }
 
     let mut mutable_arrays = [std::ptr::null_mut(); 64];
@@ -8166,6 +8181,27 @@ unsafe fn run_quick_long_ops_loop(
                 let array = mutable_arrays[array as usize];
                 debug_assert!(!array.is_null());
                 (*array).push(Value::long(value));
+                next_target
+            }
+            QuickLongOp::StringAppend {
+                destination,
+                source,
+                next_target,
+                ..
+            } => {
+                let source = match source {
+                    QuickStringAppendSource::Literal(literal) => op_array
+                        .literals
+                        .get_unchecked(literal as usize)
+                        .as_str()
+                        .unwrap_unchecked(),
+                    QuickStringAppendSource::Slot(slot) => {
+                        (*slot_base.add(slot as usize)).as_str().unwrap_unchecked()
+                    }
+                };
+                let destination = mutable_strings[destination as usize];
+                debug_assert!(!destination.is_null());
+                (*destination).push_str(source);
                 next_target
             }
             QuickLongOp::Add {

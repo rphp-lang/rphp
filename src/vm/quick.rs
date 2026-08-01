@@ -44,6 +44,12 @@ pub enum QuickArrayIndex {
     ValueSlot(u16),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickStringAppendSource {
+    Literal(u16),
+    Slot(u16),
+}
+
 #[derive(Debug, Clone)]
 pub enum QuickLongTerm {
     /// Add the induction variable directly to the accumulator.
@@ -301,6 +307,13 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Append a guarded literal or invariant string CV to a unique COW string.
+    StringAppend {
+        destination: u16,
+        source: QuickStringAppendSource,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     Add {
         lhs: u16,
         rhs: u16,
@@ -435,6 +448,7 @@ impl QuickLongOp {
             Self::ModConst { next_target, .. }
             | Self::FetchArrayLong { next_target, .. }
             | Self::ArrayPushLong { next_target, .. }
+            | Self::StringAppend { next_target, .. }
             | Self::Add { next_target, .. }
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
@@ -475,6 +489,7 @@ pub struct QuickLongOpsLoop {
     pub array_output_mask: u64,
     pub string_input_mask: u64,
     pub string_output_mask: u64,
+    pub string_append_mask: u64,
     pub object_input_mask: u64,
     pub string_cache_capacity: u8,
     pub involved_mask: u64,
@@ -1629,11 +1644,13 @@ pub fn detect_long_ops_loop(
     let mut array_output_mask = 0u64;
     let mut string_input_mask = 0u64;
     let mut string_output_mask = 0u64;
+    let mut string_append_mask = 0u64;
     let mut object_input_mask = 0u64;
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_object_call = false;
     let mut has_array_push = false;
+    let mut has_string_append = false;
     let mut has_post_inc = false;
     let mut ip = header_ip;
 
@@ -2282,6 +2299,48 @@ pub fn detect_long_ops_loop(
                     }
                 }
             }
+            OpCode::AssignConcat => {
+                if instruction.op1_type != OpType::Cv
+                    || instruction.result_type != OpType::Unused
+                {
+                    return None;
+                }
+                let source = match instruction.op2_type {
+                    OpType::Const => {
+                        op_array
+                            .literals
+                            .get(instruction.op2 as usize)?
+                            .as_str()?;
+                        QuickStringAppendSource::Literal(instruction.op2)
+                    }
+                    OpType::Cv
+                        if instruction.op2 != instruction.op1
+                            && cv_unmodified_in_region(region, instruction.op2) =>
+                    {
+                        add_mask_slot(
+                            &mut string_input_mask,
+                            instruction.op2,
+                            total_slots,
+                        )?;
+                        QuickStringAppendSource::Slot(instruction.op2)
+                    }
+                    _ => return None,
+                };
+                add_mask_slot(
+                    &mut string_append_mask,
+                    instruction.op1,
+                    total_slots,
+                )?;
+                has_string_append = true;
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::StringAppend {
+                    destination: instruction.op1,
+                    source,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
+                }
+            }
             OpCode::AssignCv => {
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
@@ -2382,6 +2441,7 @@ pub fn detect_long_ops_loop(
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
             | QuickLongOp::ArrayPushLong { resume_ip, .. }
+            | QuickLongOp::StringAppend { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
             | QuickLongOp::PropertyMethodCall { resume_ip, .. }
             | QuickLongOp::PropertyGetterCall { resume_ip, .. }
@@ -2448,7 +2508,12 @@ pub fn detect_long_ops_loop(
             QuickLongOp::BranchUnlessLt { .. } | QuickLongOp::BranchUnlessEq { .. }
         )
     });
-    if !(has_add || has_assign || has_internal_branch || has_object_call || has_array_push)
+    if !(has_add
+        || has_assign
+        || has_internal_branch
+        || has_object_call
+        || has_array_push
+        || has_string_append)
         || !has_post_inc
         || !matches!(
             ops.first(),
@@ -2482,15 +2547,27 @@ pub fn detect_long_ops_loop(
         || array_input_mask & (long_mask | bool_output_mask | array_output_mask) != 0
         || array_output_mask & (long_mask | bool_output_mask) != 0
         || string_input_mask
-            & (long_mask | bool_output_mask | array_input_mask | array_output_mask)
+            & (long_mask
+                | bool_output_mask
+                | array_input_mask
+                | array_output_mask
+                | string_append_mask)
             != 0
         || string_output_mask & !string_input_mask != 0
+        || string_append_mask
+            & (long_mask
+                | bool_output_mask
+                | array_input_mask
+                | array_output_mask
+                | string_output_mask)
+            != 0
         || object_input_mask
             & (long_mask
                 | bool_output_mask
                 | array_input_mask
                 | array_output_mask
-                | string_input_mask)
+                | string_input_mask
+                | string_append_mask)
             != 0
     {
         return None;
@@ -2502,6 +2579,7 @@ pub fn detect_long_ops_loop(
         | array_output_mask
         | string_input_mask
         | string_output_mask
+        | string_append_mask
         | object_input_mask;
 
     Some(QuickLongOpsLoop {
@@ -2517,6 +2595,7 @@ pub fn detect_long_ops_loop(
         array_output_mask,
         string_input_mask,
         string_output_mask,
+        string_append_mask,
         object_input_mask,
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
@@ -3242,6 +3321,37 @@ for ($i = 0; $i < 100; $i++) {
                     | plan.array_input_mask),
             0
         );
+    }
+
+    #[test]
+    fn detects_literal_and_invariant_string_append_as_typed_ops() {
+        for (setup, expression, expected_slot) in [
+            ("", "'x'", None),
+            ("$suffix = 'yz';", "$suffix", Some(0)),
+        ] {
+            let plan = long_ops_plan(&format!(
+                "<?php
+{setup}
+$value = '';
+for ($i = 0; $i < 100; $i++) {{
+    $value .= {expression};
+}}
+"
+            ));
+            assert!(matches!(
+                plan.ops.as_slice(),
+                [
+                    QuickLongOp::BranchUnlessLt { .. },
+                    QuickLongOp::StringAppend { source, .. },
+                    QuickLongOp::PostIncLoopLt { .. },
+                ] if match expected_slot {
+                    Some(slot) => *source == QuickStringAppendSource::Slot(slot),
+                    None => matches!(source, QuickStringAppendSource::Literal(_)),
+                }
+            ));
+            assert_ne!(plan.string_append_mask, 0);
+            assert_eq!(plan.string_append_mask & plan.string_input_mask, 0);
+        }
     }
 
     #[test]
