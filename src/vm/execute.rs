@@ -6012,6 +6012,247 @@ unsafe fn execute_quick_loop_backedge(
     Ok(())
 }
 
+/// Complete a call that could not use one of the compact DoFcall protocols.
+///
+/// Argument diagnostics, named variadics, dynamic `__invoke`, generators and
+/// internal handlers are intentionally kept out of `execute_ex`. These paths
+/// are important for PHP semantics but cold for ordinary fixed-signature user
+/// calls, so outlining them keeps the baseline dispatch working set smaller.
+#[cold]
+#[inline(never)]
+fn execute_full_call<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    opline_ptr: *const Instruction,
+    call: *mut ExecuteData,
+) -> Result<ColdResult<'a>, VmError> {
+    stats::inc_do_fcall_full();
+
+    let return_value_ptr = if opline.result_type != OpType::Unused {
+        unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) }
+    } else {
+        std::ptr::null_mut()
+    };
+    unsafe { (*call).return_value = return_value_ptr };
+
+    // Extract named variadic args eagerly so no error path can leak them.
+    let call_key = call as usize;
+    let pending_named = eg.pending_named_variadic.remove(&call_key);
+
+    // SendVal filled CV 0..N-1 for a dynamically resolved invokable object.
+    // Make room for the hidden method receiver before validating arguments.
+    if let Some(this_val) = eg.pending_invoke_this.take() {
+        let num = unsafe { (*call).num_args };
+        for i in (0..num).rev() {
+            let val = unsafe { (*call).cv(i).clone() };
+            let dst = unsafe { (*call).cv_mut(i + 1) };
+            unsafe { frame_slot_set(call, dst as *mut Value, val) };
+        }
+        let this_slot = unsafe { (*call).cv_mut(0) };
+        unsafe { frame_slot_set(call, this_slot as *mut Value, this_val) };
+    }
+
+    let func_common = unsafe { &*(*call).func };
+    let num_args = unsafe { (*call).num_args };
+    let public_max = func_common.sig.public_arity();
+    if num_args < func_common.sig.required_num_args {
+        return Err(VmError::Fatal(format!(
+            "Too few arguments, {} passed and exactly {} expected",
+            num_args, func_common.sig.required_num_args
+        )));
+    }
+    if !func_common.sig.is_variadic && num_args > public_max {
+        return Err(VmError::Fatal(format!(
+            "Too many arguments, {} passed and at most {} expected",
+            num_args, public_max
+        )));
+    }
+
+    // Named arguments can leave holes even when the public count is correct.
+    for i in 0..func_common.sig.required_num_args {
+        let cv_idx = func_common.sig.param_cv_index(i);
+        let val = unsafe { &*(*call).cv(cv_idx) };
+        if val.is_undef() {
+            return Err(VmError::Fatal(format!(
+                "Too few arguments, {} passed and exactly {} expected",
+                num_args, func_common.sig.required_num_args
+            )));
+        }
+    }
+
+    let callee_class = eg
+        .declaring_class_of(unsafe { (*call).func })
+        .map(str::to_string);
+    let callee_class_ref = callee_class.as_deref();
+
+    if !func_common.sig.param_type_hints.is_empty() {
+        let mut type_error = None;
+        for (i, hint) in func_common.sig.param_type_hints.iter().enumerate() {
+            if matches!(hint, ParamTypeHint::None) {
+                continue;
+            }
+            if (i as u32) >= num_args {
+                break;
+            }
+            let cv_idx = func_common.sig.param_cv_index(i as u32);
+            let val = unsafe { &*(*call).cv(cv_idx) };
+            if val.is_undef() {
+                continue;
+            }
+            if !check_type_hint(val, hint, eg, op_array.strict_types, callee_class_ref) {
+                type_error = Some(make_error_value(
+                    "TypeError",
+                    &format!(
+                        "Argument #{} must be of type {}, {} given",
+                        i + 1,
+                        hint.display_name(),
+                        val.type_name()
+                    ),
+                ));
+                break;
+            }
+        }
+        if let Some(err) = type_error {
+            unsafe { cleanup_frame_slots(call) };
+            eg.vm_stack.pop_call_frame(call);
+            return Ok(match throw_in_frame(eg, frame, err) {
+                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+            });
+        }
+    }
+
+    if func_common.sig.is_variadic {
+        let extra_count = num_args.saturating_sub(public_max);
+        let mut variadic_arr = PhpArray::new();
+        let cv_start = func_common.sig.variadic_cv_index;
+        for i in 0..extra_count {
+            let arg = unsafe { (*call).cv(cv_start + i) }.clone();
+            variadic_arr.push(arg);
+        }
+        if let Some(named_extras) = pending_named {
+            let variadic_hint = func_common
+                .sig
+                .param_type_hints
+                .get(public_max as usize);
+            for (name, val) in named_extras {
+                if let Some(hint) = variadic_hint {
+                    if !matches!(hint, ParamTypeHint::None)
+                        && !check_type_hint(
+                            &val,
+                            hint,
+                            eg,
+                            op_array.strict_types,
+                            callee_class_ref,
+                        )
+                    {
+                        let type_err = make_error_value(
+                            "TypeError",
+                            &format!(
+                                "Named parameter ${} must be of type {}, {} given",
+                                name,
+                                hint.display_name(),
+                                val.type_name()
+                            ),
+                        );
+                        unsafe { cleanup_frame_slots(call) };
+                        eg.vm_stack.pop_call_frame(call);
+                        return Ok(match throw_in_frame(eg, frame, type_err) {
+                            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+                        });
+                    }
+                }
+                variadic_arr.set_str(&name, val);
+            }
+        }
+        let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
+        unsafe {
+            frame_slot_set(call, variadic_slot as *mut Value, Value::array(variadic_arr));
+        }
+    }
+
+    match unsafe { (*(*call).func).fn_type } {
+        FunctionType::User => {
+            let user = unsafe { &*((*call).func as *const UserFunction) };
+            if user.op_array.is_generator {
+                use crate::vm::generator::{new_generator_ref, Generator};
+
+                let mut args = Vec::with_capacity(user.op_array.num_cvs as usize);
+                for i in 0..user.op_array.num_cvs {
+                    args.push(unsafe { (*call).cv(i).clone() });
+                }
+                let generator = Generator::new(
+                    unsafe { (*call).func },
+                    args,
+                    user.op_array.num_cvs,
+                    user.op_array.num_temps,
+                );
+                let gen_ref = new_generator_ref(generator);
+                let mut gen_obj = PhpObject::dynamic(
+                    "Generator".to_string(),
+                    0,
+                    HashMap::new(),
+                );
+                gen_obj.generator = Some(gen_ref);
+                if !return_value_ptr.is_null() {
+                    unsafe { slot_set(return_value_ptr, Value::object(gen_obj)) };
+                }
+                unsafe { cleanup_frame_slots(call) };
+                eg.vm_stack.pop_call_frame(call);
+                Ok(ColdResult::Done)
+            } else {
+                if user.op_array.may_access_globals {
+                    let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
+                        &op_array.main_scope_vars
+                    } else {
+                        &op_array.global_vars
+                    };
+                    for (cv_idx, var_name) in vars_to_sync {
+                        let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
+                        let val = unsafe { (*cv_ptr).clone() };
+                        globals_set(&mut eg.globals, var_name, val);
+                    }
+                }
+                unsafe {
+                    (*call).opline = user.op_array.instructions.as_ptr();
+                    (*frame).opline = opline_ptr.add(1);
+                }
+                eg.current_execute_data.set(call);
+                Ok(ColdResult::NewFrame(call, unsafe { (*call).op_array() }))
+            }
+        }
+        FunctionType::Internal => {
+            let internal = unsafe {
+                &*((*call).func as *const super::function::InternalFunction)
+            };
+            if !return_value_ptr.is_null() {
+                unsafe { std::ptr::drop_in_place(return_value_ptr) };
+            }
+            let handler_result = (internal.handler)(call, return_value_ptr, eg);
+            unsafe { cleanup_frame_slots(call) };
+            eg.vm_stack.pop_call_frame(call);
+            if let Some(exc) = eg.exception.take() {
+                return Ok(match throw_in_frame(eg, frame, exc) {
+                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                    ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+                });
+            }
+            handler_result?;
+            Ok(ColdResult::Done)
+        }
+        FunctionType::Undef => {
+            let err = make_error_value("Error", "Call to undefined function");
+            Ok(match throw_in_frame(eg, frame, err) {
+                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
+                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
+            })
+        }
+    }
+}
+
 /// Inner execute loop — equivalent to zend_execute_ex.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
@@ -7584,259 +7825,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 // ── Full path (handles all edge cases) ──
-                stats::inc_do_fcall_full();
-
-                // Set up return value in result slot if used
-                let return_value_ptr = if opline.result_type != OpType::Unused {
-                    unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) }
-                } else {
-                    std::ptr::null_mut()
-                };
-                unsafe { (*call).return_value = return_value_ptr };
-
-                // Eagerly extract any pending named variadic args so they don't
-                // leak on error paths (TypeError, arity, etc.).
-                let call_key = call as usize;
-                let pending_named = eg.pending_named_variadic.remove(&call_key);
-
-                // __invoke dispatch: SendVal wrote args to CV 0..N-1 but the
-                // method expects $this at CV 0 and args at CV 1..N.
-                // Shift args right by 1 and place $this at CV 0.
-                if let Some(this_val) = eg.pending_invoke_this.take() {
-                    let num = unsafe { (*call).num_args };
-                    // Shift args from CV[N-1] down to CV[0] into CV[N]..CV[1]
-                    for i in (0..num).rev() {
-                        let val = unsafe { (*call).cv(i).clone() };
-                        let dst = unsafe { (*call).cv_mut(i + 1) };
-                        unsafe { frame_slot_set(call, dst as *mut Value, val) };
+                match execute_full_call(eg, frame, op_array, opline, opline_ptr, call)? {
+                    ColdResult::Done => {
+                        unsafe { (*frame).opline = opline_ptr.add(1) };
+                        continue 'vm;
                     }
-                    // Place $this at CV 0
-                    let this_slot = unsafe { (*call).cv_mut(0) };
-                    unsafe { frame_slot_set(call, this_slot as *mut Value, this_val) };
-                    // num_args stays as the public arg count (excluding $this)
-                    // — same convention as InitMethodCall
-                }
-
-                // Validate argument count
-                // `num_args` is the explicit (public) arg count from the call site.
-                // `public_arity()` = declared param count excluding hidden $this.
-                let func_common = unsafe { &*(*call).func };
-                let num_args = unsafe { (*call).num_args };
-                let public_max = func_common.sig.public_arity();
-                if num_args < func_common.sig.required_num_args {
-                    return Err(VmError::Fatal(format!(
-                        "Too few arguments, {} passed and exactly {} expected",
-                        num_args, func_common.sig.required_num_args
-                    )));
-                }
-                if !func_common.sig.is_variadic && num_args > public_max {
-                    return Err(VmError::Fatal(format!(
-                        "Too many arguments, {} passed and at most {} expected",
-                        num_args, public_max
-                    )));
-                }
-
-                // Named args can skip required positional params; verify no holes
-                // in the required range. A required param is one at index < required_num_args.
-                if func_common.sig.required_num_args > 0 {
-                    for i in 0..func_common.sig.required_num_args {
-                        let cv_idx = func_common.sig.param_cv_index(i);
-                        let val = unsafe { &*(*call).cv(cv_idx) };
-                        if val.is_undef() {
-                            return Err(VmError::Fatal(format!(
-                                "Too few arguments, {} passed and exactly {} expected",
-                                num_args, func_common.sig.required_num_args
-                            )));
-                        }
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
                     }
-                }
-
-                // Resolve callee's declaring class for self/parent/static type hints
-                let callee_class = eg.declaring_class_of(unsafe { (*call).func }).map(|s| s.to_string());
-                let callee_class_ref = callee_class.as_deref();
-
-                // Type-check arguments against declared type hints
-                if !func_common.sig.param_type_hints.is_empty() {
-                    let mut type_error: Option<Value> = None;
-                    for (i, hint) in func_common.sig.param_type_hints.iter().enumerate() {
-                        if matches!(hint, crate::vm::function::ParamTypeHint::None) { continue; }
-                        let cv_idx = func_common.sig.param_cv_index(i as u32);
-                        if (i as u32) >= num_args { break; }
-                        let val = unsafe { &*(*call).cv(cv_idx) };
-                        if val.is_undef() { continue; }
-                        if !check_type_hint(val, hint, eg, op_array.strict_types, callee_class_ref) {
-                            type_error = Some(make_error_value("TypeError", &format!(
-                                "Argument #{} must be of type {}, {} given",
-                                i + 1,
-                                hint.display_name(),
-                                val.type_name()
-                            )));
-                            break;
-                        }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
                     }
-                    if let Some(err) = type_error {
-                        // Clean up call frame before throwing
-                        unsafe { cleanup_frame_slots(call) };
-                        eg.vm_stack.pop_call_frame(call);
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue; }
-                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                        }
-                    }
-                }
-
-                // Pack extra arguments into variadic parameter array
-                if func_common.sig.is_variadic {
-                    let extra_count = num_args.saturating_sub(public_max);
-                    let mut variadic_arr = crate::value::PhpArray::new();
-                    let cv_start = func_common.sig.variadic_cv_index;
-                    for i in 0..extra_count {
-                        let arg = unsafe { (*call).cv(cv_start + i) }.clone();
-                        variadic_arr.push(arg);
-                    }
-                    // Merge any named variadic args (extracted at start of DoFcall)
-                    if let Some(named_extras) = pending_named {
-                        // Type-check each named extra against the variadic param's type hint
-                        let variadic_hint_idx = public_max as usize; // index in param_type_hints
-                        let variadic_hint = func_common.sig.param_type_hints.get(variadic_hint_idx);
-                        for (name, val) in named_extras {
-                            if let Some(hint) = variadic_hint {
-                                if !matches!(hint, crate::vm::function::ParamTypeHint::None)
-                                    && !check_type_hint(&val, hint, eg, op_array.strict_types, callee_class_ref)
-                                {
-                                    let type_err = make_error_value("TypeError", &format!(
-                                        "Named parameter ${} must be of type {}, {} given",
-                                        name,
-                                        hint.display_name(),
-                                        val.type_name()
-                                    ));
-                                    unsafe { cleanup_frame_slots(call) };
-                                    eg.vm_stack.pop_call_frame(call);
-                                    match throw_in_frame(eg, frame, type_err) {
-                                        ThrowResult::Handled(nf, no) => { frame = nf; op_array = no; continue 'vm; }
-                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                    }
-                                }
-                            }
-                            variadic_arr.set_str(&name, val);
-                        }
-                    }
-                    // Overwrite the variadic CV slot with the packed array
-                    let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
-                    unsafe {
-                        frame_slot_set(call, variadic_slot as *mut Value, crate::value::Value::array(variadic_arr));
-                    }
-                }
-
-                // Direct fn_type check — avoids Function wrapper overhead
-                let call_fn_type = unsafe { (*(*call).func).fn_type };
-                match call_fn_type {
-                    FunctionType::User => {
-                        let user = unsafe { &*((*call).func as *const UserFunction) };
-
-                        // Generator function — create Generator object instead of executing
-                        if user.op_array.is_generator {
-                            use crate::vm::generator::{Generator, new_generator_ref};
-
-                            // Collect argument values from the call frame CV slots
-                            let mut args = Vec::new();
-                            let num_cvs = user.op_array.num_cvs as usize;
-                            for i in 0..num_cvs {
-                                let val = unsafe { (*call).cv(i as u32) }.clone();
-                                args.push(val);
-                            }
-
-                            let generator = Generator::new(
-                                unsafe { (*call).func },
-                                args,
-                                user.op_array.num_cvs,
-                                user.op_array.num_temps,
-                            );
-                            let gen_ref = new_generator_ref(generator);
-                            let mut gen_obj = PhpObject::dynamic(
-                                "Generator".to_string(),
-                                0,
-                                std::collections::HashMap::new(),
-                            );
-                            gen_obj.generator = Some(gen_ref);
-                            let gen_val = Value::object(gen_obj);
-
-                            // Write generator object as return value
-                            if !return_value_ptr.is_null() {
-                                unsafe { slot_set(return_value_ptr, gen_val) };
-                            }
-
-                            // Clean up the call frame (we didn't execute it)
-                            unsafe { cleanup_frame_slots(call) };
-                            eg.vm_stack.pop_call_frame(call);
-                        } else {
-                            // Sync caller's scope vars to eg.globals — only when callee may reach globals.
-                            if user.op_array.may_access_globals {
-                                let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
-                                    &op_array.main_scope_vars
-                                } else {
-                                    &op_array.global_vars
-                                };
-                                for (cv_idx, var_name) in vars_to_sync {
-                                    let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                                    let val = unsafe { (*cv_ptr).clone() };
-                                    globals_set(&mut eg.globals, var_name, val);
-                                }
-                            }
-                            unsafe {
-                                (*call).opline = user.op_array.instructions.as_ptr();
-                                (*frame).opline = opline_ptr.add(1);
-                            }
-                            eg.current_execute_data.set(call);
-                            frame = call;
-                            op_array = unsafe { (*frame).op_array() };
-            
-                            continue;
-                        }
-                    }
-                    FunctionType::Internal => {
-                        let internal = unsafe {
-                            &*((*call).func as *const super::function::InternalFunction)
-                        };
-                        if !return_value_ptr.is_null() {
-                            unsafe { std::ptr::drop_in_place(return_value_ptr) };
-                        }
-                        let handler_result = (internal.handler)(call, return_value_ptr, eg);
-                        unsafe { cleanup_frame_slots(call) };
-                        eg.vm_stack.pop_call_frame(call);
-                        // 1) eg.exception set (real PHP throw from callback) → catchable
-                        if let Some(exc) = eg.exception.take() {
-                            match throw_in_frame(eg, frame, exc) {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    frame = new_frame;
-                                    op_array = new_op_array;
-                                    continue;
-                                }
-                                ThrowResult::Unhandled(thrown) => {
-                                    eg.exception = Some(thrown);
-                                    return Ok(());
-                                }
-                            }
-                        }
-                        // 2) Handler returned Err (hard fatal) → not catchable
-                        if let Err(e) = handler_result {
-                            return Err(e);
-                        }
-                    }
-                    FunctionType::Undef => {
-                        let err = make_error_value("Error", "Call to undefined function");
-                        match throw_in_frame(eg, frame, err) {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
-                                frame = new_frame;
-                                op_array = new_op_array;
-                                continue;
-                            }
-                            ThrowResult::Unhandled(thrown) => {
-                                eg.exception = Some(thrown);
-                                return Ok(());
-                            }
-                        }
-                    }
+                    ColdResult::Continue => continue 'vm,
+                    ColdResult::Return => return Ok(()),
                 }
             }
 
