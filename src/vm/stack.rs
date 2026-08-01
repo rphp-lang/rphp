@@ -43,19 +43,22 @@ impl VmStack {
     pub fn push_call_frame(
         &mut self,
         func: *const FunctionCommon,
-        num_args: u32,
+        storage_num_args: u32,
+        public_num_args: u32,
+        prev_execute_data: *mut ExecuteData,
+        pending_call: *mut ExecuteData,
     ) -> *mut ExecuteData {
         let common = unsafe { &*func };
         let declared_cvs = common.frame.num_cvs as usize;
         let num_temps = common.frame.num_temps as usize;
 
         // Compute frame geometry: effective CV count and total slot count.
-        // The common case is num_args <= declared CVs. The wider frame is
-        // only needed for extra-arg error paths.
-        let effective_cvs = if (num_args as usize) <= declared_cvs {
+        // The common case is storage_num_args <= declared CVs. The wider
+        // frame is only needed for extra-arg error paths.
+        let effective_cvs = if (storage_num_args as usize) <= declared_cvs {
             declared_cvs
         } else {
-            num_args as usize
+            storage_num_args as usize
         };
         let total_slots = CALL_FRAME_SLOTS + effective_cvs + num_temps;
         let needed = total_slots * size_of::<Value>();
@@ -68,22 +71,31 @@ impl VmStack {
         let frame = self.top as *mut ExecuteData;
         self.top = unsafe { self.top.add(total_slots) };
 
-        // Initialize frame header: zero all bytes, then write non-zero fields.
-        // Zeroing handles: opline=null, call=null, return_value=null,
-        // prev_execute_data=null, pending_return_after_finally=false,
-        // has_heap_slots=false, named_args_used=false, heap_bitmap=0.
+        // Initialize every header field with its final value. Keeping storage
+        // geometry separate from public arity handles hidden method `$this`
+        // and closure captures without fixing up the header after allocation.
         unsafe {
-            std::ptr::write_bytes(frame as *mut u8, 0, size_of::<ExecuteData>());
-            (*frame).func = func;
-            (*frame).num_args = num_args;
-            (*frame).num_cvs = effective_cvs as u32;
-            (*frame).num_temps = num_temps as u32;
+            frame.write(ExecuteData {
+                opline: std::ptr::null(),
+                call: pending_call,
+                return_value: std::ptr::null_mut(),
+                func,
+                prev_execute_data,
+                num_args: public_num_args,
+                num_cvs: effective_cvs as u32,
+                num_temps: num_temps as u32,
+                pending_return_after_finally: false,
+                has_heap_slots: false,
+                named_args_used: false,
+                heap_bitmap: 0,
+            });
         }
 
         // Zero-init only CV slots beyond argument count. TMPs NOT zeroed.
-        // Arg slots (0..num_args) are left uninitialized — written by SendVal before DoFcall.
+        // Arg-storage slots (0..storage_num_args) are left uninitialized —
+        // written by SendVal or hidden-value binding before DoFcall.
         // CVs beyond args are set to Undef (zeroed) so BindDefaultParam can check for Undef.
-        let zero_start = num_args as usize;
+        let zero_start = storage_num_args as usize;
         let zero_end = effective_cvs;
         let zero_count = zero_end.saturating_sub(zero_start);
 

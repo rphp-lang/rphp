@@ -450,10 +450,13 @@ pub unsafe fn execute_macro(
 
             MacroStep::InitFcallCached { func_ptr, num_args } => {
                 // Push call frame for the known function
-                let call = eg.vm_stack.push_call_frame(*func_ptr, *num_args);
-                // Wire up call chain
-                (*call).prev_execute_data = frame;
-                (*call).call = (*frame).call;
+                let call = eg.vm_stack.push_call_frame(
+                    *func_ptr,
+                    *num_args,
+                    *num_args,
+                    frame,
+                    (*frame).call,
+                );
                 (*frame).call = call;
             }
 

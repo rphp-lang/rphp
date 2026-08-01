@@ -583,12 +583,16 @@ fn call_magic_method(
     let num_explicit_args = args.len() as u32;
 
     // Push a call frame: +1 for $this at CV 0
-    let call = eg.vm_stack.push_call_frame(func_ptr, num_explicit_args + 1);
+    let call = eg.vm_stack.push_call_frame(
+        func_ptr,
+        num_explicit_args + 1,
+        num_explicit_args,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     let mut return_value = Value::null();
     unsafe {
-        (*call).num_args = num_explicit_args;
         (*call).return_value = &mut return_value;
-        (*call).prev_execute_data = std::ptr::null_mut();
         (*call).opline = user.op_array.instructions.as_ptr();
         // Write $this directly — cleanup handles it separately.
         frame_set_this(call, obj_val.clone());
@@ -689,13 +693,18 @@ fn throw_in_frame<'a>(
 
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
     let func_ptr = &main_func.common as *const FunctionCommon;
-    let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+    let frame = eg.vm_stack.push_call_frame(
+        func_ptr,
+        0,
+        0,
+        eg.current_execute_data.get(),
+        std::ptr::null_mut(),
+    );
 
     let mut return_value = Value::null();
     unsafe {
         (*frame).return_value = &mut return_value;
         (*frame).opline = main_func.op_array.instructions.as_ptr();
-        (*frame).prev_execute_data = eg.current_execute_data.get();
     }
     eg.current_execute_data.set(frame);
 
@@ -794,14 +803,18 @@ where
     I: Iterator<Item = Value>,
 {
     let saved_execute_data = eg.current_execute_data.get();
-    let frame = eg.vm_stack.push_call_frame(func_ptr, num_args as u32);
+    let frame = eg.vm_stack.push_call_frame(
+        func_ptr,
+        num_args as u32,
+        num_args as u32,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     let mut return_value = Value::null();
 
     unsafe {
         (*frame).return_value = &mut return_value;
         // prev=null so Return exits execute_ex instead of continuing in caller
-        (*frame).prev_execute_data = std::ptr::null_mut();
-        (*frame).num_args = num_args as u32;
     }
 
     // Write args into CV slots — fresh uninitialized slots, use init (no drop).
@@ -952,11 +965,16 @@ pub fn resume_generator(
 
                         gen_ref.borrow_mut().state = GeneratorState::Running;
                         let saved_execute_data = eg.current_execute_data.get();
-                        let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+                        let frame = eg.vm_stack.push_call_frame(
+                            func_ptr,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        );
                         let mut dummy_return = Value::null();
                         unsafe {
                             (*frame).return_value = &mut dummy_return;
-                            (*frame).prev_execute_data = std::ptr::null_mut();
                         }
 
                         {
@@ -1021,11 +1039,16 @@ pub fn resume_generator(
 
                         gen_ref.borrow_mut().state = GeneratorState::Running;
                         let saved_execute_data = eg.current_execute_data.get();
-                        let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+                        let frame = eg.vm_stack.push_call_frame(
+                            func_ptr,
+                            0,
+                            0,
+                            std::ptr::null_mut(),
+                            std::ptr::null_mut(),
+                        );
                         let mut dummy_return = Value::null();
                         unsafe {
                             (*frame).return_value = &mut dummy_return;
-                            (*frame).prev_execute_data = std::ptr::null_mut();
                         }
 
                         {
@@ -1090,11 +1113,16 @@ pub fn resume_generator(
     let saved_execute_data = eg.current_execute_data.get();
 
     // Push a frame for the generator
-    let frame = eg.vm_stack.push_call_frame(func_ptr, 0);
+    let frame = eg.vm_stack.push_call_frame(
+        func_ptr,
+        0,
+        0,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     let mut dummy_return = Value::null();
     unsafe {
         (*frame).return_value = &mut dummy_return;
-        (*frame).prev_execute_data = std::ptr::null_mut();
     }
 
     // Copy saved CV values into frame
@@ -1258,11 +1286,16 @@ fn op_include(
 
     let inc_func_ptr = &main_func.common as *const FunctionCommon;
     let mut inc_return_value = Value::null();
-    let inc_frame = eg.vm_stack.push_call_frame(inc_func_ptr, 0);
+    let inc_frame = eg.vm_stack.push_call_frame(
+        inc_func_ptr,
+        0,
+        0,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+    );
     unsafe {
         (*inc_frame).return_value = &mut inc_return_value;
         (*inc_frame).opline = main_func.op_array.instructions.as_ptr();
-        (*inc_frame).prev_execute_data = std::ptr::null_mut();
     }
     for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
         if let Some(val) = eg.globals.get(var_name) {
@@ -1454,11 +1487,15 @@ fn op_new_obj<'a>(
     let construct_name = format!("{}::__construct", name);
     if let Some(func_ptr) = eg.find_function(&construct_name) {
         // +1 for $this at CV 0; SendVal writes args to CV 1..N
-        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args + 1,
+            num_args,
+            frame,
+            pending_call,
+        );
         unsafe {
-            (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
-            (*call).prev_execute_data = frame;
-            (*call).call = (*frame).call;
             (*frame).call = call;
             // Write $this directly — cleanup handles it separately.
             let obj_ref = &*result_ptr;
@@ -1807,11 +1844,15 @@ fn op_init_method_call<'a>(
         };
 
         let num_args = opline.extended_value;
-        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args + 1,
+            num_args,
+            frame,
+            pending_call,
+        );
         unsafe {
-            (*call).num_args = num_args;
-            (*call).prev_execute_data = frame;
-            (*call).call = (*frame).call;
             (*frame).call = call;
             let common = &*func_ptr;
             if common.plan.borrow_this {
@@ -1893,11 +1934,15 @@ fn op_init_static_call<'a>(
 
     let num_args = opline.extended_value;
     // +1 for $this at CV 0 (compiler allocates $this even for static calls)
-    let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+    let pending_call = unsafe { (*frame).call };
+    let call = eg.vm_stack.push_call_frame(
+        func_ptr,
+        num_args + 1,
+        num_args,
+        frame,
+        pending_call,
+    );
     unsafe {
-        (*call).num_args = num_args; // restore explicit arg count for DoFcall arity check
-        (*call).prev_execute_data = frame;
-        (*call).call = (*frame).call;
         (*frame).call = call;
     }
     Ok(ColdResult::Done)
@@ -1980,13 +2025,15 @@ fn init_resolved_user_call(
     let public_end = signature.this_offset + explicit_args;
     let capture_end = signature.num_args + resolved.use_vars.len() as u32;
     let storage_slots = public_end.max(capture_end);
-    let call = eg.vm_stack.push_call_frame(resolved.func_ptr, storage_slots);
+    let pending_call = unsafe { (*frame).call };
+    let call = eg.vm_stack.push_call_frame(
+        resolved.func_ptr,
+        storage_slots,
+        explicit_args,
+        frame,
+        pending_call,
+    );
     unsafe {
-        // DoFcall validates only the public arguments. Hidden `$this` and
-        // closure captures occupy CV slots but are not part of public arity.
-        (*call).num_args = explicit_args;
-        (*call).prev_execute_data = frame;
-        (*call).call = (*frame).call;
         (*frame).call = call;
     }
 
@@ -2023,10 +2070,15 @@ fn op_init_dynamic_call(
         // Fast path: Closure value — direct function pointer, no string lookup.
         let func_ptr = closure.func;
         let num_args = opline.extended_value;
-        let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args,
+            num_args,
+            frame,
+            pending_call,
+        );
         unsafe {
-            (*call).prev_execute_data = frame;
-            (*call).call = (*frame).call;
             (*frame).call = call;
         }
 
@@ -2069,10 +2121,15 @@ fn op_init_dynamic_call(
         })?;
 
         let num_args = opline.extended_value;
-        let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args,
+            num_args,
+            frame,
+            pending_call,
+        );
         unsafe {
-            (*call).prev_execute_data = frame;
-            (*call).call = (*frame).call;
             (*frame).call = call;
         }
 
@@ -2091,10 +2148,15 @@ fn op_init_dynamic_call(
         })?;
 
         let num_args = opline.extended_value;
-        let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args,
+            num_args,
+            frame,
+            pending_call,
+        );
         unsafe {
-            (*call).prev_execute_data = frame;
-            (*call).call = (*frame).call;
             (*frame).call = call;
         }
     } else if callable.value_type() == ValueType::Object {
@@ -2112,12 +2174,16 @@ fn op_init_dynamic_call(
         // +1 for $this at CV 0; but don't write $this yet because
         // SendVal will write args to CV 0..N-1 (compiler doesn't know
         // it's a method call). We'll shift args in DoFcall.
-        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+        let pending_call = unsafe { (*frame).call };
+        let call = eg.vm_stack.push_call_frame(
+            func_ptr,
+            num_args + 1,
+            num_args,
+            frame,
+            pending_call,
+        );
         unsafe {
-            (*call).num_args = num_args;
             (*call).num_cvs = num_args + 1; // track total CVs needed
-            (*call).prev_execute_data = frame;
-            (*call).call = (*frame).call;
             (*frame).call = call;
         }
         // Stash $this object for injection in DoFcall
@@ -7066,10 +7132,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
 
                 let num_args = opline.op1 as u32;
-                let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+                let pending_call = unsafe { (*frame).call };
+                let call = eg.vm_stack.push_call_frame(
+                    func_ptr,
+                    num_args,
+                    num_args,
+                    frame,
+                    pending_call,
+                );
                 unsafe {
-                    (*call).prev_execute_data = frame;
-                    (*call).call = (*frame).call;
                     (*frame).call = call;
                 }
 
@@ -8105,11 +8176,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
                         let func_ptr = ic.func;
                         let num_args = opline.extended_value;
-                        let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+                        let pending_call = unsafe { (*frame).call };
+                        let call = eg.vm_stack.push_call_frame(
+                            func_ptr,
+                            num_args + 1,
+                            num_args,
+                            frame,
+                            pending_call,
+                        );
                         unsafe {
-                            (*call).num_args = num_args;
-                            (*call).prev_execute_data = frame;
-                            (*call).call = (*frame).call;
                             (*frame).call = call;
                             let common = &*func_ptr;
                             if common.plan.borrow_this {

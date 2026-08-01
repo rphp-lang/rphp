@@ -434,10 +434,15 @@ pub fn execute_hot_frame(
                 }
                 let func_ptr = cached;
                 let num_args = opline.op1 as u32;
-                let call = eg.vm_stack.push_call_frame(func_ptr, num_args);
+                let pending_call = unsafe { (*frame).call };
+                let call = eg.vm_stack.push_call_frame(
+                    func_ptr,
+                    num_args,
+                    num_args,
+                    frame,
+                    pending_call,
+                );
                 unsafe {
-                    (*call).prev_execute_data = frame;
-                    (*call).call = (*frame).call;
                     (*frame).call = call;
                 }
 
@@ -908,11 +913,15 @@ pub fn execute_hot_frame(
                 let func_ptr = ic.func;
                 let func_common = unsafe { &*func_ptr };
                 let num_args = opline.extended_value;
-                let call = eg.vm_stack.push_call_frame(func_ptr, num_args + 1);
+                let pending_call = unsafe { (*frame).call };
+                let call = eg.vm_stack.push_call_frame(
+                    func_ptr,
+                    num_args + 1,
+                    num_args,
+                    frame,
+                    pending_call,
+                );
                 unsafe {
-                    (*call).num_args = num_args;
-                    (*call).prev_execute_data = frame;
-                    (*call).call = (*frame).call;
                     (*frame).call = call;
                     let this_ptr = (call as *mut Value).add(CALL_FRAME_SLOTS);
                     if func_common.plan.borrow_this {
