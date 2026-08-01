@@ -7979,7 +7979,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // $var++: increment CV in place, result = old value
                 let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let old = unsafe { &*cv_ptr };
-                let old_val = old.clone();
                 let new_val = if let Some(n) = old.as_long() {
                     match n.checked_add(1) {
                         Some(v) => Value::long(v),
@@ -7992,7 +7991,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 if opline.result_type != OpType::Unused {
                     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                    unsafe { slot_set(result_ptr, old_val) };
+                    unsafe { slot_set(result_ptr, old.clone()) };
                 }
                 unsafe { slot_set(cv_ptr, new_val) };
             }
@@ -8000,7 +7999,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             OpCode::PostDec => {
                 let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
                 let old = unsafe { &*cv_ptr };
-                let old_val = old.clone();
                 if let Some(n) = old.as_long() {
                     let new_val = match n.checked_sub(1) {
                         Some(v) => Value::long(v),
@@ -8008,14 +8006,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, old_val) };
+                        unsafe { slot_set(result_ptr, old.clone()) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else if let Some(d) = old.to_double() {
                     let new_val = Value::double(d - 1.0);
                     if opline.result_type != OpType::Unused {
                         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                        unsafe { slot_set(result_ptr, old_val) };
+                        unsafe { slot_set(result_ptr, old.clone()) };
                     }
                     unsafe { slot_set(cv_ptr, new_val) };
                 } else {

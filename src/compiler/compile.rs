@@ -612,7 +612,7 @@ impl Compiler {
             Stmt::ExprStmt(expr) => {
                 // Compile expression for side effects (e.g. function call), discard result
                 let (result, result_type) = self.compile_expr(expr);
-                self.discard_direct_internal_result(result, result_type);
+                self.discard_unused_expr_result(result, result_type);
             }
             Stmt::While { condition, body } => {
                 // Loop start: compile condition
@@ -738,7 +738,7 @@ impl Compiler {
                 // Compile update expression (discard result)
                 if let Some(upd) = update {
                     let (result, result_type) = self.compile_expr(upd);
-                    self.discard_direct_internal_result(result, result_type);
+                    self.discard_unused_expr_result(result, result_type);
                 }
 
                 // Jmp back to loop start
@@ -2988,16 +2988,26 @@ impl Compiler {
         idx
     }
 
-    /// A pure direct builtin must still execute for argument evaluation and
-    /// PHP error semantics, but an expression statement needs no TMP write.
-    fn discard_direct_internal_result(&mut self, result: u16, result_type: OpType) {
+    /// Preserve the side effect of a standalone expression while suppressing
+    /// an immediately-produced TMP that no consumer can observe.
+    ///
+    /// Only opcodes whose runtime handlers explicitly support an Unused result
+    /// belong here. Other expression kinds keep materializing their value.
+    fn discard_unused_expr_result(&mut self, result: u16, result_type: OpType) {
         if result_type != OpType::Tmp {
             return;
         }
         if let Some(instruction) = self.instructions.last_mut() {
             if matches!(
                 instruction.opcode,
-                OpCode::DirectInternalCall1 | OpCode::Strlen | OpCode::Strlen_Cv
+                OpCode::DirectInternalCall1
+                    | OpCode::Strlen
+                    | OpCode::Strlen_Cv
+                    | OpCode::DoFcall
+                    | OpCode::PreInc
+                    | OpCode::PreDec
+                    | OpCode::PostInc
+                    | OpCode::PostDec
             )
                 && instruction.result == result
                 && instruction.result_type == OpType::Tmp

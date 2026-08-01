@@ -83,8 +83,13 @@ macro_rules! arg_opt {
 /// SAFETY: rv must be a valid pointer or null.
 macro_rules! ret {
     ($rv:expr, $val:expr) => {{
+        // The return expression may itself perform observable work (for
+        // example array_pop() mutates its by-reference argument).  An unused
+        // call result suppresses only the result write, never evaluation of
+        // the internal function's return expression.
+        let value = $val;
         if !$rv.is_null() {
-            unsafe { $rv.write($val) };
+            unsafe { $rv.write(value) };
         }
         return Ok(());
     }};

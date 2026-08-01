@@ -99,6 +99,36 @@ fn test_discarded_direct_builtin_skips_tmp_result_write() {
 }
 
 #[test]
+fn test_discarded_calls_and_loop_updates_skip_tmp_results() {
+    let compiled = compile_source("<?php
+function value() { return 7; }
+for ($i = 0; $i < 3; $i++) { value(); }
+$kept = value();
+$old = $i++;
+");
+
+    let call_results: Vec<_> = compiled
+        .main
+        .instructions
+        .iter()
+        .filter(|instruction| instruction.opcode == OpCode::DoFcall)
+        .map(|instruction| instruction.result_type)
+        .collect();
+    assert!(call_results.contains(&OpType::Unused));
+    assert!(call_results.contains(&OpType::Tmp));
+
+    let increment_results: Vec<_> = compiled
+        .main
+        .instructions
+        .iter()
+        .filter(|instruction| instruction.opcode == OpCode::PostInc)
+        .map(|instruction| instruction.result_type)
+        .collect();
+    assert!(increment_results.contains(&OpType::Unused));
+    assert!(increment_results.contains(&OpType::Tmp));
+}
+
+#[test]
 fn test_direct_builtin_result_kind_controls_frame_cleanup() {
     let scalar = compile_source("<?php function scalar_direct($value) { return strlen($value); }");
     assert_eq!(scalar.functions[0].1.common.plan.cleanup, CleanupMode::SkipScan);
