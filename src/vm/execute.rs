@@ -1837,8 +1837,17 @@ fn op_init_method_call<'a>(
             // Cache the resolution (don't cache if class_id is 0 = unknown)
             if obj_class_id != 0 {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
-                ic_mut.func = resolved;
-                ic_mut.class_id = obj_class_id;
+                let common = unsafe { &*resolved };
+                let fusion_eligible = common.fn_type == FunctionType::User
+                    && common.plan.call == CallStrategy::FastScalar
+                    && unsafe {
+                        (&*(resolved as *const UserFunction))
+                            .op_array
+                            .instructions
+                            .len()
+                            <= FAST_SCALAR_METHOD_FUSION_MAX_OPS
+                    };
+                ic_mut.set_method(resolved, obj_class_id, fusion_eligible);
             }
             resolved
         };
@@ -6012,6 +6021,65 @@ unsafe fn execute_quick_loop_backedge(
     Ok(())
 }
 
+const FAST_SCALAR_METHOD_FUSION_MAX_OPS: usize = 8;
+
+/// Enter a fixed-signature user method after InitMethodCall already created
+/// its frame and bound every scalar argument. Kept out of `execute_ex` so the
+/// fused method protocol does not enlarge the baseline opcode dispatch loop.
+#[inline(never)]
+fn execute_fast_scalar_method_call<'a>(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    call: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    do_fcall: &Instruction,
+    do_fcall_ptr: *const Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    unsafe { (*caller).call = (*call).call };
+    stats::inc_do_fcall_fast();
+
+    let func_common = unsafe { &*func_ptr };
+    let cc = func_common.call_count.get();
+    if cc < u32::MAX {
+        func_common.call_count.set(cc + 1);
+    }
+    if cc == FUNC_HOT_THRESHOLD
+        && func_common.hot_status.get() == HotStatus::Cold
+        && func_common.can_promote_to_hot()
+    {
+        func_common.hot_status.set(HotStatus::Hot);
+    }
+
+    let return_value_ptr = match do_fcall.result_type {
+        OpType::Tmp | OpType::Var => unsafe {
+            (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize)
+        },
+        OpType::Unused => std::ptr::null_mut(),
+        _ => unsafe {
+            (*caller).get_op_mut(do_fcall.result as u32, do_fcall.result_type)
+        },
+    };
+    let user = unsafe { &*(func_ptr as *const UserFunction) };
+    unsafe {
+        (*call).return_value = return_value_ptr;
+        (*call).opline = user.op_array.instructions.as_ptr();
+        (*caller).opline = do_fcall_ptr.add(1);
+    }
+    eg.current_execute_data.set(call);
+
+    if func_common.hot_status.get() == HotStatus::Hot {
+        match super::hot::execute_hot_frame(eg, call)? {
+            super::hot::HotResult::Completed => Ok(ColdResult::Continue),
+            super::hot::HotResult::Bailout => {
+                let active = eg.current_execute_data.get();
+                Ok(ColdResult::NewFrame(active, unsafe { (*active).op_array() }))
+            }
+        }
+    } else {
+        Ok(ColdResult::NewFrame(call, unsafe { (*call).op_array() }))
+    }
+}
+
 /// Complete a call that could not use one of the compact DoFcall protocols.
 ///
 /// Argument diagnostics, named variadics, dynamic `__invoke`, generators and
@@ -8210,6 +8278,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 num_args,
                             )
                         };
+
+                        // When the whole scalar argument prefix was bound,
+                        // fold the adjacent DoFcall into this cache-hit method
+                        // setup. This removes one more baseline dispatch from
+                        // the ordinary `$object->method(...)` protocol.
+                        if ic.method_fusion_eligible() && bound == num_args as usize {
+                            let do_fcall_ptr = unsafe { opline_ptr.add(1 + bound) };
+                            let do_fcall = unsafe { &*do_fcall_ptr };
+                            if do_fcall.opcode == OpCode::DoFcall {
+                                match execute_fast_scalar_method_call(
+                                    eg,
+                                    frame,
+                                    call,
+                                    func_ptr,
+                                    do_fcall,
+                                    do_fcall_ptr,
+                                )? {
+                                    ColdResult::Continue => continue 'vm,
+                                    ColdResult::NewFrame(nf, no) => {
+                                        frame = nf;
+                                        op_array = no;
+                                        continue 'vm;
+                                    }
+                                    _ => unreachable!(),
+                                }
+                            }
+                        }
                         if bound != 0 {
                             opline_ptr = unsafe { opline_ptr.add(bound) };
                         }

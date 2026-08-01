@@ -76,6 +76,7 @@ unsafe impl Sync for InlineCache {}
 
 impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
+    const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
     pub fn empty() -> Self {
@@ -102,6 +103,29 @@ impl InlineCache {
         debug_assert!(slot <= (u32::MAX >> 2) as usize);
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// Cache a monomorphic method resolution and whether its already-proven
+    /// FastScalar body is short enough to benefit from InitMethodCall fusion.
+    #[inline]
+    pub fn set_method(
+        &mut self,
+        func: *const FunctionCommon,
+        class_id: u32,
+        fusion_eligible: bool,
+    ) {
+        self.func = func;
+        self.class_id = class_id;
+        self.prop_info = if fusion_eligible {
+            Self::METHOD_FUSION_ELIGIBLE
+        } else {
+            0
+        };
+    }
+
+    #[inline(always)]
+    pub fn method_fusion_eligible(&self) -> bool {
+        self.prop_info & Self::METHOD_FUSION_ELIGIBLE != 0
     }
 
     /// String identity retained by a dynamic-callback DoFcall cache entry.
