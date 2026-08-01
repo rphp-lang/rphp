@@ -6021,12 +6021,14 @@ unsafe fn execute_quick_loop_backedge(
     Ok(())
 }
 
-const FAST_SCALAR_METHOD_FUSION_MAX_OPS: usize = 8;
+// Fuse the cache-hit method protocol while its transition cost is material
+// relative to the FastScalar body; longer methods keep the normal DoFcall path.
+const FAST_SCALAR_METHOD_FUSION_MAX_OPS: usize = 16;
 
 /// Enter a fixed-signature user method after InitMethodCall already created
-/// its frame and bound every scalar argument. Kept out of `execute_ex` so the
-/// fused method protocol does not enlarge the baseline opcode dispatch loop.
-#[inline(never)]
+/// its frame and bound every scalar argument. Inlining lets the compiler merge
+/// the adjacent DoFcall setup into the cache-hit InitMethodCall path.
+#[inline(always)]
 fn execute_fast_scalar_method_call<'a>(
     eg: &mut ExecutorGlobals,
     caller: *mut ExecuteData,
