@@ -66,19 +66,19 @@ Each layer requires:
 - a regression check on existing loop, call, and object workloads.
 
 Implementation checkpoint (2026-08-01): all three layers are implemented.
-On the current machine, the no-PGO best-of-three release run is approximately
-0.075 s RPHP versus 0.101 s PHP for the composed function benchmark, and
-0.089 s RPHP versus 0.093 s PHP for the nested scalar-method benchmark. Scalar
-argument preparation is compiled once into a compact typed plan instead of
-rescanning argument bytecode inside each loop iteration. The current
-31-workload suite has 27 strict RPHP wins and four PHP wins: direct scalar call,
-nested scalar call, string append, and array build. These numbers are
-directional and must be remeasured after related runtime changes.
+On the current machine, a no-PGO release run is approximately 0.078 s RPHP
+versus 0.101 s PHP for the composed function benchmark, and 0.090 s RPHP versus
+0.093 s PHP for the scalar-method benchmark. Scalar argument preparation is
+compiled once into a compact typed plan instead of rescanning argument bytecode
+inside each loop iteration. The current 31-workload suite has 28 strict RPHP
+wins and three PHP wins: direct scalar call, string append, and array build.
+These numbers are directional and must be remeasured after related runtime
+changes.
 
-The largest measured remaining absolute gap is now the direct scalar-call loop
-at about 0.085 s RPHP versus 0.076 s PHP. Array build/append and string append
-still have larger relative gaps, but much smaller absolute gaps in the current
-suite.
+The largest measured remaining absolute gap is still the direct scalar-call
+loop, now about 0.081 s RPHP versus 0.077 s PHP. Array build/append and string
+append still have larger relative gaps, but much smaller absolute gaps in the
+current suite.
 
 ## Phase 2: unified typed execution IR
 
@@ -150,6 +150,20 @@ application-like object dispatch is approximately 0.068 s RPHP versus 0.088 s
 PHP, property R/W is 0.082 s versus 0.100 s, and method chain is 0.089 s versus
 0.152 s. Overflow, impure targets, receiver-class changes, references, and
 property type changes retain canonical fallback.
+
+The fifth vertical slice composes a quick call site's scalar argument program
+with a guarded leaf function body when the region is entered. Public body
+inputs are substituted with argument outputs, body temporaries are shifted
+after argument-expression temporaries, and the resulting program is evaluated
+by one typed executor with a fixed inline temporary buffer. Failed composition,
+target guards, type changes, and arithmetic overflow retain the existing exact
+canonical fallback.
+
+This removes the intermediate argument array and second typed-plan traversal
+from the hot iteration. In the full no-PGO suite, the direct scalar-call ratio
+improves from approximately 1.12x to 1.05x and the nested scalar-call workload
+from approximately 1.06x to 0.98x. The latter is now a strict RPHP win without
+adding a nested-loop-specific recognizer.
 
 ## Phase 3: representative real-code corpus
 

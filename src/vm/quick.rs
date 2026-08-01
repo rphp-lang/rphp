@@ -8,8 +8,8 @@
 use crate::compiler::OpArray;
 use crate::value::Value;
 use crate::vm::function::{
-    ScalarLongCallGuard, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram,
-    ScalarLongSource,
+    ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
+    ScalarLongProgram, ScalarLongSource,
 };
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
@@ -504,6 +504,58 @@ fn quick_scalar_long_source(
             .map(ScalarLongSource::Temporary),
         OpType::Unused => None,
     }
+}
+
+/// Inline a proven scalar leaf body into the quick call-site argument program.
+/// Body inputs become the argument program's outputs and body temporaries are
+/// shifted after argument-expression temporaries. The result is still the same
+/// context-independent scalar IR, now executable as one guarded region.
+pub(crate) fn compose_quick_scalar_leaf_program(
+    arguments: &ScalarLongProgram,
+    body: &ScalarLongFunctionPlan,
+) -> Option<ScalarLongProgram<ScalarLongOp, 1>> {
+    const MAX_FUSED_SCALAR_OPS: usize = 16;
+
+    if arguments.output_count != body.public_args
+        || arguments.operations.len() > 8
+        || body.program.operations.len() > 8
+        || body.program.output_count != 1
+        || arguments.operations.len() + body.program.operations.len()
+            > MAX_FUSED_SCALAR_OPS
+    {
+        return None;
+    }
+    let argument_operation_count = arguments.operations.len();
+    let remap_body_source = |source| match source {
+        ScalarLongSource::Input(index) => arguments
+            .outputs
+            .get(index as usize)
+            .copied()
+            .filter(|_| index < u16::from(arguments.output_count)),
+        ScalarLongSource::Constant(value) => Some(ScalarLongSource::Constant(value)),
+        ScalarLongSource::Temporary(index) => {
+            let index = argument_operation_count.checked_add(index as usize)?;
+            u8::try_from(index).ok().map(ScalarLongSource::Temporary)
+        }
+    };
+
+    let mut operations = Vec::with_capacity(
+        argument_operation_count + body.program.operations.len(),
+    );
+    operations.extend(arguments.operations.iter().copied());
+    for operation in body.program.operations.iter().copied() {
+        operations.push(ScalarLongOp {
+            kind: operation.kind,
+            lhs: remap_body_source(operation.lhs)?,
+            rhs: remap_body_source(operation.rhs)?,
+        });
+    }
+    let result = remap_body_source(body.program.outputs[0])?;
+    Some(ScalarLongProgram {
+        operations: operations.into_boxed_slice(),
+        outputs: [result],
+        output_count: 1,
+    })
 }
 
 fn array_literal_index(op_array: &OpArray, index: u16) -> Option<QuickArrayIndex> {
@@ -2754,6 +2806,63 @@ for ($i = 0; $i < 100; $i++) {
             argument_plan.outputs[1],
             ScalarLongSource::Temporary(0)
         );
+    }
+
+    #[test]
+    fn composes_argument_and_leaf_program_temporary_indices() {
+        let mut argument_outputs = [ScalarLongSource::Constant(0); 8];
+        argument_outputs[0] = ScalarLongSource::Input(1);
+        argument_outputs[1] = ScalarLongSource::Temporary(0);
+        let arguments = ScalarLongProgram {
+            operations: vec![ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(1),
+                rhs: ScalarLongSource::Constant(1),
+            }]
+            .into_boxed_slice(),
+            outputs: argument_outputs,
+            output_count: 2,
+        };
+        let body = ScalarLongFunctionPlan {
+            public_args: 2,
+            program: ScalarLongProgram {
+                operations: vec![
+                    ScalarLongOp {
+                        kind: ScalarLongOpKind::Multiply,
+                        lhs: ScalarLongSource::Input(0),
+                        rhs: ScalarLongSource::Input(1),
+                    },
+                    ScalarLongOp {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: ScalarLongSource::Temporary(0),
+                        rhs: ScalarLongSource::Constant(3),
+                    },
+                ]
+                .into_boxed_slice(),
+                outputs: [ScalarLongSource::Temporary(1)],
+                output_count: 1,
+            },
+        };
+
+        let fused = compose_quick_scalar_leaf_program(&arguments, &body).unwrap();
+        assert_eq!(fused.operations.len(), 3);
+        assert!(matches!(
+            fused.operations[1],
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(1),
+                rhs: ScalarLongSource::Temporary(0),
+            }
+        ));
+        assert!(matches!(
+            fused.operations[2],
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Temporary(1),
+                rhs: ScalarLongSource::Constant(3),
+            }
+        ));
+        assert_eq!(fused.outputs[0], ScalarLongSource::Temporary(2));
     }
 
     #[test]

@@ -12,11 +12,11 @@ use super::instruction::{
     Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
 use super::quick::{
-    QuickArrayIndex, QuickIncrementKind, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
-    QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget,
-    QuickLongTerm,
+    compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
+    QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
+    QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
 };
@@ -4803,14 +4803,14 @@ unsafe fn run_quick_long_induction_loop(
 /// fallback, but successful iterations no longer rescan its bytecode.
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
-unsafe fn resolve_quick_scalar_source(
+unsafe fn resolve_quick_scalar_source<const TEMPORARY_CAPACITY: usize>(
     source: ScalarLongSource,
     slot_base: *mut Value,
     induction_cv: u16,
     accumulator_cv: u16,
     induction: i64,
     accumulator: i64,
-    temporaries: &[i64; 8],
+    temporaries: &[i64; TEMPORARY_CAPACITY],
 ) -> Option<i64> {
     match source {
         ScalarLongSource::Input(slot) if slot == induction_cv => Some(induction),
@@ -4877,6 +4877,51 @@ unsafe fn evaluate_quick_scalar_call_arguments(
         )?;
     }
     Some(arguments)
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn evaluate_quick_fused_scalar_program(
+    program: &ScalarLongProgram<ScalarLongOp, 1>,
+    slot_base: *mut Value,
+    induction_cv: u16,
+    accumulator_cv: u16,
+    induction: i64,
+    accumulator: i64,
+) -> Option<i64> {
+    debug_assert!(program.operations.len() <= 16);
+    debug_assert_eq!(program.output_count, 1);
+    let mut temporaries = [0i64; 16];
+    for (index, operation) in program.operations.iter().copied().enumerate() {
+        let lhs = resolve_quick_scalar_source(
+            operation.lhs,
+            slot_base,
+            induction_cv,
+            accumulator_cv,
+            induction,
+            accumulator,
+            &temporaries,
+        )?;
+        let rhs = resolve_quick_scalar_source(
+            operation.rhs,
+            slot_base,
+            induction_cv,
+            accumulator_cv,
+            induction,
+            accumulator,
+            &temporaries,
+        )?;
+        temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+    }
+    resolve_quick_scalar_source(
+        program.outputs[0],
+        slot_base,
+        induction_cv,
+        accumulator_cv,
+        induction,
+        accumulator,
+        &temporaries,
+    )
 }
 
 /// Resolve either direct-function or monomorphic-method dispatch for a quick
@@ -5323,6 +5368,7 @@ unsafe fn run_quick_long_accumulate_loop(
     let mut scalar_call_plan: *const ScalarLongFunctionPlan = std::ptr::null();
     let mut scalar_call_composed_plan: *const ComposedScalarLongFunctionPlan =
         std::ptr::null();
+    let mut scalar_call_fused_program: Option<ScalarLongProgram<ScalarLongOp, 1>> = None;
     let mut quick_composed_targets =
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
     let mut quick_composed_plans =
@@ -5350,6 +5396,11 @@ unsafe fn run_quick_long_accumulate_loop(
                 return Ok(QuickLoopOutcome::GuardFailed);
             }
             scalar_call_plan = scalar_plan;
+            let QuickLongTerm::ScalarFunctionCall { argument_plan, .. } = &plan.term else {
+                unreachable!("scalar function call setup")
+            };
+            scalar_call_fused_program =
+                compose_quick_scalar_leaf_program(argument_plan, scalar_plan);
         } else if composed_scalar_bodies_enabled() {
             let Some(composed_plan) = user.composed_scalar_long_plan.as_deref() else {
                 stats::inc_quick_loop_guard_failed();
@@ -5534,36 +5585,49 @@ unsafe fn run_quick_long_accumulate_loop(
                 debug_assert!(!scalar_call_common.is_null());
                 debug_assert!(!scalar_call_plan.is_null() || !scalar_call_composed_plan.is_null());
                 let evaluated = (|| {
-                    let arguments = evaluate_quick_scalar_call_arguments(
-                        argument_plan.as_ref(),
-                        *argument_count,
-                        slot_base,
-                        plan.induction_cv,
-                        plan.accumulator_cv,
-                        induction,
-                        accumulator,
-                    )?;
                     let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
                     let mut call_count = 0usize;
-                    let result = if !scalar_call_plan.is_null() {
-                        evaluate_scalar_long_plan(&*scalar_call_plan, &arguments)
-                    } else if quick_composed_leaf_body {
-                        evaluate_quick_composed_leaf_body(
-                            &*scalar_call_composed_plan,
-                            &arguments,
-                            &quick_composed_plans,
+                    let result = if let Some(program) =
+                        scalar_call_fused_program.as_ref()
+                    {
+                        evaluate_quick_fused_scalar_program(
+                            program,
+                            slot_base,
+                            plan.induction_cv,
+                            plan.accumulator_cv,
+                            induction,
+                            accumulator,
                         )
                     } else {
-                        debug_assert!(!scalar_call_user.is_null());
-                        evaluate_composed_scalar_body_plan(
-                            eg,
-                            &*scalar_call_user,
-                            &*scalar_call_composed_plan,
-                            &arguments,
-                            &mut calls,
-                            &mut call_count,
-                            0,
-                        )
+                        let arguments = evaluate_quick_scalar_call_arguments(
+                            argument_plan.as_ref(),
+                            *argument_count,
+                            slot_base,
+                            plan.induction_cv,
+                            plan.accumulator_cv,
+                            induction,
+                            accumulator,
+                        )?;
+                        if !scalar_call_plan.is_null() {
+                            evaluate_scalar_long_plan(&*scalar_call_plan, &arguments)
+                        } else if quick_composed_leaf_body {
+                            evaluate_quick_composed_leaf_body(
+                                &*scalar_call_composed_plan,
+                                &arguments,
+                                &quick_composed_plans,
+                            )
+                        } else {
+                            debug_assert!(!scalar_call_user.is_null());
+                            evaluate_composed_scalar_body_plan(
+                                eg,
+                                &*scalar_call_user,
+                                &*scalar_call_composed_plan,
+                                &arguments,
+                                &mut calls,
+                                &mut call_count,
+                                0,
+                            )
+                        }
                     };
                     if result.is_some() {
                         if scalar_call_target_count == 0 {
