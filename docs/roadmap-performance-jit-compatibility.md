@@ -67,19 +67,18 @@ Each layer requires:
 
 Implementation checkpoint (2026-08-01): all three layers are implemented.
 On the current machine, the no-PGO best-of-three release run is approximately
-0.076 s RPHP versus 0.102 s PHP for the composed function benchmark, and
-0.092 s RPHP versus 0.097 s PHP for the nested scalar-method benchmark. Scalar
+0.075 s RPHP versus 0.101 s PHP for the composed function benchmark, and
+0.089 s RPHP versus 0.093 s PHP for the nested scalar-method benchmark. Scalar
 argument preparation is compiled once into a compact typed plan instead of
 rescanning argument bytecode inside each loop iteration. The current
-31-workload suite has 26 strict RPHP wins and five PHP wins: direct scalar call,
-nested scalar call, string append, array build, and application-like object
-dispatch. These numbers are directional and must be remeasured after related
-runtime changes.
+31-workload suite has 27 strict RPHP wins and four PHP wins: direct scalar call,
+nested scalar call, string append, and array build. These numbers are
+directional and must be remeasured after related runtime changes.
 
-The largest measured follow-up in this group is now application-like object
-dispatch with mutating property methods and a conditional call path (about
-0.115 s RPHP versus 0.090 s PHP). Array build/append and string append still
-have larger relative gaps, but much smaller absolute gaps in the current suite.
+The largest measured remaining absolute gap is now the direct scalar-call loop
+at about 0.085 s RPHP versus 0.076 s PHP. Array build/append and string append
+still have larger relative gaps, but much smaller absolute gaps in the current
+suite.
 
 ## Phase 2: unified typed execution IR
 
@@ -129,9 +128,8 @@ measured with exact-length boxed outputs.
 The second vertical slice is also complete. Composed bodies use the same generic
 program container and express calls through `ScalarLongCall`. Baseline and quick
 executors share one inline-cache identity, `FastScalar` ABI, and arity guard;
-only their post-guard execution strategy differs. The no-PGO 31-workload result
-remains 26 RPHP wins, with the composed-call workload at approximately 0.076 s
-RPHP versus 0.100 s PHP.
+only their post-guard execution strategy differs. The composed-call workload is
+approximately 0.075 s RPHP versus 0.101 s PHP.
 
 The third vertical slice adds `FunctionCache` and `MethodCache` dispatch to the
 same call guard. Quick scalar methods and nested scalar call trees now share the
@@ -139,11 +137,19 @@ receiver-CV, receiver-reference, class-id, method-cache, target ABI, and arity
 checks. A mismatch exits before typed execution and resumes the canonical call
 initializer.
 
-This infrastructure alone does not close the application-like object-dispatch
-gap: that workload combines void property mutators, a scalar property getter,
-a modulo branch, and a conditional nested call. The next slice must describe
-that whole guarded object loop as a typed region instead of optimizing another
-isolated method-call shape.
+The fourth vertical slice extends the existing general `QuickLongOpsLoop` with
+guarded property mutators, property getters, and the composed
+`mutator(getter())` evaluation order. Target, receiver class, method cache, ABI,
+and declared-property slot guards are resolved at region entry. Completed
+object mutations commit immediately; retained scalar slots are committed at an
+interrupt, side exit, or normal region exit. No class names, method names, or
+benchmark constants participate in recognition.
+
+This closes the previous largest gap across three different workloads:
+application-like object dispatch is approximately 0.068 s RPHP versus 0.088 s
+PHP, property R/W is 0.082 s versus 0.100 s, and method chain is 0.089 s versus
+0.152 s. Overflow, impure targets, receiver-class changes, references, and
+property type changes retain canonical fallback.
 
 ## Phase 3: representative real-code corpus
 

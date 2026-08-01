@@ -453,6 +453,144 @@ echo $i;
 }
 
 #[test]
+fn quick_object_loop_executes_property_calls_and_conditional_composition() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Tick {
+    public $value = 0;
+    public function advance() { $this->value = $this->value + 1; }
+    public function current() { return $this->value; }
+}
+class Sink {
+    public $value = 0;
+    public function accept($value) { $this->value = $this->value + $value; }
+    public function result() { return $this->value; }
+}
+$tick = new Tick();
+$sink = new Sink();
+for ($i = 0; $i < 1000; $i++) {
+    $tick->advance();
+    if ($i % 3 == 0) {
+        $sink->accept($tick->current());
+    }
+}
+echo $tick->current() . '|' . $sink->result() . '|' . $i;
+"
+        ),
+        "1000|167167|1000"
+    );
+}
+
+#[test]
+fn quick_object_loop_guards_receiver_class_between_activations() {
+    assert_eq!(
+        run_php(
+            "<?php
+class StepOne {
+    public $value = 0;
+    public function advance() { $this->value = $this->value + 1; }
+    public function current() { return $this->value; }
+}
+class StepTwo {
+    public $value = 0;
+    public function advance() { $this->value = $this->value + 2; }
+    public function current() { return $this->value; }
+}
+class Sink {
+    public $value = 0;
+    public function accept($value) { $this->value = $this->value + $value; }
+    public function result() { return $this->value; }
+}
+function collect($step) {
+    $sink = new Sink();
+    for ($i = 0; $i < 100; $i++) {
+        $step->advance();
+        if ($i % 4 == 0) {
+            $sink->accept($step->current());
+        }
+    }
+    return $step->current() . ':' . $sink->result();
+}
+echo collect(new StepOne()) . '|' . collect(new StepTwo());
+"
+        ),
+        "100:1225|200:2450"
+    );
+}
+
+#[test]
+fn quick_object_loop_property_overflow_deoptimizes_transactionally() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Tick {
+    public $value = 9223372036854775767;
+    public function advance() { $this->value = $this->value + 1; }
+    public function current() { return $this->value; }
+}
+$tick = new Tick();
+for ($i = 0; $i < 100; $i++) {
+    $tick->advance();
+}
+echo gettype($tick->current()) . '|' . $i;
+"
+        ),
+        "double|100"
+    );
+}
+
+#[test]
+fn quick_object_loop_executes_separate_mutator_and_getter_ops() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Counter {
+    public $value = 0;
+    public function add($amount) { $this->value = $this->value + $amount; }
+    public function current() { return $this->value; }
+}
+$counter = new Counter();
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $counter->add(2);
+    $current = $counter->current();
+    $sum += $current;
+}
+echo $counter->current() . '|' . $sum . '|' . $i;
+"
+        ),
+        "2000|1001000|1000"
+    );
+}
+
+#[test]
+fn quick_object_loop_rejects_impure_property_method_before_side_effects() {
+    assert_eq!(
+        run_php(
+            "<?php
+$calls = 0;
+class ObservedCounter {
+    public $value = 0;
+    public function advance() {
+        global $calls;
+        $calls++;
+        $this->value = $this->value + 1;
+    }
+    public function current() { return $this->value; }
+}
+$counter = new ObservedCounter();
+for ($i = 0; $i < 1000; $i++) {
+    $counter->advance();
+}
+echo $counter->current() . '|' . $calls . '|' . $i;
+"
+        ),
+        "1000|1000|1000"
+    );
+}
+
+#[test]
 fn quick_scalar_call_guard_preserves_impure_function_side_effects() {
     assert_eq!(
         run_php(

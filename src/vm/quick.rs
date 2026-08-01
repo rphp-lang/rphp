@@ -331,6 +331,30 @@ pub enum QuickLongOp {
         first_resume_ip: usize,
         second_resume_ip: usize,
     },
+    /// Frame-free compiler-proven property mutator with zero to eight Long
+    /// arguments. Dispatch and property layout are guarded at region entry.
+    PropertyMethodCall {
+        guard: ScalarLongCallGuard,
+        arguments: [QuickLongOperand; 8],
+        argument_count: u8,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// Compiler-proven declared-property getter whose scalar result remains in
+    /// the typed loop slot file.
+    PropertyGetterCall {
+        guard: ScalarLongCallGuard,
+        result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// Exact PHP evaluation order for `propertyMutator(propertyGetter())`.
+    ComposedPropertyCall {
+        outer_guard: ScalarLongCallGuard,
+        inner_guard: ScalarLongCallGuard,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     Assign {
         destination: u16,
         source: u16,
@@ -406,6 +430,9 @@ impl QuickLongOp {
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
             | Self::AddAddAssign { next_target, .. }
+            | Self::PropertyMethodCall { next_target, .. }
+            | Self::PropertyGetterCall { next_target, .. }
+            | Self::ComposedPropertyCall { next_target, .. }
             | Self::Assign { next_target, .. }
             | Self::AssignStringLiteral { next_target, .. }
             | Self::AssignStringSlot { next_target, .. }
@@ -438,6 +465,7 @@ pub struct QuickLongOpsLoop {
     pub array_input_mask: u64,
     pub string_input_mask: u64,
     pub string_output_mask: u64,
+    pub object_input_mask: u64,
     pub string_cache_capacity: u8,
     pub involved_mask: u64,
 }
@@ -1538,8 +1566,10 @@ pub fn detect_long_ops_loop(
     let mut array_input_mask = 0u64;
     let mut string_input_mask = 0u64;
     let mut string_output_mask = 0u64;
+    let mut object_input_mask = 0u64;
     let mut has_add = false;
     let mut has_assign = false;
+    let mut has_object_call = false;
     let mut has_post_inc = false;
     let mut ip = header_ip;
 
@@ -2038,6 +2068,129 @@ pub fn detect_long_ops_loop(
                     }
                 }
             }
+            OpCode::InitMethodCall => {
+                if instruction.op1_type != OpType::Cv {
+                    return None;
+                }
+                let cache_ip = u32::try_from(ip).ok()?;
+                let outer_guard = ScalarLongCallGuard::MethodCache {
+                    cache_ip,
+                    receiver_slot: instruction.op1,
+                };
+                add_mask_slot(&mut object_input_mask, instruction.op1, total_slots)?;
+
+                let nested = if instruction.extended_value == 1 {
+                    let inner_init = *op_array.instructions.get(ip + 1)?;
+                    let inner_do = *op_array.instructions.get(ip + 2)?;
+                    let send = *op_array.instructions.get(ip + 3)?;
+                    let outer_do = *op_array.instructions.get(ip + 4)?;
+                    if inner_init.opcode == OpCode::InitMethodCall
+                        && inner_init.op1_type == OpType::Cv
+                        && inner_init.extended_value == 0
+                        && inner_do.opcode == OpCode::DoFcall
+                        && matches!(inner_do.result_type, OpType::Tmp | OpType::Var)
+                        && matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                        && send.op1_type == inner_do.result_type
+                        && send.op1 == inner_do.result
+                        && send.op2 == 1
+                        && outer_do.opcode == OpCode::DoFcall
+                        && outer_do.result_type == OpType::Unused
+                    {
+                        Some((inner_init, inner_do, outer_do))
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                has_object_call = true;
+                if let Some((inner_init, _inner_do, _outer_do)) = nested {
+                    add_mask_slot(
+                        &mut object_input_mask,
+                        inner_init.op1,
+                        total_slots,
+                    )?;
+                    let resume_ip = ip;
+                    let inner_guard = ScalarLongCallGuard::MethodCache {
+                        cache_ip: u32::try_from(ip + 1).ok()?,
+                        receiver_slot: inner_init.op1,
+                    };
+                    ip += 5;
+                    QuickLongOp::ComposedPropertyCall {
+                        outer_guard,
+                        inner_guard,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    let argument_count = usize::try_from(instruction.extended_value).ok()?;
+                    if argument_count > 8 {
+                        return None;
+                    }
+                    let mut arguments = [QuickLongOperand::Const(0); 8];
+                    let mut cursor = ip + 1;
+                    for (argument_index, argument) in arguments
+                        .iter_mut()
+                        .enumerate()
+                        .take(argument_count)
+                    {
+                        let send = *op_array.instructions.get(cursor)?;
+                        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                            || send.op2 as usize != argument_index + 1
+                        {
+                            return None;
+                        }
+                        *argument = match send.op1_type {
+                            OpType::Cv | OpType::Tmp | OpType::Var => {
+                                add_mask_slot(
+                                    &mut long_input_mask,
+                                    send.op1,
+                                    total_slots,
+                                )?;
+                                QuickLongOperand::Slot(send.op1)
+                            }
+                            OpType::Const => QuickLongOperand::Const(long_literal(
+                                op_array,
+                                send.op1,
+                            )?),
+                            OpType::Unused => return None,
+                        };
+                        cursor += 1;
+                    }
+                    let do_fcall = *op_array.instructions.get(cursor)?;
+                    if do_fcall.opcode != OpCode::DoFcall {
+                        return None;
+                    }
+                    let resume_ip = ip;
+                    ip = cursor + 1;
+                    if do_fcall.result_type == OpType::Unused {
+                        QuickLongOp::PropertyMethodCall {
+                            guard: outer_guard,
+                            arguments,
+                            argument_count: argument_count as u8,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                            resume_ip,
+                        }
+                    } else if argument_count == 0
+                        && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+                    {
+                        add_mask_slot(
+                            &mut long_output_mask,
+                            do_fcall.result,
+                            total_slots,
+                        )?;
+                        QuickLongOp::PropertyGetterCall {
+                            guard: outer_guard,
+                            result: do_fcall.result,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                            resume_ip,
+                        }
+                    } else {
+                        return None;
+                    }
+                }
+            }
             OpCode::AssignCv => {
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
@@ -2138,6 +2291,9 @@ pub fn detect_long_ops_loop(
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
+            | QuickLongOp::PropertyMethodCall { resume_ip, .. }
+            | QuickLongOp::PropertyGetterCall { resume_ip, .. }
+            | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
             | QuickLongOp::PostIncJump { resume_ip, .. }
             | QuickLongOp::PostIncLoopLt { resume_ip, .. } => resume_ip,
@@ -2200,7 +2356,7 @@ pub fn detect_long_ops_loop(
             QuickLongOp::BranchUnlessLt { .. } | QuickLongOp::BranchUnlessEq { .. }
         )
     });
-    if !(has_add || has_assign || has_internal_branch)
+    if !(has_add || has_assign || has_internal_branch || has_object_call)
         || !has_post_inc
         || !matches!(
             ops.first(),
@@ -2234,6 +2390,9 @@ pub fn detect_long_ops_loop(
         || array_input_mask & (long_mask | bool_output_mask) != 0
         || string_input_mask & (long_mask | bool_output_mask | array_input_mask) != 0
         || string_output_mask & !string_input_mask != 0
+        || object_input_mask
+            & (long_mask | bool_output_mask | array_input_mask | string_input_mask)
+            != 0
     {
         return None;
     }
@@ -2242,7 +2401,8 @@ pub fn detect_long_ops_loop(
         | bool_output_mask
         | array_input_mask
         | string_input_mask
-        | string_output_mask;
+        | string_output_mask
+        | object_input_mask;
 
     Some(QuickLongOpsLoop {
         header_ip,
@@ -2256,6 +2416,7 @@ pub fn detect_long_ops_loop(
         array_input_mask,
         string_input_mask,
         string_output_mask,
+        object_input_mask,
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
     })
@@ -2342,6 +2503,43 @@ mod tests {
                     main.op_array.instructions
                 )
             })
+    }
+
+    #[test]
+    fn detects_guarded_property_calls_inside_general_long_ops_loop() {
+        let plan = long_ops_plan(
+            "<?php
+class Tick {
+    public $value = 0;
+    public function advance() { $this->value = $this->value + 1; }
+    public function current() { return $this->value; }
+}
+class Sink {
+    public $value = 0;
+    public function accept($value) { $this->value = $this->value + $value; }
+}
+$tick = new Tick();
+$sink = new Sink();
+for ($i = 0; $i < 100; $i++) {
+    $tick->advance();
+    if ($i % 3 == 0) {
+        $sink->accept($tick->current());
+    }
+}
+",
+        );
+        assert_eq!(plan.object_input_mask, (1u64 << 0) | (1u64 << 1));
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::PropertyMethodCall {
+                argument_count: 0,
+                ..
+            }
+        )));
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::ComposedPropertyCall { .. }
+        )));
     }
 
     fn foreach_long_accumulate_plan(source: &str) -> QuickForeachLongAccumulateLoop {
