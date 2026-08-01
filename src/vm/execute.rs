@@ -416,13 +416,21 @@ unsafe fn bind_contiguous_scalar_args(
     op_array: &crate::compiler::OpArray,
     mut next: *const Instruction,
     max_args: u32,
+    fast_scalar: bool,
 ) -> usize {
     let mut bound = 0usize;
     while bound < max_args as usize {
         let send = &*next;
-        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
-            || !try_send_scalar_method_arg(frame, call, op_array, send)
-        {
+        let copied = match send.opcode {
+            OpCode::SendVal => try_copy_scalar_arg(frame, call, op_array, send),
+            // FastScalar construction proves that no formal parameter is by
+            // reference, so SendVarEx needs only the scalar-value guard.
+            OpCode::SendVarEx if fast_scalar => {
+                try_copy_scalar_arg(frame, call, op_array, send)
+            }
+            _ => false,
+        };
+        if !copied {
             break;
         }
         bound += 1;
@@ -8260,6 +8268,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let ic = &op_array.cache[ip];
                     if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
                         let func_ptr = ic.func;
+                        let common = unsafe { &*func_ptr };
                         let num_args = opline.extended_value;
                         let pending_call = unsafe { (*frame).call };
                         let call = eg.vm_stack.push_call_frame(
@@ -8271,7 +8280,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         );
                         unsafe {
                             (*frame).call = call;
-                            let common = &*func_ptr;
                             if common.plan.borrow_this {
                                 frame_set_borrowed_this(call, obj_val as *const Value);
                             } else {
@@ -8289,6 +8297,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                                 opline_ptr.add(1),
                                 num_args,
+                                common.plan.call == CallStrategy::FastScalar,
                             )
                         };
 
