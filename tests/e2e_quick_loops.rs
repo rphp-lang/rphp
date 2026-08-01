@@ -251,6 +251,52 @@ echo $i;
 }
 
 #[test]
+fn quick_scalar_call_executes_small_fused_program_sizes() {
+    assert_eq!(
+        run_php(
+            "<?php
+function identity($value) {
+    return $value;
+}
+function add_one($value) {
+    return $value + 1;
+}
+function three_ops($value) {
+    return (($value + 1) * 2) - 3;
+}
+function four_ops($value) {
+    return ((($value + 1) * 2) - 3) + 4;
+}
+$identity_sum = 0;
+$one_sum = 0;
+$three_sum = 0;
+$four_sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $identity_sum += identity($i);
+}
+for ($i = 0; $i < 1000; $i++) {
+    $one_sum += add_one($i);
+}
+for ($i = 0; $i < 1000; $i++) {
+    $three_sum += three_ops($i);
+}
+for ($i = 0; $i < 1000; $i++) {
+    $four_sum += four_ops($i);
+}
+echo $identity_sum;
+echo '|';
+echo $one_sum;
+echo '|';
+echo $three_sum;
+echo '|';
+echo $four_sum;
+"
+        ),
+        "499500|500500|998000|1002000"
+    );
+}
+
+#[test]
 fn quick_scalar_argument_overflow_restarts_call_transactionally() {
     assert_eq!(
         run_php(

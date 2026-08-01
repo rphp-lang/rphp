@@ -4892,26 +4892,58 @@ unsafe fn evaluate_quick_fused_scalar_program(
     debug_assert!(program.operations.len() <= 16);
     debug_assert_eq!(program.output_count, 1);
     let mut temporaries = [0i64; 16];
-    for (index, operation) in program.operations.iter().copied().enumerate() {
-        let lhs = resolve_quick_scalar_source(
-            operation.lhs,
-            slot_base,
-            induction_cv,
-            accumulator_cv,
-            induction,
-            accumulator,
-            &temporaries,
-        )?;
-        let rhs = resolve_quick_scalar_source(
-            operation.rhs,
-            slot_base,
-            induction_cv,
-            accumulator_cv,
-            induction,
-            accumulator,
-            &temporaries,
-        )?;
-        temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+    macro_rules! evaluate_operation {
+        ($index:expr) => {{
+            let index = $index;
+            let operation = program.operations[index];
+            let lhs = resolve_quick_scalar_source(
+                operation.lhs,
+                slot_base,
+                induction_cv,
+                accumulator_cv,
+                induction,
+                accumulator,
+                &temporaries,
+            )?;
+            let rhs = resolve_quick_scalar_source(
+                operation.rhs,
+                slot_base,
+                induction_cv,
+                accumulator_cv,
+                induction,
+                accumulator,
+                &temporaries,
+            )?;
+            temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+        }};
+    }
+
+    // Scalar leaves are deliberately small. Removing the inner operation-loop
+    // branch for the most common sizes keeps this a generic IR executor while
+    // avoiding a second interpreter loop inside every quick-loop iteration.
+    match program.operations.len() {
+        0 => {}
+        1 => evaluate_operation!(0),
+        2 => {
+            evaluate_operation!(0);
+            evaluate_operation!(1);
+        }
+        3 => {
+            evaluate_operation!(0);
+            evaluate_operation!(1);
+            evaluate_operation!(2);
+        }
+        4 => {
+            evaluate_operation!(0);
+            evaluate_operation!(1);
+            evaluate_operation!(2);
+            evaluate_operation!(3);
+        }
+        _ => {
+            for index in 0..program.operations.len() {
+                evaluate_operation!(index);
+            }
+        }
     }
     resolve_quick_scalar_source(
         program.outputs[0],
@@ -5459,6 +5491,13 @@ unsafe fn run_quick_long_accumulate_loop(
         [std::ptr::null(); QUICK_SCALAR_MAX_RECORDED_CALLS];
     let mut scalar_call_target_count = 0usize;
     let mut scalar_call_success_count = 0u64;
+    if scalar_call_fused_program.is_some() {
+        // A fused leaf has no nested call targets. Its guarded outer target is
+        // stable for this region activation, so prepare bookkeeping once
+        // instead of reconstructing an empty composed-call list per iteration.
+        scalar_call_targets[0] = scalar_call_common;
+        scalar_call_target_count = 1;
+    }
     // An elided scalar call represents its Init/Send/DoFcall protocol plus up
     // to eight arithmetic body operations. Check it every eight iterations;
     // ordinary accumulation retains the established 32-iteration cadence.
@@ -5584,21 +5623,23 @@ unsafe fn run_quick_long_accumulate_loop(
             } => {
                 debug_assert!(!scalar_call_common.is_null());
                 debug_assert!(!scalar_call_plan.is_null() || !scalar_call_composed_plan.is_null());
-                let evaluated = (|| {
-                    let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
-                    let mut call_count = 0usize;
-                    let result = if let Some(program) =
-                        scalar_call_fused_program.as_ref()
-                    {
-                        evaluate_quick_fused_scalar_program(
-                            program,
-                            slot_base,
-                            plan.induction_cv,
-                            plan.accumulator_cv,
-                            induction,
-                            accumulator,
-                        )
-                    } else {
+                let evaluated = if let Some(program) = scalar_call_fused_program.as_ref() {
+                    let result = evaluate_quick_fused_scalar_program(
+                        program,
+                        slot_base,
+                        plan.induction_cv,
+                        plan.accumulator_cv,
+                        induction,
+                        accumulator,
+                    );
+                    if result.is_some() {
+                        scalar_call_success_count += 1;
+                    }
+                    result
+                } else {
+                    (|| {
+                        let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
+                        let mut call_count = 0usize;
                         let arguments = evaluate_quick_scalar_call_arguments(
                             argument_plan.as_ref(),
                             *argument_count,
@@ -5608,7 +5649,7 @@ unsafe fn run_quick_long_accumulate_loop(
                             induction,
                             accumulator,
                         )?;
-                        if !scalar_call_plan.is_null() {
+                        let result = if !scalar_call_plan.is_null() {
                             evaluate_scalar_long_plan(&*scalar_call_plan, &arguments)
                         } else if quick_composed_leaf_body {
                             evaluate_quick_composed_leaf_body(
@@ -5627,33 +5668,33 @@ unsafe fn run_quick_long_accumulate_loop(
                                 &mut call_count,
                                 0,
                             )
-                        }
-                    };
-                    if result.is_some() {
-                        if scalar_call_target_count == 0 {
-                            if quick_composed_leaf_body {
-                                for called in quick_composed_targets
-                                    .iter()
-                                    .copied()
-                                    .filter(|called| !called.is_null())
-                                {
-                                    scalar_call_targets[scalar_call_target_count] = called;
-                                    scalar_call_target_count += 1;
+                        };
+                        if result.is_some() {
+                            if scalar_call_target_count == 0 {
+                                if quick_composed_leaf_body {
+                                    for called in quick_composed_targets
+                                        .iter()
+                                        .copied()
+                                        .filter(|called| !called.is_null())
+                                    {
+                                        scalar_call_targets[scalar_call_target_count] = called;
+                                        scalar_call_target_count += 1;
+                                    }
+                                } else {
+                                    for called in calls.into_iter().take(call_count) {
+                                        scalar_call_targets[scalar_call_target_count] = called;
+                                        scalar_call_target_count += 1;
+                                    }
                                 }
-                            } else {
-                                for called in calls.into_iter().take(call_count) {
-                                    scalar_call_targets[scalar_call_target_count] = called;
-                                    scalar_call_target_count += 1;
-                                }
+                                scalar_call_targets[scalar_call_target_count] =
+                                    scalar_call_common;
+                                scalar_call_target_count += 1;
                             }
-                            scalar_call_targets[scalar_call_target_count] =
-                                scalar_call_common;
-                            scalar_call_target_count += 1;
+                            scalar_call_success_count += 1;
                         }
-                        scalar_call_success_count += 1;
-                    }
-                    result
-                })();
+                        result
+                    })()
+                };
                 let Some(value) = evaluated else {
                     Value::write_long(induction_ptr, induction);
                     Value::write_long(accumulator_ptr, accumulator);

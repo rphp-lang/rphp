@@ -70,15 +70,13 @@ On the current machine, a no-PGO release run is approximately 0.078 s RPHP
 versus 0.101 s PHP for the composed function benchmark, and 0.090 s RPHP versus
 0.093 s PHP for the scalar-method benchmark. Scalar argument preparation is
 compiled once into a compact typed plan instead of rescanning argument bytecode
-inside each loop iteration. The current 31-workload suite has 28 strict RPHP
-wins and three PHP wins: direct scalar call, string append, and array build.
-These numbers are directional and must be remeasured after related runtime
-changes.
+inside each loop iteration. The current 31-workload suite has 29 strict RPHP
+wins and two PHP wins: string append and array build. These numbers are
+directional and must be remeasured after related runtime changes.
 
-The largest measured remaining absolute gap is still the direct scalar-call
-loop, now about 0.081 s RPHP versus 0.077 s PHP. Array build/append and string
-append still have larger relative gaps, but much smaller absolute gaps in the
-current suite.
+The largest measured remaining absolute gap is now array build/append at about
+0.0060 s RPHP versus 0.0039 s PHP. String append has a smaller absolute gap at
+about 0.0017 s versus 0.0012 s.
 
 ## Phase 2: unified typed execution IR
 
@@ -164,6 +162,20 @@ from the hot iteration. In the full no-PGO suite, the direct scalar-call ratio
 improves from approximately 1.12x to 1.05x and the nested scalar-call workload
 from approximately 1.06x to 0.98x. The latter is now a strict RPHP win without
 adding a nested-loop-specific recognizer.
+
+The sixth vertical slice specializes execution mechanics without adding new
+PHP expression shapes. Fused scalar programs containing up to four operations
+use unrolled steps instead of a nested operation-dispatch loop. A leaf program
+also records its single guarded target once per region activation; only
+composed programs construct nested-call bookkeeping. Programs longer than four
+operations retain the generic interpreter, and all paths retain the same typed
+IR and canonical side exits.
+
+Sampling identified the nested typed loop and outlined bookkeeping closure as
+the dominant costs before this change. In the full no-PGO suite, direct scalar
+call improves further to approximately 0.046 s RPHP versus 0.075 s PHP and
+nested scalar call to 0.011 s versus 0.019 s. The composed call-heavy workload
+remains approximately 0.077 s versus 0.100 s.
 
 ## Phase 3: representative real-code corpus
 
