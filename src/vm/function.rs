@@ -6,6 +6,38 @@ use crate::value::Value;
 use crate::runtime::ExecutorGlobals;
 use super::frame::ExecuteData;
 
+/// Scalar input consumed by a precompiled long-property method plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongPlanSource {
+    Argument(u8),
+    Constant(i64),
+}
+
+/// One typed mutation in a frame-free long-property method plan.
+#[derive(Debug, Clone, Copy)]
+pub enum LongPropertyOp {
+    Add { property: u8, rhs: LongPlanSource },
+    Sub { property: u8, rhs: LongPlanSource },
+    Min { property: u8, candidate: LongPlanSource },
+    Max { property: u8, candidate: LongPlanSource },
+    Set { property: u8, value: LongPlanSource },
+}
+
+/// Inline-cache guard used to resolve a declared public property to its slot.
+pub struct LongPlanProperty {
+    pub cache_ip: u16,
+    pub required_flags: u8,
+}
+
+/// Compile-time proof for a small method whose observable work is limited to
+/// integer mutations of declared public properties. Runtime evaluation is
+/// transactional: every operation completes before any property is committed.
+pub struct LongPropertyMethodPlan {
+    pub public_args: u8,
+    pub properties: Box<[LongPlanProperty]>,
+    pub operations: Box<[LongPropertyOp]>,
+}
+
 /// Function type discriminant
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -224,6 +256,7 @@ impl FunctionCommon {
 pub struct UserFunction {
     pub common: FunctionCommon,
     pub op_array: OpArray,
+    pub long_property_plan: Option<Box<LongPropertyMethodPlan>>,
 }
 
 /// Handler signature for internal (built-in) functions.

@@ -10,7 +10,7 @@ use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp};
 use super::quick::{
     QuickArrayIndex, QuickIncrementKind, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget,
@@ -437,6 +437,126 @@ unsafe fn bind_contiguous_scalar_args(
         next = next.add(1);
     }
     bound
+}
+
+#[inline(always)]
+fn resolve_long_plan_source(source: LongPlanSource, arguments: &[i64; 8]) -> i64 {
+    match source {
+        LongPlanSource::Argument(index) => arguments[index as usize],
+        LongPlanSource::Constant(value) => value,
+    }
+}
+
+/// Execute a compiler-proven integer property method without allocating a VM
+/// frame. Every guard and arithmetic operation completes before the first
+/// write, so a failed fast path can safely restart through ordinary DoFcall.
+#[inline(always)]
+unsafe fn try_execute_long_property_method(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    receiver: &Value,
+    sends: *const Instruction,
+    plan: &LongPropertyMethodPlan,
+    callee: &UserFunction,
+) -> bool {
+    let mut arguments = [0i64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(plan.public_args as usize)
+    {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as usize != index + 1
+        {
+            return false;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return false,
+        };
+        if value.value_type() != ValueType::Long {
+            return false;
+        }
+        *argument = value.raw_long();
+    }
+
+    let class_id = receiver.object_class_id_unchecked();
+    if class_id == 0 {
+        return false;
+    }
+    let mut property_values = [0i64; 8];
+    let mut property_slots = [0usize; 8];
+    for (index, property) in plan.properties.iter().enumerate() {
+        let cache = &callee.op_array.cache[property.cache_ip as usize];
+        let flags = cache.property_flags();
+        if cache.class_id != class_id
+            || flags & property.required_flags as u32 != property.required_flags as u32
+        {
+            return false;
+        }
+        let slot = cache.property_slot();
+        let value = &*receiver.object_property_slot_unchecked(slot);
+        if value.value_type() != ValueType::Long {
+            return false;
+        }
+        property_slots[index] = slot;
+        property_values[index] = value.raw_long();
+    }
+
+    let mut written = 0u8;
+    for operation in plan.operations.iter().copied() {
+        match operation {
+            LongPropertyOp::Add { property, rhs } => {
+                let target = &mut property_values[property as usize];
+                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, &arguments)) else {
+                    return false;
+                };
+                *target = value;
+                written |= 1 << property;
+            }
+            LongPropertyOp::Sub { property, rhs } => {
+                let target = &mut property_values[property as usize];
+                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, &arguments)) else {
+                    return false;
+                };
+                *target = value;
+                written |= 1 << property;
+            }
+            LongPropertyOp::Min { property, candidate } => {
+                let candidate = resolve_long_plan_source(candidate, &arguments);
+                let target = &mut property_values[property as usize];
+                if candidate < *target {
+                    *target = candidate;
+                    written |= 1 << property;
+                }
+            }
+            LongPropertyOp::Max { property, candidate } => {
+                let candidate = resolve_long_plan_source(candidate, &arguments);
+                let target = &mut property_values[property as usize];
+                if candidate > *target {
+                    *target = candidate;
+                    written |= 1 << property;
+                }
+            }
+            LongPropertyOp::Set { property, value } => {
+                property_values[property as usize] = resolve_long_plan_source(value, &arguments);
+                written |= 1 << property;
+            }
+        }
+    }
+
+    for index in 0..plan.properties.len() {
+        if written & (1 << index) != 0 {
+            receiver.object_set_property_slot_unchecked(
+                property_slots[index],
+                Value::long(property_values[index]),
+            );
+        }
+    }
+    true
 }
 
 /// Propagate heap-backed return values into the caller's cleanup bookkeeping.
@@ -1846,16 +1966,23 @@ fn op_init_method_call<'a>(
             if obj_class_id != 0 {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let common = unsafe { &*resolved };
-                let fusion_eligible = common.fn_type == FunctionType::User
+                let (fusion_eligible, long_property_plan) = if common.fn_type == FunctionType::User
                     && common.plan.call == CallStrategy::FastScalar
-                    && unsafe {
-                        (&*(resolved as *const UserFunction))
-                            .op_array
-                            .instructions
-                            .len()
-                            <= FAST_SCALAR_METHOD_FUSION_MAX_OPS
-                    };
-                ic_mut.set_method(resolved, obj_class_id, fusion_eligible);
+                {
+                    let user = unsafe { &*(resolved as *const UserFunction) };
+                    (
+                        user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
+                        user.long_property_plan.is_some(),
+                    )
+                } else {
+                    (false, false)
+                };
+                ic_mut.set_method(
+                    resolved,
+                    obj_class_id,
+                    fusion_eligible,
+                    long_property_plan,
+                );
             }
             resolved
         };
@@ -8270,6 +8397,44 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let func_ptr = ic.func;
                         let common = unsafe { &*func_ptr };
                         let num_args = opline.extended_value;
+
+                        // A discarded call to a compiler-proven integer
+                        // property method can commit its typed plan directly.
+                        // The property inline caches are populated by the
+                        // first ordinary call; all failures remain untouched
+                        // and continue through the canonical frame path.
+                        if ic.method_has_long_property_plan() {
+                            let user = unsafe { &*(func_ptr as *const UserFunction) };
+                            if let Some(plan) = user.long_property_plan.as_deref() {
+                                let sends = unsafe { opline_ptr.add(1) };
+                                let do_fcall_ptr = unsafe { sends.add(num_args as usize) };
+                                let do_fcall = unsafe { &*do_fcall_ptr };
+                                if plan.public_args as u32 == num_args
+                                    && do_fcall.opcode == OpCode::DoFcall
+                                    && do_fcall.result_type == OpType::Unused
+                                    && unsafe {
+                                        try_execute_long_property_method(
+                                            frame,
+                                            op_array,
+                                            obj_val,
+                                            sends,
+                                            plan,
+                                            user,
+                                        )
+                                    }
+                                {
+                                    stats::inc_do_fcall_fast();
+                                    stats::inc_return_fast();
+                                    let count = common.call_count.get();
+                                    if count < u32::MAX {
+                                        common.call_count.set(count + 1);
+                                    }
+                                    unsafe { (*frame).opline = do_fcall_ptr.add(1) };
+                                    continue 'vm;
+                                }
+                            }
+                        }
+
                         let pending_call = unsafe { (*frame).call };
                         let call = eg.vm_stack.push_call_frame(
                             func_ptr,

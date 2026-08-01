@@ -521,6 +521,68 @@ echo $mm->min . '|' . $mm->max;
 }
 
 #[test]
+fn test_long_property_method_plan_is_compiled_from_general_patterns() {
+    let source = "<?php
+class Stats {
+    public $count = 0;
+    public $sum = 0;
+    public $min = 999;
+    public $max = 0;
+    public function record($v) {
+        $this->count = $this->count + 1;
+        $this->sum = $this->sum + $v;
+        if ($v < $this->min) { $this->min = $v; }
+        if ($v > $this->max) { $this->max = $v; }
+    }
+}
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let method = &result.class_defs[0].methods[0].4;
+    let plan = method.long_property_plan.as_ref().unwrap();
+    assert_eq!(plan.public_args, 1);
+    assert_eq!(plan.properties.len(), 4);
+    assert_eq!(plan.operations.len(), 4);
+}
+
+#[test]
+fn test_long_property_method_plan_fallback_is_transactional_on_overflow() {
+    // The first update in the second call must not be committed by the plan
+    // before the overflowing second update falls back to ordinary execution.
+    assert_eq!(run_php("<?php
+class Counter {
+    public $large = 9223372036854775807;
+    public $calls = 0;
+    public function update($v) {
+        $this->calls = $this->calls + 1;
+        $this->large = $this->large + $v;
+    }
+}
+$counter = new Counter();
+$counter->update(0);
+$counter->update(1);
+echo $counter->calls;
+"), "2");
+}
+
+#[test]
+fn test_long_property_method_plan_does_not_replace_used_return_value() {
+    assert_eq!(run_php("<?php
+class Counter {
+    public $value = 0;
+    public function add($v) {
+        $this->value = $this->value + $v;
+        return $this->value;
+    }
+}
+$counter = new Counter();
+$counter->add(1);
+echo $counter->add(2) . '|' . $counter->value;
+"), "3|3");
+}
+
+#[test]
 fn test_hot_general_comparison_results() {
     // General CV/CV comparisons materialize a scalar boolean when there is no
     // immediately fusible conditional jump.

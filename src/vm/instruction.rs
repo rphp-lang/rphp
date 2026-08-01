@@ -77,6 +77,7 @@ unsafe impl Sync for InlineCache {}
 impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
+    const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
     pub fn empty() -> Self {
@@ -113,19 +114,22 @@ impl InlineCache {
         func: *const FunctionCommon,
         class_id: u32,
         fusion_eligible: bool,
+        long_property_plan: bool,
     ) {
         self.func = func;
         self.class_id = class_id;
-        self.prop_info = if fusion_eligible {
-            Self::METHOD_FUSION_ELIGIBLE
-        } else {
-            0
-        };
+        self.prop_info = (if fusion_eligible { Self::METHOD_FUSION_ELIGIBLE } else { 0 })
+            | (if long_property_plan { Self::METHOD_LONG_PROPERTY_PLAN } else { 0 });
     }
 
     #[inline(always)]
     pub fn method_fusion_eligible(&self) -> bool {
         self.prop_info & Self::METHOD_FUSION_ELIGIBLE != 0
+    }
+
+    #[inline(always)]
+    pub fn method_has_long_property_plan(&self) -> bool {
+        self.prop_info & Self::METHOD_LONG_PROPERTY_PLAN != 0
     }
 
     /// String identity retained by a dynamic-callback DoFcall cache entry.

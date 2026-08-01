@@ -8,7 +8,9 @@ use crate::vm::function::{
     DirectInternalFunctionHandler, InternalFunction, InternalFunctionHandler,
     SignatureInfo, FrameLayout, CallPlan,
     CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
+    LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
 };
+use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
 
@@ -525,6 +527,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
             hot_status: Cell::new(HotStatus::Cold),
         },
         op_array,
+        long_property_plan: None,
     }
 }
 
@@ -605,7 +608,249 @@ pub fn make_user_function_typed(
             hot_status: Cell::new(HotStatus::Cold),
         },
         op_array,
+        long_property_plan: None,
     }
+}
+
+const LONG_PROPERTY_PLAN_MAX_ARGS: u32 = 8;
+const LONG_PROPERTY_PLAN_MAX_PROPERTIES: usize = 8;
+
+fn long_plan_source(
+    op_array: &OpArray,
+    op_type: OpType,
+    operand: u16,
+    public_args: u32,
+) -> Option<LongPlanSource> {
+    match op_type {
+        OpType::Cv if operand > 0 && operand as u32 <= public_args => {
+            Some(LongPlanSource::Argument((operand - 1) as u8))
+        }
+        OpType::Const => op_array
+            .literals
+            .get(operand as usize)
+            .and_then(Value::as_long)
+            .map(LongPlanSource::Constant),
+        _ => None,
+    }
+}
+
+fn property_name<'a>(op_array: &'a OpArray, instruction: &Instruction) -> Option<&'a str> {
+    if instruction.op1_type != OpType::Cv
+        || instruction.op1 != 0
+        || instruction.op2_type != OpType::Const
+    {
+        return None;
+    }
+    op_array
+        .literals
+        .get(instruction.op2 as usize)
+        .and_then(Value::as_str)
+}
+
+fn register_long_plan_property(
+    properties: &mut Vec<LongPlanProperty>,
+    indices: &mut HashMap<String, u8>,
+    name: &str,
+    cache_ip: usize,
+    required_flags: u8,
+) -> Option<u8> {
+    if let Some(&property) = indices.get(name) {
+        let guard = &mut properties[property as usize];
+        if required_flags > guard.required_flags {
+            guard.cache_ip = cache_ip as u16;
+            guard.required_flags = required_flags;
+        }
+        return Some(property);
+    }
+    if properties.len() == LONG_PROPERTY_PLAN_MAX_PROPERTIES || cache_ip > u16::MAX as usize {
+        return None;
+    }
+    let property = properties.len() as u8;
+    properties.push(LongPlanProperty {
+        cache_ip: cache_ip as u16,
+        required_flags,
+    });
+    indices.insert(name.to_string(), property);
+    Some(property)
+}
+
+/// Recognize small, side-effect-free integer property methods once, after
+/// opcode specialization. The resulting plan is independent of class and
+/// property names; runtime inline caches provide the guarded numeric slots.
+fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPropertyMethodPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if common.plan.call != CallStrategy::FastScalar
+        || common.sig.this_offset != 1
+        || public_args > LONG_PROPERTY_PLAN_MAX_ARGS
+        || op_array.instructions.len() > 32
+        || op_array.num_cvs != common.sig.num_args
+    {
+        return None;
+    }
+
+    let instructions = &op_array.instructions;
+    let mut properties = Vec::new();
+    let mut property_indices = HashMap::new();
+    let mut operations = Vec::new();
+    let mut ip = 0usize;
+
+    while ip < instructions.len() {
+        let instruction = &instructions[ip];
+
+        // $this->p = $this->p +/- scalar
+        if instruction.opcode == OpCode::FetchObjR && ip + 2 < instructions.len() {
+            let arithmetic = &instructions[ip + 1];
+            let assign = &instructions[ip + 2];
+            if matches!(arithmetic.opcode, OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp | OpCode::Sub | OpCode::Sub_TmpTmp | OpCode::Sub_CvConst)
+                && assign.opcode == OpCode::AssignObjProp
+                && arithmetic.result_type != OpType::Unused
+                && assign.result_type == arithmetic.result_type
+                && assign.result == arithmetic.result
+            {
+                let fetched_name = property_name(op_array, instruction)?;
+                let assigned_name = property_name(op_array, assign)?;
+                if fetched_name == assigned_name {
+                    let rhs = if arithmetic.op1_type == instruction.result_type
+                        && arithmetic.op1 == instruction.result
+                    {
+                        long_plan_source(op_array, arithmetic.op2_type, arithmetic.op2, public_args)
+                    } else if arithmetic.opcode != OpCode::Sub
+                        && arithmetic.opcode != OpCode::Sub_TmpTmp
+                        && arithmetic.opcode != OpCode::Sub_CvConst
+                        && arithmetic.op2_type == instruction.result_type
+                        && arithmetic.op2 == instruction.result
+                    {
+                        long_plan_source(op_array, arithmetic.op1_type, arithmetic.op1, public_args)
+                    } else {
+                        None
+                    }?;
+                    let property = register_long_plan_property(
+                        &mut properties,
+                        &mut property_indices,
+                        fetched_name,
+                        ip + 2,
+                        3,
+                    )?;
+                    operations.push(if matches!(arithmetic.opcode, OpCode::Sub | OpCode::Sub_TmpTmp | OpCode::Sub_CvConst) {
+                        LongPropertyOp::Sub { property, rhs }
+                    } else {
+                        LongPropertyOp::Add { property, rhs }
+                    });
+                    ip += 3;
+                    continue;
+                }
+            }
+        }
+
+        // if ($candidate < $this->p) $this->p = $candidate (and max mirror)
+        if instruction.opcode == OpCode::FetchObjR && ip + 3 < instructions.len() {
+            let comparison = &instructions[ip + 1];
+            let branch = &instructions[ip + 2];
+            let assign = &instructions[ip + 3];
+            if matches!(comparison.opcode, OpCode::IsSmaller | OpCode::IsSmallerOrEqual)
+                && branch.opcode == OpCode::JmpZ
+                && branch.op1_type == comparison.result_type
+                && branch.op1 == comparison.result
+                && branch.op2 as usize == ip + 4
+                && assign.opcode == OpCode::AssignObjProp
+            {
+                let fetched_name = property_name(op_array, instruction)?;
+                let assigned_name = property_name(op_array, assign)?;
+                if fetched_name == assigned_name {
+                    let (candidate, is_min) = if comparison.op2_type == instruction.result_type
+                        && comparison.op2 == instruction.result
+                    {
+                        (long_plan_source(op_array, comparison.op1_type, comparison.op1, public_args), true)
+                    } else if comparison.op1_type == instruction.result_type
+                        && comparison.op1 == instruction.result
+                    {
+                        (long_plan_source(op_array, comparison.op2_type, comparison.op2, public_args), false)
+                    } else {
+                        (None, false)
+                    };
+                    let candidate = candidate?;
+                    let assigned = long_plan_source(op_array, assign.result_type, assign.result, public_args)?;
+                    if candidate != assigned {
+                        return None;
+                    }
+                    let property = register_long_plan_property(
+                        &mut properties,
+                        &mut property_indices,
+                        fetched_name,
+                        ip + 3,
+                        3,
+                    )?;
+                    operations.push(if is_min {
+                        LongPropertyOp::Min { property, candidate }
+                    } else {
+                        LongPropertyOp::Max { property, candidate }
+                    });
+                    ip += 4;
+                    continue;
+                }
+            }
+        }
+
+        // A property read used only by Return has no observable result when
+        // the call site discards that return, but its cache/type guard remains.
+        if instruction.opcode == OpCode::FetchObjR && ip + 1 < instructions.len() {
+            let ret = &instructions[ip + 1];
+            if ret.opcode == OpCode::Return
+                && ret.op1_type == instruction.result_type
+                && ret.op1 == instruction.result
+            {
+                let name = property_name(op_array, instruction)?;
+                register_long_plan_property(
+                    &mut properties,
+                    &mut property_indices,
+                    name,
+                    ip,
+                    1,
+                )?;
+                ip += 1;
+                continue;
+            }
+        }
+
+        // Direct scalar property assignment is also transactional.
+        if instruction.opcode == OpCode::AssignObjProp {
+            let name = property_name(op_array, instruction)?;
+            let value = long_plan_source(
+                op_array,
+                instruction.result_type,
+                instruction.result,
+                public_args,
+            )?;
+            let property = register_long_plan_property(
+                &mut properties,
+                &mut property_indices,
+                name,
+                ip,
+                3,
+            )?;
+            operations.push(LongPropertyOp::Set { property, value });
+            ip += 1;
+            continue;
+        }
+
+        if instruction.opcode == OpCode::Return {
+            ip += 1;
+            continue;
+        }
+
+        return None;
+    }
+
+    if properties.is_empty() {
+        return None;
+    }
+    Some(Box::new(LongPropertyMethodPlan {
+        public_args: public_args as u8,
+        properties: properties.into_boxed_slice(),
+        operations: operations.into_boxed_slice(),
+    }))
 }
 
 /// Create an InternalFunction with the given handler.
@@ -706,6 +951,8 @@ pub fn finalize_user_method(mut function: UserFunction) -> UserFunction {
                 && instruction.op1 == 0
         });
     }
+
+    function.long_property_plan = build_long_property_method_plan(&function);
 
     function
 }
