@@ -6070,10 +6070,13 @@ fn execute_fast_scalar_method_call<'a>(
     if func_common.hot_status.get() == HotStatus::Hot {
         match super::hot::execute_hot_frame(eg, call)? {
             super::hot::HotResult::Completed => Ok(ColdResult::Continue),
-            super::hot::HotResult::Bailout => {
-                let active = eg.current_execute_data.get();
-                Ok(ColdResult::NewFrame(active, unsafe { (*active).op_array() }))
-            }
+            super::hot::HotResult::Bailout => match super::hot::resume_after_long_comparison(eg, call)? {
+                super::hot::HotResult::Completed => Ok(ColdResult::Continue),
+                super::hot::HotResult::Bailout => {
+                    let active = eg.current_execute_data.get();
+                    Ok(ColdResult::NewFrame(active, unsafe { (*active).op_array() }))
+                }
+            },
         }
     } else {
         Ok(ColdResult::NewFrame(call, unsafe { (*call).op_array() }))
@@ -7762,10 +7765,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 continue;
                             }
                             super::hot::HotResult::Bailout => {
-                                // Callee bailed. It's the active frame with opline at bailout point.
-                                frame = eg.current_execute_data.get();
-                                op_array = unsafe { (*frame).op_array() };
-                                continue;
+                                match super::hot::resume_after_long_comparison(eg, call)? {
+                                    super::hot::HotResult::Completed => continue,
+                                    super::hot::HotResult::Bailout => {
+                                        // Callee bailed. It's the active frame with opline at bailout point.
+                                        frame = eg.current_execute_data.get();
+                                        op_array = unsafe { (*frame).op_array() };
+                                        continue;
+                                    }
+                                }
                             }
                         }
                     } else {
@@ -7878,9 +7886,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     continue;
                                 }
                                 super::hot::HotResult::Bailout => {
-                                    frame = eg.current_execute_data.get();
-                                    op_array = unsafe { (*frame).op_array() };
-                                    continue;
+                                    match super::hot::resume_after_long_comparison(eg, call)? {
+                                        super::hot::HotResult::Completed => continue,
+                                        super::hot::HotResult::Bailout => {
+                                            frame = eg.current_execute_data.get();
+                                            op_array = unsafe { (*frame).op_array() };
+                                            continue;
+                                        }
+                                    }
                                 }
                             }
                         } else {

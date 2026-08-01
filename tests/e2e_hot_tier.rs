@@ -520,6 +520,31 @@ echo $mm->min . '|' . $mm->max;
 "), "1|100");
 }
 
+#[test]
+fn test_hot_general_comparison_results() {
+    // General CV/CV comparisons materialize a scalar boolean when there is no
+    // immediately fusible conditional jump.
+    assert_eq!(run_php("<?php
+function less($a, $b) { return $a < $b; }
+function less_equal($a, $b) { return $a <= $b; }
+function equal($a, $b) { return $a == $b; }
+function not_equal($a, $b) { return $a != $b; }
+
+$lt = false;
+$le = false;
+$eq = false;
+$ne = false;
+for ($i = 0; $i < 20; $i++) {
+    $lt = less(1, 2);
+    $le = less_equal(2, 2);
+    $eq = equal(3, 3);
+    $ne = not_equal(4, 5);
+}
+echo ($lt ? '1' : '0') . '|' . ($le ? '1' : '0') . '|' .
+    ($eq ? '1' : '0') . '|' . ($ne ? '1' : '0');
+"), "1|1|1|1");
+}
+
 // ══════════════════════════════════════════════════════════════════════
 // 10. InitMethodCall: method dispatch in hot tier
 // ══════════════════════════════════════════════════════════════════════

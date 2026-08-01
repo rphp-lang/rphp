@@ -972,6 +972,112 @@ pub fn execute_hot_frame(
     }
 }
 
+/// Execute a general long comparison outside the main hot dispatch body.
+///
+/// Keeping the operand decoding here prevents less common comparison shapes
+/// from displacing the recursive call/return path in `execute_hot_frame`.
+#[inline(never)]
+fn execute_hot_long_comparison(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline_ptr: *const Instruction,
+) -> Option<*const Instruction> {
+    let opline = unsafe { &*opline_ptr };
+    let op1 = match opline.op1_type {
+        OpType::Cv => {
+            let cv = unsafe { (*frame).cv(opline.op1 as u32) };
+            if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+        }
+        OpType::Tmp | OpType::Var => unsafe {
+            &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
+        },
+        OpType::Const => &op_array.literals()[opline.op1 as usize],
+        _ => return None,
+    };
+    let op2 = match opline.op2_type {
+        OpType::Cv => {
+            let cv = unsafe { (*frame).cv(opline.op2 as u32) };
+            if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+        }
+        OpType::Tmp | OpType::Var => unsafe {
+            &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
+        },
+        OpType::Const => &op_array.literals()[opline.op2 as usize],
+        _ => return None,
+    };
+    let (l1, l2) = (op1.as_long()?, op2.as_long()?);
+    let result = match opline.opcode {
+        OpCode::IsEqual => l1 == l2,
+        OpCode::IsNotEqual => l1 != l2,
+        OpCode::IsSmaller => l1 < l2,
+        OpCode::IsSmallerOrEqual => l1 <= l2,
+        _ => return None,
+    };
+
+    // Comparison results are normally consumed immediately by a conditional
+    // jump. Fuse that pair and avoid materializing the temporary boolean.
+    let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+    if let Some(next) = op_array.instructions().get(ip + 1)
+        && next.op1_type == OpType::Tmp
+        && next.op1 == opline.result
+        && matches!(next.opcode, OpCode::JmpZ | OpCode::JmpNZ)
+    {
+        if (next.opcode == OpCode::JmpZ) == result {
+            return Some(unsafe { opline_ptr.add(2) });
+        }
+        return Some(unsafe { op_array.instructions().as_ptr().add(next.op2 as usize) });
+    }
+
+    if !matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+        return None;
+    }
+    let result_ptr = unsafe {
+        (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+    };
+    unsafe { Value::write_bool(result_ptr, result) };
+    Some(unsafe { opline_ptr.add(1) })
+}
+
+/// Continue the same hot frame after a scalar comparison bailout.
+///
+/// The normal completion path calls `execute_hot_frame` directly and never
+/// enters this function.  Keeping recovery out of the primary executor makes
+/// comparison support zero-overhead for recursive call-heavy workloads.
+#[inline(never)]
+pub fn resume_after_long_comparison(
+    eg: &mut ExecutorGlobals,
+    root_frame: *mut ExecuteData,
+) -> Result<HotResult, VmError> {
+    loop {
+        // A nested callee may have caused the bailout. Baseline must retain
+        // ownership of that transition; this recovery only resumes the frame
+        // whose dispatch originally entered the hot executor.
+        if eg.current_execute_data.get() != root_frame {
+            return Ok(HotResult::Bailout);
+        }
+        let op_array = unsafe { (*root_frame).op_array() };
+        let opline_ptr = unsafe { (*root_frame).opline };
+        if !matches!(
+            unsafe { (*opline_ptr).opcode },
+            OpCode::IsEqual
+                | OpCode::IsNotEqual
+                | OpCode::IsSmaller
+                | OpCode::IsSmallerOrEqual
+        ) {
+            return Ok(HotResult::Bailout);
+        }
+        let Some(next) = execute_hot_long_comparison(root_frame, op_array, opline_ptr) else {
+            return Ok(HotResult::Bailout);
+        };
+        unsafe { (*root_frame).opline = next };
+
+        match execute_hot_frame(eg, root_frame)? {
+            HotResult::Completed => return Ok(HotResult::Completed),
+            HotResult::Bailout => continue,
+        }
+    }
+}
+
 // ── Bailout helper ────────────────────────────────────────────────────
 
 /// Set frame's opline to current position, record bail reason, and return Bailout.
