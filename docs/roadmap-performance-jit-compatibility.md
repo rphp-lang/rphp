@@ -227,6 +227,32 @@ This phase is deliberately concurrent with performance work. It prevents the
 runtime and IR from being optimized only for synthetic loops while avoiding a
 premature requirement to run an entire framework.
 
+Implementation checkpoint (2026-08-02): the first corpus workload is an
+order/quote service pipeline combining a request DTO, constructor and service
+object dispatch, declared properties, associative return data, strings,
+branches, and integer business calculations. Its deterministic aggregate is
+checked against PHP 8.4 and its performance runner is intentionally separate
+from the 31-workload microbenchmark matrix.
+
+The initial no-PGO run was approximately 0.521 s RPHP versus 0.082 s PHP for
+500,000 quotes. VM statistics showed no quick-region entry, 3,000,005 call
+frames, 500,003 object allocations, 3,500,000 property reads, and 2,000,004
+associative-array reads. Sampling then exposed repeated textual constructor
+resolution inside every `NewObj`: formatting, lowercasing, allocating, and
+hashing the same `Class::__construct` name. A per-opcode cache, guarded by the
+stable class ID and supporting negative entries for classes without a
+constructor, reduced `find_function` calls from approximately 500,014 to 14
+and runtime to approximately 0.421 s. This is a general object-allocation
+improvement, not corpus-name recognition. The next measured costs are object
+allocation/lifecycle and construction/destruction of short associative return
+arrays.
+
+The full release test suite passes after this change. A concurrent no-PGO
+microbenchmark rerun has 30 strict RPHP wins out of 31; the isolated packed
+array build-and-sum workload is the single marginal PHP win at approximately
+1.06x, consistent with the already-recorded packed-append headroom and
+unrelated to constructor execution.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

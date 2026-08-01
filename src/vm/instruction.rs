@@ -112,6 +112,17 @@ impl InlineCache {
         self.prop_info = ((slot as u32) << 2) | flags;
     }
 
+    /// Cache constructor resolution for a `NewObj` site. A null function with
+    /// a non-zero class ID is a valid negative cache entry for classes without
+    /// `__construct`.
+    #[inline]
+    pub fn set_constructor(&mut self, func: *const FunctionCommon, class_id: u32) {
+        debug_assert!(class_id != 0);
+        self.func = func;
+        self.class_id = class_id;
+        self.prop_info = 0;
+    }
+
     /// Cache a monomorphic method resolution and whether its already-proven
     /// FastScalar body is short enough to benefit from InitMethodCall fusion.
     #[inline]

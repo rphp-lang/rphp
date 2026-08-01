@@ -118,3 +118,15 @@ $f = new Foo(side());
 echo "X";
 "#), "SX");
 }
+
+#[test]
+fn test_no_constructor_negative_cache_keeps_argument_side_effects() {
+    assert_eq!(run_php(r#"<?php
+class PlainBox { public $value = 7; }
+$sum = 0;
+for ($i = 0; $i < 5; $i++) {
+    $box = new PlainBox($sum = $sum + 1);
+}
+echo $sum . ':' . $box->value;
+"#), "5:7");
+}

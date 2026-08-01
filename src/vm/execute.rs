@@ -3201,31 +3201,53 @@ fn op_new_obj<'a>(
     }
 
     // Create compact declared-property slots from the class layout.
-    let (property_layout, property_values) = if let Some(class_def) = eg.class_table.get(name) {
-        let mut values = Vec::with_capacity(class_def.properties.len());
-        for (prop_name, default_val, _vis, _declaring) in &class_def.properties {
-            let is_readonly = class_def.readonly_props.contains(prop_name);
-            let val = default_val.as_ref()
-                .map(|v| v.clone())
-                .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
-            values.push(val);
-        }
-        (class_def.property_layout.clone(), values)
-    } else {
-        (std::rc::Rc::new(crate::value::ObjectLayout::empty()), Vec::new())
-    };
+    let (class_id, property_layout, property_values) =
+        if let Some(class_def) = eg.class_table.get(name) {
+            let mut values = Vec::with_capacity(class_def.properties.len());
+            for (prop_name, default_val, _vis, _declaring) in &class_def.properties {
+                let is_readonly = class_def.readonly_props.contains(prop_name);
+                let val = default_val.as_ref()
+                    .map(|v| v.clone())
+                    .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
+                values.push(val);
+            }
+            (class_def.class_id, class_def.property_layout.clone(), values)
+        } else {
+            (0, std::rc::Rc::new(crate::value::ObjectLayout::empty()), Vec::new())
+        };
     let obj = PhpObject::with_layout(
         name.to_string(),
-        eg.class_id_of(name),
+        class_id,
         property_layout,
         property_values,
     );
     unsafe { slot_set(result_ptr, Value::object(obj)) };
 
-    // Check for __construct — set up call frame if it exists
+    // Constructor lookup is invariant for this literal `new ClassName` site.
+    // Cache both hits and misses under the stable class ID so repeated object
+    // allocation does not format, lowercase, allocate and hash the same method
+    // name every time. A changed/re-registered class gets a different ID and
+    // therefore resolves again.
     let num_args = opline.extended_value;
-    let construct_name = format!("{}::__construct", name);
-    if let Some(func_ptr) = eg.find_function(&construct_name) {
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let ic = &op_array.cache[ip];
+    let func_ptr = if class_id != 0 && ic.class_id == class_id {
+        ic.func
+    } else {
+        let construct_name = format!("{}::__construct", name);
+        let resolved = eg.find_function(&construct_name).unwrap_or(std::ptr::null());
+        if class_id != 0 {
+            let ic_mut = unsafe {
+                &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache)
+            };
+            ic_mut.set_constructor(resolved, class_id);
+        }
+        resolved
+    };
+    if !func_ptr.is_null() {
         // +1 for $this at CV 0; SendVal writes args to CV 1..N
         let pending_call = unsafe { (*frame).call };
         let call = eg.vm_stack.push_call_frame(
