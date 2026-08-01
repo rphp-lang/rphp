@@ -11,7 +11,8 @@ use crate::value::{ObjectLayout, Value};
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{
-    Instruction, InlineCache, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    Instruction, InlineCache, OpType, ARRAY_INIT_HASH_HINT,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
 };
 use super::OpArray;
 
@@ -26,6 +27,112 @@ pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
+}
+
+/// PHP normalizes only canonical decimal string array keys to integers.
+fn canonical_string_literal_array_key(value: &str) -> Option<i64> {
+    value
+        .parse::<i64>()
+        .ok()
+        .filter(|parsed| parsed.to_string() == value)
+}
+
+enum ArrayLiteralStorageHint {
+    Packed,
+    Hash,
+    Unknown,
+}
+
+/// Prove the initial representation without speculating about dynamic keys.
+/// Unknown literals keep zero-capacity packed storage and let canonical runtime
+/// insertion choose, avoiding an allocation that an immediate transition
+/// would discard.
+fn array_literal_storage_hint(
+    elements: &[crate::parser::ArrayElement],
+) -> ArrayLiteralStorageHint {
+    if elements.iter().any(|element| {
+        matches!(
+            element.key.as_ref(),
+            Some(Expr::StringLiteral(value))
+                if canonical_string_literal_array_key(value).is_none()
+        )
+    }) {
+        return ArrayLiteralStorageHint::Hash;
+    }
+
+    let mut next_key = 0i64;
+    for element in elements {
+        let key = match element.key.as_ref() {
+            None => {
+                next_key += 1;
+                continue;
+            }
+            Some(Expr::Integer(key)) => *key,
+            Some(Expr::StringLiteral(key)) => {
+                canonical_string_literal_array_key(key).unwrap()
+            }
+            _ => return ArrayLiteralStorageHint::Unknown,
+        };
+
+        if key == next_key {
+            next_key += 1;
+        } else if key < 0 || key > next_key {
+            // Sparse integer literals also require hash storage, but their
+            // capacity belongs to the integer index rather than the string
+            // index. Keep this hint allocation-neutral for now.
+            return ArrayLiteralStorageHint::Unknown;
+        }
+    }
+    ArrayLiteralStorageHint::Packed
+}
+
+#[cfg(test)]
+mod array_literal_hint_tests {
+    use super::{
+        ArrayLiteralStorageHint, array_literal_storage_hint,
+        canonical_string_literal_array_key,
+    };
+    use crate::parser::{ArrayElement, Expr};
+
+    fn element(key: Option<Expr>) -> ArrayElement {
+        ArrayElement { key, value: Expr::Integer(1) }
+    }
+
+    #[test]
+    fn distinguishes_canonical_numeric_string_keys() {
+        assert_eq!(canonical_string_literal_array_key("0"), Some(0));
+        assert_eq!(canonical_string_literal_array_key("-3"), Some(-3));
+        assert_eq!(canonical_string_literal_array_key("01"), None);
+        assert_eq!(canonical_string_literal_array_key("-0"), None);
+        assert_eq!(canonical_string_literal_array_key("name"), None);
+    }
+
+    #[test]
+    fn proves_packed_hash_and_unknown_literal_storage() {
+        assert!(matches!(
+            array_literal_storage_hint(&[element(None), element(None)]),
+            ArrayLiteralStorageHint::Packed
+        ));
+        assert!(matches!(
+            array_literal_storage_hint(&[
+                element(Some(Expr::Integer(0))),
+                element(Some(Expr::StringLiteral("1".into()))),
+            ]),
+            ArrayLiteralStorageHint::Packed
+        ));
+        assert!(matches!(
+            array_literal_storage_hint(&[element(Some(Expr::Integer(4)))]),
+            ArrayLiteralStorageHint::Unknown
+        ));
+        assert!(matches!(
+            array_literal_storage_hint(&[element(Some(Expr::StringLiteral("name".into())))]),
+            ArrayLiteralStorageHint::Hash
+        ));
+        assert!(matches!(
+            array_literal_storage_hint(&[element(Some(Expr::Variable("key".into())))]),
+            ArrayLiteralStorageHint::Unknown
+        ));
+    }
 }
 
 /// Refine the conservative per-function global-access flag once every declared
@@ -2350,11 +2457,23 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::ArrayLiteral(elements) => {
-                // Create empty array in a TMP
+                // The literal size and an unavoidable hash transition are
+                // compile-time facts. Pass them to InitArray so runtime can
+                // allocate the final representation once.
                 let arr_tmp = self.alloc_tmp();
                 let mut init = Instruction::new(OpCode::InitArray);
                 init.result_type = OpType::Tmp;
                 init.result = arr_tmp;
+                match array_literal_storage_hint(elements) {
+                    ArrayLiteralStorageHint::Packed => {
+                        init.extended_value = elements.len() as u32;
+                    }
+                    ArrayLiteralStorageHint::Hash => {
+                        init.extended_value = elements.len() as u32;
+                        init._pad |= ARRAY_INIT_HASH_HINT;
+                    }
+                    ArrayLiteralStorageHint::Unknown => {}
+                }
                 self.instructions.push(init);
 
                 // Add elements

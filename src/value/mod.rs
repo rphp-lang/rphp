@@ -301,6 +301,17 @@ impl SharedStringKey {
     fn new(value: &str) -> Self {
         Self(Rc::new(value.to_string()))
     }
+
+    /// Share the immutable Rc-backed storage already owned by a PHP string.
+    /// Later mutation of the source string detaches through normal COW.
+    #[inline]
+    fn from_value(value: &Value) -> Option<Self> {
+        let ptr = value.string_rc_ptr()?;
+        unsafe {
+            Rc::increment_strong_count(ptr);
+            Some(Self(Rc::from_raw(ptr)))
+        }
+    }
 }
 
 impl Deref for SharedStringKey {
@@ -352,6 +363,27 @@ impl PhpArray {
     pub fn new() -> Self {
         Self {
             storage: ArrayStorage::Packed(Vec::new()),
+            next_int_key: 0,
+        }
+    }
+
+    /// Create packed storage with capacity known from an array literal.
+    pub fn with_packed_capacity(capacity: usize) -> Self {
+        Self {
+            storage: ArrayStorage::Packed(Vec::with_capacity(capacity)),
+            next_int_key: 0,
+        }
+    }
+
+    /// Create string-indexed hash storage directly when a literal string key
+    /// proves that a packed representation would immediately transition.
+    pub fn with_hash_capacity(capacity: usize) -> Self {
+        Self {
+            storage: ArrayStorage::Hash {
+                entries: Vec::with_capacity(capacity),
+                str_index: HashMap::with_capacity(capacity),
+                int_index: int_index_with_capacity(0),
+            },
             next_int_key: 0,
         }
     }
@@ -439,6 +471,27 @@ impl PhpArray {
             } else {
                 // New key — one shared allocation for both entry and index.
                 let owned = SharedStringKey::new(key);
+                let idx = entries.len();
+                entries.push((ArrayEntryKey::String(owned.clone()), val));
+                str_index.insert(owned, idx);
+            }
+        }
+    }
+
+    /// Set a non-numeric PHP string key while sharing its Rc allocation with
+    /// the source Value. This avoids materializing an intermediate ArrayKey and
+    /// allocating a second copy of the same immutable key bytes.
+    pub fn set_str_value(&mut self, key: &Value, val: Value) {
+        let key_text = key.as_str().expect("set_str_value requires a string Value");
+        if matches!(&self.storage, ArrayStorage::Packed(_)) {
+            self.transition_to_hash();
+        }
+        if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
+            if let Some(&idx) = str_index.get(key_text) {
+                entries[idx].1 = val;
+            } else {
+                let owned = SharedStringKey::from_value(key)
+                    .expect("set_str_value requires Rc-backed string storage");
                 let idx = entries.len();
                 entries.push((ArrayEntryKey::String(owned.clone()), val));
                 str_index.insert(owned, idx);
@@ -1001,6 +1054,26 @@ mod php_array_tests {
         };
         let index_key = str_index.keys().next().unwrap();
         assert!(Rc::ptr_eq(&entry_key.0, &index_key.0));
+    }
+
+    #[test]
+    fn string_value_key_reuses_source_allocation_and_keeps_cow() {
+        let mut key = Value::string("shared");
+        let original_ptr = key.string_rc_ptr().unwrap();
+        let mut array = PhpArray::with_hash_capacity(1);
+        array.set_str_value(&key, Value::long(7));
+
+        let ArrayStorage::Hash { entries, .. } = &array.storage else {
+            panic!("preallocated string literal should use hash storage");
+        };
+        let ArrayEntryKey::String(entry_key) = &entries[0].0 else {
+            panic!("entry should retain its string key");
+        };
+        assert_eq!(Rc::as_ptr(&entry_key.0), original_ptr);
+
+        unsafe { key.as_string_mut().unwrap().push_str("-changed") };
+        assert_eq!(key.as_str(), Some("shared-changed"));
+        assert_eq!(array.get_str("shared").and_then(Value::as_long), Some(7));
     }
 
     #[test]

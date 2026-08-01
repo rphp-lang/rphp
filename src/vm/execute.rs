@@ -9,7 +9,7 @@ use crate::parser::Visibility;
 use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{
-    Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    Instruction, OpType, ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
@@ -10921,7 +10921,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::InitArray => {
                 let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                unsafe { slot_set(result_ptr, Value::array(PhpArray::new())) };
+                let capacity = opline.extended_value as usize;
+                let array = if opline._pad & ARRAY_INIT_HASH_HINT != 0 {
+                    PhpArray::with_hash_capacity(capacity)
+                } else {
+                    PhpArray::with_packed_capacity(capacity)
+                };
+                unsafe { slot_set(result_ptr, Value::array(array)) };
             }
 
             OpCode::AddArrayElement => {
@@ -10935,8 +10941,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 })?;
                 if opline.result_type != OpType::Unused {
                     let key_val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
-                    let key = value_to_array_key(key_val)?;
-                    php_arr.set(key, cloned_val);
+                    match value_to_array_key_ref(key_val)? {
+                        ArrayKeyRef::Int(key) => php_arr.set_int(key, cloned_val),
+                        ArrayKeyRef::String(key) => {
+                            if key_val.value_type() == ValueType::String {
+                                php_arr.set_str_value(key_val, cloned_val);
+                            } else {
+                                php_arr.set_str(key, cloned_val);
+                            }
+                        }
+                    }
                 } else {
                     php_arr.push(cloned_val);
                 }

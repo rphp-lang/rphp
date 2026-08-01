@@ -253,6 +253,27 @@ array build-and-sum workload is the single marginal PHP win at approximately
 1.06x, consistent with the already-recorded packed-append headroom and
 unrelated to constructor execution.
 
+The second corpus-driven runtime slice specializes array-literal allocation
+without recognizing the workload. The compiler selects packed, string-hash, or
+neutral initial storage from static keys, passes exact literal capacity only
+when the target representation is known, and leaves dynamic or sparse-integer
+literals allocation-neutral.
+Known string-key literals start in hash storage at final capacity. Insertion
+borrows the source `Value` key and shares its immutable `Rc<String>` bytes with
+the entry and index; later source mutation still detaches through COW. This
+removes the packed-to-hash transition, intermediate `ArrayKey` string, duplicate
+key bytes, and repeated capacity growth for common DTO/result arrays.
+
+The order pipeline improves further to approximately 0.33 s RPHP versus 0.080 s
+PHP, about 4.15x, and the full no-PGO microbenchmark matrix returns to 31 strict
+RPHP wins out of 31. Compared with the original 0.521 s corpus baseline, the
+first two general runtime corrections remove roughly 36 percent of RPHP time.
+Fresh sampling now attributes most remaining time to general opcode execution;
+property reads, object allocation, and short-hash lifecycle are secondary. The
+next structural target is therefore a guarded application region spanning the
+outer loop, object calls, properties, and result extraction, with canonical
+side exits, rather than another workload-specific hash kernel.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

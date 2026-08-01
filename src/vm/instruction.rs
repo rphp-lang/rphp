@@ -6,6 +6,10 @@ use super::function::FunctionCommon;
 /// therefore defer its full frame while preserving source evaluation order.
 pub const CALL_FLAG_DEFERRED_SCALAR_CANDIDATE: u16 = 1;
 
+/// InitArray flag: at least one compile-time literal string key guarantees
+/// general hash storage rather than packed integer storage.
+pub const ARRAY_INIT_HASH_HINT: u16 = 1;
+
 /// Operand type — where to find the operand
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

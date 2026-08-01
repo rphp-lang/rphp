@@ -694,3 +694,13 @@ $a[] = 'q';
 foreach ($a as $k => $v) { echo $k . ':' . $v . ' '; }
 "), "0:x 5:y 6:q ");
 }
+
+#[test]
+fn test_e2e_array_literal_key_storage_detaches_on_source_mutation() {
+    assert_eq!(run_php("<?php
+$key = 'name';
+$array = [$key => 42];
+$key .= '-changed';
+echo $key . '|' . $array['name'];
+"), "name-changed|42");
+}
