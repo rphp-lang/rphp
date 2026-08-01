@@ -129,6 +129,11 @@ mod inner {
     }
 
     #[inline]
+    pub fn inc_do_fcall_fast_by(count: u64) {
+        if enabled() { DO_FCALL_FAST_PATHS.fetch_add(count, Ordering::Relaxed); }
+    }
+
+    #[inline]
     pub fn inc_do_fcall_full() {
         if enabled() { DO_FCALL_FULL_PATHS.fetch_add(1, Ordering::Relaxed); }
     }
@@ -136,6 +141,11 @@ mod inner {
     #[inline]
     pub fn inc_return_fast() {
         if enabled() { RETURN_FAST_PATHS.fetch_add(1, Ordering::Relaxed); }
+    }
+
+    #[inline]
+    pub fn inc_return_fast_by(count: u64) {
+        if enabled() { RETURN_FAST_PATHS.fetch_add(count, Ordering::Relaxed); }
     }
 
     #[inline]
@@ -388,6 +398,13 @@ pub fn inc_do_fcall_fast() {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]
+pub fn inc_do_fcall_fast_by(count: u64) { inner::inc_do_fcall_fast_by(count); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_do_fcall_fast_by(_count: u64) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
 pub fn inc_do_fcall_full() { inner::inc_do_fcall_full(); }
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
@@ -399,6 +416,13 @@ pub fn inc_return_fast() { inner::inc_return_fast(); }
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_return_fast() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_return_fast_by(count: u64) { inner::inc_return_fast_by(count); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_return_fast_by(_count: u64) {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

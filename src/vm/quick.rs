@@ -7,6 +7,9 @@
 
 use crate::compiler::OpArray;
 use crate::value::Value;
+use crate::vm::function::{
+    ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+};
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
 
@@ -40,7 +43,7 @@ pub enum QuickArrayIndex {
     ValueSlot(u16),
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum QuickLongTerm {
     /// Add the induction variable directly to the accumulator.
     Induction,
@@ -76,6 +79,29 @@ pub enum QuickLongTerm {
         term_tmp: u16,
         term_ip: usize,
     },
+    /// Result of a direct user function call whose cached target is guarded at
+    /// runtime as a compiler-proven pure scalar function. Arguments remain
+    /// ordinary PHP operands in the baseline program; the quick runner reads
+    /// their retained long values without constructing a call frame.
+    ScalarFunctionCall {
+        call_ip: usize,
+        do_fcall_ip: usize,
+        long_input_mask: u64,
+        argument_plan: Box<ScalarLongProgram>,
+        argument_count: u8,
+        term_tmp: u16,
+    },
+    /// A scalar method call tree whose object receivers are invariant CVs.
+    /// Runtime validates each receiver class against the monomorphic method
+    /// cache before executing any compiler-proven scalar body.
+    ScalarMethodCall {
+        call_ip: usize,
+        do_fcall_ip: usize,
+        long_input_mask: u64,
+        object_input_mask: u64,
+        argument_count: u8,
+        term_tmp: u16,
+    },
 }
 
 /// Region for the compiler shapes produced by:
@@ -89,6 +115,7 @@ pub enum QuickLongTerm {
 ///     // or: $value = $array['key']; $accumulator += $value;
 ///     // or: $accumulator += strlen($loop_invariant_string);
 ///     // or: $accumulator += abs($long_cv);
+///     // or: $accumulator += pureScalar($long_cv, INTEGER_CONSTANT);
 /// }
 /// ```
 ///
@@ -96,7 +123,7 @@ pub enum QuickLongTerm {
 /// assignment, increment and backward jump, with an optional arithmetic
 /// term instruction. All observable state is scalar and every deoptimization
 /// point has a precise baseline instruction.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct QuickLongAccumulateLoop {
     pub header_ip: usize,
     pub exit_ip: usize,
@@ -431,6 +458,25 @@ fn long_literal(op_array: &OpArray, index: u16) -> Option<i64> {
         .and_then(Value::as_long)
 }
 
+fn quick_scalar_long_source(
+    op_array: &OpArray,
+    op_type: OpType,
+    operand: u16,
+    produced_temporary_slots: &[u16; 8],
+    produced_temporary_count: usize,
+) -> Option<ScalarLongSource> {
+    match op_type {
+        OpType::Cv => Some(ScalarLongSource::Input(operand)),
+        OpType::Const => long_literal(op_array, operand).map(ScalarLongSource::Constant),
+        OpType::Tmp | OpType::Var => produced_temporary_slots[..produced_temporary_count]
+            .iter()
+            .position(|slot| *slot == operand)
+            .and_then(|index| u8::try_from(index).ok())
+            .map(ScalarLongSource::Temporary),
+        OpType::Unused => None,
+    }
+}
+
 fn array_literal_index(op_array: &OpArray, index: u16) -> Option<QuickArrayIndex> {
     let value = op_array.literals.get(index as usize)?;
     if let Some(value) = value.as_long() {
@@ -651,6 +697,121 @@ pub fn detect_long_induction_loop(
     })
 }
 
+fn detect_scalar_method_call_tree(
+    op_array: &OpArray,
+    initializer_ip: usize,
+    total_slots: u32,
+    long_input_mask: &mut u64,
+    object_input_mask: &mut u64,
+    depth: usize,
+) -> Option<usize> {
+    if depth >= 8 {
+        return None;
+    }
+    let initializer = *op_array.instructions.get(initializer_ip)?;
+    let (argument_count, argument_offset) = match initializer.opcode {
+        OpCode::InitFcall => (initializer.op1 as usize, 0usize),
+        OpCode::InitMethodCall if initializer.op1_type == OpType::Cv => {
+            add_mask_slot(object_input_mask, initializer.op1, total_slots)?;
+            (initializer.extended_value as usize, 1usize)
+        }
+        _ => return None,
+    };
+    if argument_count > 8 {
+        return None;
+    }
+
+    let mut cursor = initializer_ip + 1;
+    for argument_index in 0..argument_count {
+        let instruction = *op_array.instructions.get(cursor)?;
+        let destination = u16::try_from(argument_index.checked_add(argument_offset)?).ok()?;
+
+        if matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            if instruction.op2 != destination {
+                return None;
+            }
+            match instruction.op1_type {
+                OpType::Cv => {
+                    add_mask_slot(long_input_mask, instruction.op1, total_slots)?;
+                }
+                OpType::Const => {
+                    long_literal(op_array, instruction.op1)?;
+                }
+                _ => return None,
+            }
+            cursor += 1;
+            continue;
+        }
+
+        if matches!(
+            instruction.opcode,
+            OpCode::Add
+                | OpCode::Add_CvTmp
+                | OpCode::Add_TmpTmp
+                | OpCode::Sub
+                | OpCode::Sub_CvConst
+                | OpCode::Sub_TmpTmp
+                | OpCode::Mul
+        ) {
+            if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                return None;
+            }
+            for (op_type, operand) in [
+                (instruction.op1_type, instruction.op1),
+                (instruction.op2_type, instruction.op2),
+            ] {
+                match op_type {
+                    OpType::Cv => {
+                        add_mask_slot(long_input_mask, operand, total_slots)?;
+                    }
+                    OpType::Const => {
+                        long_literal(op_array, operand)?;
+                    }
+                    _ => return None,
+                }
+            }
+            let send = *op_array.instructions.get(cursor + 1)?;
+            if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+                || send.op1 != instruction.result
+                || send.op2 != destination
+            {
+                return None;
+            }
+            cursor += 2;
+            continue;
+        }
+
+        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+            let nested_do_fcall_ip = detect_scalar_method_call_tree(
+                op_array,
+                cursor,
+                total_slots,
+                long_input_mask,
+                object_input_mask,
+                depth + 1,
+            )?;
+            let nested_do_fcall = *op_array.instructions.get(nested_do_fcall_ip)?;
+            let send = *op_array.instructions.get(nested_do_fcall_ip + 1)?;
+            if !matches!(nested_do_fcall.result_type, OpType::Tmp | OpType::Var)
+                || !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+                || send.op1 != nested_do_fcall.result
+                || send.op2 != destination
+            {
+                return None;
+            }
+            cursor = nested_do_fcall_ip + 2;
+            continue;
+        }
+
+        return None;
+    }
+
+    let do_fcall = *op_array.instructions.get(cursor)?;
+    (do_fcall.opcode == OpCode::DoFcall).then_some(cursor)
+}
+
 /// Recognize one side-effect-free scalar loop region.
 ///
 /// `header_ip` is the target of the backward `Jmp`; `backedge_ip` is the
@@ -661,7 +822,7 @@ pub fn detect_long_accumulate_loop(
     backedge_ip: usize,
 ) -> Option<QuickLongAccumulateLoop> {
     if header_ip.checked_add(5)? > backedge_ip
-        || header_ip.checked_add(7)? < backedge_ip
+        || header_ip.checked_add(23)? < backedge_ip
         || backedge_ip >= op_array.instructions.len()
     {
         return None;
@@ -726,7 +887,189 @@ pub fn detect_long_accumulate_loop(
     }
 
     let first_body = op_array.instructions[header_ip + 2];
-    let (accumulator_cv, term, sum_tmp, sum_ip, assign_ip) = if backedge_ip == header_ip + 5 {
+    let scalar_call_shape = if first_body.opcode == OpCode::InitFcall {
+        let argument_count = first_body.op1 as usize;
+        if argument_count > 8 {
+            return None;
+        }
+        let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+        if total_slots > 64 {
+            return None;
+        }
+        let mut long_input_mask = 0u64;
+        let mut operations = Vec::with_capacity(8);
+        let mut arguments = [ScalarLongSource::Constant(0); 8];
+        let mut produced_temporary_slots = [u16::MAX; 8];
+        let mut expression_count = 0usize;
+        let mut sent_arguments = 0usize;
+        let mut do_fcall_ip = header_ip + 3;
+        while sent_arguments < argument_count {
+            let instruction = *op_array.instructions.get(do_fcall_ip)?;
+            match instruction.opcode {
+                OpCode::Add
+                | OpCode::Add_CvTmp
+                | OpCode::Add_TmpTmp
+                | OpCode::Sub
+                | OpCode::Sub_CvConst
+                | OpCode::Sub_TmpTmp
+                | OpCode::Mul => {
+                    if expression_count == 8
+                        || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    {
+                        return None;
+                    }
+                    for (op_type, operand) in [
+                        (instruction.op1_type, instruction.op1),
+                        (instruction.op2_type, instruction.op2),
+                    ] {
+                        if op_type == OpType::Cv {
+                            add_mask_slot(&mut long_input_mask, operand, total_slots)?;
+                        }
+                    }
+                    let lhs = quick_scalar_long_source(
+                        op_array,
+                        instruction.op1_type,
+                        instruction.op1,
+                        &produced_temporary_slots,
+                        expression_count,
+                    )?;
+                    let rhs = quick_scalar_long_source(
+                        op_array,
+                        instruction.op2_type,
+                        instruction.op2,
+                        &produced_temporary_slots,
+                        expression_count,
+                    )?;
+                    if produced_temporary_slots[..expression_count]
+                        .contains(&instruction.result)
+                    {
+                        return None;
+                    }
+                    let kind = match instruction.opcode {
+                        OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp => {
+                            ScalarLongOpKind::Add
+                        }
+                        OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+                            ScalarLongOpKind::Subtract
+                        }
+                        OpCode::Mul => ScalarLongOpKind::Multiply,
+                        _ => unreachable!(),
+                    };
+                    operations.push(ScalarLongOp {
+                        kind,
+                        lhs,
+                        rhs,
+                    });
+                    produced_temporary_slots[expression_count] = instruction.result;
+                    expression_count += 1;
+                }
+                OpCode::SendVal if instruction.op2 as usize == sent_arguments => {
+                    if instruction.op1_type == OpType::Cv {
+                        add_mask_slot(
+                            &mut long_input_mask,
+                            instruction.op1,
+                            total_slots,
+                        )?;
+                    }
+                    arguments[sent_arguments] = quick_scalar_long_source(
+                        op_array,
+                        instruction.op1_type,
+                        instruction.op1,
+                        &produced_temporary_slots,
+                        expression_count,
+                    )?;
+                    sent_arguments += 1;
+                }
+                _ => return None,
+            }
+            do_fcall_ip += 1;
+        }
+
+        let do_fcall = op_array.instructions[do_fcall_ip];
+        let sum_ip = do_fcall_ip + 1;
+        let sum = op_array.instructions[sum_ip];
+        if backedge_ip != do_fcall_ip + 4
+            || do_fcall.opcode != OpCode::DoFcall
+            || do_fcall.result_type != OpType::Tmp
+            || sum.opcode != OpCode::Add_CvTmp
+            || sum.op1_type != OpType::Cv
+            || sum.op2_type != OpType::Tmp
+            || sum.op2 != do_fcall.result
+            || sum.result_type != OpType::Tmp
+        {
+            return None;
+        }
+        Some((
+            sum.op1,
+            QuickLongTerm::ScalarFunctionCall {
+                call_ip: header_ip + 2,
+                do_fcall_ip,
+                long_input_mask,
+                argument_plan: Box::new(ScalarLongProgram {
+                    operations: operations.into_boxed_slice(),
+                    outputs: arguments,
+                    output_count: argument_count as u8,
+                }),
+                argument_count: argument_count as u8,
+                term_tmp: do_fcall.result,
+            },
+            sum.result,
+            sum_ip,
+            sum_ip + 1,
+        ))
+    } else if first_body.opcode == OpCode::InitMethodCall {
+        let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+        if total_slots > 64 {
+            return None;
+        }
+        let mut long_input_mask = 0u64;
+        let mut object_input_mask = 0u64;
+        let call_ip = header_ip + 2;
+        let do_fcall_ip = detect_scalar_method_call_tree(
+            op_array,
+            call_ip,
+            total_slots,
+            &mut long_input_mask,
+            &mut object_input_mask,
+            0,
+        )?;
+        if long_input_mask & object_input_mask != 0 {
+            return None;
+        }
+        let argument_count = u8::try_from(first_body.extended_value).ok()?;
+        let do_fcall = op_array.instructions[do_fcall_ip];
+        let sum_ip = do_fcall_ip + 1;
+        let sum = *op_array.instructions.get(sum_ip)?;
+        if backedge_ip != do_fcall_ip + 4
+            || do_fcall.result_type != OpType::Tmp
+            || sum.opcode != OpCode::Add_CvTmp
+            || sum.op1_type != OpType::Cv
+            || sum.op2_type != OpType::Tmp
+            || sum.op2 != do_fcall.result
+            || sum.result_type != OpType::Tmp
+        {
+            return None;
+        }
+        Some((
+            sum.op1,
+            QuickLongTerm::ScalarMethodCall {
+                call_ip,
+                do_fcall_ip,
+                long_input_mask,
+                object_input_mask,
+                argument_count,
+                term_tmp: do_fcall.result,
+            },
+            sum.result,
+            sum_ip,
+            sum_ip + 1,
+        ))
+    } else {
+        None
+    };
+    let (accumulator_cv, term, sum_tmp, sum_ip, assign_ip) = if let Some(shape) = scalar_call_shape {
+        shape
+    } else if backedge_ip == header_ip + 5 {
         if first_body.opcode != OpCode::Add
             || first_body.op1_type != OpType::Cv
             || first_body.op2_type != OpType::Cv
@@ -969,7 +1312,9 @@ pub fn detect_long_accumulate_loop(
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
         | QuickLongTerm::ArrayIndex { term_tmp, .. }
         | QuickLongTerm::StringLength { term_tmp, .. }
-        | QuickLongTerm::AbsLong { term_tmp, .. } => {
+        | QuickLongTerm::AbsLong { term_tmp, .. }
+        | QuickLongTerm::ScalarFunctionCall { term_tmp, .. }
+        | QuickLongTerm::ScalarMethodCall { term_tmp, .. } => {
             temporary_slots.push(term_tmp);
         }
     }
@@ -2113,6 +2458,125 @@ for ($i = 0; $i < 100; $i++) {{
                 QuickLongTerm::InductionPlusCv { addend_cv: 0, .. }
             ));
         }
+    }
+
+    #[test]
+    fn detects_direct_scalar_function_call_accumulation() {
+        let plan = quick_plan(
+            "<?php
+function affine($value, $scale, $bias) {
+    return $value * $scale + $bias;
+}
+$scale = 2;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += affine($i, $scale, 1);
+}
+",
+        );
+        assert_eq!(plan.induction_cv, 2);
+        assert_eq!(plan.accumulator_cv, 1);
+        assert!(matches!(
+            plan.term,
+            QuickLongTerm::ScalarFunctionCall {
+                argument_count: 3,
+                long_input_mask,
+                call_ip,
+                do_fcall_ip,
+                ..
+            } if long_input_mask == (1u64 << 0) | (1u64 << 2)
+                && do_fcall_ip == call_ip + 4
+        ));
+    }
+
+    #[test]
+    fn detects_scalar_expression_in_function_call_argument() {
+        let plan = quick_plan(
+            "<?php
+function combine($left, $right) {
+    return $left + $right;
+}
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += combine($i, $i + 1);
+}
+",
+        );
+        assert!(matches!(
+            plan.term,
+            QuickLongTerm::ScalarFunctionCall {
+                argument_count: 2,
+                long_input_mask,
+                call_ip,
+                do_fcall_ip,
+                ..
+            } if long_input_mask == 1u64 << 1 && do_fcall_ip == call_ip + 4
+        ));
+    }
+
+    #[test]
+    fn compiles_scalar_arguments_into_typed_plan() {
+        let plan = quick_plan(
+            "<?php
+function combine($left, $right) {
+    return $left + $right;
+}
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += combine($i, $i + 1);
+}
+",
+        );
+        let QuickLongTerm::ScalarFunctionCall { argument_plan, .. } = plan.term else {
+            panic!("expected scalar function call term");
+        };
+        assert_eq!(argument_plan.operations.len(), 1);
+        assert!(matches!(
+            argument_plan.operations[0],
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(1),
+                rhs: ScalarLongSource::Constant(1),
+            }
+        ));
+        assert_eq!(
+            argument_plan.outputs[0],
+            ScalarLongSource::Input(1)
+        );
+        assert_eq!(
+            argument_plan.outputs[1],
+            ScalarLongSource::Temporary(0)
+        );
+    }
+
+    #[test]
+    fn detects_nested_monomorphic_scalar_method_accumulation() {
+        let plan = quick_plan(
+            "<?php
+class Math {
+    public function add($left, $right) { return $left + $right; }
+    public function mul($left, $right) { return $left * $right; }
+}
+$math = new Math();
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $math->add($i, $math->mul($i, 2));
+}
+",
+        );
+        assert!(matches!(
+            plan.term,
+            QuickLongTerm::ScalarMethodCall {
+                argument_count: 2,
+                long_input_mask,
+                object_input_mask,
+                call_ip,
+                do_fcall_ip,
+                ..
+            } if long_input_mask == 1u64 << 2
+                && object_input_mask == 1u64 << 0
+                && do_fcall_ip == call_ip + 7
+        ));
     }
 
     #[test]

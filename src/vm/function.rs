@@ -38,6 +38,16 @@ pub struct LongPropertyMethodPlan {
     pub operations: Box<[LongPropertyOp]>,
 }
 
+/// Compile-time proof for the exact method body
+/// `return $this->declaredPublicProperty`.
+///
+/// The property name stays in the canonical opcode stream.  The fast path
+/// consumes only the FetchObjR inline-cache slot, so class layout and property
+/// visibility remain guarded by the same resolution as ordinary execution.
+pub struct PropertyGetterMethodPlan {
+    pub cache_ip: u16,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LongRecursiveCondition {
     LessThan,
@@ -73,6 +83,75 @@ pub struct BinaryLongRecursionPlan {
     /// Present for `$this->method()` recursion. Runtime verifies that virtual
     /// dispatch on the current receiver still resolves to this exact method.
     pub method_name: Option<Box<str>>,
+}
+
+/// One scalar input to a frame-elidable integer function plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongSource {
+    /// External input whose binding belongs to the execution adapter. Function
+    /// bodies bind it to a public argument; quick regions bind it to a CV slot.
+    Input(u16),
+    Constant(i64),
+    Temporary(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongOpKind {
+    Add,
+    Subtract,
+    Multiply,
+}
+
+/// One straight-line operation in a pure integer function plan. The result is
+/// stored at this operation's position and may be consumed by later steps.
+#[derive(Debug, Clone, Copy)]
+pub struct ScalarLongOp {
+    pub kind: ScalarLongOpKind,
+    pub lhs: ScalarLongSource,
+    pub rhs: ScalarLongSource,
+}
+
+/// Shared typed scalar program used by call arguments, functions and methods.
+/// External inputs are described by `ScalarLongSource`; arithmetic temporaries
+/// are local to the program and outputs are resolved after all operations.
+#[derive(Debug, Clone)]
+pub struct ScalarLongProgram {
+    pub operations: Box<[ScalarLongOp]>,
+    /// Inline output storage matches the guarded scalar ABI limit. Keeping it
+    /// beside the program avoids a second allocation and pointer chase in hot
+    /// calls; `output_count` defines the initialized prefix.
+    pub outputs: [ScalarLongSource; 8],
+    pub output_count: u8,
+}
+
+/// Compile-time proof that a fixed-signature user function or method consists
+/// solely of a small, side-effect-free integer expression and a return.
+///
+/// Runtime guards require raw Long arguments and checked arithmetic. A failed
+/// guard leaves the ordinary ExecuteData call completely untouched, so PHP's
+/// generic numeric and error semantics remain the canonical fallback.
+pub struct ScalarLongFunctionPlan {
+    pub public_args: u8,
+    pub program: ScalarLongProgram,
+}
+
+/// One operation in a pure scalar body that may compose direct user calls with
+/// checked integer arithmetic. Call targets are resolved through the original
+/// InitFcall inline-cache slot, preserving normal namespace/runtime dispatch.
+pub enum ComposedScalarLongOp {
+    Arithmetic(ScalarLongOp),
+    Call {
+        cache_ip: u16,
+        arguments: Box<[ScalarLongSource]>,
+    },
+}
+
+/// Compile-time proof for a straight-line scalar body containing pure direct
+/// function calls, for example `return add1($a) + double($b)`.
+pub struct ComposedScalarLongFunctionPlan {
+    pub public_args: u8,
+    pub operations: Box<[ComposedScalarLongOp]>,
+    pub result: ScalarLongSource,
 }
 
 /// Function type discriminant
@@ -294,7 +373,10 @@ pub struct UserFunction {
     pub common: FunctionCommon,
     pub op_array: OpArray,
     pub long_property_plan: Option<Box<LongPropertyMethodPlan>>,
+    pub property_getter_plan: Option<PropertyGetterMethodPlan>,
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
+    pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
+    pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
 }
 
 /// Handler signature for internal (built-in) functions.

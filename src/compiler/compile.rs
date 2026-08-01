@@ -10,7 +10,9 @@ static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 use crate::value::{ObjectLayout, Value};
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
-use crate::vm::instruction::{Instruction, InlineCache, OpType};
+use crate::vm::instruction::{
+    Instruction, InlineCache, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+};
 use super::OpArray;
 
 use super::{
@@ -137,6 +139,9 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
         if can_use_fast_scalar {
             common.plan.call = CallStrategy::FastScalar;
         }
+        function.scalar_long_plan = super::build_scalar_long_function_plan(function);
+        function.composed_scalar_long_plan =
+            super::build_composed_scalar_long_function_plan(function);
     }
 }
 
@@ -2325,9 +2330,16 @@ impl Compiler {
                 init.op2_type = OpType::Const;
                 init.op2 = name_idx;
                 init.extended_value = fallback_idx as u32;
+                let init_index = self.instructions.len();
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 0, ref_args, false, false);
+
+                if args.iter().all(|arg| matches!(arg, CallArg::Positional(_)))
+                    && self.instructions.len() > init_index + 1 + args.len()
+                {
+                    self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
+                }
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -2810,9 +2822,16 @@ impl Compiler {
                 init.op2 = method_idx;
                 init.op2_type = OpType::Const;
                 init.extended_value = args.len() as u32;
+                let init_index = self.instructions.len();
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 1, 0, true, true);
+
+                if args.iter().all(|arg| matches!(arg, CallArg::Positional(_)))
+                    && self.instructions.len() > init_index + 1 + args.len()
+                {
+                    self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
+                }
 
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;

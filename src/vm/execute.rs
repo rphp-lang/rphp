@@ -8,9 +8,11 @@ use crate::runtime::ExecutorGlobals;
 use crate::parser::Visibility;
 use crate::vm::stats;
 use super::opcode::OpCode;
-use super::instruction::{Instruction, OpType};
+use super::instruction::{
+    Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
 use super::quick::{
     QuickArrayIndex, QuickIncrementKind, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget,
@@ -27,6 +29,81 @@ fn direct_user_calls_enabled() -> bool {
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
         *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_DIRECT_USER_CALLS").is_none())
+    }
+    #[cfg(not(feature = "vm-stats"))]
+    {
+        true
+    }
+}
+
+#[inline(always)]
+fn deferred_scalar_calls_enabled() -> bool {
+    #[cfg(feature = "vm-stats")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var_os("RPHP_DISABLE_DEFERRED_SCALAR_CALLS").is_none()
+        })
+    }
+    #[cfg(not(feature = "vm-stats"))]
+    {
+        true
+    }
+}
+
+#[inline(always)]
+fn composed_scalar_calls_enabled() -> bool {
+    #[cfg(feature = "vm-stats")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var_os("RPHP_DISABLE_COMPOSED_SCALAR_CALLS").is_none()
+        })
+    }
+    #[cfg(not(feature = "vm-stats"))]
+    {
+        true
+    }
+}
+
+#[inline(always)]
+fn composed_scalar_bodies_enabled() -> bool {
+    #[cfg(feature = "vm-stats")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var_os("RPHP_DISABLE_COMPOSED_SCALAR_BODIES").is_none()
+        })
+    }
+    #[cfg(not(feature = "vm-stats"))]
+    {
+        true
+    }
+}
+
+#[inline(always)]
+fn direct_property_getters_enabled() -> bool {
+    #[cfg(feature = "vm-stats")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var_os("RPHP_DISABLE_DIRECT_PROPERTY_GETTERS").is_none()
+        })
+    }
+    #[cfg(not(feature = "vm-stats"))]
+    {
+        true
+    }
+}
+
+#[inline(always)]
+fn composed_property_calls_enabled() -> bool {
+    #[cfg(feature = "vm-stats")]
+    {
+        static ENABLED: OnceLock<bool> = OnceLock::new();
+        *ENABLED.get_or_init(|| {
+            std::env::var_os("RPHP_DISABLE_COMPOSED_PROPERTY_CALLS").is_none()
+        })
     }
     #[cfg(not(feature = "vm-stats"))]
     {
@@ -451,7 +528,7 @@ fn resolve_long_plan_source(source: LongPlanSource, arguments: &[i64; 8]) -> i64
 /// frame. Every guard and arithmetic operation completes before the first
 /// write, so a failed fast path can safely restart through ordinary DoFcall.
 #[inline(always)]
-unsafe fn try_execute_long_property_method(
+pub(crate) unsafe fn try_execute_long_property_method(
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
     receiver: &Value,
@@ -483,6 +560,138 @@ unsafe fn try_execute_long_property_method(
         *argument = value.raw_long();
     }
 
+    try_execute_long_property_plan(receiver, &arguments, plan, callee)
+}
+
+/// Hot-executor boundary for the property evaluator. The baseline interpreter
+/// benefits from inlining this short call protocol, while recursively-entered
+/// hot frames must not inherit its argument workspace in their host stack
+/// frame.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_hot_long_property_method(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    receiver: &Value,
+    sends: *const Instruction,
+    plan: &LongPropertyMethodPlan,
+    callee: &UserFunction,
+) -> bool {
+    try_execute_long_property_method(caller, caller_op_array, receiver, sends, plan, callee)
+}
+
+/// Execute the guarded/transactional portion shared by contiguous and compact
+/// deferred calls after their public arguments have been normalized to Long.
+#[inline(always)]
+unsafe fn try_execute_long_property_plan(
+    receiver: &Value,
+    arguments: &[i64; 8],
+    plan: &LongPropertyMethodPlan,
+    callee: &UserFunction,
+) -> bool {
+    if plan.properties.len() == 1 {
+        return try_execute_single_long_property_plan(receiver, arguments, plan, callee);
+    }
+    try_execute_multi_long_property_plan(receiver, arguments, plan, callee)
+}
+
+/// Dominant property-method shape: one declared slot, optionally updated more
+/// than once. Keeping it separate avoids reserving the two eight-element
+/// transactional arrays in every hot-executor activation.
+#[inline(always)]
+unsafe fn try_execute_single_long_property_plan(
+    receiver: &Value,
+    arguments: &[i64; 8],
+    plan: &LongPropertyMethodPlan,
+    callee: &UserFunction,
+) -> bool {
+    let class_id = receiver.object_class_id_unchecked();
+    if class_id == 0 {
+        return false;
+    }
+    let property = &plan.properties[0];
+    let cache = &callee.op_array.cache[property.cache_ip as usize];
+    let flags = cache.property_flags();
+    if cache.class_id != class_id
+        || flags & property.required_flags as u32 != property.required_flags as u32
+    {
+        return false;
+    }
+    let slot = cache.property_slot();
+    let property_value = &*receiver.object_property_slot_unchecked(slot);
+    if property_value.value_type() != ValueType::Long {
+        return false;
+    }
+    let mut value = property_value.raw_long();
+    let mut written = false;
+
+    for operation in plan.operations.iter().copied() {
+        match operation {
+            LongPropertyOp::Add { property, rhs } => {
+                if property != 0 {
+                    return false;
+                }
+                let Some(updated) = value.checked_add(resolve_long_plan_source(rhs, arguments)) else {
+                    return false;
+                };
+                value = updated;
+                written = true;
+            }
+            LongPropertyOp::Sub { property, rhs } => {
+                if property != 0 {
+                    return false;
+                }
+                let Some(updated) = value.checked_sub(resolve_long_plan_source(rhs, arguments)) else {
+                    return false;
+                };
+                value = updated;
+                written = true;
+            }
+            LongPropertyOp::Min { property, candidate } => {
+                if property != 0 {
+                    return false;
+                }
+                let candidate = resolve_long_plan_source(candidate, arguments);
+                if candidate < value {
+                    value = candidate;
+                    written = true;
+                }
+            }
+            LongPropertyOp::Max { property, candidate } => {
+                if property != 0 {
+                    return false;
+                }
+                let candidate = resolve_long_plan_source(candidate, arguments);
+                if candidate > value {
+                    value = candidate;
+                    written = true;
+                }
+            }
+            LongPropertyOp::Set { property, value: source } => {
+                if property != 0 {
+                    return false;
+                }
+                value = resolve_long_plan_source(source, arguments);
+                written = true;
+            }
+        }
+    }
+
+    if written {
+        receiver.object_set_property_slot_unchecked(slot, Value::long(value));
+    }
+    true
+}
+
+/// General multi-property transaction remains out of line. It is important
+/// for real methods such as statistics accumulators, but should not inflate the
+/// host stack frame of every scalar-recursive hot call.
+#[inline(never)]
+unsafe fn try_execute_multi_long_property_plan(
+    receiver: &Value,
+    arguments: &[i64; 8],
+    plan: &LongPropertyMethodPlan,
+    callee: &UserFunction,
+) -> bool {
     let class_id = receiver.object_class_id_unchecked();
     if class_id == 0 {
         return false;
@@ -511,7 +720,7 @@ unsafe fn try_execute_long_property_method(
         match operation {
             LongPropertyOp::Add { property, rhs } => {
                 let target = &mut property_values[property as usize];
-                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, &arguments)) else {
+                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments)) else {
                     return false;
                 };
                 *target = value;
@@ -519,14 +728,14 @@ unsafe fn try_execute_long_property_method(
             }
             LongPropertyOp::Sub { property, rhs } => {
                 let target = &mut property_values[property as usize];
-                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, &arguments)) else {
+                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments)) else {
                     return false;
                 };
                 *target = value;
                 written |= 1 << property;
             }
             LongPropertyOp::Min { property, candidate } => {
-                let candidate = resolve_long_plan_source(candidate, &arguments);
+                let candidate = resolve_long_plan_source(candidate, arguments);
                 let target = &mut property_values[property as usize];
                 if candidate < *target {
                     *target = candidate;
@@ -534,7 +743,7 @@ unsafe fn try_execute_long_property_method(
                 }
             }
             LongPropertyOp::Max { property, candidate } => {
-                let candidate = resolve_long_plan_source(candidate, &arguments);
+                let candidate = resolve_long_plan_source(candidate, arguments);
                 let target = &mut property_values[property as usize];
                 if candidate > *target {
                     *target = candidate;
@@ -542,7 +751,7 @@ unsafe fn try_execute_long_property_method(
                 }
             }
             LongPropertyOp::Set { property, value } => {
-                property_values[property as usize] = resolve_long_plan_source(value, &arguments);
+                property_values[property as usize] = resolve_long_plan_source(value, arguments);
                 written |= 1 << property;
             }
         }
@@ -551,12 +760,1228 @@ unsafe fn try_execute_long_property_method(
     for index in 0..plan.properties.len() {
         if written & (1 << index) != 0 {
             receiver.object_set_property_slot_unchecked(
-                property_slots[index],
-                Value::long(property_values[index]),
+                property_slots[index], Value::long(property_values[index]),
             );
         }
     }
     true
+}
+
+/// Materialize a compiler-proven `return $this->property` call directly into
+/// the caller's DoFcall result.  The callee's FetchObjR cache is authoritative:
+/// only a declared public property resolved for this exact receiver class can
+/// enter the path.  A cold, polymorphic, dynamic, or non-public access simply
+/// resumes through the ordinary method frame.
+#[inline(always)]
+pub(crate) unsafe fn try_execute_direct_property_getter(
+    caller: *mut ExecuteData,
+    receiver: &Value,
+    do_fcall_ptr: *const Instruction,
+    callee: &UserFunction,
+    plan: &PropertyGetterMethodPlan,
+) -> bool {
+    if !direct_property_getters_enabled() {
+        return false;
+    }
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Unused | OpType::Tmp | OpType::Var)
+    {
+        return false;
+    }
+
+    let class_id = receiver.object_class_id_unchecked();
+    if class_id == 0 {
+        return false;
+    }
+    let cache = &callee.op_array.cache[plan.cache_ip as usize];
+    if cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+        return false;
+    }
+    let property_slot = cache.property_slot();
+
+    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
+        let property = &*receiver.object_property_slot_unchecked(property_slot);
+        let result_ptr = (caller as *mut Value)
+            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        if property.needs_cleanup() || property.is_reference() {
+            frame_slot_set(caller, result_ptr, property.clone());
+        } else {
+            // Canonical FastScalar return also transfers scalar slots as a raw
+            // Value.  Preserve that zero-clone path while clearing a possible
+            // previous heap bit on reused caller temporaries.
+            if (*caller).has_heap_slots {
+                bitmap_drop_scalar(caller, result_ptr);
+            }
+            Value::raw_copy(property as *const Value, result_ptr);
+        }
+    }
+    record_scalar_call(&callee.common);
+    (*caller).opline = do_fcall_ptr.add(1);
+    true
+}
+
+/// Keep heap-aware getter materialization out of recursively-entered hot host
+/// frames; baseline retains the inlined form.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_hot_property_getter(
+    caller: *mut ExecuteData,
+    receiver: &Value,
+    do_fcall_ptr: *const Instruction,
+    callee: &UserFunction,
+    plan: &PropertyGetterMethodPlan,
+) -> bool {
+    try_execute_direct_property_getter(caller, receiver, do_fcall_ptr, callee, plan)
+}
+
+/// Fuse the exact call-site shape `longPropertyMutator(propertyGetter())`
+/// after both method and property inline caches have independently proven the
+/// dispatch.  The getter read is captured before the transactional outer plan
+/// starts, preserving PHP argument evaluation and same-object aliasing.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_composed_long_property_call(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    outer_init_ptr: *const Instruction,
+    outer_receiver: &Value,
+    outer_user: &UserFunction,
+    outer_plan: &LongPropertyMethodPlan,
+) -> bool {
+    if !composed_property_calls_enabled() || outer_plan.public_args != 1 {
+        return false;
+    }
+    let base = caller_op_array.instructions.as_ptr();
+    let outer_ip = outer_init_ptr.offset_from(base);
+    if outer_ip < 0 || outer_ip as usize + 4 >= caller_op_array.instructions.len() {
+        return false;
+    }
+
+    let inner_init_ptr = outer_init_ptr.add(1);
+    let inner_do_ptr = outer_init_ptr.add(2);
+    let send_ptr = outer_init_ptr.add(3);
+    let outer_do_ptr = outer_init_ptr.add(4);
+    let inner_init = &*inner_init_ptr;
+    let inner_do = &*inner_do_ptr;
+    let send = &*send_ptr;
+    let outer_do = &*outer_do_ptr;
+    if inner_init.opcode != OpCode::InitMethodCall
+        || inner_init.extended_value != 0
+        || inner_do.opcode != OpCode::DoFcall
+        || !matches!(inner_do.result_type, OpType::Tmp | OpType::Var)
+        || !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+        || send.op1_type != inner_do.result_type
+        || send.op1 != inner_do.result
+        || send.op2 != 1
+        || outer_do.opcode != OpCode::DoFcall
+        || outer_do.result_type != OpType::Unused
+    {
+        return false;
+    }
+
+    let inner_receiver = match inner_init.op1_type {
+        OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+            &*(*caller).get_op_ptr(
+                inner_init.op1 as u32,
+                inner_init.op1_type,
+                caller_op_array,
+            )
+        }
+        OpType::Unused => return false,
+    };
+    let inner_receiver = if inner_receiver.is_reference() {
+        &*inner_receiver.as_ref_ptr()
+    } else {
+        inner_receiver
+    };
+    if inner_receiver.value_type() != ValueType::Object {
+        return false;
+    }
+    let inner_class_id = inner_receiver.object_class_id_unchecked();
+    if inner_class_id == 0 {
+        return false;
+    }
+    let inner_ic = &caller_op_array.cache[outer_ip as usize + 1];
+    if inner_ic.func.is_null()
+        || inner_ic.class_id != inner_class_id
+        || !inner_ic.method_has_property_getter_plan()
+    {
+        return false;
+    }
+    let inner_common = &*inner_ic.func;
+    if inner_common.fn_type != FunctionType::User || inner_common.sig.public_arity() != 0 {
+        return false;
+    }
+    let inner_user = &*(inner_ic.func as *const UserFunction);
+    let Some(getter_plan) = inner_user.property_getter_plan.as_ref() else {
+        return false;
+    };
+    let getter_cache = &inner_user.op_array.cache[getter_plan.cache_ip as usize];
+    if getter_cache.class_id != inner_class_id || getter_cache.property_flags() & 1 == 0 {
+        return false;
+    }
+    let argument = &*inner_receiver
+        .object_property_slot_unchecked(getter_cache.property_slot());
+    if argument.value_type() != ValueType::Long || argument.is_reference() {
+        return false;
+    }
+    let mut arguments = [0i64; 8];
+    arguments[0] = argument.raw_long();
+    if !try_execute_long_property_plan(outer_receiver, &arguments, outer_plan, outer_user) {
+        return false;
+    }
+
+    record_scalar_call(inner_common);
+    record_scalar_call(&outer_user.common);
+    (*caller).opline = outer_do_ptr.add(1);
+    true
+}
+
+#[inline(always)]
+fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i64> {
+    match kind {
+        ScalarLongOpKind::Add => lhs.checked_add(rhs),
+        ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
+        ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
+    }
+}
+
+#[inline(always)]
+fn resolve_scalar_function_source(
+    source: ScalarLongSource,
+    arguments: &[i64; 8],
+    temporaries: &[i64; 8],
+) -> Option<i64> {
+    match source {
+        ScalarLongSource::Input(index) => arguments.get(index as usize).copied(),
+        ScalarLongSource::Constant(value) => Some(value),
+        ScalarLongSource::Temporary(index) => temporaries.get(index as usize).copied(),
+    }
+}
+
+#[inline(always)]
+fn evaluate_scalar_long_plan(
+    plan: &ScalarLongFunctionPlan,
+    arguments: &[i64; 8],
+) -> Option<i64> {
+    if plan.program.operations.len() > 8 || plan.program.output_count != 1 {
+        return None;
+    }
+    let mut temporaries = [0i64; 8];
+    for (index, operation) in plan.program.operations.iter().copied().enumerate() {
+        let lhs = resolve_scalar_function_source(operation.lhs, arguments, &temporaries)?;
+        let rhs = resolve_scalar_function_source(operation.rhs, arguments, &temporaries)?;
+        temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+    }
+    resolve_scalar_function_source(plan.program.outputs[0], arguments, &temporaries)
+}
+
+#[inline(always)]
+pub(crate) fn should_defer_scalar_call(
+    initializer: &Instruction,
+    scalar_plan_eligible: bool,
+) -> bool {
+    if !deferred_scalar_calls_enabled()
+        || initializer._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE == 0
+    {
+        return false;
+    }
+    scalar_plan_eligible
+}
+
+/// Evaluate a scalar plan from values already captured in a compact pending
+/// activation. This is the non-contiguous counterpart of the direct Send scan:
+/// argument expressions have run exactly once, but no body frame exists yet.
+#[inline(always)]
+pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
+    eg: &ExecutorGlobals,
+    call: *mut ExecuteData,
+) -> Option<i64> {
+    let common = &*(*call).func;
+    if !(*call).deferred_scalar_call
+        || common.fn_type != FunctionType::User
+        || common.plan.call != CallStrategy::FastScalar
+        || (*call).num_args != common.sig.public_arity()
+        || (*call).named_args_used
+    {
+        return None;
+    }
+    let user = &*((*call).func as *const UserFunction);
+    let public_args = user
+        .scalar_long_plan
+        .as_deref()
+        .map(|plan| plan.public_args)
+        .or_else(|| {
+            user.composed_scalar_long_plan
+                .as_deref()
+                .map(|plan| plan.public_args)
+        })?;
+    if public_args as u32 != common.sig.public_arity() {
+        return None;
+    }
+
+    let mut arguments = [0i64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(public_args as usize)
+    {
+        let cv_index = common.sig.param_cv_index(index as u32);
+        let value = (*call).cv(cv_index);
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return None;
+        }
+        *argument = value.raw_long();
+    }
+
+    if let Some(plan) = user.scalar_long_plan.as_deref() {
+        if plan.program.operations.len() == 1
+            && plan.program.output_count == 1
+            && plan.program.outputs[0] == ScalarLongSource::Temporary(0)
+        {
+            let operation = plan.program.operations[0];
+            let operand = |source| match source {
+                ScalarLongSource::Input(index) => Some(arguments[index as usize]),
+                ScalarLongSource::Constant(value) => Some(value),
+                ScalarLongSource::Temporary(_) => None,
+            };
+            let lhs = operand(operation.lhs)?;
+            let rhs = operand(operation.rhs)?;
+            return match operation.kind {
+                ScalarLongOpKind::Add => lhs.checked_add(rhs),
+                ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
+                ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
+            };
+        }
+        return evaluate_scalar_long_plan(plan, &arguments);
+    }
+
+    if !composed_scalar_bodies_enabled() {
+        return None;
+    }
+    let plan = user.composed_scalar_long_plan.as_deref()?;
+    let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
+    let mut call_count = 0usize;
+    let result = evaluate_composed_scalar_body_plan(
+        eg,
+        user,
+        plan,
+        &arguments,
+        &mut calls,
+        &mut call_count,
+        0,
+    )?;
+    for called in calls.into_iter().take(call_count) {
+        record_scalar_call(&*called);
+    }
+    Some(result)
+}
+
+/// Execute a deferred compiler-proven property mutator from arguments already
+/// captured in its compact activation.  As with the contiguous variant, all
+/// type/cache/arithmetic guards complete before the first property write.
+#[inline(always)]
+unsafe fn try_execute_deferred_long_property_method(
+    call: *mut ExecuteData,
+) -> bool {
+    let common = &*(*call).func;
+    if !(*call).deferred_scalar_call
+        || common.fn_type != FunctionType::User
+        || common.plan.call != CallStrategy::FastScalar
+        || (*call).num_args != common.sig.public_arity()
+        || (*call).named_args_used
+    {
+        return false;
+    }
+    let user = &*((*call).func as *const UserFunction);
+    let Some(plan) = user.long_property_plan.as_deref() else {
+        return false;
+    };
+    if plan.public_args as u32 != common.sig.public_arity() {
+        return false;
+    }
+
+    let receiver = (*call).cv(0);
+    if receiver.value_type() != ValueType::Object || receiver.is_reference() {
+        return false;
+    }
+    let mut arguments = [0i64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(plan.public_args as usize)
+    {
+        let value = (*call).cv(common.sig.param_cv_index(index as u32));
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return false;
+        }
+        *argument = value.raw_long();
+    }
+
+    try_execute_long_property_plan(receiver, &arguments, plan, user)
+}
+
+/// Expand an argument-only activation into the canonical function ABI after a
+/// scalar type/arithmetic guard fails. Values are moved, not re-evaluated.
+#[inline(never)]
+pub(crate) unsafe fn materialize_deferred_scalar_call(
+    eg: &mut ExecutorGlobals,
+    compact: *mut ExecuteData,
+) -> *mut ExecuteData {
+    debug_assert!((*compact).deferred_scalar_call);
+    let storage_num_args = (*compact).num_cvs;
+    let full = eg.vm_stack.push_call_frame(
+        (*compact).func,
+        storage_num_args,
+        (*compact).num_args,
+        (*compact).prev_execute_data,
+        (*compact).call,
+    );
+    for index in 0..storage_num_args {
+        Value::raw_copy((*compact).slot_ptr(index), (*full).slot_ptr(index));
+    }
+    (*full).has_heap_slots = (*compact).has_heap_slots;
+    (*full).named_args_used = (*compact).named_args_used;
+    (*full).heap_bitmap = (*compact).heap_bitmap;
+
+    // Ownership moved to the ordinary frame. The compact storage is now just
+    // raw bump memory and must not release any captured heap value.
+    (*compact).has_heap_slots = false;
+    (*compact).heap_bitmap = 0;
+    eg.pending_call_stack.pop_call_frame(compact);
+    full
+}
+
+/// Finish a deferred activation outside the main dispatcher body. A null return
+/// means the scalar call completed; a non-null return is the materialized frame
+/// that must continue through the canonical DoFcall path.
+#[inline(never)]
+pub(crate) unsafe fn resolve_deferred_scalar_call(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    compact: *mut ExecuteData,
+    do_fcall: &Instruction,
+    do_fcall_ptr: *const Instruction,
+) -> *mut ExecuteData {
+    if do_fcall.result_type == OpType::Unused
+        && try_execute_deferred_long_property_method(compact)
+    {
+        let common = &*(*compact).func;
+        record_scalar_call(common);
+        (*caller).opline = do_fcall_ptr.add(1);
+        if (*compact).has_heap_slots {
+            cleanup_frame_slots(compact);
+        }
+        eg.pending_call_stack.pop_call_frame(compact);
+        return std::ptr::null_mut();
+    }
+
+    let evaluated = if matches!(
+        do_fcall.result_type,
+        OpType::Tmp | OpType::Var | OpType::Unused
+    ) {
+        try_execute_deferred_scalar_long_call(eg, compact)
+    } else {
+        None
+    };
+    let Some(result) = evaluated else {
+        return materialize_deferred_scalar_call(eg, compact);
+    };
+
+    let common = &*(*compact).func;
+    record_scalar_call(common);
+    complete_direct_scalar_long_call(caller, do_fcall_ptr, result);
+    if (*compact).has_heap_slots {
+        cleanup_frame_slots(compact);
+    }
+    eg.pending_call_stack.pop_call_frame(compact);
+    std::ptr::null_mut()
+}
+
+/// Compact hot-executor specialization for the overwhelmingly common leaf
+/// shape `return arg OP arg_or_const`. Keeping this separate from the general
+/// planner avoids an out-of-line Rust call per PHP leaf invocation without
+/// inlining the larger multi-step evaluator into the baseline dispatcher.
+#[inline(always)]
+pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    sends: *const Instruction,
+    common: &FunctionCommon,
+    plan: &ScalarLongFunctionPlan,
+) -> Option<(i64, *const Instruction)> {
+    if common.plan.call != CallStrategy::FastScalar
+        || common.sig.public_arity() != plan.public_args as u32
+        || plan.program.operations.len() != 1
+        || plan.program.output_count != 1
+        || plan.program.outputs[0] != ScalarLongSource::Temporary(0)
+    {
+        return None;
+    }
+
+    let mut arguments = [0i64; 8];
+    for index in 0..plan.public_args as usize {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(
+                    send.op1 as u32,
+                    send.op1_type,
+                    caller_op_array,
+                )
+            }
+            OpType::Unused => return None,
+        };
+        if value.value_type() != ValueType::Long {
+            return None;
+        }
+        arguments[index] = value.raw_long();
+    }
+
+    let operation = plan.program.operations[0];
+    let operand = |source| match source {
+        ScalarLongSource::Input(index) => Some(arguments[index as usize]),
+        ScalarLongSource::Constant(value) => Some(value),
+        ScalarLongSource::Temporary(_) => None,
+    };
+    let lhs = operand(operation.lhs)?;
+    let rhs = operand(operation.rhs)?;
+    let result = match operation.kind {
+        ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
+        ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
+        ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
+    };
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    Some((result, do_fcall_ptr))
+}
+
+/// Borrow a contiguous positional Send sequence and evaluate a pure scalar
+/// callee before any ExecuteData frame is allocated. Argument expressions that
+/// need their own opcodes simply fail this shape guard and retain the ordinary
+/// call protocol.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_direct_scalar_long_call(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    sends: *const Instruction,
+    common: &FunctionCommon,
+    plan: &ScalarLongFunctionPlan,
+) -> Option<(i64, *const Instruction)> {
+    if common.plan.call != CallStrategy::FastScalar
+        || common.sig.public_arity() != plan.public_args as u32
+    {
+        return None;
+    }
+
+    let mut arguments = [0i64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(plan.public_args as usize)
+    {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(
+                    send.op1 as u32,
+                    send.op1_type,
+                    caller_op_array,
+                )
+            }
+            OpType::Unused => return None,
+        };
+        if value.value_type() != ValueType::Long {
+            return None;
+        }
+        *argument = value.raw_long();
+    }
+
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    let result = evaluate_scalar_long_plan(plan, &arguments)?;
+    Some((result, do_fcall_ptr))
+}
+
+#[inline(always)]
+pub(crate) unsafe fn complete_direct_scalar_long_call(
+    caller: *mut ExecuteData,
+    do_fcall_ptr: *const Instruction,
+    result: i64,
+) {
+    let do_fcall = &*do_fcall_ptr;
+    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
+        let result_ptr = (caller as *mut Value)
+            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        frame_tmp_set_long(caller, result_ptr, result);
+    }
+    (*caller).opline = do_fcall_ptr.add(1);
+}
+
+const COMPOSED_SCALAR_MAX_CALLS: usize = 8;
+const COMPOSED_SCALAR_MAX_OPS: usize = 16;
+const QUICK_SCALAR_MAX_RECORDED_CALLS: usize = COMPOSED_SCALAR_MAX_CALLS + 1;
+
+#[inline(always)]
+fn record_scalar_call(common: &FunctionCommon) {
+    stats::inc_do_fcall_fast();
+    stats::inc_return_fast();
+    let count = common.call_count.get();
+    if count < u32::MAX {
+        common.call_count.set(count + 1);
+    }
+}
+
+#[inline(always)]
+fn record_scalar_calls_bulk(common: &FunctionCommon, count: u64) {
+    if count == 0 {
+        return;
+    }
+    stats::inc_do_fcall_fast_by(count);
+    stats::inc_return_fast_by(count);
+    let increment = u32::try_from(count).unwrap_or(u32::MAX);
+    common
+        .call_count
+        .set(common.call_count.get().saturating_add(increment));
+}
+
+#[inline(always)]
+unsafe fn flush_quick_scalar_calls(
+    targets: &[*const FunctionCommon; QUICK_SCALAR_MAX_RECORDED_CALLS],
+    target_count: usize,
+    success_count: &mut u64,
+) {
+    if *success_count == 0 {
+        return;
+    }
+    for target in targets.iter().copied().take(target_count) {
+        debug_assert!(!target.is_null());
+        record_scalar_calls_bulk(&*target, *success_count);
+    }
+    *success_count = 0;
+}
+
+#[inline(always)]
+fn resolve_composed_body_source(
+    source: ScalarLongSource,
+    arguments: &[i64; 8],
+    temporaries: &[i64; COMPOSED_SCALAR_MAX_OPS],
+) -> i64 {
+    match source {
+        ScalarLongSource::Input(index) => arguments[index as usize],
+        ScalarLongSource::Constant(value) => value,
+        ScalarLongSource::Temporary(index) => temporaries[index as usize],
+    }
+}
+
+unsafe fn composed_body_target(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    cache_ip: u16,
+) -> Option<*const FunctionCommon> {
+    let ip = cache_ip as usize;
+    let initializer = owner.op_array.instructions.get(ip)?;
+    if initializer.opcode != OpCode::InitFcall {
+        return None;
+    }
+    let cache = owner.op_array.cache.get(ip)?;
+    if !cache.func.is_null() {
+        return Some(cache.func);
+    }
+
+    let primary = owner
+        .op_array
+        .literals
+        .get(initializer.op2 as usize)?
+        .as_str()?;
+    let resolved = eg.find_function(primary).or_else(|| {
+        if initializer.extended_value == 0 {
+            return None;
+        }
+        owner
+            .op_array
+            .literals
+            .get(initializer.extended_value as usize)
+            .and_then(Value::as_str)
+            .and_then(|fallback| eg.find_function(fallback))
+    })?;
+    let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
+        as *mut crate::vm::instruction::InlineCache);
+    cache_mut.func = resolved;
+    Some(resolved)
+}
+
+unsafe fn evaluate_composed_scalar_body_plan(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    plan: &ComposedScalarLongFunctionPlan,
+    arguments: &[i64; 8],
+    calls: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_CALLS],
+    call_count: &mut usize,
+    depth: usize,
+) -> Option<i64> {
+    if depth >= COMPOSED_SCALAR_MAX_CALLS
+        || plan.operations.len() > COMPOSED_SCALAR_MAX_OPS
+    {
+        return None;
+    }
+    let mut temporaries = [0i64; COMPOSED_SCALAR_MAX_OPS];
+    for (operation_index, operation) in plan.operations.iter().enumerate() {
+        temporaries[operation_index] = match operation {
+            ComposedScalarLongOp::Arithmetic(operation) => {
+                let lhs = resolve_composed_body_source(
+                    operation.lhs,
+                    arguments,
+                    &temporaries,
+                );
+                let rhs = resolve_composed_body_source(
+                    operation.rhs,
+                    arguments,
+                    &temporaries,
+                );
+                match operation.kind {
+                    ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
+                    ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
+                    ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
+                }
+            }
+            ComposedScalarLongOp::Call {
+                cache_ip,
+                arguments: sources,
+            } => {
+                if sources.len() > 8 || *call_count >= COMPOSED_SCALAR_MAX_CALLS {
+                    return None;
+                }
+                let target = composed_body_target(eg, owner, *cache_ip)?;
+                let common = &*target;
+                if common.fn_type != FunctionType::User
+                    || common.plan.call != CallStrategy::FastScalar
+                    || common.sig.public_arity() != sources.len() as u32
+                {
+                    return None;
+                }
+                let target_user = &*(target as *const UserFunction);
+                let mut target_arguments = [0i64; 8];
+                for (index, source) in sources.iter().copied().enumerate() {
+                    target_arguments[index] = resolve_composed_body_source(
+                        source,
+                        arguments,
+                        &temporaries,
+                    );
+                }
+                let result = if let Some(target_plan) = target_user.scalar_long_plan.as_deref() {
+                    evaluate_scalar_long_plan(target_plan, &target_arguments)?
+                } else if let Some(target_plan) =
+                    target_user.composed_scalar_long_plan.as_deref()
+                {
+                    evaluate_composed_scalar_body_plan(
+                        eg,
+                        target_user,
+                        target_plan,
+                        &target_arguments,
+                        calls,
+                        call_count,
+                        depth + 1,
+                    )?
+                } else {
+                    return None;
+                };
+                if *call_count >= COMPOSED_SCALAR_MAX_CALLS {
+                    return None;
+                }
+                calls[*call_count] = target;
+                *call_count += 1;
+                result
+            }
+        };
+    }
+
+    Some(resolve_composed_body_source(
+        plan.result,
+        arguments,
+        &temporaries,
+    ))
+}
+
+/// Resolve a one-level composed scalar body once at quick-loop entry. Nested
+/// composed callees retain the general recursive evaluator, while the common
+/// leaf-call shape can avoid repeated cache and function-strategy guards in
+/// every loop iteration.
+unsafe fn resolve_quick_composed_leaf_body(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    plan: &ComposedScalarLongFunctionPlan,
+    targets: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_OPS],
+    scalar_plans: &mut [*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+) -> bool {
+    if plan.operations.len() > COMPOSED_SCALAR_MAX_OPS {
+        return false;
+    }
+    let mut call_count = 0usize;
+    for (index, operation) in plan.operations.iter().enumerate() {
+        let ComposedScalarLongOp::Call {
+            cache_ip,
+            arguments,
+        } = operation
+        else {
+            continue;
+        };
+        call_count += 1;
+        if call_count > COMPOSED_SCALAR_MAX_CALLS || arguments.len() > 8 {
+            return false;
+        }
+        let Some(target) = composed_body_target(eg, owner, *cache_ip) else {
+            return false;
+        };
+        let common = &*target;
+        if common.fn_type != FunctionType::User
+            || common.plan.call != CallStrategy::FastScalar
+            || common.sig.public_arity() != arguments.len() as u32
+        {
+            return false;
+        }
+        let target_user = &*(target as *const UserFunction);
+        let Some(target_plan) = target_user.scalar_long_plan.as_deref() else {
+            return false;
+        };
+        if target_plan.public_args as usize != arguments.len() {
+            return false;
+        }
+        targets[index] = target;
+        scalar_plans[index] = target_plan;
+    }
+    true
+}
+
+#[inline(always)]
+unsafe fn evaluate_quick_composed_leaf_body(
+    plan: &ComposedScalarLongFunctionPlan,
+    arguments: &[i64; 8],
+    scalar_plans: &[*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+) -> Option<i64> {
+    let mut temporaries = [0i64; COMPOSED_SCALAR_MAX_OPS];
+    for (operation_index, operation) in plan.operations.iter().enumerate() {
+        temporaries[operation_index] = match operation {
+            ComposedScalarLongOp::Arithmetic(operation) => {
+                let lhs = resolve_composed_body_source(
+                    operation.lhs,
+                    arguments,
+                    &temporaries,
+                );
+                let rhs = resolve_composed_body_source(
+                    operation.rhs,
+                    arguments,
+                    &temporaries,
+                );
+                match operation.kind {
+                    ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
+                    ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
+                    ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
+                }
+            }
+            ComposedScalarLongOp::Call {
+                arguments: sources,
+                ..
+            } => {
+                let target_plan = scalar_plans[operation_index];
+                if target_plan.is_null() {
+                    return None;
+                }
+                let mut target_arguments = [0i64; 8];
+                for (index, source) in sources.iter().copied().enumerate() {
+                    target_arguments[index] = resolve_composed_body_source(
+                        source,
+                        arguments,
+                        &temporaries,
+                    );
+                }
+                evaluate_scalar_long_plan(&*target_plan, &target_arguments)?
+            }
+        };
+    }
+
+    Some(resolve_composed_body_source(
+        plan.result,
+        arguments,
+        &temporaries,
+    ))
+}
+
+#[inline(always)]
+unsafe fn caller_long_operand(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    op_type: OpType,
+    operand: u16,
+) -> Option<i64> {
+    let value = match op_type {
+        OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+            &*(*caller).get_op_ptr(operand as u32, op_type, caller_op_array)
+        }
+        OpType::Unused => return None,
+    };
+    if value.value_type() != ValueType::Long || value.is_reference() {
+        return None;
+    }
+    Some(value.raw_long())
+}
+
+/// Enter a composed body directly from a call-site whose arguments are already
+/// scalar operands or one checked arithmetic instruction. This removes the
+/// compact pending activation and every Send/DoFcall dispatch for the root.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    initializer_ptr: *const Instruction,
+    func: *const FunctionCommon,
+    owner: &UserFunction,
+    plan: &ComposedScalarLongFunctionPlan,
+) -> Option<(i64, *const Instruction)> {
+    if !composed_scalar_bodies_enabled() {
+        return None;
+    }
+    let common = &*func;
+    if common.fn_type != FunctionType::User
+        || common.plan.call != CallStrategy::FastScalar
+        || common.sig.public_arity() != plan.public_args as u32
+    {
+        return None;
+    }
+
+    let mut arguments = [0i64; 8];
+    let mut cursor = initializer_ptr.add(1);
+    for index in 0..plan.public_args as usize {
+        let destination = common.sig.param_cv_index(index as u32) as u16;
+        let instruction = &*cursor;
+        if matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            if instruction.op2 != destination {
+                return None;
+            }
+            arguments[index] = caller_long_operand(
+                caller,
+                caller_op_array,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            cursor = cursor.add(1);
+            continue;
+        }
+
+        let kind = match instruction.opcode {
+            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
+                ScalarLongOpKind::Add
+            }
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+                ScalarLongOpKind::Subtract
+            }
+            OpCode::Mul => ScalarLongOpKind::Multiply,
+            _ => return None,
+        };
+        if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+            return None;
+        }
+        let lhs = caller_long_operand(
+            caller,
+            caller_op_array,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = caller_long_operand(
+            caller,
+            caller_op_array,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        let value = match kind {
+            ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
+            ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
+            ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
+        };
+        cursor = cursor.add(1);
+        let send = &*cursor;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+            || send.op1 != instruction.result
+            || send.op2 != destination
+        {
+            return None;
+        }
+        arguments[index] = value;
+        cursor = cursor.add(1);
+    }
+
+    let do_fcall = &*cursor;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
+    let mut call_count = 0usize;
+    let result = evaluate_composed_scalar_body_plan(
+        eg,
+        owner,
+        plan,
+        &arguments,
+        &mut calls,
+        &mut call_count,
+        0,
+    )?;
+    for called in calls.into_iter().take(call_count) {
+        record_scalar_call(&*called);
+    }
+    record_scalar_call(common);
+    Some((result, cursor))
+}
+
+#[inline(always)]
+unsafe fn composed_scalar_callee(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    initializer_ptr: *const Instruction,
+) -> Option<(*const FunctionCommon, *const ScalarLongFunctionPlan)> {
+    let initializer = &*initializer_ptr;
+    let ip = initializer_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    let cache = caller_op_array.cache.get(ip)?;
+    let func = match initializer.opcode {
+        OpCode::InitFcall => {
+            if cache.func.is_null() {
+                return None;
+            }
+            cache.func
+        }
+        OpCode::InitMethodCall => {
+            let receiver = match initializer.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(
+                        initializer.op1 as u32,
+                        initializer.op1_type,
+                        caller_op_array,
+                    )
+                }
+                OpType::Unused => return None,
+            };
+            if receiver.value_type() != ValueType::Object {
+                return None;
+            }
+            let class_id = receiver.object_class_id_unchecked();
+            if class_id == 0 || cache.func.is_null() || cache.class_id != class_id {
+                return None;
+            }
+            cache.func
+        }
+        _ => return None,
+    };
+
+    let common = &*func;
+    let public_num_args = match initializer.opcode {
+        OpCode::InitFcall => initializer.op1 as u32,
+        OpCode::InitMethodCall => initializer.extended_value,
+        _ => unreachable!(),
+    };
+    if common.fn_type != FunctionType::User
+        || common.plan.call != CallStrategy::FastScalar
+        || public_num_args != common.sig.public_arity()
+    {
+        return None;
+    }
+    let user = &*(func as *const UserFunction);
+    let plan = user.scalar_long_plan.as_deref()?;
+    Some((func, plan as *const ScalarLongFunctionPlan))
+}
+
+/// Recursively evaluate a compiler-proven scalar call tree encoded by ordinary
+/// Init/Send/DoFcall instructions. Only already-cached direct functions and
+/// monomorphic methods participate, so failure is read-only and can restart via
+/// the canonical VM protocol.
+unsafe fn evaluate_composed_scalar_call(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    initializer_ptr: *const Instruction,
+    func: *const FunctionCommon,
+    plan: &ScalarLongFunctionPlan,
+    calls: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_CALLS],
+    call_count: &mut usize,
+    depth: usize,
+) -> Option<(i64, *const Instruction)> {
+    if depth >= COMPOSED_SCALAR_MAX_CALLS || *call_count >= COMPOSED_SCALAR_MAX_CALLS {
+        return None;
+    }
+    let common = &*func;
+    if common.fn_type != FunctionType::User
+        || common.plan.call != CallStrategy::FastScalar
+        || common.sig.public_arity() != plan.public_args as u32
+    {
+        return None;
+    }
+
+    let mut arguments = [0i64; 8];
+    let mut cursor = initializer_ptr.add(1);
+    for index in 0..plan.public_args as usize {
+        let destination = common.sig.param_cv_index(index as u32) as u16;
+        let instruction = &*cursor;
+        if matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            if instruction.op2 != destination {
+                return None;
+            }
+            let value = match instruction.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(
+                        instruction.op1 as u32,
+                        instruction.op1_type,
+                        caller_op_array,
+                    )
+                }
+                OpType::Unused => return None,
+            };
+            if value.value_type() != ValueType::Long || value.is_reference() {
+                return None;
+            }
+            arguments[index] = value.raw_long();
+            cursor = cursor.add(1);
+            continue;
+        }
+
+        let arithmetic_kind = match instruction.opcode {
+            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
+                Some(ScalarLongOpKind::Add)
+            }
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+                Some(ScalarLongOpKind::Subtract)
+            }
+            OpCode::Mul => Some(ScalarLongOpKind::Multiply),
+            _ => None,
+        };
+        if let Some(kind) = arithmetic_kind {
+            if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                return None;
+            }
+            let lhs = caller_long_operand(
+                caller,
+                caller_op_array,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            let rhs = caller_long_operand(
+                caller,
+                caller_op_array,
+                instruction.op2_type,
+                instruction.op2,
+            )?;
+            let value = match kind {
+                ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
+                ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
+                ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
+            };
+            cursor = cursor.add(1);
+            let send = &*cursor;
+            if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+                || send.op1 != instruction.result
+                || send.op2 != destination
+            {
+                return None;
+            }
+            arguments[index] = value;
+            cursor = cursor.add(1);
+            continue;
+        }
+
+        let (nested_func, nested_plan) = composed_scalar_callee(
+            caller,
+            caller_op_array,
+            cursor,
+        )?;
+        let (nested_result, nested_do_fcall) = evaluate_composed_scalar_call(
+            caller,
+            caller_op_array,
+            cursor,
+            nested_func,
+            &*nested_plan,
+            calls,
+            call_count,
+            depth + 1,
+        )?;
+        let nested_result_instruction = &*nested_do_fcall;
+        if !matches!(nested_result_instruction.result_type, OpType::Tmp | OpType::Var) {
+            return None;
+        }
+        cursor = nested_do_fcall.add(1);
+        let send = &*cursor;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+            || send.op1 != nested_result_instruction.result
+            || send.op2 != destination
+        {
+            return None;
+        }
+        arguments[index] = nested_result;
+        cursor = cursor.add(1);
+    }
+
+    let do_fcall = &*cursor;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    let result = evaluate_scalar_long_plan(plan, &arguments)?;
+    calls[*call_count] = func;
+    *call_count += 1;
+    Some((result, cursor))
+}
+
+#[inline(never)]
+pub(crate) unsafe fn try_execute_composed_scalar_long_call(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    initializer_ptr: *const Instruction,
+    func: *const FunctionCommon,
+    plan: &ScalarLongFunctionPlan,
+) -> Option<(i64, *const Instruction)> {
+    if !composed_scalar_calls_enabled()
+        || (*initializer_ptr)._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE == 0
+    {
+        return None;
+    }
+    let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
+    let mut call_count = 0usize;
+    let evaluated = evaluate_composed_scalar_call(
+        caller,
+        caller_op_array,
+        initializer_ptr,
+        func,
+        plan,
+        &mut calls,
+        &mut call_count,
+        0,
+    )?;
+
+    for called in calls.into_iter().take(call_count) {
+        record_scalar_call(&*called);
+    }
+    Some(evaluated)
 }
 
 const BINARY_LONG_RECURSION_MAX_DEPTH: usize = 256;
@@ -755,6 +2180,31 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     }
 }
 
+#[inline(always)]
+unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
+    if (*call).deferred_scalar_call {
+        eg.pending_call_stack.pop_call_frame(call);
+    } else {
+        eg.vm_stack.pop_call_frame(call);
+    }
+}
+
+/// Abandon every not-yet-executed call owned by `frame`. This is required when
+/// an argument expression throws: Init has already linked the outer call, while
+/// DoFcall will never consume it. The helper also fixes the same lifetime hole
+/// for pre-existing ordinary pending frames.
+unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteData) {
+    let mut call = (*frame).call;
+    (*frame).call = std::ptr::null_mut();
+    while !call.is_null() {
+        let next = (*call).call;
+        eg.pending_named_variadic.remove(&(call as usize));
+        cleanup_frame_slots(call);
+        pop_call_storage(eg, call);
+        call = next;
+    }
+}
+
 /// Clean up a pending call frame and throw a catchable exception.
 /// Removes pending_named_variadic entries, unlinks the call from the call chain,
 /// cleans up CV/TMP slots, pops the call frame, and delegates to throw_in_frame.
@@ -771,7 +2221,7 @@ unsafe fn cleanup_call_and_throw<'a>(
     eg.pending_named_variadic.remove(&call_key);
     (*frame).call = (*call).call;
     cleanup_frame_slots(call);
-    eg.vm_stack.pop_call_frame(call);
+    pop_call_storage(eg, call);
     throw_in_frame(eg, frame, err)
 }
 
@@ -877,10 +2327,14 @@ fn throw_in_frame<'a>(
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
-                    unsafe { cleanup_frame_slots(frame) };
+                    unsafe {
+                        cleanup_pending_calls(eg, frame);
+                        cleanup_frame_slots(frame);
+                    };
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
                 }
+                unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
                 let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
                 unsafe { slot_set(catch_cv_ptr, thrown.clone()) };
@@ -891,10 +2345,14 @@ fn throw_in_frame<'a>(
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
-                    unsafe { cleanup_frame_slots(frame) };
+                    unsafe {
+                        cleanup_pending_calls(eg, frame);
+                        cleanup_frame_slots(frame);
+                    };
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
                 }
+                unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
                 eg.exception = Some(thrown.clone());
                 unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
@@ -1764,7 +3222,7 @@ fn op_fetch_obj_r(
         let property_ptr = unsafe {
             obj_val.object_property_slot_unchecked(ic.property_slot())
         };
-        unsafe { slot_set(result_ptr, (*property_ptr).clone()) };
+        unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
         return Ok(());
     }
 
@@ -1836,13 +3294,13 @@ fn op_fetch_obj_r(
         let found_val = obj.get_property(&key).cloned();
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
-            unsafe { slot_set(result_ptr, val) };
+            unsafe { frame_slot_set(frame, result_ptr, val) };
         } else {
             // Property not found — try __get magic method
             if let Some(result) = call_magic_method(eg, obj_val, "__get", &[Value::string(name)])? {
-                unsafe { slot_set(result_ptr, result) };
+                unsafe { frame_slot_set(frame, result_ptr, result) };
             } else {
-                unsafe { slot_set(result_ptr, Value::null()) };
+                unsafe { frame_slot_set(frame, result_ptr, Value::null()) };
             }
         }
     }
@@ -2060,22 +3518,24 @@ fn op_init_method_call<'a>(
             if obj_class_id != 0 {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let common = unsafe { &*resolved };
-                let (fusion_eligible, long_property_plan) = if common.fn_type == FunctionType::User
+                let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
                     && common.plan.call == CallStrategy::FastScalar
                 {
                     let user = unsafe { &*(resolved as *const UserFunction) };
                     (
                         user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
                         user.long_property_plan.is_some(),
+                        user.property_getter_plan.is_some(),
                     )
                 } else {
-                    (false, false)
+                    (false, false, false)
                 };
                 ic_mut.set_method(
                     resolved,
                     obj_class_id,
                     fusion_eligible,
                     long_property_plan,
+                    property_getter_plan,
                 );
             }
             resolved
@@ -2083,16 +3543,36 @@ fn op_init_method_call<'a>(
 
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
-        let call = eg.vm_stack.push_call_frame(
-            func_ptr,
-            num_args + 1,
-            num_args,
-            frame,
-            pending_call,
-        );
+        let common = unsafe { &*func_ptr };
+        let scalar_plan_eligible = common.fn_type == FunctionType::User
+            && common.plan.call == CallStrategy::FastScalar
+            && num_args == common.sig.public_arity()
+            && {
+                let user = unsafe { &*(func_ptr as *const UserFunction) };
+                user.scalar_long_plan.is_some()
+                    || user.composed_scalar_long_plan.is_some()
+                    || user.long_property_plan.is_some()
+            };
+        let deferred = should_defer_scalar_call(opline, scalar_plan_eligible);
+        let call = if deferred {
+            eg.pending_call_stack.push_deferred_scalar_call(
+                func_ptr,
+                num_args + 1,
+                num_args,
+                frame,
+                pending_call,
+            )
+        } else {
+            eg.vm_stack.push_call_frame(
+                func_ptr,
+                num_args + 1,
+                num_args,
+                frame,
+                pending_call,
+            )
+        };
         unsafe {
             (*frame).call = call;
-            let common = &*func_ptr;
             if common.plan.borrow_this {
                 frame_set_borrowed_this(call, obj_val as *const Value);
             } else {
@@ -3259,13 +4739,94 @@ unsafe fn run_quick_long_induction_loop(
     }
 }
 
+/// Execute the compact typed argument plan emitted once by the quick planner.
+/// The original Init/argument/Send region remains the transactional baseline
+/// fallback, but successful iterations no longer rescan its bytecode.
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn resolve_quick_scalar_source(
+    source: ScalarLongSource,
+    slot_base: *mut Value,
+    induction_cv: u16,
+    accumulator_cv: u16,
+    induction: i64,
+    accumulator: i64,
+    temporaries: &[i64; 8],
+) -> Option<i64> {
+    match source {
+        ScalarLongSource::Input(slot) if slot == induction_cv => Some(induction),
+        ScalarLongSource::Input(slot) if slot == accumulator_cv => Some(accumulator),
+        ScalarLongSource::Input(slot) => Some((*slot_base.add(slot as usize)).raw_long()),
+        ScalarLongSource::Constant(value) => Some(value),
+        ScalarLongSource::Temporary(index) => temporaries.get(index as usize).copied(),
+    }
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn evaluate_quick_scalar_call_arguments(
+    argument_plan: &ScalarLongProgram,
+    argument_count: u8,
+    slot_base: *mut Value,
+    induction_cv: u16,
+    accumulator_cv: u16,
+    induction: i64,
+    accumulator: i64,
+) -> Option<[i64; 8]> {
+    if argument_plan.operations.len() > 8
+        || argument_plan.output_count != argument_count
+    {
+        return None;
+    }
+    let mut temporaries = [0i64; 8];
+    for (index, operation) in argument_plan.operations.iter().copied().enumerate() {
+        let lhs = resolve_quick_scalar_source(
+            operation.lhs,
+            slot_base,
+            induction_cv,
+            accumulator_cv,
+            induction,
+            accumulator,
+            &temporaries,
+        )?;
+        let rhs = resolve_quick_scalar_source(
+            operation.rhs,
+            slot_base,
+            induction_cv,
+            accumulator_cv,
+            induction,
+            accumulator,
+            &temporaries,
+        )?;
+        temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+    }
+    let mut arguments = [0i64; 8];
+    for (index, output) in argument_plan.outputs
+        .iter()
+        .copied()
+        .take(argument_plan.output_count as usize)
+        .enumerate()
+    {
+        arguments[index] = resolve_quick_scalar_source(
+            output,
+            slot_base,
+            induction_cv,
+            accumulator_cv,
+            induction,
+            accumulator,
+            &temporaries,
+        )?;
+    }
+    Some(arguments)
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_accumulate_loop(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
-    plan: QuickLongAccumulateLoop,
+    plan: &QuickLongAccumulateLoop,
 ) -> Result<QuickLoopOutcome, VmError> {
     if (*frame).num_cvs != op_array.num_cvs
         || (*frame).num_cvs + (*frame).num_temps > 64
@@ -3286,7 +4847,9 @@ unsafe fn run_quick_long_accumulate_loop(
         | QuickLongTerm::InductionPlusCv { term_tmp, .. }
         | QuickLongTerm::ArrayIndex { term_tmp, .. }
         | QuickLongTerm::StringLength { term_tmp, .. }
-        | QuickLongTerm::AbsLong { term_tmp, .. } => {
+        | QuickLongTerm::AbsLong { term_tmp, .. }
+        | QuickLongTerm::ScalarFunctionCall { term_tmp, .. }
+        | QuickLongTerm::ScalarMethodCall { term_tmp, .. } => {
             Some(slot_base.add(term_tmp as usize))
         }
     };
@@ -3302,7 +4865,9 @@ unsafe fn run_quick_long_accumulate_loop(
         | QuickLongTerm::InductionPlusConst { .. }
         | QuickLongTerm::ArrayIndex { .. }
         | QuickLongTerm::StringLength { .. }
-        | QuickLongTerm::AbsLong { .. } => None,
+        | QuickLongTerm::AbsLong { .. }
+        | QuickLongTerm::ScalarFunctionCall { .. }
+        | QuickLongTerm::ScalarMethodCall { .. } => None,
         QuickLongTerm::InductionPlusCv { addend_cv, .. } => {
             Some(slot_base.add(addend_cv as usize))
         }
@@ -3335,6 +4900,45 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongBound::Const(_) => None,
     };
 
+    let scalar_call_inputs_valid = match plan.term {
+        QuickLongTerm::ScalarFunctionCall {
+            mut long_input_mask,
+            ..
+        } => {
+            let mut valid = true;
+            while long_input_mask != 0 {
+                let slot = long_input_mask.trailing_zeros() as u16;
+                long_input_mask &= long_input_mask - 1;
+                valid &= !quick_loop_slot_has_heap(frame, slot)
+                    && (*slot_base.add(slot as usize)).value_type() == ValueType::Long;
+            }
+            valid
+        }
+        QuickLongTerm::ScalarMethodCall {
+            mut long_input_mask,
+            mut object_input_mask,
+            ..
+        } => {
+            let mut valid = true;
+            while long_input_mask != 0 {
+                let slot = long_input_mask.trailing_zeros() as u16;
+                long_input_mask &= long_input_mask - 1;
+                valid &= !quick_loop_slot_has_heap(frame, slot)
+                    && (*slot_base.add(slot as usize)).value_type() == ValueType::Long;
+            }
+            while object_input_mask != 0 {
+                let slot = object_input_mask.trailing_zeros() as u16;
+                object_input_mask &= object_input_mask - 1;
+                let value = &*slot_base.add(slot as usize);
+                valid &= value.value_type() == ValueType::Object
+                    && !value.is_reference()
+                    && value.object_class_id_unchecked() != 0;
+            }
+            valid
+        }
+        _ => true,
+    };
+
     if quick_loop_slot_has_heap(frame, plan.induction_cv)
         || quick_loop_slot_has_heap(frame, plan.accumulator_cv)
         || plan
@@ -3347,6 +4951,8 @@ unsafe fn run_quick_long_accumulate_loop(
                 | QuickLongTerm::ArrayIndex { term_tmp, .. }
                 | QuickLongTerm::StringLength { term_tmp, .. }
                 | QuickLongTerm::AbsLong { term_tmp, .. }
+                | QuickLongTerm::ScalarFunctionCall { term_tmp, .. }
+                | QuickLongTerm::ScalarMethodCall { term_tmp, .. }
                 if quick_loop_slot_has_heap(frame, term_tmp)
         )
         || matches!(
@@ -3371,6 +4977,7 @@ unsafe fn run_quick_long_accumulate_loop(
             .increment_tmp
             .is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
         || matches!(plan.bound, QuickLongBound::Cv(slot) if quick_loop_slot_has_heap(frame, slot))
+        || !scalar_call_inputs_valid
         || (*induction_ptr).value_type() != ValueType::Long
         || (*accumulator_ptr).value_type() != ValueType::Long
         || condition_ptr.is_some_and(|ptr| {
@@ -3439,10 +5046,122 @@ unsafe fn run_quick_long_accumulate_loop(
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
     }
+    let mut scalar_call_common = std::ptr::null();
+    let mut scalar_call_user: *const UserFunction = std::ptr::null();
+    let mut scalar_call_plan: *const ScalarLongFunctionPlan = std::ptr::null();
+    let mut scalar_call_composed_plan: *const ComposedScalarLongFunctionPlan =
+        std::ptr::null();
+    let mut quick_composed_targets =
+        [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
+    let mut quick_composed_plans =
+        [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
+    let mut quick_composed_leaf_body = false;
+    if let QuickLongTerm::ScalarFunctionCall {
+        call_ip,
+        argument_count,
+        ..
+    } = plan.term
+    {
+        let cached = op_array.cache[call_ip].func;
+        if !direct_user_calls_enabled() || cached.is_null() {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        let common = &*cached;
+        if common.fn_type != FunctionType::User
+            || common.plan.call != CallStrategy::FastScalar
+            || common.sig.public_arity() != argument_count as u32
+        {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        let user = &*(cached as *const UserFunction);
+        if let Some(scalar_plan) = user.scalar_long_plan.as_deref() {
+            if scalar_plan.public_args != argument_count {
+                stats::inc_quick_loop_guard_failed();
+                return Ok(QuickLoopOutcome::GuardFailed);
+            }
+            scalar_call_plan = scalar_plan;
+        } else if composed_scalar_bodies_enabled() {
+            let Some(composed_plan) = user.composed_scalar_long_plan.as_deref() else {
+                stats::inc_quick_loop_guard_failed();
+                return Ok(QuickLoopOutcome::GuardFailed);
+            };
+            if composed_plan.public_args != argument_count {
+                stats::inc_quick_loop_guard_failed();
+                return Ok(QuickLoopOutcome::GuardFailed);
+            }
+            scalar_call_composed_plan = composed_plan;
+            quick_composed_leaf_body = resolve_quick_composed_leaf_body(
+                eg,
+                user,
+                composed_plan,
+                &mut quick_composed_targets,
+                &mut quick_composed_plans,
+            );
+        } else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        scalar_call_common = cached;
+        scalar_call_user = user;
+    } else if let QuickLongTerm::ScalarMethodCall {
+        call_ip,
+        argument_count,
+        ..
+    } = plan.term
+    {
+        let initializer = &op_array.instructions[call_ip];
+        let cache = &op_array.cache[call_ip];
+        if initializer.opcode != OpCode::InitMethodCall
+            || initializer.op1_type != OpType::Cv
+        {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        let receiver = &*slot_base.add(initializer.op1 as usize);
+        let class_id = receiver.object_class_id_unchecked();
+        let cached = cache.func;
+        if !direct_user_calls_enabled()
+            || class_id == 0
+            || cache.class_id != class_id
+            || cached.is_null()
+        {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        let common = &*cached;
+        if common.fn_type != FunctionType::User
+            || common.plan.call != CallStrategy::FastScalar
+            || common.sig.public_arity() != argument_count as u32
+        {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        let user = &*(cached as *const UserFunction);
+        let Some(method_plan) = user.scalar_long_plan.as_deref() else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        if method_plan.public_args != argument_count {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        scalar_call_common = cached;
+        scalar_call_plan = method_plan;
+    }
     let mut iterations = 0u64;
     let mut last_term = 0i64;
     let mut last_increment_result = 0i64;
     let mut completed_iteration = false;
+    let mut scalar_call_targets =
+        [std::ptr::null(); QUICK_SCALAR_MAX_RECORDED_CALLS];
+    let mut scalar_call_target_count = 0usize;
+    let mut scalar_call_success_count = 0u64;
+    // An elided scalar call represents its Init/Send/DoFcall protocol plus up
+    // to eight arithmetic body operations. Check it every eight iterations;
+    // ordinary accumulation retains the established 32-iteration cadence.
+    let interrupt_iteration_mask = if scalar_call_common.is_null() { 31 } else { 7 };
 
     loop {
         if induction >= bound {
@@ -3464,15 +5183,20 @@ unsafe fn run_quick_long_accumulate_loop(
                 }
             }
             (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
+            flush_quick_scalar_calls(
+                &scalar_call_targets,
+                scalar_call_target_count,
+                &mut scalar_call_success_count,
+            );
             stats::inc_quick_loop_completed(iterations);
             return Ok(QuickLoopOutcome::Completed);
         }
 
-        let term = match plan.term {
+        let term = match &plan.term {
             QuickLongTerm::Induction => induction,
             QuickLongTerm::InductionPlusConst {
                 addend, term_ip, ..
-            } => match induction.checked_add(addend) {
+            } => match induction.checked_add(*addend) {
                 Some(value) => value,
                 None => {
                     Value::write_long(induction_ptr, induction);
@@ -3480,7 +5204,7 @@ unsafe fn run_quick_long_accumulate_loop(
                     if let Some(ptr) = condition_ptr {
                         Value::write_bool(ptr, true);
                     }
-                    (*frame).opline = op_array.instructions.as_ptr().add(term_ip);
+                    (*frame).opline = op_array.instructions.as_ptr().add(*term_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
                     return Ok(QuickLoopOutcome::Deoptimized);
                 }
@@ -3495,7 +5219,7 @@ unsafe fn run_quick_long_accumulate_loop(
                         if let Some(ptr) = condition_ptr {
                             Value::write_bool(ptr, true);
                         }
-                        (*frame).opline = op_array.instructions.as_ptr().add(term_ip);
+                        (*frame).opline = op_array.instructions.as_ptr().add(*term_ip);
                         stats::inc_quick_loop_deoptimized(iterations);
                         return Ok(QuickLoopOutcome::Deoptimized);
                     }
@@ -3518,7 +5242,7 @@ unsafe fn run_quick_long_accumulate_loop(
                     if let Some(ptr) = condition_ptr {
                         Value::write_bool(ptr, true);
                     }
-                    (*frame).opline = op_array.instructions.as_ptr().add(fetch_ip);
+                    (*frame).opline = op_array.instructions.as_ptr().add(*fetch_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
                     return Ok(QuickLoopOutcome::Deoptimized);
                 };
@@ -3532,7 +5256,7 @@ unsafe fn run_quick_long_accumulate_loop(
                 term_ip,
                 ..
             } => {
-                if operand_cv != plan.induction_cv {
+                if *operand_cv != plan.induction_cv {
                     invariant_abs.unwrap_unchecked()
                 } else {
                     match induction.checked_abs() {
@@ -3544,12 +5268,151 @@ unsafe fn run_quick_long_accumulate_loop(
                                 Value::write_bool(ptr, true);
                             }
                             (*frame).opline =
-                                op_array.instructions.as_ptr().add(term_ip);
+                                op_array.instructions.as_ptr().add(*term_ip);
                             stats::inc_quick_loop_deoptimized(iterations);
                             return Ok(QuickLoopOutcome::Deoptimized);
                         }
                     }
                 }
+            }
+            QuickLongTerm::ScalarFunctionCall {
+                call_ip,
+                argument_plan,
+                argument_count,
+                ..
+            } => {
+                debug_assert!(!scalar_call_common.is_null());
+                debug_assert!(!scalar_call_plan.is_null() || !scalar_call_composed_plan.is_null());
+                let evaluated = (|| {
+                    let arguments = evaluate_quick_scalar_call_arguments(
+                        argument_plan.as_ref(),
+                        *argument_count,
+                        slot_base,
+                        plan.induction_cv,
+                        plan.accumulator_cv,
+                        induction,
+                        accumulator,
+                    )?;
+                    let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
+                    let mut call_count = 0usize;
+                    let result = if !scalar_call_plan.is_null() {
+                        evaluate_scalar_long_plan(&*scalar_call_plan, &arguments)
+                    } else if quick_composed_leaf_body {
+                        evaluate_quick_composed_leaf_body(
+                            &*scalar_call_composed_plan,
+                            &arguments,
+                            &quick_composed_plans,
+                        )
+                    } else {
+                        debug_assert!(!scalar_call_user.is_null());
+                        evaluate_composed_scalar_body_plan(
+                            eg,
+                            &*scalar_call_user,
+                            &*scalar_call_composed_plan,
+                            &arguments,
+                            &mut calls,
+                            &mut call_count,
+                            0,
+                        )
+                    };
+                    if result.is_some() {
+                        if scalar_call_target_count == 0 {
+                            if quick_composed_leaf_body {
+                                for called in quick_composed_targets
+                                    .iter()
+                                    .copied()
+                                    .filter(|called| !called.is_null())
+                                {
+                                    scalar_call_targets[scalar_call_target_count] = called;
+                                    scalar_call_target_count += 1;
+                                }
+                            } else {
+                                for called in calls.into_iter().take(call_count) {
+                                    scalar_call_targets[scalar_call_target_count] = called;
+                                    scalar_call_target_count += 1;
+                                }
+                            }
+                            scalar_call_targets[scalar_call_target_count] =
+                                scalar_call_common;
+                            scalar_call_target_count += 1;
+                        }
+                        scalar_call_success_count += 1;
+                    }
+                    result
+                })();
+                let Some(value) = evaluated else {
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(accumulator_ptr, accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(*call_ip);
+                    flush_quick_scalar_calls(
+                        &scalar_call_targets,
+                        scalar_call_target_count,
+                        &mut scalar_call_success_count,
+                    );
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                };
+                value
+            }
+            QuickLongTerm::ScalarMethodCall {
+                call_ip,
+                do_fcall_ip,
+                ..
+            } => {
+                debug_assert!(!scalar_call_common.is_null());
+                debug_assert!(!scalar_call_plan.is_null());
+                // The recursive call-tree evaluator reads caller CVs. Publish
+                // the exact current loop state before entering it; these are
+                // also the canonical values for transactional baseline replay.
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, accumulator);
+                let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
+                let mut call_count = 0usize;
+                let initializer = op_array.instructions.as_ptr().add(*call_ip);
+                let evaluated = match evaluate_composed_scalar_call(
+                    frame,
+                    op_array,
+                    initializer,
+                    scalar_call_common,
+                    &*scalar_call_plan,
+                    &mut calls,
+                    &mut call_count,
+                    0,
+                ) {
+                    Some((value, do_fcall))
+                        if do_fcall.offset_from(op_array.instructions.as_ptr())
+                            == *do_fcall_ip as isize =>
+                    {
+                        if scalar_call_target_count == 0 {
+                            for called in calls.into_iter().take(call_count) {
+                                scalar_call_targets[scalar_call_target_count] = called;
+                                scalar_call_target_count += 1;
+                            }
+                        }
+                        scalar_call_success_count += 1;
+                        Some(value)
+                    }
+                    _ => None,
+                };
+                let Some(value) = evaluated else {
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(accumulator_ptr, accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(*call_ip);
+                    flush_quick_scalar_calls(
+                        &scalar_call_targets,
+                        scalar_call_target_count,
+                        &mut scalar_call_success_count,
+                    );
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                };
+                value
             }
         };
 
@@ -3568,6 +5431,11 @@ unsafe fn run_quick_long_accumulate_loop(
                     Value::write_long(ptr, term);
                 }
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
+                flush_quick_scalar_calls(
+                    &scalar_call_targets,
+                    scalar_call_target_count,
+                    &mut scalar_call_success_count,
+                );
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(QuickLoopOutcome::Deoptimized);
             }
@@ -3589,6 +5457,11 @@ unsafe fn run_quick_long_accumulate_loop(
                 }
                 Value::write_long(sum_ptr, next_accumulator);
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
+                flush_quick_scalar_calls(
+                    &scalar_call_targets,
+                    scalar_call_target_count,
+                    &mut scalar_call_success_count,
+                );
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(QuickLoopOutcome::Deoptimized);
             }
@@ -3604,10 +5477,9 @@ unsafe fn run_quick_long_accumulate_loop(
         completed_iteration = true;
         iterations += 1;
 
-        // One quick iteration represents seven or eight baseline instructions.
-        // Checking every 32 iterations preserves approximately the same
-        // interrupt bound as execute_ex's 256-opcode batch.
-        if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+        if iterations & interrupt_iteration_mask == 0
+            && eg.vm_interrupt.load(Ordering::Relaxed)
+        {
             Value::write_long(induction_ptr, induction);
             Value::write_long(accumulator_ptr, accumulator);
             if let Some(ptr) = condition_ptr {
@@ -3624,6 +5496,11 @@ unsafe fn run_quick_long_accumulate_loop(
                 Value::write_long(ptr, last_increment_result);
             }
             (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+            flush_quick_scalar_calls(
+                &scalar_call_targets,
+                scalar_call_target_count,
+                &mut scalar_call_success_count,
+            );
             handle_interrupt(eg)?;
         }
     }
@@ -6203,7 +8080,7 @@ unsafe fn execute_quick_loop_backedge(
                     run_quick_long_induction_loop(eg, frame, op_array, *plan)?
                 }
                 super::planner::BlockPlan::QuickLongAccumulate(plan) => {
-                    run_quick_long_accumulate_loop(eg, frame, op_array, *plan)?
+                    run_quick_long_accumulate_loop(eg, frame, op_array, plan)?
                 }
                 super::planner::BlockPlan::QuickForeachLongAccumulate(plan) => {
                     super::quick_foreach::run_quick_foreach_long_accumulate_loop(
@@ -6291,6 +8168,7 @@ fn execute_fast_scalar_method_call<'a>(
         },
     };
     let user = unsafe { &*(func_ptr as *const UserFunction) };
+
     unsafe {
         (*call).return_value = return_value_ptr;
         (*call).opline = user.op_array.instructions.as_ptr();
@@ -7675,14 +9553,102 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
 
                 let num_args = opline.op1 as u32;
+                let common = unsafe { &*func_ptr };
+                let mut scalar_plan_eligible = false;
+                if common.fn_type == FunctionType::User
+                    && num_args == common.sig.public_arity()
+                {
+                    let user = unsafe { &*(func_ptr as *const UserFunction) };
+                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some();
+                    if let Some(plan) = user.scalar_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_direct_scalar_long_call(
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                common,
+                                plan,
+                            )
+                        } {
+                            stats::inc_do_fcall_fast();
+                            stats::inc_return_fast();
+                            let count = common.call_count.get();
+                            if count < u32::MAX {
+                                common.call_count.set(count + 1);
+                            }
+                            unsafe {
+                                complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            continue 'vm;
+                        }
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_composed_scalar_long_call(
+                                frame,
+                                op_array,
+                                opline_ptr,
+                                func_ptr,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            continue 'vm;
+                        }
+                    }
+                    if let Some(plan) = user.composed_scalar_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_direct_composed_scalar_body_call(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr,
+                                func_ptr,
+                                user,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            continue 'vm;
+                        }
+                    }
+                }
+
                 let pending_call = unsafe { (*frame).call };
-                let call = eg.vm_stack.push_call_frame(
-                    func_ptr,
-                    num_args,
-                    num_args,
-                    frame,
-                    pending_call,
-                );
+                let deferred = should_defer_scalar_call(opline, scalar_plan_eligible);
+                let call = if deferred {
+                    eg.pending_call_stack.push_deferred_scalar_call(
+                        func_ptr,
+                        num_args,
+                        num_args,
+                        frame,
+                        pending_call,
+                    )
+                } else {
+                    eg.vm_stack.push_call_frame(
+                        func_ptr,
+                        num_args,
+                        num_args,
+                        frame,
+                        pending_call,
+                    )
+                };
                 unsafe {
                     (*frame).call = call;
                 }
@@ -7854,10 +9820,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::DoFcall => {
                 // Execute the pending call
-                let call = unsafe { (*frame).call };
+                let mut call = unsafe { (*frame).call };
                 debug_assert!(!call.is_null());
                 // Restore previous pending call from the chain
                 unsafe { (*frame).call = (*call).call };
+
+                // A non-contiguous pure-scalar call captured its arguments in a
+                // compact activation. On success it never acquires body CVs or
+                // TMPs; on any guard failure it becomes the ordinary ABI frame
+                // and continues through the unchanged DoFcall implementation.
+                if unsafe { (*call).deferred_scalar_call } {
+                    call = unsafe {
+                        resolve_deferred_scalar_call(
+                            eg,
+                            frame,
+                            call,
+                            opline,
+                            opline_ptr,
+                        )
+                    };
+                    if call.is_null() {
+                        continue 'vm;
+                    }
+                }
 
                 // ── FastScalar path: tightest call protocol ──
                 // Preconditions guaranteed at compile time: fixed arity, no by-ref,
@@ -8563,52 +10548,173 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let func_ptr = ic.func;
                         let common = unsafe { &*func_ptr };
                         let num_args = opline.extended_value;
+                        let mut scalar_plan_eligible = false;
 
-                        // A discarded call to a compiler-proven integer
-                        // property method can commit its typed plan directly.
-                        // The property inline caches are populated by the
-                        // first ordinary call; all failures remain untouched
-                        // and continue through the canonical frame path.
-                        if ic.method_has_long_property_plan() {
+                        // Public monomorphic methods whose bodies do not use
+                        // `$this` can consume adjacent scalar arguments through
+                        // the same frame-free ABI as ordinary functions. The
+                        // receiver/class cache above still provides normal PHP
+                        // virtual-dispatch semantics.
+                        if common.fn_type == FunctionType::User
+                            && num_args == common.sig.public_arity()
+                        {
                             let user = unsafe { &*(func_ptr as *const UserFunction) };
-                            if let Some(plan) = user.long_property_plan.as_deref() {
-                                let sends = unsafe { opline_ptr.add(1) };
-                                let do_fcall_ptr = unsafe { sends.add(num_args as usize) };
-                                let do_fcall = unsafe { &*do_fcall_ptr };
-                                if plan.public_args as u32 == num_args
-                                    && do_fcall.opcode == OpCode::DoFcall
-                                    && do_fcall.result_type == OpType::Unused
-                                    && unsafe {
-                                        try_execute_long_property_method(
-                                            frame,
-                                            op_array,
-                                            obj_val,
-                                            sends,
-                                            plan,
-                                            user,
-                                        )
+
+                            // Method cache bits classify compiler-proven
+                            // property bodies. Handle those before consulting
+                            // the more general scalar planners so their common
+                            // cache-hit path pays only the guards it needs.
+                            if ic.method_has_long_property_plan() {
+                                if let Some(plan) = user.long_property_plan.as_deref() {
+                                    if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
+                                        && unsafe {
+                                            try_execute_composed_long_property_call(
+                                                frame,
+                                                op_array,
+                                                opline_ptr,
+                                                obj_val,
+                                                user,
+                                                plan,
+                                            )
+                                        }
+                                    {
+                                        continue 'vm;
                                     }
-                                {
+                                    let sends = unsafe { opline_ptr.add(1) };
+                                    let do_fcall_ptr = unsafe { sends.add(num_args as usize) };
+                                    let do_fcall = unsafe { &*do_fcall_ptr };
+                                    if plan.public_args as u32 == num_args
+                                        && do_fcall.opcode == OpCode::DoFcall
+                                        && do_fcall.result_type == OpType::Unused
+                                        && unsafe {
+                                            try_execute_long_property_method(
+                                                frame,
+                                                op_array,
+                                                obj_val,
+                                                sends,
+                                                plan,
+                                                user,
+                                            )
+                                        }
+                                    {
+                                        record_scalar_call(common);
+                                        unsafe { (*frame).opline = do_fcall_ptr.add(1) };
+                                        continue 'vm;
+                                    }
+                                }
+                            }
+                            if ic.method_has_property_getter_plan() {
+                                if let Some(plan) = user.property_getter_plan.as_ref() {
+                                    let do_fcall_ptr = unsafe { opline_ptr.add(1) };
+                                    if unsafe {
+                                        try_execute_direct_property_getter(
+                                            frame,
+                                            obj_val,
+                                            do_fcall_ptr,
+                                            user,
+                                            plan,
+                                        )
+                                    } {
+                                        continue 'vm;
+                                    }
+                                }
+                            }
+
+                            scalar_plan_eligible =
+                                user.composed_scalar_long_plan.is_some()
+                                    || user.long_property_plan.is_some();
+                            if let Some(plan) = user.scalar_long_plan.as_deref() {
+                                scalar_plan_eligible = true;
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_scalar_long_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        common,
+                                        plan,
+                                    )
+                                } {
                                     stats::inc_do_fcall_fast();
                                     stats::inc_return_fast();
                                     let count = common.call_count.get();
                                     if count < u32::MAX {
                                         common.call_count.set(count + 1);
                                     }
-                                    unsafe { (*frame).opline = do_fcall_ptr.add(1) };
+                                    unsafe {
+                                        complete_direct_scalar_long_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
+                                }
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_composed_scalar_long_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr,
+                                        func_ptr,
+                                        plan,
+                                    )
+                                } {
+                                    unsafe {
+                                        complete_direct_scalar_long_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
+                                }
+                            }
+                            if let Some(plan) = user.composed_scalar_long_plan.as_deref() {
+                                scalar_plan_eligible = true;
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_composed_scalar_body_call(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        opline_ptr,
+                                        func_ptr,
+                                        user,
+                                        plan,
+                                    )
+                                } {
+                                    unsafe {
+                                        complete_direct_scalar_long_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
                                     continue 'vm;
                                 }
                             }
                         }
 
                         let pending_call = unsafe { (*frame).call };
-                        let call = eg.vm_stack.push_call_frame(
-                            func_ptr,
-                            num_args + 1,
-                            num_args,
-                            frame,
-                            pending_call,
+                        let deferred = should_defer_scalar_call(
+                            opline,
+                            scalar_plan_eligible,
                         );
+                        let call = if deferred {
+                            eg.pending_call_stack.push_deferred_scalar_call(
+                                func_ptr,
+                                num_args + 1,
+                                num_args,
+                                frame,
+                                pending_call,
+                            )
+                        } else {
+                            eg.vm_stack.push_call_frame(
+                                func_ptr,
+                                num_args + 1,
+                                num_args,
+                                frame,
+                                pending_call,
+                            )
+                        };
                         unsafe {
                             (*frame).call = call;
                             if common.plan.borrow_this {

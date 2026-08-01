@@ -212,6 +212,73 @@ function chain($x) { return leaf($x); }
 }
 
 #[test]
+fn test_straight_line_integer_function_gets_scalar_long_plan() {
+    let source = "<?php function calc($a, $b) { return ($a + 1) * ($b - 2); }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let calc = result
+        .functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("calc"))
+        .map(|(_, function)| function)
+        .unwrap();
+
+    let plan = calc.scalar_long_plan.as_deref().expect("scalar long plan");
+    assert_eq!(plan.public_args, 2);
+    assert_eq!(plan.program.operations.len(), 3);
+}
+
+#[test]
+fn test_pure_call_chain_gets_composed_scalar_body_plan() {
+    let source = "<?php
+function add1($x) { return $x + 1; }
+function double($x) { return $x + $x; }
+function combine($a, $b) { return add1($a) + double($b); }
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let combine = result
+        .functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("combine"))
+        .map(|(_, function)| function)
+        .unwrap();
+
+    assert!(combine.scalar_long_plan.is_none());
+    let plan = combine
+        .composed_scalar_long_plan
+        .as_deref()
+        .expect("composed scalar body plan");
+    assert_eq!(plan.public_args, 2);
+    assert_eq!(plan.operations.len(), 3);
+}
+
+#[test]
+fn test_hot_direct_scalar_leaf_falls_back_on_overflow() {
+    assert_eq!(run_php("<?php
+function leaf($value) { return $value + 1; }
+function chain($value) { return leaf($value); }
+$sum = 0;
+for ($i = 0; $i < 100; $i++) { $sum += chain($i); }
+echo $sum . ':' . gettype(chain(9223372036854775807));
+"), "5050:double");
+}
+
+#[test]
+fn test_hot_deferred_scalar_call_with_nested_argument() {
+    assert_eq!(run_php("<?php
+function add($a, $b) { return $a + $b; }
+function twice($value) { return $value * 2; }
+function chain($value) { return add($value, twice($value)); }
+$sum = 0;
+for ($i = 0; $i < 100; $i++) { $sum += chain($i); }
+echo $sum;
+"), "14850");
+}
+
+#[test]
 fn test_transitive_global_chain_stays_conservative() {
     let source = "<?php
 function reader() { global $value; return $value; }
@@ -680,6 +747,85 @@ class Stats {
 }
 
 #[test]
+fn test_property_getter_method_plan_is_compiled_for_exact_getter_only() {
+    let source = "<?php
+class Box {
+    public $value = 7;
+    public function value() { return $this->value; }
+    public function adjusted() { return $this->value + 1; }
+}
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let getter = &result.class_defs[0].methods[0].4;
+    let adjusted = &result.class_defs[0].methods[1].4;
+    assert_eq!(getter.property_getter_plan.as_ref().unwrap().cache_ip, 0);
+    assert!(adjusted.property_getter_plan.is_none());
+}
+
+#[test]
+fn test_direct_property_getter_preserves_heap_value_cow() {
+    assert_eq!(run_php("<?php
+class StringBox {
+    public $value = 'base';
+    public function value() { return $this->value; }
+}
+class ArrayBox {
+    public $value = [1];
+    public function value() { return $this->value; }
+}
+$strings = new StringBox();
+$strings->value();
+$stringCopy = $strings->value();
+$stringCopy .= '!';
+$arrays = new ArrayBox();
+$arrays->value();
+$arrayCopy = $arrays->value();
+$arrayCopy[] = 2;
+echo $strings->value() . '|' . count($arrays->value()) . '|' . count($arrayCopy);
+"), "base|1|2");
+}
+
+#[test]
+fn test_direct_property_getter_guards_polymorphism() {
+    assert_eq!(run_php("<?php
+class First {
+    public $value = 11;
+    public function value() { return $this->value; }
+}
+class Second {
+    public $value = 29;
+    public function value() { return $this->value; }
+}
+function readValue($object) { return $object->value(); }
+$first = new First();
+$second = new Second();
+echo readValue($first) . '|' . readValue($first) . '|';
+echo readValue($second) . '|' . readValue($second) . '|';
+echo readValue($first);
+"), "11|11|29|29|11");
+}
+
+#[test]
+fn test_property_getter_falls_back_for_private_and_magic_properties() {
+    assert_eq!(run_php("<?php
+class PrivateBox {
+    private $value = 17;
+    public function value() { return $this->value; }
+}
+class MagicBox {
+    public function __get($name) { return $name . '!'; }
+    public function value() { return $this->missing; }
+}
+$private = new PrivateBox();
+$magic = new MagicBox();
+echo $private->value() . '|' . $private->value() . '|';
+echo $magic->value() . '|' . $magic->value();
+"), "17|17|missing!|missing!");
+}
+
+#[test]
 fn test_long_property_method_plan_fallback_is_transactional_on_overflow() {
     // The first update in the second call must not be committed by the plan
     // before the overflowing second update falls back to ordinary execution.
@@ -713,6 +859,133 @@ $counter = new Counter();
 $counter->add(1);
 echo $counter->add(2) . '|' . $counter->value;
 "), "3|3");
+}
+
+#[test]
+fn test_deferred_property_method_evaluates_nested_argument_once() {
+    assert_eq!(run_php("<?php
+class Accumulator {
+    public $total = 0;
+    public function add($value) {
+        $this->total = $this->total + $value;
+    }
+}
+$calls = 0;
+function nextValue() {
+    global $calls;
+    $calls = $calls + 1;
+    return 3;
+}
+$accumulator = new Accumulator();
+$accumulator->add(0);
+$accumulator->add(nextValue());
+$accumulator->add(nextValue());
+echo $accumulator->total . '|' . $calls;
+"), "6|2");
+}
+
+#[test]
+fn test_deferred_property_method_materializes_when_return_is_used() {
+    assert_eq!(run_php("<?php
+class Accumulator {
+    public $total = 0;
+    public function add($value) {
+        $this->total = $this->total + $value;
+        return $this->total;
+    }
+}
+$calls = 0;
+function nextValue() {
+    global $calls;
+    $calls = $calls + 1;
+    return 2;
+}
+$accumulator = new Accumulator();
+$accumulator->add(0);
+echo $accumulator->add(nextValue()) . '|' . $calls . '|' . $accumulator->total;
+"), "2|1|2");
+}
+
+#[test]
+fn test_deferred_property_method_overflow_fallback_is_transactional() {
+    assert_eq!(run_php("<?php
+class Counter {
+    public $large = 9223372036854775807;
+    public $calls = 0;
+    public function update($value) {
+        $this->calls = $this->calls + 1;
+        $this->large = $this->large + $value;
+    }
+}
+function one() { return 1; }
+$counter = new Counter();
+$counter->update(0);
+$counter->update(one());
+echo $counter->calls;
+"), "2");
+}
+
+#[test]
+fn test_deferred_property_method_double_and_exception_fallback() {
+    assert_eq!(run_php("<?php
+class Accumulator {
+    public $total = 0;
+    public function add($value) {
+        $this->total = $this->total + $value;
+    }
+}
+function fractional() { return 2.5; }
+function failValue() { throw new Exception('stop'); }
+$accumulator = new Accumulator();
+$accumulator->add(0);
+$accumulator->add(fractional());
+try {
+    $accumulator->add(failValue());
+} catch (Exception $exception) {
+    $accumulator->add(3);
+}
+echo $accumulator->total;
+"), "5.5");
+}
+
+#[test]
+fn test_composed_property_call_preserves_same_object_aliasing() {
+    assert_eq!(run_php("<?php
+class Counter {
+    public $value = 1;
+    public function value() { return $this->value; }
+    public function add($amount) {
+        $this->value = $this->value + $amount;
+    }
+}
+$counter = new Counter();
+$counter->add($counter->value());
+$counter->add($counter->value());
+echo $counter->value;
+"), "4");
+}
+
+#[test]
+fn test_composed_property_call_overflow_fallback_is_transactional() {
+    assert_eq!(run_php("<?php
+class Source {
+    public $value = 1;
+    public function value() { return $this->value; }
+}
+class Counter {
+    public $large = 9223372036854775807;
+    public $calls = 0;
+    public function update($value) {
+        $this->calls = $this->calls + 1;
+        $this->large = $this->large + $value;
+    }
+}
+$source = new Source();
+$counter = new Counter();
+$counter->update($source->value());
+$counter->update($source->value());
+echo $counter->calls;
+"), "2");
 }
 
 #[test]
@@ -790,6 +1063,42 @@ class Accumulator {
 $a = new Accumulator();
 echo $a->add_range(1, 100);
 "), "5050");
+}
+
+#[test]
+fn test_hot_recursive_caller_uses_direct_property_getter() {
+    assert_eq!(run_php("<?php
+class Box {
+    public $value = 7;
+    public function value() { return $this->value; }
+    public function repeated($n) {
+        if ($n <= 0) return 0;
+        return $this->value() + $this->repeated($n - 1);
+    }
+}
+$box = new Box();
+echo $box->repeated(20);
+"), "140");
+}
+
+#[test]
+fn test_hot_recursive_caller_uses_direct_property_mutator() {
+    assert_eq!(run_php("<?php
+class Counter {
+    public $value = 0;
+    public function add($amount) {
+        $this->value = $this->value + $amount;
+    }
+    public function repeated($n) {
+        if ($n <= 0) return $this->value;
+        $this->add(2);
+        return $this->repeated($n - 1);
+    }
+}
+$counter = new Counter();
+$counter->repeated(1);
+echo $counter->repeated(20);
+"), "42");
 }
 
 // ══════════════════════════════════════════════════════════════════════

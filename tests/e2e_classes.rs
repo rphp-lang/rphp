@@ -43,6 +43,40 @@ echo $c->add(3, 4);
 }
 
 #[test]
+fn test_class_scalar_long_method_nested_calls() {
+    assert_eq!(run_php(r#"<?php
+class Calculator {
+    public function add($a, $b) { return $a + $b; }
+    public function mul($a, $b) { return $a * $b; }
+}
+$c = new Calculator();
+echo $c->add(2, $c->mul(3, 4));
+"#), "14");
+}
+
+#[test]
+fn test_class_composed_scalar_call_guards_polymorphic_dispatch() {
+    assert_eq!(run_php(r#"<?php
+class AddMath {
+    public function combine($a, $b) { return $a + $b; }
+    public function inner($a, $b) { return $a * $b; }
+}
+class SubMath {
+    public function combine($a, $b) { return $a - $b; }
+    public function inner($a, $b) { return $a + $b; }
+}
+function calculate($math, $value) {
+    return $math->combine($value, $math->inner($value, 2));
+}
+$add = new AddMath();
+$sub = new SubMath();
+echo calculate($add, 3) . ':' . calculate($add, 4) . '|';
+echo calculate($sub, 3) . ':' . calculate($sub, 4) . '|';
+echo calculate($add, 5);
+"#), "9:12|-2:-2|15");
+}
+
+#[test]
 fn test_class_multiple_properties() {
     assert_eq!(run_php(r#"<?php
 class Person {

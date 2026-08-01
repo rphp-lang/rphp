@@ -94,9 +94,10 @@ use crate::runtime::ExecutorGlobals;
 use super::execute::VmError;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
 use super::function::{CallStrategy, FunctionType, UserFunction, HotStatus, FUNC_HOT_THRESHOLD};
-use super::instruction::{Instruction, OpType};
+use super::instruction::{Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE};
 use super::opcode::OpCode;
 use super::stack;
+use super::stats;
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -434,14 +435,121 @@ pub fn execute_hot_frame(
                 }
                 let func_ptr = cached;
                 let num_args = opline.op1 as u32;
+                let func_common = unsafe { &*func_ptr };
+                let mut scalar_plan_eligible = false;
+                if func_common.fn_type == FunctionType::User
+                    && num_args == func_common.sig.public_arity()
+                {
+                    let user = unsafe { &*(func_ptr as *const UserFunction) };
+                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some();
+                    if let Some(plan) = user.scalar_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        let evaluated = if plan.program.operations.len() == 1 {
+                            unsafe {
+                                super::execute::try_execute_direct_single_scalar_long_op(
+                                    frame,
+                                    op_array,
+                                    opline_ptr.add(1),
+                                    func_common,
+                                    plan,
+                                )
+                            }
+                        } else {
+                            unsafe {
+                                super::execute::try_execute_direct_scalar_long_call(
+                                    frame,
+                                    op_array,
+                                    opline_ptr.add(1),
+                                    func_common,
+                                    plan,
+                                )
+                            }
+                        };
+                        if let Some((result, do_fcall_ptr)) = evaluated {
+                            stats::inc_do_fcall_fast();
+                            stats::inc_return_fast();
+                            let count = func_common.call_count.get();
+                            if count < u32::MAX {
+                                func_common.call_count.set(count + 1);
+                            }
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_composed_scalar_long_call(
+                                frame,
+                                op_array,
+                                opline_ptr,
+                                func_ptr,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+                    if let Some(plan) = user.composed_scalar_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_direct_composed_scalar_body_call(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr,
+                                func_ptr,
+                                user,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+                }
+
                 let pending_call = unsafe { (*frame).call };
-                let call = eg.vm_stack.push_call_frame(
-                    func_ptr,
-                    num_args,
-                    num_args,
-                    frame,
-                    pending_call,
+                let deferred = super::execute::should_defer_scalar_call(
+                    opline,
+                    scalar_plan_eligible,
                 );
+                let call = if deferred {
+                    eg.pending_call_stack.push_deferred_scalar_call(
+                        func_ptr,
+                        num_args,
+                        num_args,
+                        frame,
+                        pending_call,
+                    )
+                } else {
+                    eg.vm_stack.push_call_frame(
+                        func_ptr,
+                        num_args,
+                        num_args,
+                        frame,
+                        pending_call,
+                    )
+                };
                 unsafe {
                     (*frame).call = call;
                 }
@@ -665,8 +773,24 @@ pub fn execute_hot_frame(
 
             // ── DoFcall — recursive hot call or bailout ──
             OpCode::DoFcall => {
-                let call = unsafe { (*frame).call };
+                let mut call = unsafe { (*frame).call };
                 unsafe { (*frame).call = (*call).call };
+
+                if unsafe { (*call).deferred_scalar_call } {
+                    call = unsafe {
+                        super::execute::resolve_deferred_scalar_call(
+                            eg,
+                            frame,
+                            call,
+                            opline,
+                            opline_ptr,
+                        )
+                    };
+                    if call.is_null() {
+                        opline_ptr = unsafe { (*frame).opline };
+                        continue;
+                    }
+                }
 
                 let func_common = unsafe { &*(*call).func };
 
@@ -913,14 +1037,187 @@ pub fn execute_hot_frame(
                 let func_ptr = ic.func;
                 let func_common = unsafe { &*func_ptr };
                 let num_args = opline.extended_value;
+                let mut scalar_plan_eligible = false;
+
+                if func_common.fn_type == FunctionType::User
+                    && num_args == func_common.sig.public_arity()
+                {
+                    let user = unsafe { &*(func_ptr as *const UserFunction) };
+
+                    if ic.method_has_long_property_plan() {
+                        if let Some(plan) = user.long_property_plan.as_deref() {
+                            if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
+                                && unsafe {
+                                    super::execute::try_execute_composed_long_property_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr,
+                                        obj_val,
+                                        user,
+                                        plan,
+                                    )
+                                }
+                            {
+                                opline_ptr = unsafe { (*frame).opline };
+                                continue;
+                            }
+                            let sends = unsafe { opline_ptr.add(1) };
+                            let do_fcall_ptr = unsafe { sends.add(num_args as usize) };
+                            let do_fcall = unsafe { &*do_fcall_ptr };
+                            if plan.public_args as u32 == num_args
+                                && do_fcall.opcode == OpCode::DoFcall
+                                && do_fcall.result_type == OpType::Unused
+                                && unsafe {
+                                    super::execute::try_execute_hot_long_property_method(
+                                        frame,
+                                        op_array,
+                                        obj_val,
+                                        sends,
+                                        plan,
+                                        user,
+                                    )
+                                }
+                            {
+                                stats::inc_do_fcall_fast();
+                                stats::inc_return_fast();
+                                let count = func_common.call_count.get();
+                                if count < u32::MAX {
+                                    func_common.call_count.set(count + 1);
+                                }
+                                unsafe { (*frame).opline = do_fcall_ptr.add(1) };
+                                opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                                continue;
+                            }
+                        }
+                    }
+                    if ic.method_has_property_getter_plan() {
+                        if let Some(plan) = user.property_getter_plan.as_ref() {
+                            let do_fcall_ptr = unsafe { opline_ptr.add(1) };
+                            if unsafe {
+                                super::execute::try_execute_hot_property_getter(
+                                    frame,
+                                    obj_val,
+                                    do_fcall_ptr,
+                                    user,
+                                    plan,
+                                )
+                            } {
+                                opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                                continue;
+                            }
+                        }
+                    }
+
+                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some()
+                        || user.long_property_plan.is_some();
+                    if let Some(plan) = user.scalar_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        let evaluated = if plan.program.operations.len() == 1 {
+                            unsafe {
+                                super::execute::try_execute_direct_single_scalar_long_op(
+                                    frame,
+                                    op_array,
+                                    opline_ptr.add(1),
+                                    func_common,
+                                    plan,
+                                )
+                            }
+                        } else {
+                            unsafe {
+                                super::execute::try_execute_direct_scalar_long_call(
+                                    frame,
+                                    op_array,
+                                    opline_ptr.add(1),
+                                    func_common,
+                                    plan,
+                                )
+                            }
+                        };
+                        if let Some((result, do_fcall_ptr)) = evaluated {
+                            stats::inc_do_fcall_fast();
+                            stats::inc_return_fast();
+                            let count = func_common.call_count.get();
+                            if count < u32::MAX {
+                                func_common.call_count.set(count + 1);
+                            }
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_composed_scalar_long_call(
+                                frame,
+                                op_array,
+                                opline_ptr,
+                                func_ptr,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+                    if let Some(plan) = user.composed_scalar_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_direct_composed_scalar_body_call(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr,
+                                func_ptr,
+                                user,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+                }
+
                 let pending_call = unsafe { (*frame).call };
-                let call = eg.vm_stack.push_call_frame(
-                    func_ptr,
-                    num_args + 1,
-                    num_args,
-                    frame,
-                    pending_call,
+                let deferred = super::execute::should_defer_scalar_call(
+                    opline,
+                    scalar_plan_eligible,
                 );
+                let call = if deferred {
+                    eg.pending_call_stack.push_deferred_scalar_call(
+                        func_ptr,
+                        num_args + 1,
+                        num_args,
+                        frame,
+                        pending_call,
+                    )
+                } else {
+                    eg.vm_stack.push_call_frame(
+                        func_ptr,
+                        num_args + 1,
+                        num_args,
+                        frame,
+                        pending_call,
+                    )
+                };
                 unsafe {
                     (*frame).call = call;
                     let this_ptr = (call as *mut Value).add(CALL_FRAME_SLOTS);

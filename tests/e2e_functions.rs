@@ -132,6 +132,132 @@ fn test_e2e_user_function_with_local_vars() {
 }
 
 #[test]
+fn test_e2e_scalar_long_plan_straight_line_expression() {
+    assert_eq!(
+        run_php("<?php function calc($a, $b) { return ($a + 1) * ($b - 2); } echo calc(4, 10);"),
+        "40"
+    );
+}
+
+#[test]
+fn test_e2e_scalar_long_plan_falls_back_for_double() {
+    assert_eq!(
+        run_php("<?php function calc($a, $b) { return ($a + 1) * $b; } $v = calc(1.5, 2); echo gettype($v) . ':' . $v;"),
+        "double:5"
+    );
+}
+
+#[test]
+fn test_e2e_scalar_long_plan_falls_back_on_overflow() {
+    assert_eq!(
+        run_php("<?php function inc($value) { return $value + 1; } echo gettype(inc(9223372036854775807));"),
+        "double"
+    );
+}
+
+#[test]
+fn test_e2e_deferred_scalar_call_captures_arguments_in_source_order() {
+    assert_eq!(
+        run_php(r#"<?php
+function add($a, $b) { return $a + $b; }
+function replace(&$value) { $value = 10; return 2; }
+$value = 1;
+echo add($value, replace($value)) . ':' . $value;
+"#),
+        "3:10"
+    );
+}
+
+#[test]
+fn test_e2e_deferred_scalar_call_falls_back_for_double_and_overflow() {
+    assert_eq!(
+        run_php(r#"<?php
+function add($a, $b) { return $a + $b; }
+function identity($value) { return $value; }
+$double = add(identity(1.5), 2);
+$overflow = add(identity(9223372036854775807), 1);
+echo gettype($double) . ':' . $double . '|' . gettype($overflow);
+"#),
+        "double:3.5|double"
+    );
+}
+
+#[test]
+fn test_e2e_deferred_scalar_call_is_cleaned_when_argument_throws() {
+    assert_eq!(
+        run_php(r#"<?php
+function add($a, $b) { return $a + $b; }
+function fail() { throw new Exception('stop'); }
+try {
+    echo add(1, fail());
+} catch (Exception $error) {
+    echo $error->getMessage();
+}
+echo ':' . add(2, 3);
+"#),
+        "stop:5"
+    );
+}
+
+#[test]
+fn test_e2e_composed_scalar_call_supports_multiple_nested_levels() {
+    assert_eq!(
+        run_php(r#"<?php
+function add($a, $b) { return $a + $b; }
+function mul($a, $b) { return $a * $b; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $sum += add(1, add(2, mul(3, 4))); }
+echo $sum;
+"#),
+        "300"
+    );
+}
+
+#[test]
+fn test_e2e_composed_scalar_call_falls_back_transactionally_on_nested_overflow() {
+    assert_eq!(
+        run_php(r#"<?php
+function add($a, $b) { return $a + $b; }
+function mul($a, $b) { return $a * $b; }
+function calculate($input) { return add(1, mul($input, 2)); }
+calculate(2);
+$value = calculate(9223372036854775807);
+echo gettype($value) . ':' . $value;
+"#),
+        "double:18446744073709552000"
+    );
+}
+
+#[test]
+fn test_e2e_composed_scalar_body_falls_back_for_double_and_overflow() {
+    assert_eq!(
+        run_php(r#"<?php
+function add1($value) { return $value + 1; }
+function twice($value) { return $value * 2; }
+function combine($a, $b) { return add1($a) + twice($b); }
+combine(1, 2);
+$double = combine(1.5, 2);
+$overflow = combine(9223372036854775807, 1);
+echo gettype($double) . ':' . $double . '|' . gettype($overflow);
+"#),
+        "double:6.5|double"
+    );
+}
+
+#[test]
+fn test_e2e_composed_scalar_body_does_not_speculate_side_effecting_target() {
+    assert_eq!(
+        run_php(r#"<?php
+function touch($value) { echo 'T'; return $value + 1; }
+function twice($value) { return $value * 2; }
+function combine($a, $b) { return touch($a) + twice($b); }
+echo ':' . combine(2, 3);
+"#),
+        "T:9"
+    );
+}
+
+#[test]
 fn test_e2e_user_function_scope_isolation() {
     assert_eq!(
         run_php("<?php $x = 10; function foo() { $x = 99; return $x; } echo foo(); echo $x;"),

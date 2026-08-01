@@ -6,6 +6,7 @@ use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
 use super::function::FunctionCommon;
 
 const DEFAULT_STACK_PAGE_SIZE: usize = 256 * 1024; // 256 KB
+const PENDING_STACK_PAGE_SIZE: usize = 16 * 1024;
 
 /// VM stack page — linked list of pages
 struct VmStackPage {
@@ -24,7 +25,15 @@ pub struct VmStack {
 
 impl VmStack {
     pub fn new() -> Self {
-        let page_size = DEFAULT_STACK_PAGE_SIZE;
+        Self::with_page_size(DEFAULT_STACK_PAGE_SIZE)
+    }
+
+    /// Smaller bump stack used by compact argument-only call activations.
+    pub fn new_pending() -> Self {
+        Self::with_page_size(PENDING_STACK_PAGE_SIZE)
+    }
+
+    fn with_page_size(page_size: usize) -> Self {
         let page = Self::alloc_page(page_size);
 
         let top = unsafe { (page as *mut u8).add(size_of::<VmStackPage>()) as *mut Value };
@@ -36,6 +45,47 @@ impl VmStack {
             current_page: page,
             page_size,
         }
+    }
+
+    /// Allocate only the ExecuteData header and already-declared argument slots.
+    /// The function body is never entered through this activation; DoFcall either
+    /// evaluates its scalar plan or materializes a full frame on the main stack.
+    #[inline(always)]
+    pub fn push_deferred_scalar_call(
+        &mut self,
+        func: *const FunctionCommon,
+        storage_num_args: u32,
+        public_num_args: u32,
+        prev_execute_data: *mut ExecuteData,
+        pending_call: *mut ExecuteData,
+    ) -> *mut ExecuteData {
+        let total_slots = CALL_FRAME_SLOTS + storage_num_args as usize;
+        let needed = total_slots * size_of::<Value>();
+        let available = unsafe { self.end.offset_from(self.top) } as usize * size_of::<Value>();
+        if needed > available {
+            self.extend(needed);
+        }
+
+        let frame = self.top as *mut ExecuteData;
+        self.top = unsafe { self.top.add(total_slots) };
+        unsafe {
+            frame.write(ExecuteData {
+                opline: std::ptr::null(),
+                call: pending_call,
+                return_value: std::ptr::null_mut(),
+                func,
+                prev_execute_data,
+                num_args: public_num_args,
+                num_cvs: storage_num_args,
+                num_temps: 0,
+                pending_return_after_finally: false,
+                has_heap_slots: false,
+                named_args_used: false,
+                deferred_scalar_call: true,
+                heap_bitmap: 0,
+            });
+        }
+        frame
     }
 
     /// Allocate a call frame on the stack.
@@ -87,6 +137,7 @@ impl VmStack {
                 pending_return_after_finally: false,
                 has_heap_slots: false,
                 named_args_used: false,
+                deferred_scalar_call: false,
                 heap_bitmap: 0,
             });
         }

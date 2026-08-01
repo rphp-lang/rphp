@@ -60,6 +60,10 @@ pub struct ExecuteData {
     /// Used by FastScalar DoFcall to skip the holes check on the hot path.
     /// Only named args can create holes in required params while num_args matches sig.num_args.
     pub named_args_used: bool,
+    /// Compact argument-only activation owned by ExecutorGlobals::pending_call_stack.
+    /// Such a call has no body CVs/TMPs until a failed scalar guard materializes
+    /// the ordinary ABI frame on the main VM stack.
+    pub deferred_scalar_call: bool,
     /// Per-slot heap bitmap: bit N = 1 means slot N currently holds a heap value
     /// (String, Array, Object, Closure) that needs drop on cleanup or overwrite.
     /// Only valid for frames with <= 64 total slots (CVs + TMPs).

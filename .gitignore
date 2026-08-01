@@ -2,5 +2,6 @@
 .DS_Store
 .claude/
 .idea
-docs/
+docs/*
+!docs/roadmap-performance-jit-compatibility.md
 inbox/

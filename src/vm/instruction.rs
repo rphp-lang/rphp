@@ -1,6 +1,11 @@
 use super::opcode::OpCode;
 use super::function::FunctionCommon;
 
+/// InitFcall/InitMethodCall flag: every source argument is positional and at
+/// least one needs opcodes between Init and its Send. A proven scalar callee may
+/// therefore defer its full frame while preserving source evaluation order.
+pub const CALL_FLAG_DEFERRED_SCALAR_CANDIDATE: u16 = 1;
+
 /// Operand type — where to find the operand
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,6 +83,7 @@ impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
+    const METHOD_PROPERTY_GETTER_PLAN: u32 = 4;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
     pub fn empty() -> Self {
@@ -115,11 +121,13 @@ impl InlineCache {
         class_id: u32,
         fusion_eligible: bool,
         long_property_plan: bool,
+        property_getter_plan: bool,
     ) {
         self.func = func;
         self.class_id = class_id;
         self.prop_info = (if fusion_eligible { Self::METHOD_FUSION_ELIGIBLE } else { 0 })
-            | (if long_property_plan { Self::METHOD_LONG_PROPERTY_PLAN } else { 0 });
+            | (if long_property_plan { Self::METHOD_LONG_PROPERTY_PLAN } else { 0 })
+            | (if property_getter_plan { Self::METHOD_PROPERTY_GETTER_PLAN } else { 0 });
     }
 
     #[inline(always)]
@@ -130,6 +138,11 @@ impl InlineCache {
     #[inline(always)]
     pub fn method_has_long_property_plan(&self) -> bool {
         self.prop_info & Self::METHOD_LONG_PROPERTY_PLAN != 0
+    }
+
+    #[inline(always)]
+    pub fn method_has_property_getter_plan(&self) -> bool {
+        self.prop_info & Self::METHOD_PROPERTY_GETTER_PLAN != 0
     }
 
     /// String identity retained by a dynamic-callback DoFcall cache entry.

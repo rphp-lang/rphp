@@ -46,6 +46,8 @@ pub fn resolve_property_key(
 /// Will grow as we implement more features.
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
+    /// Compact argument-only activations for deferred pure-scalar calls.
+    pub pending_call_stack: VmStack,
     pub current_execute_data: Cell<*mut ExecuteData>,
     pub vm_interrupt: AtomicBool,
     pub timed_out: AtomicBool,
@@ -92,6 +94,7 @@ impl ExecutorGlobals {
     pub fn new() -> Self {
         Self {
             vm_stack: VmStack::new(),
+            pending_call_stack: VmStack::new_pending(),
             current_execute_data: Cell::new(std::ptr::null_mut()),
             vm_interrupt: AtomicBool::new(false),
             timed_out: AtomicBool::new(false),
@@ -119,6 +122,7 @@ impl ExecutorGlobals {
     pub fn with_output(output: Box<dyn Write>) -> Self {
         Self {
             vm_stack: VmStack::new(),
+            pending_call_stack: VmStack::new_pending(),
             current_execute_data: Cell::new(std::ptr::null_mut()),
             vm_interrupt: AtomicBool::new(false),
             timed_out: AtomicBool::new(false),

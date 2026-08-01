@@ -1,0 +1,205 @@
+# RPHP roadmap: no-JIT core, typed IR, JIT, compatibility
+
+Status: accepted project direction, 2026-08-01
+
+## Objective
+
+Build a PHP runtime whose supported language subset is semantically correct,
+systemically fast without a JIT, and structured so the same guarded execution
+plans can later be lowered to native code. Compatibility breadth and production
+hardening expand after the execution architecture is proven, while differential
+correctness tests and representative application workloads remain active from
+the beginning.
+
+The project does not need to preserve the Zend C ABI. That freedom should be
+used deliberately for compact values, a purpose-built call ABI, frame elision,
+inline caches, typed execution plans, and precise deoptimization.
+
+## Non-negotiable correctness contract
+
+1. Baseline bytecode is the semantic source of truth.
+2. Every optimized operation has an exact baseline resume position.
+3. Guards run before the operation they protect mutates observable state.
+4. Completed operations remain committed; fallback never repeats a side effect.
+5. Type changes, overflow, references, COW, magic behavior, exceptions, and
+   polymorphic dispatch leave the optimized path before behavior can diverge.
+6. Removing every optimization cache must leave a correct executable program.
+7. Supported behavior is continuously compared with reference PHP.
+
+## Phase 1: optimal supported PHP core without JIT
+
+Optimize runtime costs that a JIT cannot repair by itself:
+
+- `Value` representation and scalar access;
+- packed/hash arrays and strings;
+- objects, declared properties, and copy-on-write behavior;
+- function and method ABI;
+- frame allocation, cleanup, and frame-free calls;
+- monomorphic inline caches;
+- memory ownership and lifecycle;
+- guarded fallback and precise deoptimization.
+
+The goal is not to win every microbenchmark. The exit criterion is that core
+runtime primitives are stable, remaining hot costs are measured on both
+microbenchmarks and representative programs, and no large structural overhead
+is being delegated to a future JIT.
+
+### Current performance workstream
+
+Extend `QuickScalarCall` in this order:
+
+1. scalar expressions in call arguments;
+2. composed scalar user functions;
+3. monomorphic scalar methods guarded by receiver class and method cache.
+
+This targets the largest current no-JIT gaps: scalar methods, composed function
+calls, and part of application-like object dispatch. String-append and
+array-append kernels follow because their relative gaps are large but their
+current absolute benchmark cost is smaller.
+
+Each layer requires:
+
+- a compiler/planner proof;
+- runtime identity, arity, type, and dispatch guards;
+- exact overflow/type/side-effect fallback tests;
+- an interleaved release benchmark against `php -n`;
+- a regression check on existing loop, call, and object workloads.
+
+Implementation checkpoint (2026-08-01): all three layers are implemented.
+On the current machine, the no-PGO best-of-three release run is approximately
+0.076 s RPHP versus 0.102 s PHP for the composed function benchmark, and
+0.092 s RPHP versus 0.097 s PHP for the nested scalar-method benchmark. Scalar
+argument preparation is compiled once into a compact typed plan instead of
+rescanning argument bytecode inside each loop iteration. The current
+31-workload suite has 26 strict RPHP wins and five PHP wins: direct scalar call,
+nested scalar call, string append, array build, and application-like object
+dispatch. These numbers are directional and must be remeasured after related
+runtime changes.
+
+The largest measured follow-up in this group is now application-like object
+dispatch with mutating property methods and a conditional call path (about
+0.115 s RPHP versus 0.090 s PHP). Array build/append and string append still
+have larger relative gaps, but much smaller absolute gaps in the current suite.
+
+## Phase 2: unified typed execution IR
+
+Consolidate the existing scalar, composed-scalar, property, recursion, and
+quick-loop plans into a small typed IR. A representative vocabulary is:
+
+```text
+GuardLong
+GuardClass
+GuardFunction
+LoadProperty
+StoreProperty
+AddLong
+SubLong
+MultiplyLong
+CallScalar
+Loop
+Exit
+Deopt
+```
+
+The no-JIT executor must run this IR first. That validates its semantics,
+guards, side exits, and profitability before native code generation exists.
+
+Exit criteria:
+
+- calls, methods, properties, and loops share one deoptimization contract;
+- plans can describe the majority of measured hot time without benchmark-only
+  shapes;
+- plan construction is outside the hot execution path;
+- baseline execution remains independently correct.
+
+Implementation checkpoint (2026-08-01): the first vertical slice is unified.
+Scalar function and method bodies, plus quick-loop scalar call arguments, now
+use the same `ScalarLongProgram`, `ScalarLongOp`, and context-independent
+`ScalarLongSource`. An `Input` is bound to a public argument by the function
+executor and to a CV slot by the quick-loop executor; constants and temporaries
+retain identical semantics in both contexts. The former duplicate quick scalar
+source, operation, and argument-plan types have been removed.
+
+The scalar ABI keeps eight output slots inline because eight is already the
+guarded maximum arity. An exact-length boxed output experiment reduced plan
+storage but regressed the measured scalar workloads by roughly 2–4 percent due
+to another allocation and pointer chase, so inline storage remains an executor
+layout decision rather than a second IR.
+
+The next slice is to represent guarded scalar calls in the shared IR and migrate
+`ComposedScalarLongOp::Call` onto it. Receiver-class and method-cache guards then
+join the same deoptimization contract, targeting the largest absolute remaining
+gap: application-like object dispatch.
+
+## Phase 3: representative real-code corpus
+
+Start before the JIT and continue through all later phases. Add progressively
+larger programs covering:
+
+- DTO and service-object flows;
+- routing and middleware-like dispatch;
+- dependency-container patterns;
+- collections and transformations;
+- serialization and parsing;
+- business calculations with exceptions and mixed data.
+
+This phase is deliberately concurrent with performance work. It prevents the
+runtime and IR from being optimized only for synthetic loops while avoiding a
+premature requirement to run an entire framework.
+
+## Phase 4: minimal typed-region JIT
+
+Lower only already-proven typed plans at first:
+
+- integer and floating-point arithmetic;
+- conditions and loops;
+- scalar functions and methods;
+- monomorphic declared properties;
+- calls inlined under identity/class guards;
+- side exits into the baseline interpreter.
+
+Do not build an opcode-by-opcode JIT. The benefit must come from keeping values
+in registers, hoisting guards, eliminating dispatch and frames, and compiling
+whole typed regions.
+
+Benchmark four modes, including cold and warm behavior:
+
+1. PHP without JIT;
+2. RPHP without JIT;
+3. PHP with JIT;
+4. RPHP with JIT.
+
+Also track compilation latency, code-cache memory, runtime memory, and
+deoptimization frequency.
+
+## Phase 5: compatibility breadth and production use
+
+Once the execution architecture and minimal JIT are proven, broaden support
+substantially:
+
+- references and complex aliasing;
+- exceptions and `finally` edges;
+- magic methods and wider object semantics;
+- inheritance, traits, closures, and generators;
+- standard library and Composer-oriented behavior;
+- extension strategy;
+- diagnostics, profiling, deployment, security, and operational hardening.
+
+Compatibility is expanded here, not first introduced here: every earlier
+phase already preserves the supported subset and exercises selected real code.
+
+## Decision gates
+
+Proceed from no-JIT optimization to unified IR when new handwritten kernels
+mostly duplicate combinations already expressible by typed plans.
+
+Proceed from typed IR to JIT when:
+
+- guards and exact deoptimization are stable;
+- representative hot regions are expressible;
+- the remaining cost is dominated by typed-plan dispatch, call boundaries, or
+  repeated guards that native code can remove.
+
+Do not postpone a runtime data-structure problem merely because a JIT exists.
+Strings, arrays, object layout, allocation, COW, and lifecycle remain runtime
+responsibilities.

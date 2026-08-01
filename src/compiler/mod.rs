@@ -9,8 +9,11 @@ use crate::vm::function::{
     SignatureInfo, FrameLayout, CallPlan,
     CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
     LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
+    PropertyGetterMethodPlan,
     BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
     LongRecursiveCondition,
+    ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongFunctionPlan,
+    ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -530,11 +533,17 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         },
         op_array,
         long_property_plan: None,
+        property_getter_plan: None,
         binary_long_recursion_plan: None,
+        scalar_long_plan: None,
+        composed_scalar_long_plan: None,
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
+    function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.composed_scalar_long_plan =
+        build_composed_scalar_long_function_plan(&function);
     function
 }
 
@@ -616,12 +625,270 @@ pub fn make_user_function_typed(
         },
         op_array,
         long_property_plan: None,
+        property_getter_plan: None,
         binary_long_recursion_plan: None,
+        scalar_long_plan: None,
+        composed_scalar_long_plan: None,
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
+    function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.composed_scalar_long_plan =
+        build_composed_scalar_long_function_plan(&function);
     function
+}
+
+const SCALAR_LONG_PLAN_MAX_ARGS: u32 = 8;
+const SCALAR_LONG_PLAN_MAX_OPS: usize = 8;
+
+fn scalar_long_source(
+    op_array: &OpArray,
+    temporary_results: &HashMap<u16, u8>,
+    this_offset: u32,
+    public_args: u32,
+    op_type: OpType,
+    operand: u16,
+) -> Option<ScalarLongSource> {
+    match op_type {
+        OpType::Cv
+            if operand as u32 >= this_offset
+                && (operand as u32) < this_offset + public_args =>
+        {
+            Some(ScalarLongSource::Input((operand as u32 - this_offset) as u16))
+        }
+        OpType::Const => op_array
+            .literals
+            .get(operand as usize)
+            .filter(|value| value.value_type() == crate::value::ValueType::Long)
+            .and_then(Value::as_long)
+            .map(ScalarLongSource::Constant),
+        OpType::Tmp | OpType::Var => temporary_results
+            .get(&operand)
+            .copied()
+            .map(ScalarLongSource::Temporary),
+        OpType::Unused => None,
+        _ => None,
+    }
+}
+
+/// Recognize a small straight-line integer expression such as
+/// `return ($a + 1) * $b`. This is deliberately narrower than general PHP
+/// arithmetic: runtime Long guards and checked operations must all succeed or
+/// the untouched canonical frame executes normally.
+fn build_scalar_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if common.plan.call != CallStrategy::FastScalar
+        || common.plan.ret != ReturnStrategy::Fast
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 2
+    {
+        return None;
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut operations = Vec::new();
+
+    for instruction in &op_array.instructions {
+        if instruction.opcode == OpCode::Return {
+            // The compiler appends an implicit `return null` even after an
+            // explicit return. Only an explicit scalar return proves a plan.
+            if instruction.extended_value == 0 {
+                return None;
+            }
+            let result = scalar_long_source(
+                op_array,
+                &temporary_results,
+                common.sig.this_offset,
+                public_args,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            let mut outputs = [ScalarLongSource::Constant(0); 8];
+            outputs[0] = result;
+            return Some(Box::new(ScalarLongFunctionPlan {
+                public_args: public_args as u8,
+                program: ScalarLongProgram {
+                    operations: operations.into_boxed_slice(),
+                    outputs,
+                    output_count: 1,
+                },
+            }));
+        }
+
+        let kind = match instruction.opcode {
+            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
+                ScalarLongOpKind::Add
+            }
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+                ScalarLongOpKind::Subtract
+            }
+            OpCode::Mul => ScalarLongOpKind::Multiply,
+            _ => return None,
+        };
+        if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let lhs = scalar_long_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = scalar_long_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        let result_index = operations.len() as u8;
+        operations.push(ScalarLongOp { kind, lhs, rhs });
+        temporary_results.insert(instruction.result, result_index);
+    }
+
+    None
+}
+
+const COMPOSED_SCALAR_LONG_PLAN_MAX_OPS: usize = 16;
+
+/// Recognize a straight-line integer body that composes direct user functions
+/// with arithmetic. The target function itself is guarded at runtime and must
+/// expose either a scalar leaf plan or another composed body plan.
+fn build_composed_scalar_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ComposedScalarLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if common.plan.call != CallStrategy::FastScalar
+        || common.plan.ret != ReturnStrategy::Fast
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || op_array.instructions.len() > 32
+    {
+        return None;
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut operations = Vec::new();
+    let mut contains_call = false;
+    let mut ip = 0usize;
+
+    while ip < op_array.instructions.len() {
+        let instruction = &op_array.instructions[ip];
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 || !contains_call {
+                return None;
+            }
+            let result = scalar_long_source(
+                op_array,
+                &temporary_results,
+                common.sig.this_offset,
+                public_args,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            return Some(Box::new(ComposedScalarLongFunctionPlan {
+                public_args: public_args as u8,
+                operations: operations.into_boxed_slice(),
+                result,
+            }));
+        }
+
+        if instruction.opcode == OpCode::InitFcall {
+            let num_args = instruction.op1 as usize;
+            if num_args > SCALAR_LONG_PLAN_MAX_ARGS as usize
+                || ip > u16::MAX as usize
+                || operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
+                || ip + num_args + 1 >= op_array.instructions.len()
+            {
+                return None;
+            }
+            let mut arguments = Vec::with_capacity(num_args);
+            for argument_index in 0..num_args {
+                let send = &op_array.instructions[ip + 1 + argument_index];
+                if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                    || send.op2 as usize != argument_index
+                {
+                    return None;
+                }
+                arguments.push(scalar_long_source(
+                    op_array,
+                    &temporary_results,
+                    common.sig.this_offset,
+                    public_args,
+                    send.op1_type,
+                    send.op1,
+                )?);
+            }
+            let do_fcall = &op_array.instructions[ip + 1 + num_args];
+            if do_fcall.opcode != OpCode::DoFcall
+                || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            let result_index = operations.len() as u8;
+            operations.push(ComposedScalarLongOp::Call {
+                cache_ip: ip as u16,
+                arguments: arguments.into_boxed_slice(),
+            });
+            temporary_results.insert(do_fcall.result, result_index);
+            contains_call = true;
+            ip += num_args + 2;
+            continue;
+        }
+
+        let kind = match instruction.opcode {
+            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
+                ScalarLongOpKind::Add
+            }
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+                ScalarLongOpKind::Subtract
+            }
+            OpCode::Mul => ScalarLongOpKind::Multiply,
+            _ => return None,
+        };
+        if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let lhs = scalar_long_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = scalar_long_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        let result_index = operations.len() as u8;
+        operations.push(ComposedScalarLongOp::Arithmetic(ScalarLongOp {
+            kind,
+            lhs,
+            rhs,
+        }));
+        temporary_results.insert(instruction.result, result_index);
+        ip += 1;
+    }
+
+    None
 }
 
 fn build_binary_long_recursion_plan(
@@ -812,6 +1079,50 @@ fn property_name<'a>(op_array: &'a OpArray, instruction: &Instruction) -> Option
         .literals
         .get(instruction.op2 as usize)
         .and_then(Value::as_str)
+}
+
+/// Prove the exact zero-argument getter shape emitted for
+/// `return $this->property;`.  Keeping this deliberately narrower than the
+/// discarded-return property planner means the runtime may safely materialize
+/// the fetched value without replaying any other method behavior.
+fn build_property_getter_method_plan(
+    function: &UserFunction,
+) -> Option<PropertyGetterMethodPlan> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    if common.plan.call != CallStrategy::FastScalar
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.this_offset != 1
+        || common.sig.public_arity() != 0
+        || op_array.num_cvs != common.sig.num_args
+        || op_array.instructions.len() != 3
+    {
+        return None;
+    }
+
+    let fetch = &op_array.instructions[0];
+    let explicit_return = &op_array.instructions[1];
+    let implicit_return = &op_array.instructions[2];
+    if fetch.opcode != OpCode::FetchObjR
+        || !matches!(fetch.result_type, OpType::Tmp | OpType::Var)
+        || property_name(op_array, fetch).is_none()
+        || explicit_return.opcode != OpCode::Return
+        || explicit_return.extended_value != 1
+        || explicit_return.op1_type != fetch.result_type
+        || explicit_return.op1 != fetch.result
+        || implicit_return.opcode != OpCode::Return
+        || implicit_return.extended_value != 0
+        || implicit_return.op1_type != OpType::Const
+        || op_array
+            .literals
+            .get(implicit_return.op1 as usize)?
+            .value_type()
+            != crate::value::ValueType::Null
+    {
+        return None;
+    }
+
+    Some(PropertyGetterMethodPlan { cache_ip: 0 })
 }
 
 fn register_long_plan_property(
@@ -1120,8 +1431,12 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     }
 
     function.long_property_plan = build_long_property_method_plan(&function);
+    function.property_getter_plan = build_property_getter_method_plan(&function);
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, method_name);
+    function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.composed_scalar_long_plan =
+        build_composed_scalar_long_function_plan(&function);
 
     function
 }
