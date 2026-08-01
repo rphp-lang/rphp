@@ -12,8 +12,9 @@ use crate::vm::function::{
     PropertyGetterMethodPlan,
     BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
     LongRecursiveCondition,
-    ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongFunctionPlan,
-    ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+    ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall,
+    ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram,
+    ScalarLongSource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -708,13 +709,11 @@ fn build_scalar_long_function_plan(
                 instruction.op1_type,
                 instruction.op1,
             )?;
-            let mut outputs = [ScalarLongSource::Constant(0); 8];
-            outputs[0] = result;
             return Some(Box::new(ScalarLongFunctionPlan {
                 public_args: public_args as u8,
                 program: ScalarLongProgram {
                     operations: operations.into_boxed_slice(),
-                    outputs,
+                    outputs: [result],
                     output_count: 1,
                 },
             }));
@@ -799,8 +798,11 @@ fn build_composed_scalar_long_function_plan(
             )?;
             return Some(Box::new(ComposedScalarLongFunctionPlan {
                 public_args: public_args as u8,
-                operations: operations.into_boxed_slice(),
-                result,
+                program: ScalarLongProgram {
+                    operations: operations.into_boxed_slice(),
+                    outputs: [result],
+                    output_count: 1,
+                },
             }));
         }
 
@@ -837,10 +839,10 @@ fn build_composed_scalar_long_function_plan(
                 return None;
             }
             let result_index = operations.len() as u8;
-            operations.push(ComposedScalarLongOp::Call {
+            operations.push(ComposedScalarLongOp::Call(ScalarLongCall {
                 cache_ip: ip as u16,
                 arguments: arguments.into_boxed_slice(),
-            });
+            }));
             temporary_results.insert(do_fcall.result, result_index);
             contains_call = true;
             ip += num_args + 2;

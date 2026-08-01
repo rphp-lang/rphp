@@ -120,16 +120,22 @@ executor and to a CV slot by the quick-loop executor; constants and temporaries
 retain identical semantics in both contexts. The former duplicate quick scalar
 source, operation, and argument-plan types have been removed.
 
-The scalar ABI keeps eight output slots inline because eight is already the
-guarded maximum arity. An exact-length boxed output experiment reduced plan
-storage but regressed the measured scalar workloads by roughly 2–4 percent due
-to another allocation and pointer chase, so inline storage remains an executor
-layout decision rather than a second IR.
+`ScalarLongProgram<Operation, OUTPUT_CAPACITY>` gives each program an exact
+compile-time inline output capacity: function and composed bodies use one slot,
+while quick argument plans use the guarded scalar ABI maximum of eight. This
+keeps the common IR without the extra allocation and 2–4 percent regression
+measured with exact-length boxed outputs.
 
-The next slice is to represent guarded scalar calls in the shared IR and migrate
-`ComposedScalarLongOp::Call` onto it. Receiver-class and method-cache guards then
-join the same deoptimization contract, targeting the largest absolute remaining
-gap: application-like object dispatch.
+The second vertical slice is also complete. Composed bodies use the same generic
+program container and express calls through `ScalarLongCall`. Baseline and quick
+executors share one inline-cache identity, `FastScalar` ABI, and arity guard;
+only their post-guard execution strategy differs. The no-PGO 31-workload result
+remains 26 RPHP wins, with the composed-call workload at approximately 0.076 s
+RPHP versus 0.100 s PHP.
+
+The next slice adds receiver-class and method-cache dispatch to the same guarded
+call contract, targeting the largest absolute remaining gap: application-like
+object dispatch.
 
 ## Phase 3: representative real-code corpus
 

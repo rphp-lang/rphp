@@ -14,7 +14,7 @@ use common::run_php;
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
-use rphp::vm::function::CallStrategy;
+use rphp::vm::function::{CallStrategy, ComposedScalarLongOp};
 
 // ══════════════════════════════════════════════════════════════════════
 // 1. Promotion: scalar recursion enters hot executor
@@ -252,7 +252,16 @@ function combine($a, $b) { return add1($a) + double($b); }
         .as_deref()
         .expect("composed scalar body plan");
     assert_eq!(plan.public_args, 2);
-    assert_eq!(plan.operations.len(), 3);
+    assert_eq!(plan.program.operations.len(), 3);
+    assert_eq!(plan.program.output_count, 1);
+    assert_eq!(
+        plan.program
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation, ComposedScalarLongOp::Call(_)))
+            .count(),
+        2
+    );
 }
 
 #[test]

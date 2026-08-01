@@ -115,12 +115,12 @@ pub struct ScalarLongOp {
 /// External inputs are described by `ScalarLongSource`; arithmetic temporaries
 /// are local to the program and outputs are resolved after all operations.
 #[derive(Debug, Clone)]
-pub struct ScalarLongProgram {
-    pub operations: Box<[ScalarLongOp]>,
-    /// Inline output storage matches the guarded scalar ABI limit. Keeping it
-    /// beside the program avoids a second allocation and pointer chase in hot
-    /// calls; `output_count` defines the initialized prefix.
-    pub outputs: [ScalarLongSource; 8],
+pub struct ScalarLongProgram<Operation = ScalarLongOp, const OUTPUT_CAPACITY: usize = 8> {
+    pub operations: Box<[Operation]>,
+    /// Inline output storage avoids a second allocation and pointer chase in
+    /// hot calls. Function bodies instantiate one slot, while argument plans
+    /// use the guarded scalar ABI capacity of eight.
+    pub outputs: [ScalarLongSource; OUTPUT_CAPACITY],
     pub output_count: u8,
 }
 
@@ -132,26 +132,29 @@ pub struct ScalarLongProgram {
 /// generic numeric and error semantics remain the canonical fallback.
 pub struct ScalarLongFunctionPlan {
     pub public_args: u8,
-    pub program: ScalarLongProgram,
+    pub program: ScalarLongProgram<ScalarLongOp, 1>,
 }
 
-/// One operation in a pure scalar body that may compose direct user calls with
-/// checked integer arithmetic. Call targets are resolved through the original
-/// InitFcall inline-cache slot, preserving normal namespace/runtime dispatch.
+/// Guarded scalar call embedded in a typed program. The cache position is
+/// relative to the owning function's canonical bytecode and remains the source
+/// of truth for runtime function identity and namespace fallback resolution.
+pub struct ScalarLongCall {
+    pub cache_ip: u16,
+    pub arguments: Box<[ScalarLongSource]>,
+}
+
+/// One instruction in a pure scalar body that composes direct user calls with
+/// checked integer arithmetic.
 pub enum ComposedScalarLongOp {
     Arithmetic(ScalarLongOp),
-    Call {
-        cache_ip: u16,
-        arguments: Box<[ScalarLongSource]>,
-    },
+    Call(ScalarLongCall),
 }
 
 /// Compile-time proof for a straight-line scalar body containing pure direct
 /// function calls, for example `return add1($a) + double($b)`.
 pub struct ComposedScalarLongFunctionPlan {
     pub public_args: u8,
-    pub operations: Box<[ComposedScalarLongOp]>,
-    pub result: ScalarLongSource,
+    pub program: ScalarLongProgram<ComposedScalarLongOp, 1>,
 }
 
 /// Function type discriminant
