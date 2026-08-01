@@ -9,6 +9,8 @@ use crate::vm::function::{
     SignatureInfo, FrameLayout, CallPlan,
     CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
     LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
+    BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
+    LongRecursiveCondition,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -507,7 +509,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
-    UserFunction {
+    let mut function = UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,
             sig: SignatureInfo {
@@ -528,7 +530,12 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         },
         op_array,
         long_property_plan: None,
-    }
+        binary_long_recursion_plan: None,
+    };
+    let self_name = function.op_array.name.clone();
+    function.binary_long_recursion_plan =
+        build_binary_long_recursion_plan(&function, &self_name);
+    function
 }
 
 /// Extended full constructor with type hints and param names.
@@ -588,7 +595,7 @@ pub fn make_user_function_typed(
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
-    UserFunction {
+    let mut function = UserFunction {
         common: FunctionCommon {
             fn_type: FunctionType::User,
             sig: SignatureInfo {
@@ -609,7 +616,167 @@ pub fn make_user_function_typed(
         },
         op_array,
         long_property_plan: None,
+        binary_long_recursion_plan: None,
+    };
+    let self_name = function.op_array.name.clone();
+    function.binary_long_recursion_plan =
+        build_binary_long_recursion_plan(&function, &self_name);
+    function
+}
+
+fn build_binary_long_recursion_plan(
+    function: &UserFunction,
+    self_name: &str,
+) -> Option<BinaryLongRecursionPlan> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let this_offset = common.sig.this_offset;
+    let argument_cv = this_offset as u16;
+    let has_no_type_hints = common
+        .sig
+        .param_type_hints
+        .iter()
+        .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
+    if self_name.is_empty()
+        || common.sig.public_arity() != 1
+        || common.sig.required_num_args != 1
+        || common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || !has_no_type_hints
+        || !matches!(common.sig.return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed)
+        || op_array.is_generator
+        || !op_array.global_vars.is_empty()
+        || !op_array.static_vars.is_empty()
+        || !op_array.try_entries.is_empty()
+        || op_array.num_cvs != common.sig.num_args
+        || op_array.instructions.len() != 14
+    {
+        return None;
     }
+
+    let instructions = &op_array.instructions;
+    let condition = match instructions[0].opcode {
+        OpCode::JmpZ_Lt_CvConst => LongRecursiveCondition::LessThan,
+        OpCode::JmpZ_Le_CvConst => LongRecursiveCondition::LessThanOrEqual,
+        _ => return None,
+    };
+    let condition_instruction = &instructions[0];
+    if condition_instruction.op1_type != OpType::Cv
+        || condition_instruction.op1 != argument_cv
+        || condition_instruction.op2_type != OpType::Const
+        || condition_instruction.result as usize != 3
+        || instructions[1].opcode != OpCode::JmpZ
+        || instructions[1].op2 as usize != 3
+    {
+        return None;
+    }
+    let threshold = op_array
+        .literals
+        .get(condition_instruction.op2 as usize)?
+        .as_long()?;
+
+    let base_return = &instructions[2];
+    if base_return.opcode != OpCode::Return {
+        return None;
+    }
+    let base = match base_return.op1_type {
+        OpType::Cv if base_return.op1 == argument_cv => LongRecursiveBase::Argument,
+        OpType::Const => LongRecursiveBase::Constant(
+            op_array.literals.get(base_return.op1 as usize)?.as_long()?,
+        ),
+        _ => return None,
+    };
+
+    let recursive_call = |start: usize| -> Option<(i64, u16)> {
+        let initializer = &instructions[start];
+        let subtract = &instructions[start + 1];
+        let send = &instructions[start + 2];
+        let call = &instructions[start + 3];
+
+        if this_offset == 0 {
+            if initializer.opcode != OpCode::InitFcall
+                || initializer.op1 != 1
+                || initializer.op2_type != OpType::Const
+            {
+                return None;
+            }
+        } else if initializer.opcode != OpCode::InitMethodCall
+            || initializer.op1_type != OpType::Cv
+            || initializer.op1 != 0
+            || initializer.op2_type != OpType::Const
+            || initializer.extended_value != 1
+        {
+            return None;
+        }
+        let target_name = op_array
+            .literals
+            .get(initializer.op2 as usize)?
+            .as_str()?;
+        if !target_name.eq_ignore_ascii_case(self_name) {
+            return None;
+        }
+
+        if subtract.opcode != OpCode::Sub_CvConst
+            || subtract.op1_type != OpType::Cv
+            || subtract.op1 != argument_cv
+            || subtract.op2_type != OpType::Const
+            || !matches!(subtract.result_type, OpType::Tmp | OpType::Var)
+            || send.opcode != OpCode::SendVal
+            || send.op1_type != subtract.result_type
+            || send.op1 != subtract.result
+            || send.op2 != argument_cv
+            || call.opcode != OpCode::DoFcall
+            || !matches!(call.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let delta = op_array
+            .literals
+            .get(subtract.op2 as usize)?
+            .as_long()?;
+        if delta <= 0 {
+            return None;
+        }
+        Some((delta, call.result))
+    };
+
+    let (first_delta, first_result) = recursive_call(3)?;
+    let (second_delta, second_result) = recursive_call(7)?;
+    let combine_instruction = &instructions[11];
+    let operands_match = combine_instruction.op1_type == OpType::Tmp
+        && combine_instruction.op2_type == OpType::Tmp
+        && combine_instruction.op1 == first_result
+        && combine_instruction.op2 == second_result;
+    let commutative_operands_match = operands_match
+        || (combine_instruction.op1_type == OpType::Tmp
+            && combine_instruction.op2_type == OpType::Tmp
+            && combine_instruction.op1 == second_result
+            && combine_instruction.op2 == first_result);
+    let combine = match combine_instruction.opcode {
+        OpCode::Add_TmpTmp if commutative_operands_match => LongRecursiveCombine::Add,
+        OpCode::Sub_TmpTmp if operands_match => LongRecursiveCombine::Subtract,
+        OpCode::Mul if commutative_operands_match => LongRecursiveCombine::Multiply,
+        _ => return None,
+    };
+    let result_return = &instructions[12];
+    if !matches!(combine_instruction.result_type, OpType::Tmp | OpType::Var)
+        || result_return.opcode != OpCode::Return
+        || result_return.op1_type != combine_instruction.result_type
+        || result_return.op1 != combine_instruction.result
+        || instructions[13].opcode != OpCode::Return
+    {
+        return None;
+    }
+
+    Some(BinaryLongRecursionPlan {
+        condition,
+        threshold,
+        base,
+        first_delta,
+        second_delta,
+        combine,
+        method_name: (this_offset == 1).then(|| self_name.to_string().into_boxed_str()),
+    })
 }
 
 const LONG_PROPERTY_PLAN_MAX_ARGS: u32 = 8;
@@ -921,7 +1088,7 @@ pub fn make_direct_internal_function(
 /// `this_offset` is still zero: `num_args` already includes the hidden `$this`
 /// slot while `required_num_args` intentionally counts only public arguments.
 /// Re-run that classification once the public signature is known.
-pub fn finalize_user_method(mut function: UserFunction) -> UserFunction {
+pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> UserFunction {
     function.common.sig.this_offset = 1;
 
     let common = &function.common;
@@ -953,6 +1120,8 @@ pub fn finalize_user_method(mut function: UserFunction) -> UserFunction {
     }
 
     function.long_property_plan = build_long_property_method_plan(&function);
+    function.binary_long_recursion_plan =
+        build_binary_long_recursion_plan(&function, method_name);
 
     function
 }

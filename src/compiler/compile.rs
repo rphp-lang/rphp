@@ -1341,17 +1341,20 @@ impl Compiler {
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
-                    let user_func = finalize_user_method(make_user_function_typed(
-                        op_array,
-                        cp.num_args + 1,
-                        cp.required_num_args,
-                        cp.is_variadic,
-                        cp.variadic_cv_index,
-                        cp.ref_args,
-                        cp.type_hints,
-                        cp.param_names,
-                        cp.return_type_hint,
-                    ));
+                    let user_func = finalize_user_method(
+                        make_user_function_typed(
+                            op_array,
+                            cp.num_args + 1,
+                            cp.required_num_args,
+                            cp.is_variadic,
+                            cp.variadic_cv_index,
+                            cp.ref_args,
+                            cp.type_hints,
+                            cp.param_names,
+                            cp.return_type_hint,
+                        ),
+                        &method.name,
+                    );
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1518,17 +1521,20 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = finalize_user_method(make_user_function_typed(
-                        op_array,
-                        cp.num_args + 1,
-                        cp.required_num_args,
-                        cp.is_variadic,
-                        cp.variadic_cv_index,
-                        cp.ref_args,
-                        cp.type_hints,
-                        cp.param_names,
-                        cp.return_type_hint,
-                    ));
+                    let user_func = finalize_user_method(
+                        make_user_function_typed(
+                            op_array,
+                            cp.num_args + 1,
+                            cp.required_num_args,
+                            cp.is_variadic,
+                            cp.variadic_cv_index,
+                            cp.ref_args,
+                            cp.type_hints,
+                            cp.param_names,
+                            cp.return_type_hint,
+                        ),
+                        &method.name,
+                    );
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }
@@ -1611,17 +1617,20 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = finalize_user_method(make_user_function_typed(
-                        op_array,
-                        cp.num_args + 1,
-                        cp.required_num_args,
-                        cp.is_variadic,
-                        cp.variadic_cv_index,
-                        cp.ref_args,
-                        cp.type_hints,
-                        cp.param_names,
-                        cp.return_type_hint,
-                    ));
+                    let user_func = finalize_user_method(
+                        make_user_function_typed(
+                            op_array,
+                            cp.num_args + 1,
+                            cp.required_num_args,
+                            cp.is_variadic,
+                            cp.variadic_cv_index,
+                            cp.ref_args,
+                            cp.type_hints,
+                            cp.param_names,
+                            cp.return_type_hint,
+                        ),
+                        &method.name,
+                    );
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
                 }

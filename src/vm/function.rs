@@ -38,6 +38,43 @@ pub struct LongPropertyMethodPlan {
     pub operations: Box<[LongPropertyOp]>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongRecursiveCondition {
+    LessThan,
+    LessThanOrEqual,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongRecursiveBase {
+    Argument,
+    Constant(i64),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LongRecursiveCombine {
+    Add,
+    Subtract,
+    Multiply,
+}
+
+/// A compile-time proof for a pure one-argument binary recurrence:
+///
+/// `base(n) ? base_value : self(n - first) OP self(n - second)`
+///
+/// Execution preserves the recursive traversal order but uses compact typed
+/// activations rather than a complete PHP ExecuteData frame for every node.
+pub struct BinaryLongRecursionPlan {
+    pub condition: LongRecursiveCondition,
+    pub threshold: i64,
+    pub base: LongRecursiveBase,
+    pub first_delta: i64,
+    pub second_delta: i64,
+    pub combine: LongRecursiveCombine,
+    /// Present for `$this->method()` recursion. Runtime verifies that virtual
+    /// dispatch on the current receiver still resolves to this exact method.
+    pub method_name: Option<Box<str>>,
+}
+
 /// Function type discriminant
 #[repr(u8)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -257,6 +294,7 @@ pub struct UserFunction {
     pub common: FunctionCommon,
     pub op_array: OpArray,
     pub long_property_plan: Option<Box<LongPropertyMethodPlan>>,
+    pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
 }
 
 /// Handler signature for internal (built-in) functions.

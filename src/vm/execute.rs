@@ -10,7 +10,7 @@ use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{Instruction, OpType};
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition};
 use super::quick::{
     QuickArrayIndex, QuickIncrementKind, QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition,
     QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget,
@@ -557,6 +557,100 @@ unsafe fn try_execute_long_property_method(
         }
     }
     true
+}
+
+const BINARY_LONG_RECURSION_MAX_DEPTH: usize = 256;
+
+#[derive(Clone, Copy)]
+struct BinaryLongActivation {
+    argument: i64,
+    first_result: i64,
+    state: u8,
+}
+
+/// Preserve the source recursion's depth-first evaluation order using compact
+/// integer activations. The recognized body is pure, so any failed arithmetic
+/// guard can safely restart from the root through the canonical PHP executor.
+#[inline(never)]
+fn execute_binary_long_recursion(
+    eg: &ExecutorGlobals,
+    plan: &BinaryLongRecursionPlan,
+    input: i64,
+) -> Result<Option<i64>, VmError> {
+    let empty = BinaryLongActivation {
+        argument: 0,
+        first_result: 0,
+        state: 0,
+    };
+    let mut activations = [empty; BINARY_LONG_RECURSION_MAX_DEPTH];
+    let mut depth = 0usize;
+    let mut argument = input;
+    let mut result = 0i64;
+    let mut has_result = false;
+    let mut steps = 0u32;
+
+    loop {
+        steps = steps.wrapping_add(1);
+        if steps & 1023 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+            handle_interrupt(eg)?;
+        }
+
+        if !has_result {
+            let is_base = match plan.condition {
+                LongRecursiveCondition::LessThan => argument < plan.threshold,
+                LongRecursiveCondition::LessThanOrEqual => argument <= plan.threshold,
+            };
+            if is_base {
+                result = match plan.base {
+                    LongRecursiveBase::Argument => argument,
+                    LongRecursiveBase::Constant(value) => value,
+                };
+            } else {
+                if depth == BINARY_LONG_RECURSION_MAX_DEPTH {
+                    return Ok(None);
+                }
+                activations[depth] = BinaryLongActivation {
+                    argument,
+                    first_result: 0,
+                    state: 0,
+                };
+                depth += 1;
+                let Some(next) = argument.checked_sub(plan.first_delta) else {
+                    return Ok(None);
+                };
+                argument = next;
+                continue;
+            }
+        }
+
+        if depth == 0 {
+            return Ok(Some(result));
+        }
+
+        let activation = &mut activations[depth - 1];
+        if activation.state == 0 {
+            activation.first_result = result;
+            activation.state = 1;
+            let Some(next) = activation.argument.checked_sub(plan.second_delta) else {
+                return Ok(None);
+            };
+            argument = next;
+            has_result = false;
+            continue;
+        }
+
+        let combined = match plan.combine {
+            LongRecursiveCombine::Add => activation.first_result.checked_add(result),
+            LongRecursiveCombine::Subtract => activation.first_result.checked_sub(result),
+            LongRecursiveCombine::Multiply => activation.first_result.checked_mul(result),
+        };
+        let Some(combined) = combined else {
+            return Ok(None);
+        };
+        result = combined;
+        depth -= 1;
+        has_result = true;
+    }
 }
 
 /// Propagate heap-backed return values into the caller's cleanup bookkeeping.
@@ -7770,6 +7864,78 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // no variadics, no generator, no globals, no type hints, no return type.
                 // Runtime: only check fn_type + plan + no pending edge cases.
                 let func_common_fast = unsafe { &*(*call).func };
+
+                // A compiler-proven pure binary recurrence can preserve the
+                // PHP depth-first evaluation order with compact integer
+                // activations. The already-created root frame supplies the
+                // canonical argument ABI; all recursive descendants avoid it.
+                if func_common_fast.fn_type == FunctionType::User
+                    && unsafe { (*call).num_args } == 1
+                    && !unsafe { (*call).named_args_used }
+                    && eg.pending_invoke_this.is_none()
+                    && eg.pending_named_variadic.is_empty()
+                    && matches!(opline.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+                {
+                    let user = unsafe { &*((*call).func as *const UserFunction) };
+                    if let Some(plan) = user.binary_long_recursion_plan.as_ref() {
+                        let method_dispatch_matches = if let Some(method_name) = &plan.method_name {
+                            let receiver = unsafe { (*call).cv(0) };
+                            if let Some(object) = receiver.as_object() {
+                                let full_name = format!("{}::{}", object.class_name, method_name);
+                                drop(object);
+                                eg.find_function(&full_name)
+                                    .is_some_and(|resolved| resolved == unsafe { (*call).func })
+                            } else {
+                                false
+                            }
+                        } else {
+                            true
+                        };
+                        let argument_cv = func_common_fast.sig.param_cv_index(0);
+                        let argument = unsafe { (*call).cv(argument_cv) };
+                        if method_dispatch_matches
+                            && argument.value_type() == ValueType::Long
+                            && !argument.is_reference()
+                        {
+                            let evaluated = execute_binary_long_recursion(
+                                eg,
+                                plan,
+                                unsafe { argument.raw_long() },
+                            );
+                            match evaluated {
+                                Ok(Some(result)) => {
+                                    stats::inc_do_fcall_fast();
+                                    stats::inc_return_fast();
+                                    let count = func_common_fast.call_count.get();
+                                    if count < u32::MAX {
+                                        func_common_fast.call_count.set(count + 1);
+                                    }
+                                    if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                                        let result_ptr = unsafe {
+                                            (frame as *mut Value)
+                                                .add(CALL_FRAME_SLOTS + opline.result as usize)
+                                        };
+                                        unsafe { frame_tmp_set_long(frame, result_ptr, result) };
+                                    }
+                                    if unsafe { (*call).has_heap_slots } {
+                                        unsafe { cleanup_frame_slots(call) };
+                                    }
+                                    eg.vm_stack.pop_call_frame(call);
+                                    unsafe { (*frame).opline = opline_ptr.add(1) };
+                                    continue 'vm;
+                                }
+                                Ok(None) => {}
+                                Err(error) => {
+                                    if unsafe { (*call).has_heap_slots } {
+                                        unsafe { cleanup_frame_slots(call) };
+                                    }
+                                    eg.vm_stack.pop_call_frame(call);
+                                    return Err(error);
+                                }
+                            }
+                        }
+                    }
+                }
 
                 // ── Fast path for fixed-signature internal functions ──
                 // Internal handlers still receive their ordinary ExecuteData
