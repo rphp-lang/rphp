@@ -1577,6 +1577,23 @@ impl Value {
         }
     }
 
+    /// Get a mutable array only when this Value is its sole COW owner.
+    ///
+    /// Guarded execution regions use this before retaining a raw array pointer:
+    /// a shared array must fall back so the canonical opcode performs the PHP
+    /// copy-on-write detach at the first mutation.
+    #[inline]
+    pub(crate) fn as_array_mut_if_unique(&mut self) -> Option<&mut PhpArray> {
+        if self.value_type() != ValueType::Array {
+            return None;
+        }
+        unsafe {
+            let rc_ptr = self.data.ptr as *mut PhpArray;
+            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+            (Rc::strong_count(&rc) == 1).then(|| &mut *rc_ptr)
+        }
+    }
+
     #[inline]
     pub fn value_type(&self) -> ValueType {
         // Safety: type_info low byte is always a valid ValueType

@@ -293,6 +293,14 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Append a retained Long value to a unique COW array. Runtime resolves
+    /// the mutable packed/hash storage once at region entry.
+    ArrayPushLong {
+        array: u16,
+        value: QuickLongOperand,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     Add {
         lhs: u16,
         rhs: u16,
@@ -426,6 +434,7 @@ impl QuickLongOp {
             }
             Self::ModConst { next_target, .. }
             | Self::FetchArrayLong { next_target, .. }
+            | Self::ArrayPushLong { next_target, .. }
             | Self::Add { next_target, .. }
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
@@ -463,6 +472,7 @@ pub struct QuickLongOpsLoop {
     pub long_output_mask: u64,
     pub bool_output_mask: u64,
     pub array_input_mask: u64,
+    pub array_output_mask: u64,
     pub string_input_mask: u64,
     pub string_output_mask: u64,
     pub object_input_mask: u64,
@@ -1616,12 +1626,14 @@ pub fn detect_long_ops_loop(
     let mut long_output_mask = 0u64;
     let mut bool_output_mask = 0u64;
     let mut array_input_mask = 0u64;
+    let mut array_output_mask = 0u64;
     let mut string_input_mask = 0u64;
     let mut string_output_mask = 0u64;
     let mut object_input_mask = 0u64;
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_object_call = false;
+    let mut has_array_push = false;
     let mut has_post_inc = false;
     let mut ip = header_ip;
 
@@ -1924,6 +1936,33 @@ pub fn detect_long_ops_loop(
                     index,
                     result: instruction.result,
                     destination,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
+                }
+            }
+            OpCode::ArrayPushOp => {
+                if instruction.op1_type != OpType::Cv
+                    || instruction.result_type != OpType::Unused
+                {
+                    return None;
+                }
+                let value = match instruction.op2_type {
+                    OpType::Cv | OpType::Tmp | OpType::Var => {
+                        add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
+                        QuickLongOperand::Slot(instruction.op2)
+                    }
+                    OpType::Const => {
+                        QuickLongOperand::Const(long_literal(op_array, instruction.op2)?)
+                    }
+                    OpType::Unused => return None,
+                };
+                add_mask_slot(&mut array_output_mask, instruction.op1, total_slots)?;
+                has_array_push = true;
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::ArrayPushLong {
+                    array: instruction.op1,
+                    value,
                     next_target: QuickLongTarget::unresolved(ip)?,
                     resume_ip,
                 }
@@ -2342,6 +2381,7 @@ pub fn detect_long_ops_loop(
             | QuickLongOp::BranchUnlessEq { resume_ip, .. }
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
+            | QuickLongOp::ArrayPushLong { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
             | QuickLongOp::PropertyMethodCall { resume_ip, .. }
             | QuickLongOp::PropertyGetterCall { resume_ip, .. }
@@ -2408,7 +2448,7 @@ pub fn detect_long_ops_loop(
             QuickLongOp::BranchUnlessLt { .. } | QuickLongOp::BranchUnlessEq { .. }
         )
     });
-    if !(has_add || has_assign || has_internal_branch || has_object_call)
+    if !(has_add || has_assign || has_internal_branch || has_object_call || has_array_push)
         || !has_post_inc
         || !matches!(
             ops.first(),
@@ -2439,11 +2479,18 @@ pub fn detect_long_ops_loop(
 
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
-        || array_input_mask & (long_mask | bool_output_mask) != 0
-        || string_input_mask & (long_mask | bool_output_mask | array_input_mask) != 0
+        || array_input_mask & (long_mask | bool_output_mask | array_output_mask) != 0
+        || array_output_mask & (long_mask | bool_output_mask) != 0
+        || string_input_mask
+            & (long_mask | bool_output_mask | array_input_mask | array_output_mask)
+            != 0
         || string_output_mask & !string_input_mask != 0
         || object_input_mask
-            & (long_mask | bool_output_mask | array_input_mask | string_input_mask)
+            & (long_mask
+                | bool_output_mask
+                | array_input_mask
+                | array_output_mask
+                | string_input_mask)
             != 0
     {
         return None;
@@ -2452,6 +2499,7 @@ pub fn detect_long_ops_loop(
         | long_output_mask
         | bool_output_mask
         | array_input_mask
+        | array_output_mask
         | string_input_mask
         | string_output_mask
         | object_input_mask;
@@ -2466,6 +2514,7 @@ pub fn detect_long_ops_loop(
         long_output_mask,
         bool_output_mask,
         array_input_mask,
+        array_output_mask,
         string_input_mask,
         string_output_mask,
         object_input_mask,
@@ -3161,6 +3210,38 @@ for ($i = 0; $i < 10; $i++) {
                 ..
             })
         ));
+    }
+
+    #[test]
+    fn detects_long_array_push_as_typed_op() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [];
+for ($i = 0; $i < 100; $i++) {
+    $values[] = $i;
+}
+",
+        );
+        assert!(matches!(
+            plan.ops.as_slice(),
+            [
+                QuickLongOp::BranchUnlessLt { .. },
+                QuickLongOp::ArrayPushLong {
+                    value: QuickLongOperand::Slot(_),
+                    ..
+                },
+                QuickLongOp::PostIncLoopLt { .. },
+            ]
+        ));
+        assert_ne!(plan.array_output_mask, 0);
+        assert_eq!(
+            plan.array_output_mask
+                & (plan.long_input_mask
+                    | plan.long_output_mask
+                    | plan.bool_output_mask
+                    | plan.array_input_mask),
+            0
+        );
     }
 
     #[test]

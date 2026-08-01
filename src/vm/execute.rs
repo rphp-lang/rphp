@@ -7921,6 +7921,7 @@ unsafe fn run_quick_long_ops_loop(
         || (*frame).heap_bitmap
             & (plan.involved_mask
                 & !(plan.array_input_mask
+                    | plan.array_output_mask
                     | plan.string_input_mask
                     | plan.object_input_mask))
             != 0
@@ -7977,6 +7978,19 @@ unsafe fn run_quick_long_ops_loop(
         return dispatch_quick_long_conditional_kernel(
             eg, frame, op_array, plan, slot_base, slots, kernel, body,
         );
+    }
+
+    let mut mutable_arrays = [std::ptr::null_mut(); 64];
+    let mut array_output_mask = plan.array_output_mask;
+    while array_output_mask != 0 {
+        let slot = array_output_mask.trailing_zeros() as usize;
+        array_output_mask &= array_output_mask - 1;
+        let value = &mut *slot_base.add(slot);
+        let Some(array) = value.as_array_mut_if_unique() else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        mutable_arrays[slot] = array;
     }
 
     let mut arrays = [QuickLongArray::EMPTY; 64];
@@ -8137,6 +8151,21 @@ unsafe fn run_quick_long_ops_loop(
                     slots[destination as usize] = fetched;
                     dirty_long_mask |= 1u64 << destination;
                 }
+                next_target
+            }
+            QuickLongOp::ArrayPushLong {
+                array,
+                value,
+                next_target,
+                ..
+            } => {
+                let value = match value {
+                    QuickLongOperand::Slot(slot) => slots[slot as usize],
+                    QuickLongOperand::Const(value) => value,
+                };
+                let array = mutable_arrays[array as usize];
+                debug_assert!(!array.is_null());
+                (*array).push(Value::long(value));
                 next_target
             }
             QuickLongOp::Add {

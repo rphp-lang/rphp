@@ -70,13 +70,15 @@ On the current machine, a no-PGO release run is approximately 0.078 s RPHP
 versus 0.101 s PHP for the composed function benchmark, and 0.090 s RPHP versus
 0.093 s PHP for the scalar-method benchmark. Scalar argument preparation is
 compiled once into a compact typed plan instead of rescanning argument bytecode
-inside each loop iteration. The current 31-workload suite has 29 strict RPHP
-wins and two PHP wins: string append and array build. These numbers are
-directional and must be remeasured after related runtime changes.
+inside each loop iteration. The current 31-workload suite has 30 strict RPHP
+wins and one PHP win, string append. These numbers are directional and must be
+remeasured after related runtime changes.
 
-The largest measured remaining absolute gap is now array build/append at about
-0.0060 s RPHP versus 0.0039 s PHP. String append has a smaller absolute gap at
-about 0.0017 s versus 0.0012 s.
+In the published suite, the remaining gap is string append at about 0.0017 s
+RPHP versus 0.0012 s PHP. Isolated packed-array append still has structural
+headroom at approximately 0.0030 to 0.0036 s versus 0.0018 s, even though faster
+RPHP reads make the combined array build-and-sum workload a 0.0036 s versus
+0.0038 s RPHP win.
 
 ## Phase 2: unified typed execution IR
 
@@ -176,6 +178,22 @@ the dominant costs before this change. In the full no-PGO suite, direct scalar
 call improves further to approximately 0.046 s RPHP versus 0.075 s PHP and
 nested scalar call to 0.011 s versus 0.019 s. The composed call-heavy workload
 remains approximately 0.077 s versus 0.100 s.
+
+The seventh vertical slice adds `ArrayPushLong` to the general typed loop IR.
+The planner accepts Long CV, temporary, and literal values and records mutated
+array slots separately from immutable array inputs. Runtime verifies type,
+reference state, and unique COW ownership once at region entry, then retains the
+mutable `PhpArray` and appends Long values without repeated opcode dispatch,
+cloning, or refcount checks. Shared and reference-backed slots retain canonical
+COW behavior through baseline fallback; interrupts and arithmetic side exits
+commit completed appends exactly once.
+
+Profiling separated the old array workload into a slow append phase and an
+already-fast read phase. With the typed append operation, 499,967 of 500,000
+benchmark appends execute in one guarded region with zero deoptimizations. The
+combined array build-and-sum workload improves from approximately 0.0060 s to
+0.0036 s RPHP versus 0.0038 s PHP, while the rest of the 31-workload suite
+retains its previous wins.
 
 ## Phase 3: representative real-code corpus
 

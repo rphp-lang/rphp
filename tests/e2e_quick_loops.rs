@@ -1542,6 +1542,76 @@ echo $i;
 }
 
 #[test]
+fn quick_long_array_push_builds_unique_packed_array() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$constants = [];
+for ($i = 0; $i < 1000; $i++) {
+    $values[] = $i;
+}
+for ($i = 0; $i < 1000; $i++) {
+    $constants[] = 7;
+}
+echo count($values);
+echo '|';
+echo $values[0];
+echo '|';
+echo $values[999];
+echo '|';
+echo $constants[999];
+echo '|';
+echo $i;
+"
+        ),
+        "1000|0|999|7|1000"
+    );
+}
+
+#[test]
+fn quick_long_array_push_preserves_cow_alias() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+$copy = $values;
+for ($i = 0; $i < 1000; $i++) {
+    $values[] = $i;
+}
+echo count($values);
+echo '|';
+echo count($copy);
+echo '|';
+echo $values[999];
+"
+        ),
+        "1000|0|999"
+    );
+}
+
+#[test]
+fn quick_long_array_push_reference_uses_canonical_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php
+function append_many(&$values) {
+    for ($i = 0; $i < 100; $i++) {
+        $values[] = 7;
+    }
+}
+$values = [];
+append_many($values);
+echo count($values);
+echo '|';
+echo $values[99];
+"
+        ),
+        "100|7"
+    );
+}
+
+#[test]
 fn quick_hash_invariant_string_fetch_falls_back_for_missing_value_exactly() {
     assert_eq!(
         run_php(
