@@ -78,6 +78,31 @@ fn test_known_unary_builtin_is_lowered_to_frame_free_call() {
 }
 
 #[test]
+fn test_known_binary_builtin_is_lowered_to_frame_free_call() {
+    let opcodes = main_opcodes("<?php $left = 9; $right = 2; intdiv($left, $right);");
+    assert!(opcodes.contains(&OpCode::DirectInternalCall2));
+    assert!(!opcodes.contains(&OpCode::InitFcall));
+    assert!(!opcodes.contains(&OpCode::SendVal));
+    assert!(!opcodes.contains(&OpCode::DoFcall));
+
+    assert_eq!(run_php("<?php echo intdiv('9', 2);"), "4");
+    assert_eq!(run_php("<?php echo gettype(intdiv(1, 0));"), "boolean");
+}
+
+#[test]
+fn test_direct_binary_builtin_preserves_namespace_resolution() {
+    let out = run_php(r#"<?php
+namespace DirectBinaryShadow {
+    function intdiv($left, $right) { return 99; }
+    echo intdiv(9, 2);
+    echo ':';
+    echo \intdiv(9, 2);
+}
+"#);
+    assert_eq!(out, "99:4");
+}
+
+#[test]
 fn test_discarded_direct_builtin_skips_tmp_result_write() {
     let compiled = compile_source("<?php $value = 'abc'; strlen($value);");
     let direct = compiled
@@ -133,6 +158,9 @@ fn test_direct_builtin_result_kind_controls_frame_cleanup() {
     let scalar = compile_source("<?php function scalar_direct($value) { return strlen($value); }");
     assert_eq!(scalar.functions[0].1.common.plan.cleanup, CleanupMode::SkipScan);
 
+    let binary = compile_source("<?php function binary_direct($left, $right) { return intdiv($left, $right); }");
+    assert_eq!(binary.functions[0].1.common.plan.cleanup, CleanupMode::SkipScan);
+
     let heap = compile_source("<?php function heap_direct($value) { return strtolower($value); }");
     assert_eq!(heap.functions[0].1.common.plan.cleanup, CleanupMode::ScanAll);
 }
@@ -146,6 +174,12 @@ fn test_named_builtin_argument_keeps_regular_call_protocol() {
     assert!(opcodes.contains(&OpCode::InitFcall));
     assert!(opcodes.contains(&OpCode::SendNamed));
     assert!(opcodes.contains(&OpCode::DoFcall));
+
+    let binary = main_opcodes("<?php intdiv(dividend: 9, divisor: 2);");
+    assert!(!binary.contains(&OpCode::DirectInternalCall2));
+    assert!(binary.contains(&OpCode::InitFcall));
+    assert!(binary.contains(&OpCode::SendNamed));
+    assert!(binary.contains(&OpCode::DoFcall));
 }
 
 #[test]
@@ -210,6 +244,14 @@ $abs_args = [-7];
 echo call_user_func_array('abs', $abs_args);
 "#);
     assert_eq!(out, "5:7");
+}
+
+#[test]
+fn test_direct_binary_internal_callback_uses_shared_abi() {
+    assert_eq!(
+        run_php("<?php echo call_user_func_array('intdiv', ['9', 2]);"),
+        "4",
+    );
 }
 
 #[test]

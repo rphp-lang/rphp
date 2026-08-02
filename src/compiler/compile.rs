@@ -2332,6 +2332,9 @@ impl Compiler {
                                     OpCode::Strlen
                                 }
                             }
+                            crate::builtin_metadata::DirectInternalLowering::Generic2 => {
+                                unreachable!("binary direct builtin selected by unary lowering")
+                            }
                         };
                         let mut call = Instruction::new(opcode);
                         call.op1 = argument_op;
@@ -2341,6 +2344,35 @@ impl Compiler {
                         if opcode == OpCode::DirectInternalCall1 {
                             call.extended_value = direct_kind as u32;
                         }
+                        self.instructions.push(call);
+                        return (tmp, OpType::Tmp);
+                    }
+                }
+
+                if let [CallArg::Positional(first), CallArg::Positional(second)] = args.as_slice() {
+                    let direct_kind = self
+                        .unambiguous_global_function_name(name)
+                        .and_then(crate::builtin_metadata::direct_internal_spec)
+                        .filter(|spec| {
+                            spec.required_args <= 2
+                                && spec.max_args >= 2
+                                && spec.kind.lowering()
+                                    == crate::builtin_metadata::DirectInternalLowering::Generic2
+                        })
+                        .map(|spec| spec.kind);
+
+                    if let Some(direct_kind) = direct_kind {
+                        let (first_op, first_type) = self.compile_expr(first);
+                        let (second_op, second_type) = self.compile_expr(second);
+                        let tmp = self.alloc_tmp();
+                        let mut call = Instruction::new(OpCode::DirectInternalCall2);
+                        call.op1 = first_op;
+                        call.op1_type = first_type;
+                        call.op2 = second_op;
+                        call.op2_type = second_type;
+                        call.result = tmp;
+                        call.result_type = OpType::Tmp;
+                        call.extended_value = direct_kind as u32;
                         self.instructions.push(call);
                         return (tmp, OpType::Tmp);
                     }
@@ -3148,6 +3180,7 @@ impl Compiler {
             if matches!(
                 instruction.opcode,
                 OpCode::DirectInternalCall1
+                    | OpCode::DirectInternalCall2
                     | OpCode::Strlen
                     | OpCode::Strlen_Cv
                     | OpCode::DoFcall

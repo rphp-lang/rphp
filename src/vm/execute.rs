@@ -9930,6 +9930,34 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::DirectInternalCall2 => {
+                let first = unsafe {
+                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let second = unsafe {
+                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+                };
+                let Some(kind) = crate::builtin_metadata::DirectInternalKind::from_id(
+                    opline.extended_value,
+                ) else {
+                    return Err(VmError::Fatal(
+                        "Invalid direct internal handler ID".into(),
+                    ));
+                };
+                let result = crate::stdlib::invoke_direct_internal2(kind, first, second)?;
+
+                if opline.result_type != OpType::Unused {
+                    let result_ptr = unsafe {
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    };
+                    if kind.result_may_need_cleanup() && opline.result_type == OpType::Tmp {
+                        unsafe { frame_tmp_set(frame, result_ptr, result) };
+                    } else {
+                        unsafe { result_ptr.write(result) };
+                    }
+                }
+            }
+
             OpCode::Strlen => {
                 let argument = unsafe {
                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)

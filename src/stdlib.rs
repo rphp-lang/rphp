@@ -152,6 +152,26 @@ pub(crate) fn invoke_direct_internal1(
         DirectInternalKind::Acos => direct_acos(args),
         DirectInternalKind::Atan => direct_atan(args),
         DirectInternalKind::Exp => direct_exp(args),
+        DirectInternalKind::Intdiv => Err(VmError::Fatal(
+            "Invalid unary invocation of intdiv".into(),
+        )),
+    }
+}
+
+/// Dispatch a compiler-identified pure binary builtin without a call frame.
+#[inline(always)]
+pub(crate) fn invoke_direct_internal2(
+    kind: crate::builtin_metadata::DirectInternalKind,
+    first: &Value,
+    second: &Value,
+) -> Result<Value, VmError> {
+    use crate::builtin_metadata::DirectInternalKind;
+
+    match kind {
+        DirectInternalKind::Intdiv => direct_intdiv_values(first, second),
+        _ => Err(VmError::Fatal(
+            "Invalid binary direct internal handler ID".into(),
+        )),
     }
 }
 
@@ -361,7 +381,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("round", fn_round, 2, 1, "num", "precision");
     reg!("pow", fn_pow, 2, 2, "base", "exponent");
     reg_direct!("sqrt", fn_sqrt, direct_sqrt, 1, 1, "num");
-    reg!("intdiv", fn_intdiv, 2, 2, "dividend", "divisor");
+    reg_direct!("intdiv", fn_intdiv, direct_intdiv, 2, 2, "dividend", "divisor");
     reg!("fmod", fn_fmod, 2, 2, "x", "y");
     reg!("log", fn_log, 1, 1, "num");
     reg!("log10", fn_log10, 1, 1, "num");
@@ -1958,14 +1978,33 @@ fn fn_sqrt(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, result);
 }
 
-fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let a = arg_long!(ed, 0);
-    let b = arg_long!(ed, 1);
-    if b == 0 {
-        ret!(rv, Value::bool(false)); // PHP throws DivisionByZeroError
+#[inline(always)]
+fn direct_intdiv_values(first: &Value, second: &Value) -> Result<Value, VmError> {
+    let a = if first.is_reference() {
+        unsafe { &*first.as_ref_ptr() }
     } else {
-        ret!(rv, Value::long(a / b));
+        first
+    }.to_long_val();
+    let b = if second.is_reference() {
+        unsafe { &*second.as_ref_ptr() }
+    } else {
+        second
+    }.to_long_val();
+    if b == 0 {
+        Ok(Value::bool(false)) // PHP throws DivisionByZeroError
+    } else {
+        Ok(Value::long(a / b))
     }
+}
+
+#[inline(always)]
+fn direct_intdiv(args: &[Value]) -> Result<Value, VmError> {
+    direct_intdiv_values(direct_arg(args, 0), direct_arg(args, 1))
+}
+
+fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let result = direct_intdiv_values(arg!(ed, 0), arg!(ed, 1))?;
+    ret!(rv, result);
 }
 
 fn fn_fmod(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {

@@ -274,6 +274,22 @@ next structural target is therefore a guarded application region spanning the
 outer loop, object calls, properties, and result extraction, with canonical
 side exits, rather than another workload-specific hash kernel.
 
+The third corpus-driven slice removes a separate call-ABI limitation before
+building that region. The metadata-driven frame-free internal ABI now has a
+two-operand opcode in addition to its unary form, and `intdiv` is its first
+binary client. Positional direct calls compile to one `DirectInternalCall2`;
+namespace shadowing and named arguments retain canonical call resolution, while
+`call_user_func_array` uses the same registered direct handler when its callback
+and argument shape are eligible.
+
+In the order pipeline this replaces 1,000,000 `InitFcall`/send/`DoFcall`
+sequences and reduces call-frame creation from 3,000,005 to 2,000,005. Runtime
+improves from approximately 0.33 s to 0.316 s versus 0.080 s PHP, about 3.95x.
+The modest time reduction despite a million removed frames confirms that the
+remaining dominant cost is cross-opcode application execution, not one
+especially expensive internal frame. The complete release test suite and all
+31 no-PGO microbenchmark wins remain intact.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

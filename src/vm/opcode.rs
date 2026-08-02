@@ -123,6 +123,9 @@ pub enum OpCode {
     DirectInternalCall1 = 130,
     /// Dedicated strlen(): op1=argument, result=byte length.
     Strlen = 131,
+    /// Frame-free call to a known pure internal function with two positional
+    /// arguments: op1/op2=arguments, extended_value=handler ID.
+    DirectInternalCall2 = 132,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.
