@@ -13,7 +13,7 @@ use super::instruction::{
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
@@ -2061,6 +2061,471 @@ pub(crate) unsafe fn try_execute_direct_object_long_call(
         plan,
     )?;
     Some((result, do_fcall_ptr))
+}
+
+#[derive(Clone, Copy)]
+enum ObjectArrayResolved {
+    Long(i64),
+    Borrowed(*const Value),
+}
+
+#[inline(always)]
+unsafe fn object_array_property(
+    owner: &UserFunction,
+    receiver: &Value,
+    arguments: &[*const Value; 8],
+    object: ObjectLongObjectSource,
+    cache_ip: u16,
+) -> Option<*const Value> {
+    let object = match object {
+        ObjectLongObjectSource::Receiver => receiver as *const Value,
+        ObjectLongObjectSource::Argument(argument) => {
+            *arguments.get(argument as usize)?
+        }
+    };
+    if object.is_null()
+        || (*object).value_type() != ValueType::Object
+        || (*object).is_reference()
+    {
+        return None;
+    }
+    let class_id = (*object).object_class_id_unchecked();
+    if class_id == 0 {
+        return None;
+    }
+    let cache = owner.op_array.cache.get(cache_ip as usize)?;
+    if cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+        return None;
+    }
+    let property = (*object).object_property_slot_unchecked(cache.property_slot());
+    if (*property).is_reference() {
+        return None;
+    }
+    Some(property)
+}
+
+#[inline(always)]
+unsafe fn resolve_object_array_source(
+    source: ObjectArraySource,
+    owner: &UserFunction,
+    receiver: &Value,
+    arguments: &[*const Value; 8],
+    slots: &[std::mem::MaybeUninit<i64>; 64],
+    initialized: u64,
+) -> Option<ObjectArrayResolved> {
+    match source {
+        ObjectArraySource::Receiver => {
+            Some(ObjectArrayResolved::Borrowed(receiver as *const Value))
+        }
+        ObjectArraySource::Argument(argument) => {
+            let pointer = *arguments.get(argument as usize)?;
+            (!pointer.is_null()).then_some(ObjectArrayResolved::Borrowed(pointer))
+        }
+        ObjectArraySource::LongSlot(slot) => {
+            let bit = 1u64.checked_shl(slot as u32)?;
+            if initialized & bit == 0 {
+                return None;
+            }
+            Some(ObjectArrayResolved::Long(
+                slots.get(slot as usize)?.assume_init(),
+            ))
+        }
+        ObjectArraySource::Literal(literal) => owner
+            .op_array
+            .literals
+            .get(literal as usize)
+            .map(|value| ObjectArrayResolved::Borrowed(value as *const Value)),
+        ObjectArraySource::Property { object, cache_ip } => object_array_property(
+            owner,
+            receiver,
+            arguments,
+            object,
+            cache_ip,
+        )
+        .map(ObjectArrayResolved::Borrowed),
+    }
+}
+
+#[inline(always)]
+unsafe fn resolve_object_array_long(
+    source: ObjectArraySource,
+    owner: &UserFunction,
+    receiver: &Value,
+    arguments: &[*const Value; 8],
+    slots: &[std::mem::MaybeUninit<i64>; 64],
+    initialized: u64,
+) -> Option<i64> {
+    match resolve_object_array_source(
+        source,
+        owner,
+        receiver,
+        arguments,
+        slots,
+        initialized,
+    )? {
+        ObjectArrayResolved::Long(value) => Some(value),
+        ObjectArrayResolved::Borrowed(pointer) => {
+            if pointer.is_null()
+                || (*pointer).is_reference()
+                || (*pointer).value_type() != ValueType::Long
+            {
+                return None;
+            }
+            Some((*pointer).raw_long())
+        }
+    }
+}
+
+#[inline(always)]
+unsafe fn evaluate_object_array_call(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    receiver: &Value,
+    outer_arguments: &[*const Value; 8],
+    slots: &[std::mem::MaybeUninit<i64>; 64],
+    initialized: u64,
+    call: &ObjectArrayLongCall,
+) -> Option<(i64, *const FunctionCommon)> {
+    let call_receiver = match resolve_object_array_source(
+        call.receiver,
+        owner,
+        receiver,
+        outer_arguments,
+        slots,
+        initialized,
+    )? {
+        ObjectArrayResolved::Borrowed(pointer) => pointer,
+        ObjectArrayResolved::Long(_) => return None,
+    };
+    if call_receiver.is_null()
+        || (*call_receiver).is_reference()
+        || (*call_receiver).value_type() != ValueType::Object
+    {
+        return None;
+    }
+
+    let class_id = (*call_receiver).object_class_id_unchecked();
+    let cache = owner.op_array.cache.get(call.cache_ip as usize)?;
+    let initializer = owner.op_array.instructions.get(call.cache_ip as usize)?;
+    if class_id == 0
+        || cache.class_id != class_id
+        || cache.func.is_null()
+        || !method_return_dispatch_contract_matches(initializer, &*cache.func)
+    {
+        return None;
+    }
+    let common = &*cache.func;
+    if common.fn_type != FunctionType::User
+        || common.sig.public_arity() != call.arguments.len() as u32
+        || common.sig.required_num_args != call.arguments.len() as u32
+        || common.sig.ref_args != 0
+        || common.sig.is_variadic
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+    {
+        return None;
+    }
+    let callee = &*(cache.func as *const UserFunction);
+    let plan = callee.object_long_plan.as_deref()?;
+    if plan.public_args as usize != call.arguments.len() {
+        return None;
+    }
+
+    let declaring_class = eg.declaring_class_of(cache.func);
+    let mut callee_slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
+    let mut callee_initialized = 0u64;
+    let mut object_arguments = [std::ptr::null(); 8];
+    let mut string_arguments = [std::ptr::null(); 8];
+    for (index, source) in call.arguments.iter().copied().enumerate() {
+        let resolved = resolve_object_array_source(
+            source,
+            owner,
+            receiver,
+            outer_arguments,
+            slots,
+            initialized,
+        )?;
+        let hint = common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        let bit = 1u8 << index;
+        match resolved {
+            ObjectArrayResolved::Long(value) => {
+                if !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int)
+                    || plan.object_argument_mask & bit != 0
+                    || plan.string_argument_mask & bit != 0
+                {
+                    return None;
+                }
+                if plan.long_argument_mask & bit != 0 {
+                    let slot = common.sig.param_cv_index(index as u32) as usize;
+                    callee_slots[slot].write(value);
+                    callee_initialized |= 1u64 << slot;
+                }
+            }
+            ObjectArrayResolved::Borrowed(pointer) => {
+                if pointer.is_null()
+                    || (*pointer).is_reference()
+                    || !check_type_hint(
+                        &*pointer,
+                        hint,
+                        eg,
+                        owner.op_array.strict_types,
+                        declaring_class,
+                    )
+                {
+                    return None;
+                }
+                if plan.long_argument_mask & bit != 0 {
+                    if (*pointer).value_type() != ValueType::Long {
+                        return None;
+                    }
+                    let slot = common.sig.param_cv_index(index as u32) as usize;
+                    callee_slots[slot].write((*pointer).raw_long());
+                    callee_initialized |= 1u64 << slot;
+                }
+                if plan.object_argument_mask & bit != 0 {
+                    if (*pointer).value_type() != ValueType::Object {
+                        return None;
+                    }
+                    object_arguments[index] = pointer;
+                }
+                if plan.string_argument_mask & bit != 0 {
+                    if (*pointer).value_type() != ValueType::String {
+                        return None;
+                    }
+                    string_arguments[index] = pointer;
+                }
+            }
+        }
+    }
+
+    let result = evaluate_object_long_plan(
+        &*call_receiver,
+        &object_arguments,
+        &string_arguments,
+        &mut callee_slots,
+        callee_initialized,
+        callee,
+        plan,
+    )?;
+    Some((result, cache.func))
+}
+
+/// Evaluate a guarded read-only application region. All nested work produces
+/// raw Longs; the result array is allocated only after every guard and checked
+/// arithmetic operation has succeeded.
+#[inline(never)]
+unsafe fn evaluate_object_array_plan(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    arguments: &[*const Value; 8],
+    owner: &UserFunction,
+    plan: &ObjectArrayFunctionPlan,
+) -> Option<Value> {
+    if plan.slot_count as usize > 64
+        || plan.operations.len() > 64
+        || plan.entries.is_empty()
+        || plan.entries.len() > 4
+    {
+        return None;
+    }
+    let mut slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
+    let mut initialized = 0u64;
+    let mut called = [std::ptr::null(); 64];
+    let mut called_count = 0usize;
+
+    for operation in plan.operations.iter() {
+        let (destination, value) = match operation {
+            ObjectArrayLongOp::Assign {
+                destination,
+                source,
+            } => (
+                *destination,
+                resolve_object_array_long(
+                    *source,
+                    owner,
+                    receiver,
+                    arguments,
+                    &slots,
+                    initialized,
+                )?,
+            ),
+            ObjectArrayLongOp::Arithmetic {
+                kind,
+                lhs,
+                rhs,
+                destination,
+            } => {
+                let lhs = resolve_object_array_long(
+                    *lhs,
+                    owner,
+                    receiver,
+                    arguments,
+                    &slots,
+                    initialized,
+                )?;
+                let rhs = resolve_object_array_long(
+                    *rhs,
+                    owner,
+                    receiver,
+                    arguments,
+                    &slots,
+                    initialized,
+                )?;
+                (*destination, apply_scalar_long_op(*kind, lhs, rhs)?)
+            }
+            ObjectArrayLongOp::IntDiv {
+                lhs,
+                rhs,
+                destination,
+            } => {
+                let lhs = resolve_object_array_long(
+                    *lhs,
+                    owner,
+                    receiver,
+                    arguments,
+                    &slots,
+                    initialized,
+                )?;
+                let rhs = resolve_object_array_long(
+                    *rhs,
+                    owner,
+                    receiver,
+                    arguments,
+                    &slots,
+                    initialized,
+                )?;
+                (*destination, lhs.checked_div(rhs)?)
+            }
+            ObjectArrayLongOp::Call(call) => {
+                let (value, target) = evaluate_object_array_call(
+                    eg,
+                    owner,
+                    receiver,
+                    arguments,
+                    &slots,
+                    initialized,
+                    call,
+                )?;
+                *called.get_mut(called_count)? = target;
+                called_count += 1;
+                (call.destination, value)
+            }
+        };
+        slots[destination as usize].write(value);
+        initialized |= 1u64 << destination;
+    }
+
+    let mut values = [0i64; 4];
+    for (index, entry) in plan.entries.iter().enumerate() {
+        values[index] = resolve_object_array_long(
+            entry.value,
+            owner,
+            receiver,
+            arguments,
+            &slots,
+            initialized,
+        )?;
+    }
+
+    let mut result = PhpArray::with_hash_capacity(plan.entries.len());
+    for (index, entry) in plan.entries.iter().enumerate() {
+        let key = owner.op_array.literals.get(entry.key_literal as usize)?;
+        if key.value_type() != ValueType::String {
+            return None;
+        }
+        result.set_str_value(key, Value::long(values[index]));
+    }
+    for target in called.into_iter().take(called_count) {
+        record_scalar_call(&*target);
+    }
+    Some(Value::array(result))
+}
+
+/// Direct positional adapter for ObjectArrayFunctionPlan. The outer method's
+/// declaration is validated before its borrowed arguments enter the region.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_direct_object_array_call(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    receiver: &Value,
+    sends: *const Instruction,
+    callee: &UserFunction,
+    plan: &ObjectArrayFunctionPlan,
+) -> Option<(Value, *const Instruction)> {
+    let common = &callee.common;
+    if receiver.value_type() != ValueType::Object
+        || receiver.is_reference()
+        || common.sig.public_arity() != plan.public_args as u32
+        || common.sig.required_num_args != plan.public_args as u32
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.ref_args != 0
+        || common.sig.is_variadic
+    {
+        return None;
+    }
+
+    let declaring_class = eg.declaring_class_of(&callee.common as *const FunctionCommon);
+    let mut arguments = [std::ptr::null(); 8];
+    for index in 0..plan.public_args as usize {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller)
+                .get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array),
+            OpType::Unused => return None,
+        };
+        if value.is_reference()
+            || !check_type_hint(
+                value,
+                common
+                    .sig
+                    .param_type_hints
+                    .get(index)
+                    .unwrap_or(&ParamTypeHint::None),
+                eg,
+                caller_op_array.strict_types,
+                declaring_class,
+            )
+        {
+            return None;
+        }
+        arguments[index] = value as *const Value;
+    }
+
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    let result = evaluate_object_array_plan(eg, receiver, &arguments, callee, plan)?;
+    Some((result, do_fcall_ptr))
+}
+
+#[inline(always)]
+pub(crate) unsafe fn complete_direct_object_array_call(
+    caller: *mut ExecuteData,
+    do_fcall_ptr: *const Instruction,
+    result: Value,
+) {
+    let do_fcall = &*do_fcall_ptr;
+    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
+        let result_ptr = (caller as *mut Value)
+            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        frame_tmp_set(caller, result_ptr, result);
+    }
+    (*caller).opline = do_fcall_ptr.add(1);
 }
 
 #[inline(always)]
@@ -12945,6 +13410,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     } {
                                         continue 'vm;
                                     }
+                                }
+                            }
+
+                            if let Some(plan) = user.object_array_plan.as_deref() {
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_object_array_call(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        obj_val,
+                                        opline_ptr.add(1),
+                                        user,
+                                        plan,
+                                    )
+                                } {
+                                    record_scalar_call(common);
+                                    unsafe {
+                                        complete_direct_object_array_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
                                 }
                             }
 

@@ -1475,6 +1475,124 @@ class TaxPolicy {
 }
 
 #[test]
+fn test_small_object_array_method_composes_guarded_long_calls() {
+    let result = compile_types(r#"<?php
+class Request {
+    public $subtotal = 0;
+    public function __construct(int $subtotal) { $this->subtotal = $subtotal; }
+}
+class Policy {
+    public function rate(Request $request): int { return $request->subtotal; }
+}
+class Service {
+    public $policy;
+    public function __construct(Policy $policy) { $this->policy = $policy; }
+    public function quote(Request $request): array {
+        $rate = $this->policy->rate($request);
+        $net = $request->subtotal - $rate;
+        return ['net' => $net, 'gross' => $net + 1];
+    }
+}
+"#);
+    let quote = result
+        .class_defs
+        .iter()
+        .find(|class| class.name == "Service")
+        .unwrap()
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "quote")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+    let plan = quote
+        .object_array_plan
+        .as_deref()
+        .expect("guarded object/Long array plan");
+    assert_eq!(plan.public_args, 1);
+    assert_eq!(plan.entries.len(), 2);
+    assert!(plan.operations.iter().any(|operation| {
+        matches!(operation, rphp::vm::function::ObjectArrayLongOp::Call(_))
+    }));
+
+    assert_eq!(run_php(r#"<?php
+class Request {
+    public $subtotal = 0;
+    public function __construct(int $subtotal) { $this->subtotal = $subtotal; }
+}
+class Policy {
+    public function rate(Request $request): int { return $request->subtotal - 2; }
+}
+class Service {
+    public $policy;
+    public function __construct(Policy $policy) { $this->policy = $policy; }
+    public function quote(Request $request): array {
+        $rate = $this->policy->rate($request);
+        $net = $request->subtotal - $rate;
+        return ['net' => $net, 'gross' => $net + 1];
+    }
+}
+$service = new Service(new Policy());
+$request = new Request(12);
+$result = [];
+for ($i = 0; $i < 40; $i++) { $result = $service->quote($request); }
+echo $result['net'] . ':' . $result['gross'];
+"#), "2:3");
+}
+
+#[test]
+fn test_object_array_region_side_exits_on_polymorphic_nested_method() {
+    assert_eq!(run_php(r#"<?php
+class Request { public $subtotal = 7; }
+class Policy {
+    public function rate(Request $request): int { return $request->subtotal; }
+}
+class LoudPolicy extends Policy {
+    public function rate(Request $request): int {
+        echo '!';
+        return $request->subtotal + 5;
+    }
+}
+class Service {
+    public $policy;
+    public function __construct($policy) { $this->policy = $policy; }
+    public function quote(Request $request): array {
+        $rate = $this->policy->rate($request);
+        return ['value' => $rate];
+    }
+}
+$service = new Service(new Policy());
+$request = new Request();
+for ($i = 0; $i < 30; $i++) { $service->quote($request); }
+$service->policy = new LoudPolicy();
+$result = $service->quote($request);
+echo $result['value'];
+"#), "!12");
+}
+
+#[test]
+fn test_object_array_region_side_exits_before_overflowed_array_result() {
+    assert_eq!(run_php(r#"<?php
+class Request { public $value = 9223372036854775807; }
+class Policy {
+    public function value(Request $request): int { return $request->value; }
+}
+class Service {
+    public $policy;
+    public function __construct(Policy $policy) { $this->policy = $policy; }
+    public function collect(Request $request): array {
+        $value = $this->policy->value($request);
+        return ['value' => $value + 1];
+    }
+}
+$service = new Service(new Policy());
+$request = new Request();
+for ($i = 0; $i < 30; $i++) { $service->collect($request); }
+$result = $service->collect($request);
+echo gettype($result['value']);
+"#), "double");
+}
+
+#[test]
 fn test_monomorphic_class_guard_rechecks_a_different_runtime_class() {
     assert_eq!(run_php(r#"<?php
 class Accepted {}

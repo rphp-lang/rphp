@@ -682,6 +682,37 @@ local-CV zeroing. That makes a guarded multi-call/multi-result quote region the
 next frame target; request and result-array allocation remain separate scalar-
 replacement/data-layout targets even after that frame is gone.
 
+The following checkpoint adds that region without recognizing the corpus class
+or method names. The compiler now proves a compact read-only object method that
+reads warmed declared properties, composes monomorphic callees already backed
+by `ObjectLongFunctionPlan`, performs checked Long arithmetic/`intdiv`, and
+returns a small literal-key associative array. The plan keeps canonical
+property and method cache positions as runtime guards. Argument declarations,
+receiver classes, nested target identities, property layouts, references and
+every checked arithmetic step are validated before the result array is
+allocated. A mismatch therefore replays the untouched bytecode; dedicated
+tests cover a polymorphic nested-method switch and an overflowed result edge.
+
+On the order pipeline this removes the final repeated `QuoteService::quote()`
+frame. VM statistics fall from about 500,000 pushed frames and 32 MB of local
+zeroing to 9 cold/startup frames and 288 bytes, while the nested policy calls
+remain accounted through the same scalar-call counters. Best-of-five no-PGO
+times improve from approximately 0.183--0.187 s to 0.164 s untyped and from
+0.191--0.192 s to 0.171 s typed, versus approximately 0.081 s and 0.084 s in
+PHP (about 2.03x and 2.04x). The complete release suite passes and the separate
+31-workload matrix remains at 29 strict RPHP wins; its two marginal losses are
+array construction at about 1.09x and the standalone scalar-method case at
+about 1.06x.
+
+The profile has consequently crossed a useful boundary: full PHP frame
+machinery is no longer a repeated corpus cost. The largest remaining costs are
+now materialization boundaries -- one request object and one returned
+three-entry array per iteration, plus the ownership writes/clones around them.
+The next corpus slice should therefore scalar-replace the non-escaping request
+and then let adjacent consumers read the region's three scalar outputs without
+materializing the intermediate result array. Those are allocation/escape
+analysis problems, not another call-dispatch kernel.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

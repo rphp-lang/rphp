@@ -1235,6 +1235,31 @@ pub fn execute_hot_frame(
                         }
                     }
 
+                    if let Some(plan) = user.object_array_plan.as_deref() {
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_direct_object_array_call(
+                                eg,
+                                frame,
+                                op_array,
+                                obj_val,
+                                opline_ptr.add(1),
+                                user,
+                                plan,
+                            )
+                        } {
+                            super::execute::record_scalar_call(func_common);
+                            unsafe {
+                                super::execute::complete_direct_object_array_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+
                     if let Some(plan) = user.object_long_plan.as_deref() {
                         scalar_plan_eligible = true;
                         if let Some((result, do_fcall_ptr)) = unsafe {

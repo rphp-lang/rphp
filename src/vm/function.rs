@@ -304,6 +304,68 @@ pub struct ObjectLongFunctionPlan {
     pub string_intdiv_select: Option<Box<ObjectLongStringIntDivSelect>>,
 }
 
+/// Scalar/value input in a small read-only application method. Property
+/// sources deliberately retain the canonical FetchObjR cache position: a
+/// runtime class/layout mismatch therefore side-exits before the plan creates
+/// its result array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectArraySource {
+    Receiver,
+    Argument(u8),
+    LongSlot(u16),
+    Literal(u16),
+    Property {
+        object: ObjectLongObjectSource,
+        cache_ip: u16,
+    },
+}
+
+/// One nested monomorphic call whose target is itself proven by an
+/// ObjectLongFunctionPlan. The owning method's inline cache remains the
+/// dispatch authority; no class or method identity is baked into this IR.
+pub struct ObjectArrayLongCall {
+    pub cache_ip: u16,
+    pub receiver: ObjectArraySource,
+    pub arguments: Box<[ObjectArraySource]>,
+    pub destination: u16,
+}
+
+pub enum ObjectArrayLongOp {
+    Assign {
+        destination: u16,
+        source: ObjectArraySource,
+    },
+    Arithmetic {
+        kind: ScalarLongOpKind,
+        lhs: ObjectArraySource,
+        rhs: ObjectArraySource,
+        destination: u16,
+    },
+    IntDiv {
+        lhs: ObjectArraySource,
+        rhs: ObjectArraySource,
+        destination: u16,
+    },
+    Call(ObjectArrayLongCall),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectArrayEntry {
+    pub key_literal: u16,
+    pub value: ObjectArraySource,
+}
+
+/// Compile-time proof for a read-only object method that composes guarded
+/// Long-returning methods and checked integer work into a small associative
+/// array. Evaluation is transactional: all guards and arithmetic complete
+/// before the array becomes observable, so failure can replay canonical PHP.
+pub struct ObjectArrayFunctionPlan {
+    pub public_args: u8,
+    pub slot_count: u16,
+    pub operations: Box<[ObjectArrayLongOp]>,
+    pub entries: Box<[ObjectArrayEntry]>,
+}
+
 /// Branch metadata for a pure function that selects one of two immutable
 /// string values from a guarded Long predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -709,6 +771,7 @@ pub struct UserFunction {
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
     pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
     pub object_long_plan: Option<Box<ObjectLongFunctionPlan>>,
+    pub object_array_plan: Option<Box<ObjectArrayFunctionPlan>>,
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
     pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,

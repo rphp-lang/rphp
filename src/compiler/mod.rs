@@ -20,7 +20,8 @@ use crate::vm::function::{
     ScalarStringSelect, ScalarStringSource,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongObjectSource,
     ObjectLongOp, ObjectLongSource, ObjectLongStringIntDivCase,
-    ObjectLongStringIntDivSelect,
+    ObjectLongStringIntDivSelect, ObjectArrayEntry, ObjectArrayFunctionPlan,
+    ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -603,6 +604,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
         object_long_plan: None,
+        object_array_plan: None,
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
@@ -614,6 +616,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
+    function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
@@ -716,6 +719,7 @@ pub fn make_user_function_typed(
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
         object_long_plan: None,
+        object_array_plan: None,
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
@@ -727,6 +731,7 @@ pub fn make_user_function_typed(
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
+    function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
@@ -1804,6 +1809,354 @@ fn build_object_long_function_plan(
         slot_count: slot_count as u16,
         operations: operations.into_boxed_slice(),
         string_intdiv_select,
+    }))
+}
+
+fn object_array_source(
+    function: &UserFunction,
+    aliases: &[Option<ObjectArraySource>; OBJECT_LONG_PLAN_MAX_SLOTS as usize],
+    initialized_long: &[bool; OBJECT_LONG_PLAN_MAX_SLOTS as usize],
+    op_type: OpType,
+    operand: u16,
+) -> Option<ObjectArraySource> {
+    let common = &function.common;
+    match op_type {
+        OpType::Const => function
+            .op_array
+            .literals
+            .get(operand as usize)
+            .map(|_| ObjectArraySource::Literal(operand)),
+        OpType::Cv => {
+            let slot = operand as u32;
+            if slot == 0 {
+                return Some(ObjectArraySource::Receiver);
+            }
+            let first_argument = common.sig.this_offset;
+            let argument_end = first_argument + common.sig.public_arity();
+            if slot >= first_argument && slot < argument_end {
+                Some(ObjectArraySource::Argument((slot - first_argument) as u8))
+            } else if initialized_long.get(slot as usize).copied().unwrap_or(false) {
+                Some(ObjectArraySource::LongSlot(operand))
+            } else {
+                aliases.get(slot as usize).copied().flatten()
+            }
+        }
+        OpType::Tmp | OpType::Var => aliases
+            .get(operand as usize)
+            .copied()
+            .flatten()
+            .or_else(|| {
+                initialized_long
+                    .get(operand as usize)
+                    .copied()
+                    .filter(|initialized| *initialized)
+                    .map(|_| ObjectArraySource::LongSlot(operand))
+            }),
+        OpType::Unused => None,
+    }
+}
+
+struct PendingObjectArrayCall {
+    cache_ip: u16,
+    receiver: ObjectArraySource,
+    expected_arguments: usize,
+    arguments: Vec<ObjectArraySource>,
+}
+
+/// Recognize a compact read-only application method which composes existing
+/// object/Long callees and returns a small literal-key array. Unlike a
+/// benchmark-specific superinstruction, the plan is expressed only in terms
+/// of PHP data dependencies and the canonical inline-cache positions.
+fn build_object_array_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ObjectArrayFunctionPlan>> {
+    const MAX_ENTRIES: usize = 4;
+
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    let slot_count = op_array.num_cvs.checked_add(op_array.num_temps)?;
+    if common.sig.this_offset != 1
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args != common.sig.required_num_args
+        || public_args > OBJECT_LONG_PLAN_MAX_ARGS
+        || slot_count > OBJECT_LONG_PLAN_MAX_SLOTS
+        || op_array.instructions.len() > OBJECT_LONG_PLAN_MAX_OPS
+        || op_array.instructions.len() > u16::MAX as usize
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Array
+        )
+        || common.sig.param_type_hints.iter().any(|hint| {
+            !matches!(
+                hint,
+                ParamTypeHint::None
+                    | ParamTypeHint::Mixed
+                    | ParamTypeHint::Int
+                    | ParamTypeHint::String
+                    | ParamTypeHint::ClassName(_)
+            )
+        })
+    {
+        return None;
+    }
+
+    let mut aliases = [None; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
+    let mut initialized_long = [false; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
+    let mut pending_call: Option<PendingObjectArrayCall> = None;
+    let mut operations = Vec::new();
+    let mut entries = Vec::new();
+    let mut array_slot = None;
+    let mut returned = false;
+    let first_argument = common.sig.this_offset;
+    let argument_end = first_argument + public_args;
+
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        if returned {
+            if instruction.opcode == OpCode::Return && instruction.extended_value == 0 {
+                continue;
+            }
+            return None;
+        }
+
+        match instruction.opcode {
+            OpCode::FetchObjR => {
+                if instruction.op2_type != OpType::Const
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    || op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_none()
+                {
+                    return None;
+                }
+                let object = match object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op1_type,
+                    instruction.op1,
+                )? {
+                    ObjectArraySource::Receiver => ObjectLongObjectSource::Receiver,
+                    ObjectArraySource::Argument(argument) => {
+                        ObjectLongObjectSource::Argument(argument)
+                    }
+                    _ => return None,
+                };
+                aliases[instruction.result as usize] = Some(ObjectArraySource::Property {
+                    object,
+                    cache_ip: ip as u16,
+                });
+                initialized_long[instruction.result as usize] = false;
+            }
+            OpCode::InitMethodCall => {
+                if pending_call.is_some()
+                    || instruction.op2_type != OpType::Const
+                    || op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_none()
+                    || instruction.extended_value as usize > OBJECT_LONG_PLAN_MAX_ARGS as usize
+                {
+                    return None;
+                }
+                pending_call = Some(PendingObjectArrayCall {
+                    cache_ip: ip as u16,
+                    receiver: object_array_source(
+                        function,
+                        &aliases,
+                        &initialized_long,
+                        instruction.op1_type,
+                        instruction.op1,
+                    )?,
+                    expected_arguments: instruction.extended_value as usize,
+                    arguments: Vec::with_capacity(instruction.extended_value as usize),
+                });
+            }
+            OpCode::SendVal | OpCode::SendVarEx => {
+                let argument = object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let pending = pending_call.as_mut()?;
+                if pending.arguments.len() == pending.expected_arguments {
+                    return None;
+                }
+                pending.arguments.push(argument);
+            }
+            OpCode::DoFcall => {
+                if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                    return None;
+                }
+                let pending = pending_call.take()?;
+                if pending.arguments.len() != pending.expected_arguments {
+                    return None;
+                }
+                aliases[instruction.result as usize] = None;
+                initialized_long[instruction.result as usize] = true;
+                operations.push(ObjectArrayLongOp::Call(ObjectArrayLongCall {
+                    cache_ip: pending.cache_ip,
+                    receiver: pending.receiver,
+                    arguments: pending.arguments.into_boxed_slice(),
+                    destination: instruction.result,
+                }));
+            }
+            OpCode::AssignCv => {
+                if pending_call.is_some() || instruction.op1_type != OpType::Cv {
+                    return None;
+                }
+                let destination = instruction.op1 as u32;
+                if destination < argument_end || destination >= slot_count {
+                    return None;
+                }
+                let source = object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                aliases[destination as usize] = None;
+                initialized_long[destination as usize] = true;
+                operations.push(ObjectArrayLongOp::Assign {
+                    destination: instruction.op1,
+                    source,
+                });
+            }
+            opcode if scalar_long_op_kind(opcode).is_some() => {
+                if pending_call.is_some()
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                let lhs = object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                aliases[instruction.result as usize] = None;
+                initialized_long[instruction.result as usize] = true;
+                operations.push(ObjectArrayLongOp::Arithmetic {
+                    kind: scalar_long_op_kind(opcode)?,
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                });
+            }
+            OpCode::DirectInternalCall2 => {
+                if pending_call.is_some()
+                    || crate::builtin_metadata::DirectInternalKind::from_id(
+                        instruction.extended_value,
+                    ) != Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                let lhs = object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_array_source(
+                    function,
+                    &aliases,
+                    &initialized_long,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                aliases[instruction.result as usize] = None;
+                initialized_long[instruction.result as usize] = true;
+                operations.push(ObjectArrayLongOp::IntDiv {
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                });
+            }
+            OpCode::InitArray => {
+                if pending_call.is_some()
+                    || array_slot.is_some()
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    || instruction.extended_value == 0
+                    || instruction.extended_value as usize > MAX_ENTRIES
+                    || instruction._pad & crate::vm::instruction::ARRAY_INIT_HASH_HINT == 0
+                {
+                    return None;
+                }
+                array_slot = Some((instruction.result_type, instruction.result));
+            }
+            OpCode::AddArrayElement => {
+                if pending_call.is_some()
+                    || Some((instruction.op1_type, instruction.op1)) != array_slot
+                    || instruction.result_type != OpType::Const
+                    || entries.len() == MAX_ENTRIES
+                    || op_array
+                        .literals
+                        .get(instruction.result as usize)
+                        .and_then(Value::as_str)
+                        .is_none()
+                {
+                    return None;
+                }
+                entries.push(ObjectArrayEntry {
+                    key_literal: instruction.result,
+                    value: object_array_source(
+                        function,
+                        &aliases,
+                        &initialized_long,
+                        instruction.op2_type,
+                        instruction.op2,
+                    )?,
+                });
+            }
+            OpCode::Return if instruction.extended_value != 0 => {
+                if pending_call.is_some()
+                    || Some((instruction.op1_type, instruction.op1)) != array_slot
+                {
+                    return None;
+                }
+                returned = true;
+            }
+            OpCode::Return => return None,
+            _ => return None,
+        }
+    }
+
+    if !returned
+        || pending_call.is_some()
+        || entries.is_empty()
+        || entries.len() > MAX_ENTRIES
+        || operations.is_empty()
+        || !operations
+            .iter()
+            .any(|operation| matches!(operation, ObjectArrayLongOp::Call(_)))
+    {
+        return None;
+    }
+
+    Some(Box::new(ObjectArrayFunctionPlan {
+        public_args: public_args as u8,
+        slot_count: slot_count as u16,
+        operations: operations.into_boxed_slice(),
+        entries: entries.into_boxed_slice(),
     }))
 }
 
@@ -3196,6 +3549,7 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
         build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
+    function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
