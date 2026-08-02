@@ -1211,6 +1211,92 @@ fn build_conditional_scalar_long_function_plan(
 
 const COMPOSED_SCALAR_LONG_PLAN_MAX_OPS: usize = 16;
 
+fn composed_scalar_argument_masks(function: &UserFunction) -> Option<(u8, u8)> {
+    let common = &function.common;
+    let public_args = common.sig.public_arity();
+    if common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+        )
+    {
+        return None;
+    }
+
+    let mut long_mask = 0u8;
+    let mut object_mask = 0u8;
+    for index in 0..public_args as usize {
+        let hint = common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        match hint {
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int => {
+                long_mask |= 1u8 << index;
+            }
+            ParamTypeHint::ClassName(_) => object_mask |= 1u8 << index,
+            _ => return None,
+        }
+    }
+    Some((long_mask, object_mask))
+}
+
+fn composed_scalar_long_source(
+    function: &UserFunction,
+    long_argument_mask: u8,
+    temporary_results: &HashMap<u16, ScalarLongSource>,
+    op_type: OpType,
+    operand: u16,
+) -> Option<ScalarLongSource> {
+    let source = scalar_long_source(
+        &function.op_array,
+        temporary_results,
+        function.common.sig.this_offset,
+        function.common.sig.public_arity(),
+        op_type,
+        operand,
+    )?;
+    match source {
+        ScalarLongSource::Input(index)
+            if long_argument_mask & (1u8 << index) == 0 =>
+        {
+            None
+        }
+        _ => Some(source),
+    }
+}
+
+fn bind_composed_scalar_long_local(
+    function: &UserFunction,
+    long_argument_mask: u8,
+    instruction: &Instruction,
+    temporary_results: &mut HashMap<u16, ScalarLongSource>,
+) -> Option<()> {
+    if instruction.opcode != OpCode::AssignCv || instruction.op1_type != OpType::Cv {
+        return None;
+    }
+    let destination = instruction.op1 as u32;
+    let first_argument = function.common.sig.this_offset;
+    let argument_end = first_argument + function.common.sig.public_arity();
+    if destination < first_argument
+        || (destination >= first_argument && destination < argument_end)
+    {
+        return None;
+    }
+    let source = composed_scalar_long_source(
+        function,
+        long_argument_mask,
+        temporary_results,
+        instruction.op2_type,
+        instruction.op2,
+    )?;
+    temporary_results.insert(instruction.op1, source);
+    Some(())
+}
+
 /// Recognize a straight-line integer body that composes direct user functions
 /// with arithmetic. The target function itself is guarded at runtime and must
 /// expose either a scalar leaf plan or another composed body plan.
@@ -1220,9 +1306,9 @@ fn build_composed_scalar_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if !common.supports_scalar_long_plan()
-        || common.plan.ret != ReturnStrategy::Fast
-        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+    let (long_argument_mask, object_argument_mask) =
+        composed_scalar_argument_masks(function)?;
+    if common.plan.ret != ReturnStrategy::Fast
         || op_array.instructions.len() > 32
     {
         return None;
@@ -1239,16 +1325,17 @@ fn build_composed_scalar_long_function_plan(
             if instruction.extended_value == 0 || !contains_call {
                 return None;
             }
-            let result = scalar_long_source(
-                op_array,
+            let result = composed_scalar_long_source(
+                function,
+                long_argument_mask,
                 &temporary_results,
-                common.sig.this_offset,
-                public_args,
                 instruction.op1_type,
                 instruction.op1,
             )?;
             return Some(Box::new(ComposedScalarLongFunctionPlan {
                 public_args: public_args as u8,
+                long_argument_mask,
+                object_argument_mask,
                 program: ScalarLongProgram {
                     operations: operations.into_boxed_slice(),
                     outputs: [result],
@@ -1257,8 +1344,35 @@ fn build_composed_scalar_long_function_plan(
             }));
         }
 
-        if instruction.opcode == OpCode::InitFcall {
-            let num_args = instruction.op1 as usize;
+        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+            let (num_args, parameter_offset, guard) = match instruction.opcode {
+                OpCode::InitFcall => (
+                    instruction.op1 as usize,
+                    0usize,
+                    ScalarLongCallGuard::FunctionCache {
+                        cache_ip: ip as u32,
+                    },
+                ),
+                OpCode::InitMethodCall if instruction.op1_type == OpType::Cv => {
+                    let receiver_cv = instruction.op1 as u32;
+                    let receiver_index = receiver_cv
+                        .checked_sub(common.sig.this_offset)?;
+                    if receiver_index >= public_args
+                        || object_argument_mask & (1u8 << receiver_index) == 0
+                    {
+                        return None;
+                    }
+                    (
+                        instruction.extended_value as usize,
+                        1usize,
+                        ScalarLongCallGuard::MethodCache {
+                            cache_ip: ip as u32,
+                            receiver_slot: instruction.op1,
+                        },
+                    )
+                }
+                _ => return None,
+            };
             if num_args > SCALAR_LONG_PLAN_MAX_ARGS as usize
                 || ip > u32::MAX as usize
                 || operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
@@ -1270,15 +1384,14 @@ fn build_composed_scalar_long_function_plan(
             for argument_index in 0..num_args {
                 let send = &op_array.instructions[ip + 1 + argument_index];
                 if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
-                    || send.op2 as usize != argument_index
+                    || send.op2 as usize != argument_index + parameter_offset
                 {
                     return None;
                 }
-                arguments.push(scalar_long_source(
-                    op_array,
+                arguments.push(composed_scalar_long_source(
+                    function,
+                    long_argument_mask,
                     &temporary_results,
-                    common.sig.this_offset,
-                    public_args,
                     send.op1_type,
                     send.op1,
                 )?);
@@ -1291,9 +1404,7 @@ fn build_composed_scalar_long_function_plan(
             }
             let result_index = operations.len() as u8;
             operations.push(ComposedScalarLongOp::Call(ScalarLongCall {
-                guard: ScalarLongCallGuard::FunctionCache {
-                    cache_ip: ip as u32,
-                },
+                guard,
                 arguments: arguments.into_boxed_slice(),
             }));
             temporary_results.insert(
@@ -1306,7 +1417,12 @@ fn build_composed_scalar_long_function_plan(
         }
 
         if instruction.opcode == OpCode::AssignCv {
-            bind_scalar_long_local(function, instruction, &mut temporary_results)?;
+            bind_composed_scalar_long_local(
+                function,
+                long_argument_mask,
+                instruction,
+                &mut temporary_results,
+            )?;
             ip += 1;
             continue;
         }
@@ -1317,19 +1433,17 @@ fn build_composed_scalar_long_function_plan(
         {
             return None;
         }
-        let lhs = scalar_long_source(
-            op_array,
+        let lhs = composed_scalar_long_source(
+            function,
+            long_argument_mask,
             &temporary_results,
-            common.sig.this_offset,
-            public_args,
             instruction.op1_type,
             instruction.op1,
         )?;
-        let rhs = scalar_long_source(
-            op_array,
+        let rhs = composed_scalar_long_source(
+            function,
+            long_argument_mask,
             &temporary_results,
-            common.sig.this_offset,
-            public_args,
             instruction.op2_type,
             instruction.op2,
         )?;

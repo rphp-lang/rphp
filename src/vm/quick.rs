@@ -1233,13 +1233,6 @@ pub fn detect_long_accumulate_loop(
                     expression_count += 1;
                 }
                 OpCode::SendVal if instruction.op2 as usize == sent_arguments => {
-                    if instruction.op1_type == OpType::Cv {
-                        add_mask_slot(
-                            &mut long_input_mask,
-                            instruction.op1,
-                            total_slots,
-                        )?;
-                    }
                     arguments[sent_arguments] = quick_scalar_long_source(
                         op_array,
                         instruction.op1_type,
@@ -3245,7 +3238,7 @@ for ($i = 0; $i < 100; $i++) {
                 guard,
                 do_fcall_ip,
                 ..
-            } if long_input_mask == (1u64 << 0) | (1u64 << 2)
+            } if long_input_mask == 0
                 && matches!(guard, ScalarLongCallGuard::FunctionCache { .. })
                 && do_fcall_ip == guard.cache_ip() + 4
         ));

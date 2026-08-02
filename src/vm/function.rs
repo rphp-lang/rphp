@@ -214,6 +214,12 @@ pub enum ComposedScalarLongOp {
 /// function calls, for example `return add1($a) + double($b)`.
 pub struct ComposedScalarLongFunctionPlan {
     pub public_args: u8,
+    /// Public arguments consumed as raw Long values by arithmetic or nested
+    /// scalar-call arguments.
+    pub long_argument_mask: u8,
+    /// Public arguments used only as guarded object receivers. These inputs
+    /// never enter `ScalarLongSource` arithmetic.
+    pub object_argument_mask: u8,
     pub program: ScalarLongProgram<ComposedScalarLongOp, 1>,
 }
 

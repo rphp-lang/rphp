@@ -122,6 +122,26 @@ fanout gap is approximately 3.5x because its consumer has a mixed object/Long
 signature that the scalar-only external ABI cannot yet represent; this is the
 next call-layer boundary, rather than another arithmetic opcode gap.
 
+Mixed typed ABI checkpoint (2026-08-02): composed scalar plans now describe
+public inputs with separate Long and guarded-object masks. A class-declared
+object may be used as a method receiver without ever entering scalar
+arithmetic, while integer arguments and results continue through the shared
+Long IR. At quick-region entry the runtime validates the declared class
+contract, resolves the monomorphic method cache and scalar leaf plan once, and
+then evaluates only the Long portion inside the loop. A changed receiver class,
+a reference, a failed type contract, an impure method, or an incompatible
+override leaves the canonical call frame untouched and resumes normal PHP
+execution.
+
+This removes the previously measured frame boundary rather than specializing
+the benchmark's arithmetic. In the same five-run no-PGO matrix, method-return
+fanout improves from approximately 0.244 s to 0.079 s untyped and from 0.244 s
+to 0.078 s typed. PHP without JIT measures approximately 0.069 s and 0.070 s,
+so the gap contracts from roughly 3.5x to 1.14x/1.12x. The rest of the matrix
+stays within ordinary run-to-run variance. The next decision should therefore
+come from profiling the remaining composed-program and string-return costs,
+not from adding another method-fanout-specific kernel.
+
 ## Phase 2: unified typed execution IR
 
 Consolidate the existing scalar, composed-scalar, property, recursion, and

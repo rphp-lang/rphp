@@ -1244,6 +1244,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
         user,
         plan,
         &arguments,
+        &[std::ptr::null(); 8],
         &mut calls,
         &mut call_count,
         0,
@@ -1632,41 +1633,59 @@ unsafe fn guarded_scalar_call_target(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
     call: &ScalarLongCall,
+    object_arguments: &[*const Value; 8],
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
-    let ScalarLongCallGuard::FunctionCache { .. } = call.guard else {
-        return None;
-    };
     let ip = call.guard.cache_ip();
     let initializer = owner.op_array.instructions.get(ip)?;
-    if initializer.opcode != OpCode::InitFcall {
-        return None;
-    }
     let cache = owner.op_array.cache.get(ip)?;
-    if cache.func.is_null() {
-        let primary = owner
-            .op_array
-            .literals
-            .get(initializer.op2 as usize)?
-            .as_str()?;
-        let resolved = eg.find_function(primary).or_else(|| {
-            if initializer.extended_value == 0 {
+    let receiver = match call.guard {
+        ScalarLongCallGuard::FunctionCache { .. } => {
+            if initializer.opcode != OpCode::InitFcall {
                 return None;
             }
-            owner
-                .op_array
-                .literals
-                .get(initializer.extended_value as usize)
-                .and_then(Value::as_str)
-                .and_then(|fallback| eg.find_function(fallback))
-        })?;
-        let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
-            as *mut crate::vm::instruction::InlineCache);
-        cache_mut.func = resolved;
-    }
+            if cache.func.is_null() {
+                let primary = owner
+                    .op_array
+                    .literals
+                    .get(initializer.op2 as usize)?
+                    .as_str()?;
+                let resolved = eg.find_function(primary).or_else(|| {
+                    if initializer.extended_value == 0 {
+                        return None;
+                    }
+                    owner
+                        .op_array
+                        .literals
+                        .get(initializer.extended_value as usize)
+                        .and_then(Value::as_str)
+                        .and_then(|fallback| eg.find_function(fallback))
+                })?;
+                let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache);
+                cache_mut.func = resolved;
+            }
+            None
+        }
+        ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
+            if initializer.opcode != OpCode::InitMethodCall
+                || initializer.op1_type != OpType::Cv
+                || initializer.op1 != receiver_slot
+            {
+                return None;
+            }
+            let receiver_index = (receiver_slot as u32)
+                .checked_sub(owner.common.sig.this_offset)? as usize;
+            let receiver = *object_arguments.get(receiver_index)?;
+            if receiver.is_null() {
+                return None;
+            }
+            Some(&*receiver)
+        }
+    };
     guarded_cached_scalar_call_target(
         &owner.op_array,
         call.guard,
-        None,
+        receiver,
         call.arguments.len(),
     )
 }
@@ -1676,6 +1695,7 @@ unsafe fn evaluate_composed_scalar_body_plan(
     owner: &UserFunction,
     plan: &ComposedScalarLongFunctionPlan,
     arguments: &[i64; 8],
+    object_arguments: &[*const Value; 8],
     calls: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_CALLS],
     call_count: &mut usize,
     depth: usize,
@@ -1707,7 +1727,12 @@ unsafe fn evaluate_composed_scalar_body_plan(
                 if sources.len() > 8 || *call_count >= COMPOSED_SCALAR_MAX_CALLS {
                     return None;
                 }
-                let (target, target_user) = guarded_scalar_call_target(eg, owner, call)?;
+                let (target, target_user) = guarded_scalar_call_target(
+                    eg,
+                    owner,
+                    call,
+                    object_arguments,
+                )?;
                 let target_user = &*target_user;
                 let mut target_arguments = [0i64; 8];
                 for (index, source) in sources.iter().copied().enumerate() {
@@ -1722,11 +1747,16 @@ unsafe fn evaluate_composed_scalar_body_plan(
                 } else if let Some(target_plan) =
                     target_user.composed_scalar_long_plan.as_deref()
                 {
+                    if target_plan.object_argument_mask != 0 {
+                        return None;
+                    }
+                    let no_object_arguments = [std::ptr::null(); 8];
                     evaluate_composed_scalar_body_plan(
                         eg,
                         target_user,
                         target_plan,
                         &target_arguments,
+                        &no_object_arguments,
                         calls,
                         call_count,
                         depth + 1,
@@ -1759,6 +1789,7 @@ unsafe fn resolve_quick_composed_leaf_body(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
     plan: &ComposedScalarLongFunctionPlan,
+    object_arguments: &[*const Value; 8],
     targets: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_OPS],
     scalar_plans: &mut [*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
 ) -> bool {
@@ -1777,7 +1808,12 @@ unsafe fn resolve_quick_composed_leaf_body(
         if call_count > COMPOSED_SCALAR_MAX_CALLS || call.arguments.len() > 8 {
             return false;
         }
-        let Some((target, target_user)) = guarded_scalar_call_target(eg, owner, call) else {
+        let Some((target, target_user)) = guarded_scalar_call_target(
+            eg,
+            owner,
+            call,
+            object_arguments,
+        ) else {
             return false;
         };
         let Some(target_plan) = (&*target_user).scalar_long_plan.as_deref() else {
@@ -1961,6 +1997,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
         owner,
         plan,
         &arguments,
+        &[std::ptr::null(); 8],
         &mut calls,
         &mut call_count,
         0,
@@ -5046,6 +5083,7 @@ unsafe fn resolve_quick_scalar_source<const TEMPORARY_CAPACITY: usize>(
 unsafe fn evaluate_quick_scalar_call_arguments(
     argument_plan: &ScalarLongProgram,
     argument_count: u8,
+    long_argument_mask: u8,
     slot_base: *mut Value,
     induction_cv: u16,
     accumulator_cv: u16,
@@ -5086,15 +5124,17 @@ unsafe fn evaluate_quick_scalar_call_arguments(
         .take(argument_plan.output_count as usize)
         .enumerate()
     {
-        arguments[index] = resolve_quick_scalar_source(
-            output,
-            slot_base,
-            induction_cv,
-            accumulator_cv,
-            induction,
-            accumulator,
-            &temporaries,
-        )?;
+        if long_argument_mask & (1u8 << index) != 0 {
+            arguments[index] = resolve_quick_scalar_source(
+                output,
+                slot_base,
+                induction_cv,
+                accumulator_cv,
+                induction,
+                accumulator,
+                &temporaries,
+            )?;
+        }
     }
     Some(arguments)
 }
@@ -5191,7 +5231,21 @@ unsafe fn guarded_quick_scalar_call_target(
         return None;
     }
     let receiver = match guard {
-        ScalarLongCallGuard::FunctionCache { .. } => None,
+        ScalarLongCallGuard::FunctionCache { .. } => {
+            let ip = guard.cache_ip();
+            let initializer = op_array.instructions.get(ip)?;
+            let cache = op_array.cache.get(ip)?;
+            if initializer.opcode != OpCode::InitFcall || cache.func.is_null() {
+                return None;
+            }
+            let common = &*cache.func;
+            if common.fn_type != FunctionType::User
+                || common.sig.public_arity() != argument_count as u32
+            {
+                return None;
+            }
+            return Some((cache.func, cache.func as *const UserFunction));
+        }
         ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
             Some(&*slot_base.add(receiver_slot as usize))
         }
@@ -5202,6 +5256,85 @@ unsafe fn guarded_quick_scalar_call_target(
         receiver,
         argument_count as usize,
     )
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn prepare_quick_composed_object_arguments(
+    eg: &ExecutorGlobals,
+    caller_op_array: &crate::compiler::OpArray,
+    slot_base: *mut Value,
+    target: *const FunctionCommon,
+    plan: &ComposedScalarLongFunctionPlan,
+    argument_plan: &ScalarLongProgram,
+) -> Option<[*const Value; 8]> {
+    let argument_count = plan.public_args as usize;
+    let expected_mask = if argument_count == 8 {
+        u8::MAX
+    } else {
+        (1u8 << argument_count) - 1
+    };
+    if argument_plan.output_count != plan.public_args
+        || plan.long_argument_mask & plan.object_argument_mask != 0
+        || plan.long_argument_mask | plan.object_argument_mask != expected_mask
+    {
+        return None;
+    }
+
+    let common = &*target;
+    let callee_class = eg.declaring_class_of(target).map(str::to_string);
+    let mut object_arguments = [std::ptr::null(); 8];
+    for index in 0..argument_count {
+        let output = argument_plan.outputs[index];
+        if plan.object_argument_mask & (1u8 << index) != 0 {
+            let ScalarLongSource::Input(slot) = output else {
+                return None;
+            };
+            let value = &*slot_base.add(slot as usize);
+            let hint = common.sig.param_type_hints.get(index)?;
+            if value.is_reference()
+                || !check_type_hint(
+                    value,
+                    hint,
+                    eg,
+                    caller_op_array.strict_types,
+                    callee_class.as_deref(),
+                )
+            {
+                return None;
+            }
+            object_arguments[index] = value;
+        } else if let ScalarLongSource::Input(slot) = output {
+            let value = &*slot_base.add(slot as usize);
+            if value.value_type() != ValueType::Long || value.is_reference() {
+                return None;
+            }
+        }
+    }
+    Some(object_arguments)
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn quick_long_argument_outputs_are_valid(
+    slot_base: *mut Value,
+    argument_plan: &ScalarLongProgram,
+    argument_count: u8,
+) -> bool {
+    if argument_plan.output_count != argument_count {
+        return false;
+    }
+    argument_plan.outputs
+        .iter()
+        .copied()
+        .take(argument_count as usize)
+        .all(|output| match output {
+            ScalarLongSource::Input(slot) => {
+                let value = &*slot_base.add(slot as usize);
+                value.value_type() == ValueType::Long && !value.is_reference()
+            }
+            ScalarLongSource::Constant(_) | ScalarLongSource::Temporary(_) => true,
+        })
 }
 
 #[derive(Clone, Copy)]
@@ -5620,6 +5753,8 @@ unsafe fn run_quick_long_accumulate_loop(
     let mut scalar_call_plan: *const ScalarLongFunctionPlan = std::ptr::null();
     let mut scalar_call_composed_plan: *const ComposedScalarLongFunctionPlan =
         std::ptr::null();
+    let mut scalar_call_long_argument_mask = 0u8;
+    let mut scalar_call_object_arguments = [std::ptr::null(); 8];
     let mut scalar_call_fused_program: Option<ScalarLongProgram<ScalarLongOp, 1>> = None;
     let mut quick_composed_targets =
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
@@ -5642,14 +5777,25 @@ unsafe fn run_quick_long_accumulate_loop(
             return Ok(QuickLoopOutcome::GuardFailed);
         };
         let user = &*user;
+        let QuickLongTerm::ScalarFunctionCall { argument_plan, .. } = &plan.term else {
+            unreachable!("scalar function call setup")
+        };
         if let Some(scalar_plan) = user.scalar_long_plan.as_deref() {
-            if scalar_plan.public_args != argument_count {
+            if scalar_plan.public_args != argument_count
+                || !quick_long_argument_outputs_are_valid(
+                    slot_base,
+                    argument_plan,
+                    argument_count,
+                )
+            {
                 stats::inc_quick_loop_guard_failed();
                 return Ok(QuickLoopOutcome::GuardFailed);
             }
             scalar_call_plan = scalar_plan;
-            let QuickLongTerm::ScalarFunctionCall { argument_plan, .. } = &plan.term else {
-                unreachable!("scalar function call setup")
+            scalar_call_long_argument_mask = if argument_count == 8 {
+                u8::MAX
+            } else {
+                (1u8 << argument_count) - 1
             };
             scalar_call_fused_program =
                 compose_quick_scalar_leaf_program(argument_plan, scalar_plan);
@@ -5662,11 +5808,25 @@ unsafe fn run_quick_long_accumulate_loop(
                 stats::inc_quick_loop_guard_failed();
                 return Ok(QuickLoopOutcome::GuardFailed);
             }
+            let Some(object_arguments) = prepare_quick_composed_object_arguments(
+                eg,
+                op_array,
+                slot_base,
+                cached,
+                composed_plan,
+                argument_plan,
+            ) else {
+                stats::inc_quick_loop_guard_failed();
+                return Ok(QuickLoopOutcome::GuardFailed);
+            };
             scalar_call_composed_plan = composed_plan;
+            scalar_call_long_argument_mask = composed_plan.long_argument_mask;
+            scalar_call_object_arguments = object_arguments;
             quick_composed_leaf_body = resolve_quick_composed_leaf_body(
                 eg,
                 user,
                 composed_plan,
+                &scalar_call_object_arguments,
                 &mut quick_composed_targets,
                 &mut quick_composed_plans,
             );
@@ -5863,6 +6023,7 @@ unsafe fn run_quick_long_accumulate_loop(
                         let arguments = evaluate_quick_scalar_call_arguments(
                             argument_plan.as_ref(),
                             *argument_count,
+                            scalar_call_long_argument_mask,
                             slot_base,
                             plan.induction_cv,
                             plan.accumulator_cv,
@@ -5884,6 +6045,7 @@ unsafe fn run_quick_long_accumulate_loop(
                                 &*scalar_call_user,
                                 &*scalar_call_composed_plan,
                                 &arguments,
+                                &scalar_call_object_arguments,
                                 &mut calls,
                                 &mut call_count,
                                 0,

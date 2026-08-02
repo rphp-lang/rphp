@@ -4,6 +4,7 @@ use common::{run_php, run_php_expect_error};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
+use rphp::vm::function::{ComposedScalarLongOp, ScalarLongCallGuard};
 use rphp::vm::instruction::{KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS};
 use rphp::vm::opcode::OpCode;
 
@@ -1184,6 +1185,43 @@ function consume(int $value): int {
         .unwrap();
     assert!(source.scalar_long_plan.is_some());
     assert!(consume.composed_scalar_long_plan.is_some());
+}
+
+#[test]
+fn test_composed_scalar_plan_separates_typed_object_receiver_from_long_arguments() {
+    let result = compile_types(r#"<?php
+class Source {
+    public function value(int $value): int {
+        if (($value & 1) === 0) {
+            return $value + 3;
+        }
+        return $value - 2;
+    }
+}
+function consume(Source $source, int $value): int {
+    $local = $source->value($value);
+    return ($local % 97) ^ 13;
+}
+"#);
+
+    let consume = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consume")
+        .map(|(_, function)| function)
+        .unwrap();
+    let plan = consume
+        .composed_scalar_long_plan
+        .as_deref()
+        .expect("mixed object/long composed scalar plan");
+    assert_eq!(plan.public_args, 2);
+    assert_eq!(plan.object_argument_mask, 0b01);
+    assert_eq!(plan.long_argument_mask, 0b10);
+    assert!(plan.program.operations.iter().any(|operation| matches!(
+        operation,
+        ComposedScalarLongOp::Call(call)
+            if matches!(call.guard, ScalarLongCallGuard::MethodCache { .. })
+    )));
 }
 
 #[test]

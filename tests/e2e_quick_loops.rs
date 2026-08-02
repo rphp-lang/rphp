@@ -401,6 +401,98 @@ echo $i;
 }
 
 #[test]
+fn quick_typed_function_elides_composed_method_receiver_frame() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Source {
+    public function value(int $value): int {
+        if (($value & 1) === 0) {
+            return $value + 3;
+        }
+        return $value - 2;
+    }
+}
+function consume(Source $source, int $value): int {
+    $local = $source->value($value);
+    return ($local % 97) ^ 13;
+}
+function total($source) {
+    $sum = 0;
+    for ($i = 0; $i < 1000; $i++) {
+        $sum += consume($source, $i);
+    }
+    return $sum . '|' . $i;
+}
+echo total(new Source());
+"
+        ),
+        "47110|1000"
+    );
+}
+
+#[test]
+fn quick_typed_composed_method_receiver_rechecks_class_contract() {
+    assert_eq!(
+        run_php(
+            "<?php
+class Source {
+    public function value(int $value): int { return $value + 1; }
+}
+class Other {
+    public function value(int $value): int { return $value + 100; }
+}
+function consume(Source $source, int $value): int {
+    return $source->value($value) + 1;
+}
+function total($source) {
+    $sum = 0;
+    for ($i = 0; $i < 1000; $i++) {
+        $sum += consume($source, $i);
+    }
+    return $sum;
+}
+echo total(new Source()) . '|';
+try {
+    total(new Other());
+} catch (TypeError $error) {
+    echo 'type-error';
+}
+"
+        ),
+        "501500|type-error"
+    );
+}
+
+#[test]
+fn quick_typed_composed_method_receiver_preserves_impure_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php
+$calls = 0;
+class ObservedSource {
+    public function value(int $value): int {
+        global $calls;
+        $calls++;
+        return $value;
+    }
+}
+function consume(ObservedSource $source, int $value): int {
+    return $source->value($value) + 1;
+}
+$source = new ObservedSource();
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += consume($source, $i);
+}
+echo $sum . '|' . $calls . '|' . $i;
+"
+        ),
+        "500500|1000|1000"
+    );
+}
+
+#[test]
 fn quick_composed_call_guard_preserves_nested_side_effects() {
     assert_eq!(
         run_php(
