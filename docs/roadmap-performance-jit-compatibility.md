@@ -661,6 +661,27 @@ objects and 500,000 result arrays. The next measurement should therefore test
 composition of the quote region and non-escaping request scalar replacement,
 not add another leaf-only method kernel.
 
+A subsequent DTO-constructor plan recognizes fixed-signature bodies that only
+copy positional arguments into declared `$this` properties and return. At a
+literal `new` site, the already-created object's exact class ID and each warmed
+`AssignObjProp` write cache prove the destination slots. All arguments and type
+hints are validated before any write; named arguments, references, dynamic or
+magic properties, cache/layout changes, and unsupported constructor work retain
+the ordinary frame. The direct path clones each source exactly once into the
+new object's property vector and materializes the constructor's null result,
+preserving ownership without the temporary argument/property clone cycle.
+
+The request constructor therefore removes another 500,000 complete frames:
+the corpus now pushes about 500,000 frames in total, executes only cold-start
+constructor `SendVal`/`AssignObjProp`/`Return` opcodes, scans about 9.0 million
+frame slots instead of 11.0 million, and performs 500,000 fewer Object clones.
+Untyped time remains near the preceding checkpoint at roughly 0.183--0.187 s;
+typed runs improve to about 0.191--0.192 s. The remaining repeated frame is now
+`QuoteService::quote()` itself, which also accounts for the surviving 32 MB of
+local-CV zeroing. That makes a guarded multi-call/multi-result quote region the
+next frame target; request and result-array allocation remain separate scalar-
+replacement/data-layout targets even after that frame is gone.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

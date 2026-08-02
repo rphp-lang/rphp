@@ -9,7 +9,7 @@ use crate::vm::function::{
     SignatureInfo, FrameLayout, CallPlan,
     CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
     LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
-    PropertyGetterMethodPlan,
+    PropertyGetterMethodPlan, PropertyInitAssignment, PropertyInitMethodPlan,
     BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
     LongRecursiveCondition,
     ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
@@ -599,6 +599,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         op_array,
         long_property_plan: None,
         property_getter_plan: None,
+        property_init_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
         object_long_plan: None,
@@ -711,6 +712,7 @@ pub fn make_user_function_typed(
         op_array,
         long_property_plan: None,
         property_getter_plan: None,
+        property_init_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
         object_long_plan: None,
@@ -2814,6 +2816,69 @@ fn build_property_getter_method_plan(
     Some(PropertyGetterMethodPlan { cache_ip: 0 })
 }
 
+fn build_property_init_method_plan(
+    function: &UserFunction,
+) -> Option<Box<PropertyInitMethodPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if common.sig.this_offset != 1
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args != common.sig.required_num_args
+        || public_args > 8
+        || op_array.num_cvs != common.sig.num_args
+        || op_array.instructions.len() > public_args as usize + 2
+    {
+        return None;
+    }
+
+    let mut assignments = Vec::new();
+    let mut saw_return = false;
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        match instruction.opcode {
+            OpCode::AssignObjProp => {
+                if saw_return
+                    || property_name(op_array, instruction).is_none()
+                    || instruction.result_type != OpType::Cv
+                    || instruction.result == 0
+                    || instruction.result as u32 > public_args
+                    || ip > u16::MAX as usize
+                {
+                    return None;
+                }
+                assignments.push(PropertyInitAssignment {
+                    cache_ip: ip as u16,
+                    argument: (instruction.result - 1) as u8,
+                });
+            }
+            OpCode::Return => {
+                if instruction.op1_type != OpType::Const
+                    || op_array
+                        .literals
+                        .get(instruction.op1 as usize)?
+                        .value_type()
+                        != crate::value::ValueType::Null
+                {
+                    return None;
+                }
+                saw_return = true;
+            }
+            _ => return None,
+        }
+    }
+    if !saw_return {
+        return None;
+    }
+
+    Some(Box::new(PropertyInitMethodPlan {
+        public_args: public_args as u8,
+        assignments: assignments.into_boxed_slice(),
+    }))
+}
+
 fn register_long_plan_property(
     properties: &mut Vec<LongPlanProperty>,
     indices: &mut HashMap<String, u8>,
@@ -3126,6 +3191,7 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
 
     function.long_property_plan = build_long_property_method_plan(&function);
     function.property_getter_plan = build_property_getter_method_plan(&function);
+    function.property_init_plan = build_property_init_method_plan(&function);
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);

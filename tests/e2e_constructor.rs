@@ -1,6 +1,15 @@
 /// Tests for __construct() constructor
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+
+fn compile_constructor_source(source: &str) -> rphp::compiler::compile::CompileResult {
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    Compiler::new().compile(&statements).unwrap()
+}
 
 #[test]
 fn test_constructor_basic() {
@@ -129,4 +138,58 @@ for ($i = 0; $i < 5; $i++) {
 }
 echo $sum . ':' . $box->value;
 "#), "5:7");
+}
+
+#[test]
+fn test_declared_property_constructor_gets_init_plan() {
+    let result = compile_constructor_source(r#"<?php
+class Request {
+    public $subtotal;
+    public $level;
+    public $region;
+    public function __construct(int $subtotal, int $level, string $region) {
+        $this->subtotal = $subtotal;
+        $this->level = $level;
+        $this->region = $region;
+    }
+}
+"#);
+    let constructor = result.class_defs[0]
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "__construct")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+    let plan = constructor
+        .property_init_plan
+        .as_deref()
+        .expect("declared property constructor init plan");
+    assert_eq!(plan.public_args, 3);
+    assert_eq!(plan.assignments.len(), 3);
+}
+
+#[test]
+fn test_constructor_init_plan_preserves_named_type_and_dynamic_fallbacks() {
+    assert_eq!(run_php(r#"<?php
+class DeclaredDto {
+    public $first;
+    public $second;
+    public function __construct(int $first, int $second) {
+        $this->first = $first;
+        $this->second = $second;
+    }
+}
+class DynamicDto {
+    public function __construct($value) { $this->value = $value; }
+}
+$named = new DeclaredDto(second: 4, first: 3);
+for ($i = 0; $i < 20; $i++) { $warm = new DeclaredDto($i, $i + 1); }
+for ($i = 0; $i < 20; $i++) { $dynamic = new DynamicDto($i); }
+echo $named->first . ':' . $named->second . '|' . $dynamic->value . '|';
+try {
+    new DeclaredDto('bad', 1);
+} catch (TypeError $error) {
+    echo 'typed';
+}
+"#), "3:4|19|typed");
 }

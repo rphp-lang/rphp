@@ -13,7 +13,7 @@ use super::instruction::{
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
@@ -4127,6 +4127,101 @@ fn op_throw<'a>(
     }
 }
 
+unsafe fn try_execute_property_init_constructor(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    sends: *const Instruction,
+    object: &Value,
+    callee: &UserFunction,
+    plan: &PropertyInitMethodPlan,
+) -> Option<*const Instruction> {
+    let common = &callee.common;
+    if common.sig.public_arity() != plan.public_args as u32
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.ref_args != 0
+        || common.sig.is_variadic
+        || plan.assignments.len() > 8
+        || object.value_type() != ValueType::Object
+        || object.is_reference()
+    {
+        return None;
+    }
+
+    let declaring_class = eg.declaring_class_of(&callee.common as *const FunctionCommon);
+    let mut arguments = [std::ptr::null(); 8];
+    for index in 0..plan.public_args as usize {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(
+                    send.op1 as u32,
+                    send.op1_type,
+                    caller_op_array,
+                )
+            }
+            OpType::Unused => return None,
+        };
+        if value.is_reference() {
+            return None;
+        }
+        let hint = common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        if !check_type_hint(
+            value,
+            hint,
+            eg,
+            caller_op_array.strict_types,
+            declaring_class,
+        ) {
+            return None;
+        }
+        arguments[index] = value as *const Value;
+    }
+
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    let class_id = object.object_class_id_unchecked();
+    if class_id == 0 {
+        return None;
+    }
+    let mut property_slots = [0usize; 8];
+    for (index, assignment) in plan.assignments.iter().copied().enumerate() {
+        let cache = callee.op_array.cache.get(assignment.cache_ip as usize)?;
+        if cache.class_id != class_id || cache.property_flags() != 3 {
+            return None;
+        }
+        property_slots[index] = cache.property_slot();
+    }
+
+    for (index, assignment) in plan.assignments.iter().copied().enumerate() {
+        let argument = &*arguments[assignment.argument as usize];
+        object.object_set_property_slot_unchecked(property_slots[index], argument.clone());
+    }
+    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
+        let result_ptr = (caller as *mut Value)
+            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        frame_tmp_set(caller, result_ptr, Value::null());
+    }
+    record_scalar_call(common);
+    (*caller).opline = do_fcall_ptr.add(1);
+    Some(do_fcall_ptr)
+}
+
 #[inline(never)]
 fn op_new_obj<'a>(
     eg: &mut ExecutorGlobals,
@@ -4221,6 +4316,28 @@ fn op_new_obj<'a>(
         resolved
     };
     if !func_ptr.is_null() {
+        let common = unsafe { &*func_ptr };
+        if common.fn_type == FunctionType::User {
+            let user = unsafe { &*(func_ptr as *const UserFunction) };
+            if let Some(plan) = user.property_init_plan.as_deref() {
+                let object = unsafe { &*result_ptr };
+                if unsafe {
+                    try_execute_property_init_constructor(
+                        eg,
+                        frame,
+                        op_array,
+                        (opline as *const Instruction).add(1),
+                        object,
+                        user,
+                        plan,
+                    )
+                }
+                .is_some()
+                {
+                    return Ok(ColdResult::Continue);
+                }
+            }
+        }
         // +1 for $this at CV 0; SendVal writes args to CV 1..N
         let pending_call = unsafe { (*frame).call };
         let call = eg.vm_stack.push_call_frame(

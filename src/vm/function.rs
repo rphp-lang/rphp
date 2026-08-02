@@ -48,6 +48,21 @@ pub struct PropertyGetterMethodPlan {
     pub cache_ip: u16,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct PropertyInitAssignment {
+    pub cache_ip: u16,
+    pub argument: u8,
+}
+
+/// Compile-time proof for a fixed-signature method whose body only copies
+/// positional arguments into declared properties of `$this`. New-object sites
+/// may use it after the canonical write caches warm, avoiding a constructor
+/// ExecuteData frame while preserving argument validation and property layout.
+pub struct PropertyInitMethodPlan {
+    pub public_args: u8,
+    pub assignments: Box<[PropertyInitAssignment]>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LongRecursiveCondition {
     LessThan,
@@ -690,6 +705,7 @@ pub struct UserFunction {
     pub op_array: OpArray,
     pub long_property_plan: Option<Box<LongPropertyMethodPlan>>,
     pub property_getter_plan: Option<PropertyGetterMethodPlan>,
+    pub property_init_plan: Option<Box<PropertyInitMethodPlan>>,
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
     pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
     pub object_long_plan: Option<Box<ObjectLongFunctionPlan>>,
