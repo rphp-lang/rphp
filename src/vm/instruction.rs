@@ -12,6 +12,18 @@ pub const CALL_FLAG_DEFERRED_SCALAR_CANDIDATE: u16 = 1;
 /// remain in the call protocol; only repeated type validation may be skipped.
 pub const CALL_FLAG_EXACT_SCALAR_ARGS: u16 = 1 << 1;
 
+/// InitMethodCall flag: the returned array is assigned to a dead local and
+/// immediately consumed by a compiler-proven constant-key Long extraction
+/// span. A compatible ObjectArrayFunctionPlan may publish its scalar outputs
+/// directly and skip materializing the intermediate PHP array.
+pub const CALL_FLAG_OBJECT_ARRAY_CONSUMERS: u16 = 1 << 2;
+
+/// NewObj flag: a constructor-initialized object is assigned once, passed to
+/// an immediately scalar-consumed ObjectArray method, and otherwise does not
+/// escape. Runtime may represent its declared properties virtually for that
+/// span, guarded by the canonical constructor/property caches.
+pub const NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE: u16 = 1;
+
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;

@@ -433,6 +433,23 @@ impl OpArray {
                 break;
             }
         }
+
+        // Mark method calls whose small associative result is immediately
+        // reduced to Long consumers and otherwise dead. Runtime still guards
+        // the selected callee's ObjectArrayFunctionPlan and every value; this
+        // bit records only the caller-side escape/liveness proof.
+        for init_ip in 0..self.instructions.len() {
+            if crate::vm::quick::detect_object_array_consumer_span(self, init_ip).is_some() {
+                self.instructions[init_ip]._pad |=
+                    crate::vm::instruction::CALL_FLAG_OBJECT_ARRAY_CONSUMERS;
+            }
+        }
+        for new_ip in 0..self.instructions.len() {
+            if crate::vm::quick::detect_virtual_object_array_pipeline_span(self, new_ip).is_some() {
+                self.instructions[new_ip]._pad |=
+                    crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE;
+            }
+        }
     }
 }
 

@@ -8,7 +8,10 @@ use rphp::vm::function::{
     CallStrategy, ComposedScalarLongOp, ComposedTypedLongOp, ReturnStrategy,
     ScalarLongCallGuard,
 };
-use rphp::vm::instruction::{KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS};
+use rphp::vm::instruction::{
+    KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
+};
 use rphp::vm::opcode::OpCode;
 
 fn compile_types(source: &str) -> rphp::compiler::compile::CompileResult {
@@ -1589,7 +1592,153 @@ $request = new Request();
 for ($i = 0; $i < 30; $i++) { $service->collect($request); }
 $result = $service->collect($request);
 echo gettype($result['value']);
+    "#), "double");
+}
+
+#[test]
+fn test_dead_object_array_result_and_request_get_scalar_pipeline_markers() {
+    let source = r#"<?php
+class Request {
+    public $value = 0;
+    public $bonus = 3;
+    public function __construct(int $value) { $this->value = $value; }
+}
+class Policy {
+    public function amount(Request $request): int {
+        return $request->value + $request->bonus;
+    }
+}
+class Service {
+    public $policy;
+    public function __construct(Policy $policy) { $this->policy = $policy; }
+    public function quote(Request $request): array {
+        $value = $this->policy->amount($request);
+        return ['value' => $value];
+    }
+}
+function runPipeline(int $iterations): int {
+    $service = new Service(new Policy());
+    $sum = 0;
+    for ($i = 0; $i < $iterations; $i++) {
+        $request = new Request(2);
+        $result = $service->quote($request);
+        $sum = $sum + $result['value'];
+    }
+    return $sum;
+}
+echo runPipeline(100);
+"#;
+    let compiled = compile_types(source);
+    let run = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "runPipeline")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(run.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::InitMethodCall
+            && instruction._pad & CALL_FLAG_OBJECT_ARRAY_CONSUMERS != 0
+    }));
+    assert!(run.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE != 0
+    }));
+    assert_eq!(run_php(source), "500");
+}
+
+#[test]
+fn test_virtual_request_pipeline_preserves_nontrivial_constructor_fallback() {
+    assert_eq!(run_php(r#"<?php
+class Request {
+    public $value = 0;
+    public function __construct($value) { $this->value = $value + 0; }
+}
+class Policy {
+    public function amount($request) { return $request->value; }
+}
+class Service {
+    public $policy;
+    public function __construct($policy) { $this->policy = $policy; }
+    public function quote($request) {
+        $value = $this->policy->amount($request);
+        return ['value' => $value];
+    }
+}
+$service = new Service(new Policy());
+$source = 4;
+$sum = 0;
+for ($i = 0; $i < 50; $i++) {
+    $request = new Request($source);
+    $result = $service->quote($request);
+    $sum = $sum + $result['value'];
+}
+echo $sum;
+"#), "200");
+}
+
+#[test]
+fn test_object_array_consumer_overflow_replays_canonical_addition() {
+    assert_eq!(run_php(r#"<?php
+class Request { public $value = 1; }
+class Policy { public function amount($request) { return $request->value; } }
+class Service {
+    public $policy;
+    public function __construct($policy) { $this->policy = $policy; }
+    public function quote($request) {
+        $value = $this->policy->amount($request);
+        return ['value' => $value];
+    }
+}
+$service = new Service(new Policy());
+$request = new Request();
+$sum = 9223372036854775780;
+for ($i = 0; $i < 50; $i++) {
+    $result = $service->quote($request);
+    $sum = $sum + $result['value'];
+}
+echo gettype($sum);
 "#), "double");
+}
+
+#[test]
+fn test_request_and_array_escape_disable_scalar_pipeline_markers() {
+    let compiled = compile_types(r#"<?php
+class Request {
+    public $value = 0;
+    public function __construct($value) { $this->value = $value; }
+}
+class Policy { public function amount($request) { return $request->value; } }
+class Service {
+    public $policy;
+    public function __construct($policy) { $this->policy = $policy; }
+    public function quote($request) {
+        $value = $this->policy->amount($request);
+        return ['value' => $value];
+    }
+}
+function escaped($service) {
+    $sum = 0;
+    $request = new Request(2);
+    $result = $service->quote($request);
+    $sum = $sum + $result['value'];
+    echo $request->value;
+    return $result;
+}
+"#);
+    let escaped = compiled
+        .functions
+        .iter()
+        .find(|(name, _)| name == "escaped")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(!escaped.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::InitMethodCall
+            && instruction._pad & CALL_FLAG_OBJECT_ARRAY_CONSUMERS != 0
+    }));
+    assert!(!escaped.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::NewObj
+            && instruction._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE != 0
+    }));
 }
 
 #[test]

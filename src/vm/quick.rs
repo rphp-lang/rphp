@@ -508,6 +508,243 @@ impl QuickLongOpsLoop {
 
 pub const QUICK_STRAIGHT_ARRAY_MAX_ADDS: usize = 4;
 
+fn instruction_mentions_operand(
+    instruction: &crate::vm::instruction::Instruction,
+    op_type: OpType,
+    slot: u16,
+) -> bool {
+    (instruction.op1_type == op_type && instruction.op1 == slot)
+        || (instruction.op2_type == op_type && instruction.op2 == slot)
+        || (instruction.result_type == op_type && instruction.result == slot)
+}
+
+fn object_array_add_consumer(
+    fetch: crate::vm::instruction::Instruction,
+    add: crate::vm::instruction::Instruction,
+    assign: crate::vm::instruction::Instruction,
+) -> Option<u16> {
+    if !matches!(add.opcode, OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp)
+        || !matches!(add.result_type, OpType::Tmp | OpType::Var)
+        || assign.opcode != OpCode::AssignCv
+        || assign.op1_type != OpType::Cv
+        || assign.op2_type != add.result_type
+        || assign.op2 != add.result
+        || assign.result_type != OpType::Unused
+    {
+        return None;
+    }
+    let accumulator = if add.op1_type == OpType::Cv
+        && add.op2_type == fetch.result_type
+        && add.op2 == fetch.result
+    {
+        add.op1
+    } else if add.op2_type == OpType::Cv
+        && add.op1_type == fetch.result_type
+        && add.op1 == fetch.result
+    {
+        add.op2
+    } else {
+        return None;
+    };
+    (assign.op1 == accumulator).then_some(accumulator)
+}
+
+/// Prove an immediate scalar-consumer span for a method's small associative
+/// array result. The assigned array CV must have no other syntactic use in the
+/// function, which makes non-materialization unobservable for the admitted
+/// Long-only ObjectArrayFunctionPlan result.
+pub fn detect_object_array_consumer_span(
+    op_array: &OpArray,
+    init_ip: usize,
+) -> Option<usize> {
+    let initializer = *op_array.instructions.get(init_ip)?;
+    if initializer.opcode != OpCode::InitMethodCall {
+        return None;
+    }
+    let do_fcall_ip = init_ip
+        .checked_add(1)?
+        .checked_add(initializer.extended_value as usize)?;
+    let do_fcall = *op_array.instructions.get(do_fcall_ip)?;
+    let assign_ip = do_fcall_ip + 1;
+    let assign = *op_array.instructions.get(assign_ip)?;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+        || assign.opcode != OpCode::AssignCv
+        || assign.op1_type != OpType::Cv
+        || assign.op2_type != do_fcall.result_type
+        || assign.op2 != do_fcall.result
+        || assign.result_type != OpType::Unused
+    {
+        return None;
+    }
+
+    let array_cv = assign.op1;
+    let mut fetch_ips = [usize::MAX; QUICK_STRAIGHT_ARRAY_MAX_ADDS];
+    let mut fetch_count = 0usize;
+    let mut add_count = 0usize;
+    let mut cursor = assign_ip + 1;
+    while fetch_count < fetch_ips.len() {
+        let Some(fetch) = op_array.instructions.get(cursor).copied() else {
+            break;
+        };
+        if fetch.opcode != OpCode::FetchDimR
+            || fetch.op1_type != OpType::Cv
+            || fetch.op1 != array_cv
+            || fetch.op2_type != OpType::Const
+            || !matches!(fetch.result_type, OpType::Tmp | OpType::Var)
+            || op_array
+                .literals
+                .get(fetch.op2 as usize)
+                .and_then(Value::as_str)
+                .is_none()
+        {
+            break;
+        }
+        fetch_ips[fetch_count] = cursor;
+        fetch_count += 1;
+
+        let add = op_array.instructions.get(cursor + 1).copied();
+        let assign = op_array.instructions.get(cursor + 2).copied();
+        if let (Some(add), Some(assign)) = (add, assign)
+            && object_array_add_consumer(fetch, add, assign).is_some()
+        {
+            add_count += 1;
+            cursor += 3;
+            continue;
+        }
+
+        // One final fetch may feed arbitrary canonical scalar bytecode. The
+        // fast path materializes that Long TMP and resumes immediately after
+        // the fetch.
+        cursor += 1;
+        break;
+    }
+    if add_count == 0 || fetch_count == 0 || cursor >= op_array.instructions.len() {
+        return None;
+    }
+
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        if ip == assign_ip || fetch_ips[..fetch_count].contains(&ip) {
+            continue;
+        }
+        if instruction_mentions_operand(instruction, OpType::Cv, array_cv) {
+            return None;
+        }
+        if ip != do_fcall_ip
+            && ip != assign_ip
+            && instruction_mentions_operand(
+                instruction,
+                do_fcall.result_type,
+                do_fcall.result,
+            )
+        {
+            return None;
+        }
+    }
+
+    Some(cursor)
+}
+
+/// Prove the caller-side escape shape for a constructor-initialized object
+/// passed directly into an ObjectArray consumer call. Runtime supplies the
+/// class, constructor-plan and declared-property guards that are unavailable
+/// while this caller is compiled.
+pub fn detect_virtual_object_array_pipeline_span(
+    op_array: &OpArray,
+    new_ip: usize,
+) -> Option<usize> {
+    let new_object = *op_array.instructions.get(new_ip)?;
+    if new_object.opcode != OpCode::NewObj
+        || new_object.op1_type != OpType::Const
+        || !matches!(new_object.result_type, OpType::Tmp | OpType::Var)
+        || new_object.extended_value == 0
+        || new_object.extended_value > 8
+        || op_array
+            .literals
+            .get(new_object.op1 as usize)
+            .and_then(Value::as_str)
+            .is_none()
+    {
+        return None;
+    }
+    let constructor_do_ip = new_ip + 1 + new_object.extended_value as usize;
+    let constructor_do = *op_array.instructions.get(constructor_do_ip)?;
+    let object_assign_ip = constructor_do_ip + 1;
+    let object_assign = *op_array.instructions.get(object_assign_ip)?;
+    if constructor_do.opcode != OpCode::DoFcall
+        || object_assign.opcode != OpCode::AssignCv
+        || object_assign.op1_type != OpType::Cv
+        || object_assign.op2_type != new_object.result_type
+        || object_assign.op2 != new_object.result
+        || object_assign.result_type != OpType::Unused
+    {
+        return None;
+    }
+
+    for index in 0..new_object.extended_value as usize {
+        let send = *op_array.instructions.get(new_ip + 1 + index)?;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            return None;
+        }
+    }
+
+    let method_ip = object_assign_ip + 1;
+    let method = *op_array.instructions.get(method_ip)?;
+    if method.opcode != OpCode::InitMethodCall
+        || method._pad & crate::vm::instruction::CALL_FLAG_OBJECT_ARRAY_CONSUMERS == 0
+        || detect_object_array_consumer_span(op_array, method_ip).is_none()
+    {
+        return None;
+    }
+    let mut virtual_argument_sends = 0usize;
+    let mut virtual_send_ip = usize::MAX;
+    for index in 0..method.extended_value as usize {
+        let send_ip = method_ip + 1 + index;
+        let send = *op_array.instructions.get(send_ip)?;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            return None;
+        }
+        if send.op1_type == OpType::Cv && send.op1 == object_assign.op1 {
+            virtual_argument_sends += 1;
+            virtual_send_ip = send_ip;
+        }
+    }
+    if virtual_argument_sends != 1 {
+        return None;
+    }
+
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        if ip != new_ip
+            && ip != object_assign_ip
+            && instruction_mentions_operand(
+                instruction,
+                new_object.result_type,
+                new_object.result,
+            )
+        {
+            return None;
+        }
+        if ip != object_assign_ip
+            && ip != virtual_send_ip
+            && instruction_mentions_operand(instruction, OpType::Cv, object_assign.op1)
+        {
+            return None;
+        }
+        if matches!(constructor_do.result_type, OpType::Tmp | OpType::Var)
+            && ip != constructor_do_ip
+            && instruction_mentions_operand(
+                instruction,
+                constructor_do.result_type,
+                constructor_do.result,
+            )
+        {
+            return None;
+        }
+    }
+
+    detect_object_array_consumer_span(op_array, method_ip)
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct QuickStraightArrayFetchAdd {
     pub index: QuickArrayIndex,

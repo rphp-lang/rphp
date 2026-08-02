@@ -713,6 +713,40 @@ and then let adjacent consumers read the region's three scalar outputs without
 materializing the intermediate result array. Those are allocation/escape
 analysis problems, not another call-dispatch kernel.
 
+That scalar-replacement checkpoint is now implemented in both directions. The
+caller analysis marks a small associative result only when it is assigned to a
+local, immediately reduced through constant string keys into checked Long
+consumers, and has no other use. A compatible `ObjectArrayFunctionPlan` can
+then publish its scalar values directly: no result `PhpArray`, hash lookup, or
+temporary array ownership traffic is needed. If a key, class, cache, value type,
+or arithmetic check fails, execution resumes through the original bytecode
+before any observable write.
+
+The adjacent request object is virtualized under a similarly narrow escape
+proof. A positional constructor backed by `PropertyInitMethodPlan` is mapped
+to declared property slots, including declared defaults, and the composed
+object-call plan reads those slots from temporary scalar storage. Class hints,
+constructor types, method/property caches, visibility/read safety, and the
+absence of `__destruct` remain runtime guards. Requests that escape, constructors
+with additional work, references, dynamic or magic behavior, and polymorphic
+edges retain canonical allocation and calls.
+
+On the order pipeline, best-of-five no-PGO time improves from about 0.164 s to
+0.115 s untyped and from about 0.171 s to 0.128 s typed, versus approximately
+0.079 s and 0.084 s in PHP (about 1.45x and 1.53x). Hot result-array clones fall
+to four process-wide cold/startup clones and request-object clones to eight;
+only nine cold/startup frames remain. The full release suite passes, while the
+independent 31-workload matrix still records 29 RPHP wins and only the same two
+small losses (about 1.08x array construction and 1.06x scalar method).
+
+The remaining corpus gap is consequently no longer primarily PHP object or
+array materialization. It is the outer loop's general opcode/control dispatch
+(`Mod`, branches, jumps, equality and accumulator writes), plus the remaining
+string ownership boundary. The next systematic step should compose this
+already-guarded virtual pipeline into a closed scalar loop region, so those
+operations stay in native Rust locals across iterations while all existing
+guards and canonical side exits remain reusable.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

@@ -1236,6 +1236,25 @@ pub fn execute_hot_frame(
                     }
 
                     if let Some(plan) = user.object_array_plan.as_deref() {
+                        if opline._pad
+                            & crate::vm::instruction::CALL_FLAG_OBJECT_ARRAY_CONSUMERS
+                            != 0
+                            && let Some(next_ptr) = unsafe {
+                                super::execute::try_execute_direct_object_array_consumers(
+                                    eg,
+                                    frame,
+                                    op_array,
+                                    opline_ptr,
+                                    obj_val,
+                                    user,
+                                    plan,
+                                )
+                            }
+                        {
+                            super::execute::record_scalar_call(func_common);
+                            opline_ptr = next_ptr;
+                            continue;
+                        }
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_direct_object_array_call(
                                 eg,
