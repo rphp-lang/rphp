@@ -39,9 +39,9 @@
 //! Single source of truth: [`FunctionCommon::can_promote_to_hot()`].
 //! A function is promoted to `HotStatus::Hot` only if:
 //! - User function (not internal)
-//! - `CallStrategy::FastScalar` or `CallStrategy::Fast`
+//! - A compact scalar call strategy
 //! - `ReturnStrategy::Fast` (no globals/statics/try-finally/generator sync)
-//! - No non-trivial param type hints
+//! - Only scalar parameter hints supported by the compact boundary
 //!
 //! Once `Hot`, these properties are **invariant** — the hot executor's DoFcall
 //! relies on them without re-checking (except caller-dependent globals guard).
@@ -800,11 +800,24 @@ pub fn execute_hot_frame(
                 // Arity: use public_arity() (= num_args - this_offset) so methods work —
                 // call.num_args excludes $this, sig.num_args includes it.
                 if func_common.fn_type != FunctionType::User
-                    || !matches!(func_common.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
+                    || !func_common.plan.call.is_compact_user_call()
                     || unsafe { (*call).num_args } != func_common.sig.public_arity()
                 {
                     unsafe { (*frame).call = call };
                     return bailout(frame, opline_ptr, HotBailReason::IneligibleCallee);
+                }
+
+                if func_common.plan.call != CallStrategy::FastScalar
+                    && !unsafe {
+                        super::execute::compact_scalar_call_types_match(
+                            call,
+                            func_common,
+                            op_array.strict_types,
+                        )
+                    }
+                {
+                    unsafe { (*frame).call = call };
+                    return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);
                 }
 
                 // For Fast: bail if caller has globals to sync (depends on call site, not callee).
@@ -869,25 +882,37 @@ pub fn execute_hot_frame(
             // ── Return — scalar fast path ──
             OpCode::Return => {
                 if opline.op1_type != OpType::Unused {
+                    let retval_ptr = if opline.op1_type == OpType::Cv {
+                        let cv_val = unsafe { (*frame).cv(opline.op1 as u32) };
+                        if cv_val.is_reference() {
+                            unsafe { cv_val.as_ref_ptr() as *const Value }
+                        } else {
+                            cv_val as *const Value
+                        }
+                    } else if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
+                        unsafe {
+                            (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
+                        }
+                    } else if opline.op1_type == OpType::Const {
+                        &op_array.literals()[opline.op1 as usize] as *const Value
+                    } else {
+                        return bailout(frame, opline_ptr, HotBailReason::UnsupportedReturnType);
+                    };
+
+                    // A typed return must be checked even when the caller
+                    // discards its value. Side-exit at the untouched Return so
+                    // baseline constructs the canonical TypeError.
+                    let common = unsafe { &*(*frame).func };
+                    if super::execute::check_fast_scalar_type_hint(
+                        unsafe { &*retval_ptr },
+                        &common.sig.return_type_hint,
+                        op_array.strict_types,
+                    ) != Some(true) {
+                        return bailout(frame, opline_ptr, HotBailReason::UnsupportedReturnType);
+                    }
+
                     let return_target = unsafe { (*frame).return_value };
                     if !return_target.is_null() {
-                        let retval_ptr = if opline.op1_type == OpType::Cv {
-                            let cv_val = unsafe { (*frame).cv(opline.op1 as u32) };
-                            if cv_val.is_reference() {
-                                unsafe { cv_val.as_ref_ptr() as *const Value }
-                            } else {
-                                cv_val as *const Value
-                            }
-                        } else if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
-                            unsafe {
-                                (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
-                            }
-                        } else if opline.op1_type == OpType::Const {
-                            &op_array.literals()[opline.op1 as usize] as *const Value
-                        } else {
-                            return bailout(frame, opline_ptr, HotBailReason::UnsupportedReturnType);
-                        };
-
                         let src_val = unsafe { &*retval_ptr };
                         if src_val.needs_cleanup() || src_val.is_reference() {
                             return bailout(frame, opline_ptr, HotBailReason::HeapReturnValue);

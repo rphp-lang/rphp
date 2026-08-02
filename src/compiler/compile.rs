@@ -223,28 +223,21 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
         function.op_array.may_access_globals = may_access_globals[index];
 
         // A direct, fixed-arity scalar call chain proven not to reach globals
-        // can use the tight FastScalar protocol and hot executor.
+        // can use the untyped or exact-Long scalar protocol and hot executor.
         let common = &mut function.common;
-        let has_no_type_hints = common
-            .sig
-            .param_type_hints
-            .iter()
-            .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
-        let has_no_return_type =
-            matches!(common.sig.return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
-        let can_use_fast_scalar = !may_access_globals[index]
+        let scalar_strategy = common.sig.declared_scalar_call_strategy();
+        let can_use_fast_scalar = scalar_strategy.is_some()
+            && !may_access_globals[index]
             && !common.sig.is_variadic
             && common.sig.ref_args == 0
             && common.sig.public_arity() == common.sig.required_num_args
             && function.op_array.global_vars.is_empty()
             && function.op_array.static_vars.is_empty()
             && function.op_array.try_entries.is_empty()
-            && !function.op_array.is_generator
-            && has_no_type_hints
-            && has_no_return_type;
+            && !function.op_array.is_generator;
 
         if can_use_fast_scalar {
-            common.plan.call = CallStrategy::FastScalar;
+            common.plan.call = scalar_strategy.unwrap();
         }
         function.scalar_long_plan = super::build_scalar_long_function_plan(function);
         function.composed_scalar_long_plan =

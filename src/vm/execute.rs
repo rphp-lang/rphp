@@ -193,6 +193,52 @@ fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &
     }
 }
 
+/// Validate hints supported by the compact scalar call/return protocol.
+/// `None` means the hint needs the canonical class/union/callable checker.
+#[inline(always)]
+pub(crate) fn check_fast_scalar_type_hint(
+    value: &Value,
+    hint: &ParamTypeHint,
+    strict: bool,
+) -> Option<bool> {
+    Some(match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed => true,
+        ParamTypeHint::Int => value.value_type() == ValueType::Long,
+        ParamTypeHint::Float => {
+            value.value_type() == ValueType::Double
+                || (!strict && value.value_type() == ValueType::Long)
+        }
+        ParamTypeHint::String => value.value_type() == ValueType::String,
+        ParamTypeHint::Bool => {
+            matches!(value.value_type(), ValueType::True | ValueType::False)
+        }
+        _ => return None,
+    })
+}
+
+/// Validate the already-bound public arguments for compact user-call ABIs.
+/// A failed guard leaves the frame untouched so the canonical call path can
+/// report or coerce the value according to normal PHP rules.
+#[inline(always)]
+pub(crate) unsafe fn compact_scalar_call_types_match(
+    call: *mut ExecuteData,
+    common: &FunctionCommon,
+    strict: bool,
+) -> bool {
+    let hints = &common.sig.param_type_hints;
+    let check_count = std::cmp::min((*call).num_args as usize, hints.len());
+    for (index, hint) in hints.iter().take(check_count).enumerate() {
+        if matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed) {
+            continue;
+        }
+        let value = &*(*call).cv(common.sig.param_cv_index(index as u32));
+        if check_fast_scalar_type_hint(value, hint, strict) != Some(true) {
+            return false;
+        }
+    }
+    true
+}
+
 /// VM error — replaces panic! in all runtime paths
 #[derive(Debug)]
 pub enum VmError {
@@ -462,7 +508,7 @@ pub(crate) unsafe fn try_send_scalar_arg(
 }
 
 /// Method-call variant that also accepts SendVarEx after proving the resolved
-/// FastScalar callee cannot require a reference.
+/// scalar callee cannot require a reference.
 #[inline(always)]
 pub(crate) unsafe fn try_send_scalar_method_arg(
     frame: *mut ExecuteData,
@@ -474,7 +520,7 @@ pub(crate) unsafe fn try_send_scalar_method_arg(
         OpCode::SendVal => try_copy_scalar_arg(frame, call, op_array, send),
         OpCode::SendVarEx => {
             let common = &*(*call).func;
-            common.plan.call == CallStrategy::FastScalar
+            common.plan.call.supports_scalar_long_plan()
                 && !common.sig.is_param_by_ref(send.extended_value)
                 && try_copy_scalar_arg(frame, call, op_array, send)
         }
@@ -1000,7 +1046,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
     let common = &*(*call).func;
     if !(*call).deferred_scalar_call
         || common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
+        || !common.plan.call.supports_scalar_long_plan()
         || (*call).num_args != common.sig.public_arity()
         || (*call).named_args_used
     {
@@ -1087,7 +1133,7 @@ unsafe fn try_execute_deferred_long_property_method(
     let common = &*(*call).func;
     if !(*call).deferred_scalar_call
         || common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
+        || !common.plan.call.supports_scalar_long_plan()
         || (*call).num_args != common.sig.public_arity()
         || (*call).named_args_used
     {
@@ -1210,7 +1256,7 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
     common: &FunctionCommon,
     plan: &ScalarLongFunctionPlan,
 ) -> Option<(i64, *const Instruction)> {
-    if common.plan.call != CallStrategy::FastScalar
+    if !common.plan.call.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
         || plan.program.operations.len() != 1
         || plan.program.output_count != 1
@@ -1278,7 +1324,7 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     common: &FunctionCommon,
     plan: &ScalarLongFunctionPlan,
 ) -> Option<(i64, *const Instruction)> {
-    if common.plan.call != CallStrategy::FastScalar
+    if !common.plan.call.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
@@ -1404,7 +1450,7 @@ unsafe fn guarded_scalar_user_target(
     }
     let common = &*target;
     if common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
+        || !common.plan.call.supports_scalar_long_plan()
         || common.sig.public_arity() != argument_count as u32
     {
         return None;
@@ -1714,7 +1760,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
     }
     let common = &*func;
     if common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
+        || !common.plan.call.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
@@ -1890,7 +1936,7 @@ unsafe fn evaluate_composed_scalar_call(
     }
     let common = &*func;
     if common.fn_type != FunctionType::User
-        || common.plan.call != CallStrategy::FastScalar
+        || !common.plan.call.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
@@ -3626,7 +3672,7 @@ fn op_init_method_call<'a>(
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let common = unsafe { &*resolved };
                 let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
-                    && common.plan.call == CallStrategy::FastScalar
+                    && common.plan.call.supports_scalar_long_plan()
                 {
                     let user = unsafe { &*(resolved as *const UserFunction) };
                     (
@@ -3652,7 +3698,7 @@ fn op_init_method_call<'a>(
         let pending_call = unsafe { (*frame).call };
         let common = unsafe { &*func_ptr };
         let scalar_plan_eligible = common.fn_type == FunctionType::User
-            && common.plan.call == CallStrategy::FastScalar
+            && common.plan.call.supports_scalar_long_plan()
             && num_args == common.sig.public_arity()
             && {
                 let user = unsafe { &*(func_ptr as *const UserFunction) };
@@ -10930,7 +10976,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // ── Fast path for simple user function calls ──
                 if func_common_fast.fn_type == FunctionType::User
-                    && func_common_fast.plan.call == CallStrategy::Fast
+                    && matches!(
+                        func_common_fast.plan.call,
+                        CallStrategy::Fast | CallStrategy::FastTypedScalar
+                    )
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
                 {
@@ -10952,34 +11001,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && num_args_fast >= func_common_fast.sig.required_num_args
                         && num_args_fast <= func_common_fast.sig.public_arity()
                     {
-                        let mut type_ok = true;
-                        let hints = &func_common_fast.sig.param_type_hints;
                         let caller_strict = op_array.strict_types;
-                        let has_typed_params = !hints.is_empty() && hints.iter().any(|h| !matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed));
-                        if caller_strict && has_typed_params {
-                            type_ok = false;
-                        } else if !hints.is_empty() {
-                            let check_count = std::cmp::min(num_args_fast as usize, hints.len());
-                            for i in 0..check_count {
-                                let hint = &hints[i];
-                                if matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed) {
-                                    continue;
-                                }
-                                let cv_idx = func_common_fast.sig.param_cv_index(i as u32);
-                                let val = unsafe { &*(*call).cv(cv_idx) };
-                                let ok = match hint {
-                                    ParamTypeHint::Int => val.as_long().is_some(),
-                                    ParamTypeHint::Float => val.value_type() == ValueType::Double || val.as_long().is_some(),
-                                    ParamTypeHint::Bool => val.value_type() == ValueType::True || val.value_type() == ValueType::False,
-                                    ParamTypeHint::String => val.as_str().is_some(),
-                                    _ => true,
-                                };
-                                if !ok {
-                                    type_ok = false;
-                                    break;
-                                }
-                            }
-                        }
+                        let type_ok = unsafe {
+                            compact_scalar_call_types_match(
+                                call,
+                                func_common_fast,
+                                caller_strict,
+                            )
+                        };
                         if !type_ok {
                             // Fall through to full path for proper TypeError
                         } else {
@@ -11628,7 +11657,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                                 opline_ptr.add(1),
                                 num_args,
-                                common.plan.call == CallStrategy::FastScalar,
+                                common.plan.call.supports_scalar_long_plan(),
                             )
                         };
 
@@ -11636,7 +11665,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // fold the adjacent DoFcall into this cache-hit method
                         // setup. This removes one more baseline dispatch from
                         // the ordinary `$object->method(...)` protocol.
-                        if ic.method_fusion_eligible() && bound == num_args as usize {
+                        if ic.method_fusion_eligible()
+                            && bound == num_args as usize
+                            && (common.plan.call == CallStrategy::FastScalar
+                                || unsafe {
+                                    compact_scalar_call_types_match(
+                                        call,
+                                        common,
+                                        op_array.strict_types,
+                                    )
+                                })
+                        {
                             let do_fcall_ptr = unsafe { opline_ptr.add(1 + bound) };
                             let do_fcall = unsafe { &*do_fcall_ptr };
                             if do_fcall.opcode == OpCode::DoFcall {
@@ -11884,25 +11923,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if func_common_ret.plan.ret == ReturnStrategy::Fast
                     && eg.exception.is_none()
                 {
-                    // Inline return type validation for scalar hints.
-                    // strict_types callers fall through to full path.
+                    // Inline exact scalar validation before transferring the
+                    // value. Complex hints use ReturnStrategy::Full.
                     let ret_hint = &func_common_ret.sig.return_type_hint;
                     let has_return_type = !matches!(ret_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
-                    // strict_types with return type → use full path for proper enforcement.
-                    if has_return_type && op_array.strict_types {
-                        // Fall through to full return path.
-                    } else {
                     if has_return_type && opline.op1_type != OpType::Unused {
                         let retval = unsafe {
                             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
-                        let type_ok = match ret_hint {
-                            ParamTypeHint::Int => retval.as_long().is_some(),
-                            ParamTypeHint::Float => retval.to_double().is_some(),
-                            ParamTypeHint::Bool => retval.value_type() == ValueType::True || retval.value_type() == ValueType::False,
-                            ParamTypeHint::String => retval.as_str().is_some(),
-                            _ => true,
-                        };
+                        let type_ok = check_fast_scalar_type_hint(
+                            retval,
+                            ret_hint,
+                            op_array.strict_types,
+                        ) == Some(true);
                         if !type_ok {
                             let err = make_error_value("TypeError", &format!(
                                 "Return value must be of type {}, {} returned",
@@ -11994,7 +12027,6 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
     
                     continue;
-                    } // else: not strict with return type
                 }
 
                 // ── Full return path ──

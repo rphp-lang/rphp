@@ -233,16 +233,40 @@ pub enum CallStrategy {
     /// Enables: inlined scalar SendVal, minimal DoFcall, direct Return.
     /// Typical profile: `fib($n)`, `add($a, $b)`.
     FastScalar,
-    /// No variadics, no param type hints → skip validation in DoFcall.
+    /// No variadics and only compact scalar parameter hints. The call
+    /// boundary validates those hints without entering the canonical checker.
     Fast,
     /// Full validation: arity check, type hints, variadic packing.
     Full,
+    /// Fixed-arity scalar path whose public parameters are all declared
+    /// `int`. The boundary validates them once; direct Long plans satisfy the
+    /// same contract through their existing argument guards.
+    ///
+    /// Kept after the original variants so adding the typed ABI does not
+    /// change their discriminants or perturb the established untyped paths.
+    FastTypedScalar,
 }
 
-/// Return dispatch: Fast skips global/static sync, return type check, try/finally.
+impl CallStrategy {
+    /// Whether compiler-proven Long plans can satisfy this ABI entirely with
+    /// their existing input and checked-arithmetic guards.
+    #[inline(always)]
+    pub fn supports_scalar_long_plan(self) -> bool {
+        matches!(self, Self::FastScalar | Self::FastTypedScalar)
+    }
+
+    /// User-call strategies understood by the compact scalar boundary.
+    #[inline(always)]
+    pub fn is_compact_user_call(self) -> bool {
+        matches!(self, Self::FastScalar | Self::Fast | Self::FastTypedScalar)
+    }
+}
+
+/// Return dispatch: Fast skips global/static sync and try/finally, while
+/// validating simple scalar return hints inline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReturnStrategy {
-    /// No globals, no statics, no return type, no try/finally, not generator.
+    /// No globals/statics/try-finally/generator and at most a scalar type hint.
     Fast,
     /// Full return: sync globals/statics, check return type, handle finally.
     Full,
@@ -302,6 +326,34 @@ impl SignatureInfo {
     #[inline]
     pub fn param_cv_index(&self, idx: u32) -> u32 {
         idx + self.this_offset
+    }
+
+    /// Scalar ABI selected solely from declarations. Structural eligibility
+    /// (arity, refs, globals, generators, try/finally) is checked by callers.
+    #[inline]
+    pub fn declared_scalar_call_strategy(&self) -> Option<CallStrategy> {
+        let untyped_params = self
+            .param_type_hints
+            .iter()
+            .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
+        let untyped_return = matches!(
+            self.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed
+        );
+        if untyped_params && untyped_return {
+            return Some(CallStrategy::FastScalar);
+        }
+
+        let exact_long_params = !self.param_type_hints.is_empty()
+            && self
+                .param_type_hints
+                .iter()
+                .all(|hint| matches!(hint, ParamTypeHint::Int));
+        let exact_long_return = matches!(
+            self.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+        );
+        (exact_long_params && exact_long_return).then_some(CallStrategy::FastTypedScalar)
     }
 }
 
@@ -374,17 +426,26 @@ impl FunctionCommon {
     ///
     /// A function is hot-eligible if:
     /// - User function (internal functions have opaque handlers)
-    /// - FastScalar or Fast call strategy (no variadics, no by-ref)
+    /// - Compact call strategy (no variadics, no by-ref)
     /// - Fast return strategy (no globals/statics/try-finally/generator sync)
-    /// - No non-trivial param type hints (hot executor skips type validation)
+    /// - Only scalar param hints that the compact call boundary can validate
     #[inline]
     pub fn can_promote_to_hot(&self) -> bool {
         self.fn_type == FunctionType::User
-            && matches!(self.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
+            && self.plan.call.is_compact_user_call()
+            && !self.sig.is_variadic
+            && self.sig.ref_args == 0
             && self.plan.ret == ReturnStrategy::Fast
             && (self.sig.param_type_hints.is_empty()
                 || self.sig.param_type_hints.iter().all(|h|
-                    matches!(h, ParamTypeHint::None | ParamTypeHint::Mixed)))
+                    matches!(h,
+                        ParamTypeHint::None
+                            | ParamTypeHint::Int
+                            | ParamTypeHint::Float
+                            | ParamTypeHint::String
+                            | ParamTypeHint::Bool
+                            | ParamTypeHint::Mixed
+                    )))
     }
 }
 

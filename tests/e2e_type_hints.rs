@@ -602,6 +602,63 @@ echo good();
 "#), "caught 42");
 }
 
+#[test]
+fn test_exact_int_fast_scalar_rejects_bad_argument_after_warmup() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+function addOne(int $value): int { return $value + 1; }
+for ($i = 0; $i < 100; $i++) { addOne($i); }
+try { addOne("bad"); } catch (TypeError $e) { echo "caught"; }
+"#), "caught");
+}
+
+#[test]
+fn test_exact_int_fast_scalar_rejects_bad_return_after_warmup() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+function maybeBad(int $value): int {
+    if ($value < 1000) { return $value + 1; }
+    return "bad";
+}
+for ($i = 0; $i < 100; $i++) { maybeBad($i); }
+try { maybeBad(1000); } catch (TypeError $e) { echo "caught"; }
+"#), "caught");
+}
+
+#[test]
+fn test_hot_untyped_caller_rechecks_typed_scalar_callee() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+function typedTarget(int $value): int { return $value + 1; }
+function forward($value) { return typedTarget($value); }
+for ($i = 0; $i < 100; $i++) { forward($i); }
+try { forward(1.5); } catch (TypeError $e) { echo "caught"; }
+"#), "caught");
+}
+
+#[test]
+fn test_typed_scalar_method_rejects_bad_argument_after_warmup() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+class TypedCounter {
+    function add(int $value): int { return $value + 1; }
+}
+$counter = new TypedCounter();
+for ($i = 0; $i < 100; $i++) { $counter->add($i); }
+try { $counter->add(1.5); } catch (TypeError $e) { echo "caught"; }
+"#), "caught");
+}
+
+#[test]
+fn test_fast_return_only_hint_rejects_bad_value_after_warmup() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+function returnOnly($value): int { return $value; }
+for ($i = 0; $i < 100; $i++) { returnOnly($i); }
+try { returnOnly("bad"); } catch (TypeError $e) { echo "caught"; }
+"#), "caught");
+}
+
 // ── declare(strict_types=1) ──
 
 #[test]

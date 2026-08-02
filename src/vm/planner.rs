@@ -417,6 +417,16 @@ pub unsafe fn execute_macro(
                     _ => slot_base.add(*slot as usize), // Tmp/Const
                 };
 
+                let common = &*(*frame).func;
+                if super::execute::check_fast_scalar_type_hint(
+                    &*retval_ptr,
+                    &common.sig.return_type_hint,
+                    op_array.strict_types,
+                ) != Some(true)
+                {
+                    return MacroResult::GuardFail;
+                }
+
                 let return_target = (*frame).return_value;
                 if !return_target.is_null() {
                     let retval = &*retval_ptr;
@@ -493,10 +503,22 @@ pub unsafe fn execute_macro(
                 (*frame).call = (*call).call;
 
                 let func_common = &*(*call).func;
-                // Runtime guard: callee is still Fast/FastScalar User
+                // Runtime guard: callee still uses a compact user-call ABI.
                 if func_common.fn_type != FunctionType::User
-                    || !matches!(func_common.plan.call, CallStrategy::FastScalar | CallStrategy::Fast)
+                    || !func_common.plan.call.is_compact_user_call()
                 {
+                    (*frame).call = call;
+                    return MacroResult::GuardFail;
+                }
+
+                if func_common.plan.call != CallStrategy::FastScalar
+                    && !super::execute::compact_scalar_call_types_match(
+                        call,
+                        func_common,
+                        op_array.strict_types,
+                    )
+                {
+                    (*frame).call = call;
                     return MacroResult::GuardFail;
                 }
 

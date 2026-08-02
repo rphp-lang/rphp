@@ -1812,3 +1812,64 @@ wins plus one timing-level tie. Fresh sampling reduces `with_hash_capacity`
 from 88 samples to 3 and leaves the complete small-array lifecycle near 6
 percent. Object creation and destruction are now the largest named runtime
 lifecycle cost at roughly 20 percent combined.
+
+## Phase 3d result: declared scalar types as an execution contract
+
+Before continuing into object layout, an isolated type-declaration matrix
+measured the cost of function and method hints. With identical integer bodies,
+RPHP initially took 0.1636 s for typed parameters, 0.1705 s for typed parameters
+plus return, 0.2742 s for the strict variant, and 0.2154 s for the typed method.
+The corresponding untyped function and method took 0.1219 s and 0.1157 s. This
+showed that declarations were selecting slower call machinery even when every
+runtime value already had the declared representation.
+
+Scalar hints now use the compact call and return boundary. A separate
+`FastTypedScalar` ABI is selected only for fixed-arity, non-reference functions
+whose public parameters are all `int` and whose return is absent, `mixed`, or
+`int`. It deliberately adds no metadata or type checks to the original
+baseline `FastScalar` call/return path. Compiler-proven Long leaf,
+composed-call, and monomorphic method plans accept both scalar ABIs: their
+existing Long input guards and
+checked arithmetic satisfy the declared contract without allocating a frame.
+Other `int`, `float`, `string`, and `bool` signatures use compact inline checks
+and retain the canonical checker for failed or unsupported cases.
+
+The type contract is enforced at every tier. Baseline calls validate already
+bound arguments; nested hot and macro calls repeat the guard at their call
+boundary; typed returns are checked even when the caller discards the result.
+A failed guard side-exits at the untouched call or return so the canonical path
+produces the normal `TypeError`. Dedicated warmup tests cover invalid direct
+arguments, nested hot calls, methods, typed returns, and return-only hints.
+
+Final best-of-five no-PGO measurements are:
+
+| Variant | RPHP | PHP 8.4.12, no CLI opcache | RPHP / PHP |
+|---|---:|---:|---:|
+| Function, untyped | 0.1176 s | 0.0419 s | 2.81x |
+| Function, `int` parameters | 0.1318 s | 0.0465 s | 2.83x |
+| Function, `int` return | 0.1280 s | 0.0445 s | 2.87x |
+| Function, parameters + return | 0.1319 s | 0.0492 s | 2.68x |
+| Function, strict parameters + return | 0.1323 s | 0.0496 s | 2.67x |
+| Method, untyped | 0.1129 s | 0.0535 s | 2.11x |
+| Method, parameters + return | 0.1256 s | 0.0614 s | 2.05x |
+| Scalar-plan function, untyped | 0.0446 s | 0.0756 s | 0.59x |
+| Scalar-plan function, typed | 0.0448 s | 0.0838 s | 0.53x |
+| Scalar-plan method, untyped | 0.0435 s | 0.0451 s | 0.96x |
+| Scalar-plan method, typed | 0.0435 s | 0.0517 s | 0.84x |
+
+The generic strict typed function is about 52 percent faster than its initial
+RPHP measurement. The typed generic function and method retain roughly 11--12
+percent overhead versus their untyped RPHP controls, which is now the compact
+boundary check rather than a different frame protocol. When the body is a
+compiler-proven scalar plan, typed and untyped RPHP are effectively equal;
+the typed function is 47 percent faster than PHP and the typed method 16
+percent faster.
+
+Two independent corpus runs measure 0.2344--0.2369 s RPHP versus
+0.0781--0.0787 s PHP, about 2.98--3.03x. This is slightly below the preceding
+0.2404--0.2406 s checkpoint, so the typed ABI carries no measured tax for the
+untyped application. The complete release suite passes with default features
+and with `--no-default-features`; the type-hint suite has 72 tests. The 31-case
+no-PGO matrix remains 30 RPHP wins with one marginal packed-array build loss at
+1.05x. Declared object layout and allocation therefore remain the next
+corpus-driven no-JIT target.

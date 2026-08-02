@@ -625,28 +625,37 @@ pub fn make_user_function_typed(
     }
     op_array.compute_blocks();
     op_array.prepare_quick_loops();
-    // FastScalar: tightest path for simple fixed-arity scalar functions.
-    // Requires NO actual type hints — DoFcall FastScalar skips type checking entirely.
+    // Exact all-`int` parameters use a distinct typed scalar ABI. Keeping it
+    // separate leaves the original untyped FastScalar machine path untouched.
     let has_only_scalar_hints = param_type_hints.iter().all(|h| matches!(h,
         ParamTypeHint::None | ParamTypeHint::Int | ParamTypeHint::Float
         | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed
     ));
-    let has_no_type_hints = param_type_hints.iter().all(|h| matches!(h,
-        ParamTypeHint::None | ParamTypeHint::Mixed
-    ));
-    let has_no_return_type = matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
-    let is_fast_scalar = !is_variadic
+    let has_no_type_hints = param_type_hints
+        .iter()
+        .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
+    let has_no_return_type =
+        matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+    let has_exact_long_params = !param_type_hints.is_empty()
+        && param_type_hints
+            .iter()
+            .all(|hint| matches!(hint, ParamTypeHint::Int));
+    let has_exact_long_return = matches!(
+        return_type_hint,
+        ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+    );
+    let has_fast_scalar_shape = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
         && num_args == required_num_args
         && op_array.global_vars.is_empty()
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
-        && !op_array.may_access_globals
-        && has_no_type_hints
-        && has_no_return_type;
-    let call = if is_fast_scalar {
+        && !op_array.may_access_globals;
+    let call = if has_fast_scalar_shape && has_no_type_hints && has_no_return_type {
         CallStrategy::FastScalar
+    } else if has_fast_scalar_shape && has_exact_long_params && has_exact_long_return {
+        CallStrategy::FastTypedScalar
     } else if !is_variadic && !op_array.is_generator && has_only_scalar_hints {
         CallStrategy::Fast
     } else {
@@ -741,7 +750,7 @@ fn build_scalar_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if common.plan.call != CallStrategy::FastScalar
+    if !common.plan.call.supports_scalar_long_plan()
         || common.plan.ret != ReturnStrategy::Fast
         || public_args > SCALAR_LONG_PLAN_MAX_ARGS
         || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 2
@@ -827,7 +836,7 @@ fn build_composed_scalar_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if common.plan.call != CallStrategy::FastScalar
+    if !common.plan.call.supports_scalar_long_plan()
         || common.plan.ret != ReturnStrategy::Fast
         || public_args > SCALAR_LONG_PLAN_MAX_ARGS
         || op_array.instructions.len() > 32
@@ -1152,7 +1161,7 @@ fn build_property_getter_method_plan(
 ) -> Option<PropertyGetterMethodPlan> {
     let common = &function.common;
     let op_array = &function.op_array;
-    if common.plan.call != CallStrategy::FastScalar
+    if !common.plan.call.supports_scalar_long_plan()
         || common.plan.ret != ReturnStrategy::Fast
         || common.sig.this_offset != 1
         || common.sig.public_arity() != 0
@@ -1221,7 +1230,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if common.plan.call != CallStrategy::FastScalar
+    if !common.plan.call.supports_scalar_long_plan()
         || common.sig.this_offset != 1
         || public_args > LONG_PROPERTY_PLAN_MAX_ARGS
         || op_array.instructions.len() > 32
@@ -1465,26 +1474,19 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     function.common.sig.this_offset = 1;
 
     let common = &function.common;
-    let has_no_type_hints = common
-        .sig
-        .param_type_hints
-        .iter()
-        .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
-    let has_no_return_type =
-        matches!(common.sig.return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
-    let can_use_fast_scalar = !common.sig.is_variadic
+    let scalar_strategy = common.sig.declared_scalar_call_strategy();
+    let can_use_fast_scalar = scalar_strategy.is_some()
+        && !common.sig.is_variadic
         && common.sig.ref_args == 0
         && common.sig.public_arity() == common.sig.required_num_args
         && function.op_array.global_vars.is_empty()
         && function.op_array.static_vars.is_empty()
         && function.op_array.try_entries.is_empty()
         && !function.op_array.is_generator
-        && !function.op_array.may_access_globals
-        && has_no_type_hints
-        && has_no_return_type;
+        && !function.op_array.may_access_globals;
 
     if can_use_fast_scalar {
-        function.common.plan.call = CallStrategy::FastScalar;
+        function.common.plan.call = scalar_strategy.unwrap();
         function.common.plan.borrow_this = !function.op_array.instructions.iter().any(|instruction| {
             instruction.opcode == OpCode::Return
                 && instruction.op1_type == OpType::Cv

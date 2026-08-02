@@ -381,6 +381,37 @@ combined. The next no-JIT structural target is therefore declared-object
 layout and allocation, while dynamic properties and magic behavior must keep
 their canonical fallbacks.
 
+Before opening that object-layout slice, the eighth corpus-era checkpoint uses
+declared scalar types as an optimization contract. An isolated matrix showed
+that identical typed functions and methods were paying a different, slower
+frame protocol: strict typed function calls took approximately 0.274 s versus
+0.122 s untyped, and typed methods took 0.215 s versus 0.116 s untyped.
+
+A distinct `FastTypedScalar` ABI now represents fixed-arity all-`int`
+parameters with an absent, `mixed`, or `int` return. It remains separate from
+the original untyped `FastScalar`, preserving that ABI's metadata and
+discriminants plus its dedicated baseline call/return path. Existing
+compiler-proven Long plans, composed scalar calls, and monomorphic scalar
+methods accept the typed ABI because their Long guards and
+checked arithmetic already prove the declaration. Other scalar hints use
+compact call/return checks, while failures and complex hints retain canonical
+validation and errors. Hot and macro tiers check nested typed calls and typed
+returns, including discarded results, before committing.
+
+The final generic strict typed function is approximately 0.132 s, a 52 percent
+reduction from the initial RPHP result. Typed scalar-plan functions and methods
+are effectively equal to their untyped RPHP controls: 0.0448 s versus 0.0446 s
+for functions and 0.0435 s for both method variants. They are respectively
+about 47 percent and 16 percent faster than PHP 8.4 without JIT.
+
+Two independent order-pipeline runs are 0.2344--0.2369 s RPHP versus
+0.0781--0.0787 s PHP, slightly better than the preceding 0.2404--0.2406 s
+checkpoint and therefore showing no tax on untyped real code. Both complete
+release configurations pass, the focused type suite contains 72 tests, and
+the no-PGO matrix remains 30 RPHP wins with one marginal 1.05x packed-array
+build loss. Work can now return to declared-object layout and allocation with
+the scalar type boundary ready for the later typed-region JIT.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:
