@@ -1407,6 +1407,46 @@ class Service {
 }
 
 #[test]
+fn test_typed_object_property_long_method_gets_guarded_plan() {
+    let result = compile_types(r#"<?php
+class QuoteRequest {
+    public int $level;
+    public int $subtotal;
+}
+class DiscountPolicy {
+    public function rate(QuoteRequest $request): int {
+        $rate = 150;
+        if ($request->level >= 3) {
+            $rate = $rate + 250;
+        }
+        if ($request->subtotal >= 20000) {
+            $rate = $rate + 175;
+        }
+        return $rate;
+    }
+}
+"#);
+    let policy = result
+        .class_defs
+        .iter()
+        .find(|class| class.name == "DiscountPolicy")
+        .unwrap();
+    let rate = policy
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "rate")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+    let plan = rate
+        .object_long_plan
+        .as_deref()
+        .expect("typed property-reading Long plan");
+    assert_eq!(plan.public_args, 1);
+    assert_eq!(plan.object_argument_mask, 1);
+    assert_eq!(plan.long_argument_mask, 0);
+}
+
+#[test]
 fn test_monomorphic_class_guard_rechecks_a_different_runtime_class() {
     assert_eq!(run_php(r#"<?php
 class Accepted {}

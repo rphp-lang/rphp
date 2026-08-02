@@ -13,7 +13,7 @@ use super::instruction::{
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
@@ -1631,6 +1631,238 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
         return None;
     }
     let result = evaluate_scalar_long_plan(plan, &arguments)?;
+    Some((result, do_fcall_ptr))
+}
+
+#[inline(always)]
+fn resolve_object_long_source(
+    source: ObjectLongSource,
+    slots: &[std::mem::MaybeUninit<i64>; 64],
+    initialized: u64,
+) -> Option<i64> {
+    match source {
+        ObjectLongSource::Slot(slot) => {
+            let bit = 1u64.checked_shl(slot as u32)?;
+            if initialized & bit == 0 {
+                return None;
+            }
+            Some(unsafe { slots.get(slot as usize)?.assume_init() })
+        }
+        ObjectLongSource::Constant(value) => Some(value),
+    }
+}
+
+/// Execute a compiler-proven read-only object/Long method body against the
+/// callee's warmed property caches. Every failure is side-effect free, so the
+/// caller can allocate the ordinary frame and replay canonical PHP bytecode.
+#[inline(never)]
+unsafe fn evaluate_object_long_plan(
+    receiver: &Value,
+    object_arguments: &[*const Value; 8],
+    slots: &mut [std::mem::MaybeUninit<i64>; 64],
+    mut initialized: u64,
+    callee: &UserFunction,
+    plan: &ObjectLongFunctionPlan,
+) -> Option<i64> {
+    if plan.slot_count as usize > slots.len()
+        || plan.operations.len() > 64
+        || plan.operations.is_empty()
+    {
+        return None;
+    }
+
+    let mut ip = 0usize;
+    while ip < plan.operations.len() {
+        match plan.operations[ip] {
+            ObjectLongOp::Assign {
+                destination,
+                source,
+            } => {
+                slots[destination as usize]
+                    .write(resolve_object_long_source(source, slots, initialized)?);
+                initialized |= 1u64 << destination;
+            }
+            ObjectLongOp::FetchProperty {
+                object,
+                cache_ip,
+                destination,
+            } => {
+                let object = match object {
+                    ObjectLongObjectSource::Receiver => receiver,
+                    ObjectLongObjectSource::Argument(argument) => {
+                        let pointer = *object_arguments.get(argument as usize)?;
+                        if pointer.is_null() {
+                            return None;
+                        }
+                        &*pointer
+                    }
+                };
+                if object.value_type() != ValueType::Object || object.is_reference() {
+                    return None;
+                }
+                let class_id = object.object_class_id_unchecked();
+                if class_id == 0 {
+                    return None;
+                }
+                let cache = callee.op_array.cache.get(cache_ip as usize)?;
+                if cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+                    return None;
+                }
+                let property = &*object.object_property_slot_unchecked(cache.property_slot());
+                if property.value_type() != ValueType::Long || property.is_reference() {
+                    return None;
+                }
+                slots[destination as usize].write(property.raw_long());
+                initialized |= 1u64 << destination;
+            }
+            ObjectLongOp::Arithmetic {
+                kind,
+                lhs,
+                rhs,
+                destination,
+            } => {
+                let lhs = resolve_object_long_source(lhs, slots, initialized)?;
+                let rhs = resolve_object_long_source(rhs, slots, initialized)?;
+                slots[destination as usize].write(apply_scalar_long_op(kind, lhs, rhs)?);
+                initialized |= 1u64 << destination;
+            }
+            ObjectLongOp::Compare {
+                kind,
+                lhs,
+                rhs,
+                destination,
+            } => {
+                let lhs = resolve_object_long_source(lhs, slots, initialized)?;
+                let rhs = resolve_object_long_source(rhs, slots, initialized)?;
+                let value = match kind {
+                    ScalarLongConditionKind::Equal => lhs == rhs,
+                    ScalarLongConditionKind::NotEqual => lhs != rhs,
+                    ScalarLongConditionKind::LessThan => lhs < rhs,
+                    ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
+                };
+                slots[destination as usize].write(value as i64);
+                initialized |= 1u64 << destination;
+            }
+            ObjectLongOp::JumpIfFalse { condition, target } => {
+                if resolve_object_long_source(condition, slots, initialized)? == 0 {
+                    ip = target as usize;
+                    continue;
+                }
+            }
+            ObjectLongOp::JumpIfTrue { condition, target } => {
+                if resolve_object_long_source(condition, slots, initialized)? != 0 {
+                    ip = target as usize;
+                    continue;
+                }
+            }
+            ObjectLongOp::Jump { target } => {
+                ip = target as usize;
+                continue;
+            }
+            ObjectLongOp::Return { value } => {
+                return resolve_object_long_source(value, slots, initialized);
+            }
+            ObjectLongOp::Bail => return None,
+        }
+        ip += 1;
+    }
+    None
+}
+
+/// Borrow a contiguous positional Send sequence and execute a guarded method
+/// that reads object properties and returns a Long. Argument declarations are
+/// validated before the body plan, including unused typed parameters.
+#[inline(never)]
+unsafe fn try_execute_direct_object_long_call(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    receiver: &Value,
+    sends: *const Instruction,
+    callee: &UserFunction,
+    plan: &ObjectLongFunctionPlan,
+) -> Option<(i64, *const Instruction)> {
+    let common = &callee.common;
+    if !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.public_arity() != plan.public_args as u32
+        || common.sig.ref_args != 0
+        || common.sig.is_variadic
+    {
+        return None;
+    }
+
+    let declaring_class = eg.declaring_class_of(&callee.common as *const FunctionCommon);
+    let mut slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
+    let mut initialized = 0u64;
+    let mut object_arguments = [std::ptr::null(); 8];
+    for index in 0..plan.public_args as usize {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(
+                    send.op1 as u32,
+                    send.op1_type,
+                    caller_op_array,
+                )
+            }
+            OpType::Unused => return None,
+        };
+        if value.is_reference() {
+            return None;
+        }
+        let hint = common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        if !check_type_hint(
+            value,
+            hint,
+            eg,
+            caller_op_array.strict_types,
+            declaring_class,
+        ) {
+            return None;
+        }
+
+        let bit = 1u8 << index;
+        if plan.long_argument_mask & bit != 0 {
+            if value.value_type() != ValueType::Long {
+                return None;
+            }
+            let slot = common.sig.param_cv_index(index as u32) as usize;
+            slots[slot].write(value.raw_long());
+            initialized |= 1u64 << slot;
+        }
+        if plan.object_argument_mask & bit != 0 {
+            if value.value_type() != ValueType::Object {
+                return None;
+            }
+            object_arguments[index] = value as *const Value;
+        }
+    }
+
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+    {
+        return None;
+    }
+    let result = evaluate_object_long_plan(
+        receiver,
+        &object_arguments,
+        &mut slots,
+        initialized,
+        callee,
+        plan,
+    )?;
     Some((result, do_fcall_ptr))
 }
 
@@ -12399,6 +12631,30 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     } {
                                         continue 'vm;
                                     }
+                                }
+                            }
+
+                            if let Some(plan) = user.object_long_plan.as_deref() {
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_object_long_call(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        obj_val,
+                                        opline_ptr.add(1),
+                                        user,
+                                        plan,
+                                    )
+                                } {
+                                    record_scalar_call(common);
+                                    unsafe {
+                                        complete_direct_scalar_long_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
                                 }
                             }
 

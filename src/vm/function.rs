@@ -177,6 +177,81 @@ pub struct ScalarLongFunctionPlan {
     pub select: Option<ScalarLongSelect>,
 }
 
+/// Scalar source in a small guarded object-reading program. Slot indices use
+/// the callee's already-resolved CV/TMP layout, so the executor needs no PHP
+/// frame merely to address local integer values.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectLongSource {
+    Slot(u16),
+    Constant(i64),
+}
+
+/// Object input whose declared property is read by an object-long program.
+/// Only the method receiver and fixed positional arguments are admitted; a
+/// computed object would require executing the canonical body first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ObjectLongObjectSource {
+    Receiver,
+    Argument(u8),
+}
+
+/// One canonical instruction in a frame-free, read-only object/Long body.
+/// The representation intentionally preserves instruction indices so guarded
+/// forward branches need no separate CFG or target rewriting.
+#[derive(Debug, Clone, Copy)]
+pub enum ObjectLongOp {
+    Assign {
+        destination: u16,
+        source: ObjectLongSource,
+    },
+    FetchProperty {
+        object: ObjectLongObjectSource,
+        cache_ip: u16,
+        destination: u16,
+    },
+    Arithmetic {
+        kind: ScalarLongOpKind,
+        lhs: ObjectLongSource,
+        rhs: ObjectLongSource,
+        destination: u16,
+    },
+    Compare {
+        kind: ScalarLongConditionKind,
+        lhs: ObjectLongSource,
+        rhs: ObjectLongSource,
+        destination: u16,
+    },
+    JumpIfFalse {
+        condition: ObjectLongSource,
+        target: u16,
+    },
+    JumpIfTrue {
+        condition: ObjectLongSource,
+        target: u16,
+    },
+    Jump {
+        target: u16,
+    },
+    Return {
+        value: ObjectLongSource,
+    },
+    /// Canonical implicit `return null` (or another deliberately unsupported
+    /// edge). Reaching it side-exits before any observable state was changed.
+    Bail,
+}
+
+/// Compile-time proof for a fixed-signature method that only reads declared
+/// object properties and performs checked integer work. Property inline
+/// caches remain authoritative at runtime, preserving class layout and PHP
+/// visibility semantics across polymorphic calls.
+pub struct ObjectLongFunctionPlan {
+    pub public_args: u8,
+    pub long_argument_mask: u8,
+    pub object_argument_mask: u8,
+    pub slot_count: u16,
+    pub operations: Box<[ObjectLongOp]>,
+}
+
 /// Branch metadata for a pure function that selects one of two immutable
 /// string values from a guarded Long predicate.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -580,6 +655,7 @@ pub struct UserFunction {
     pub property_getter_plan: Option<PropertyGetterMethodPlan>,
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
     pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
+    pub object_long_plan: Option<Box<ObjectLongFunctionPlan>>,
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
     pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,

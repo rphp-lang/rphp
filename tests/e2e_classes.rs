@@ -77,6 +77,43 @@ echo calculate($add, 5);
 }
 
 #[test]
+fn test_object_long_method_side_exits_across_property_layouts_and_types() {
+    assert_eq!(run_php(r#"<?php
+class RequestA {
+    public $level;
+    public $subtotal;
+}
+class RequestB {
+    public $subtotal;
+    public $level;
+}
+class RequestC {
+    public $level;
+    public $subtotal;
+}
+class Policy {
+    public function rate($request) {
+        $rate = 150;
+        if ($request->level >= 3) $rate = $rate + 250;
+        if ($request->subtotal >= 20000) $rate = $rate + 175;
+        return $rate;
+    }
+}
+function invoke($policy, $request) {
+    return $policy->rate($request);
+}
+$policy = new Policy();
+$a = new RequestA(); $a->level = 4; $a->subtotal = 30000;
+$b = new RequestB(); $b->level = 1; $b->subtotal = 30000;
+$c = new RequestC(); $c->level = 4.0; $c->subtotal = 100.0;
+echo invoke($policy, $a) . ':' . invoke($policy, $a) . '|';
+echo invoke($policy, $b) . ':' . invoke($policy, $b) . '|';
+echo invoke($policy, $c) . ':' . invoke($policy, $c) . '|';
+echo invoke($policy, $a);
+"#), "575:575|325:325|400:400|575");
+}
+
+#[test]
 fn test_class_multiple_properties() {
     assert_eq!(run_php(r#"<?php
 class Person {

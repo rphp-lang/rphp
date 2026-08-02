@@ -18,6 +18,8 @@ use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
     ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource,
+    ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp,
+    ObjectLongSource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -598,6 +600,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         property_getter_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
+        object_long_plan: None,
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
@@ -608,6 +611,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.object_long_plan = build_object_long_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
@@ -708,6 +712,7 @@ pub fn make_user_function_typed(
         property_getter_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
+        object_long_plan: None,
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
@@ -718,6 +723,7 @@ pub fn make_user_function_typed(
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.object_long_plan = build_object_long_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
@@ -1293,6 +1299,336 @@ fn build_conditional_scalar_long_function_plan(
             when_true,
             when_false,
         }),
+    }))
+}
+
+const OBJECT_LONG_PLAN_MAX_ARGS: u32 = 8;
+const OBJECT_LONG_PLAN_MAX_SLOTS: u32 = 64;
+const OBJECT_LONG_PLAN_MAX_OPS: usize = 64;
+
+fn object_long_source(
+    function: &UserFunction,
+    initialized: &[bool; OBJECT_LONG_PLAN_MAX_SLOTS as usize],
+    long_argument_mask: &mut u8,
+    op_type: OpType,
+    operand: u16,
+) -> Option<ObjectLongSource> {
+    match op_type {
+        OpType::Const => function
+            .op_array
+            .literals
+            .get(operand as usize)
+            .and_then(Value::as_long)
+            .map(ObjectLongSource::Constant),
+        OpType::Cv => {
+            let slot = operand as u32;
+            let first_argument = function.common.sig.this_offset;
+            let argument_end = first_argument + function.common.sig.public_arity();
+            if slot >= first_argument && slot < argument_end {
+                *long_argument_mask |= 1 << (slot - first_argument);
+                Some(ObjectLongSource::Slot(operand))
+            } else if initialized.get(slot as usize).copied().unwrap_or(false) {
+                Some(ObjectLongSource::Slot(operand))
+            } else {
+                None
+            }
+        }
+        OpType::Tmp | OpType::Var => initialized
+            .get(operand as usize)
+            .copied()
+            .filter(|initialized| *initialized)
+            .map(|_| ObjectLongSource::Slot(operand)),
+        OpType::Unused => None,
+    }
+}
+
+/// Recognize a small, side-effect-free method program that reads declared
+/// properties from its receiver or positional object arguments and otherwise
+/// stays in checked Long operations. Keeping one plan operation per canonical
+/// instruction makes forward branches exact and leaves every unsupported edge
+/// on the ordinary PHP executor.
+fn build_object_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ObjectLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    let slot_count = op_array.num_cvs.checked_add(op_array.num_temps)?;
+    if common.sig.this_offset != 1
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args != common.sig.required_num_args
+        || public_args > OBJECT_LONG_PLAN_MAX_ARGS
+        || slot_count > OBJECT_LONG_PLAN_MAX_SLOTS
+        || op_array.instructions.len() > OBJECT_LONG_PLAN_MAX_OPS
+        || op_array.instructions.len() > u16::MAX as usize
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+        )
+        || common.sig.param_type_hints.iter().any(|hint| {
+            !matches!(
+                hint,
+                ParamTypeHint::None
+                    | ParamTypeHint::Mixed
+                    | ParamTypeHint::Int
+                    | ParamTypeHint::ClassName(_)
+            )
+        })
+    {
+        return None;
+    }
+
+    let mut initialized = [false; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
+    let mut long_argument_mask = 0u8;
+    let mut object_argument_mask = 0u8;
+    let mut operations = Vec::with_capacity(op_array.instructions.len());
+    let first_argument = common.sig.this_offset;
+    let argument_end = first_argument + public_args;
+
+    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        let operation = match instruction.opcode {
+            OpCode::AssignCv => {
+                if instruction.op1_type != OpType::Cv {
+                    return None;
+                }
+                let destination = instruction.op1 as u32;
+                // Rebinding `$this` or a public input would invalidate the
+                // adapter-owned object/Long bindings.
+                if destination < first_argument || destination < argument_end {
+                    return None;
+                }
+                let source = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[destination as usize] = true;
+                ObjectLongOp::Assign {
+                    destination: instruction.op1,
+                    source,
+                }
+            }
+            OpCode::FetchObjR => {
+                if instruction.op1_type != OpType::Cv
+                    || instruction.op2_type != OpType::Const
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    || op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_none()
+                {
+                    return None;
+                }
+                let object = if instruction.op1 == 0 {
+                    ObjectLongObjectSource::Receiver
+                } else {
+                    let slot = instruction.op1 as u32;
+                    if slot < first_argument || slot >= argument_end {
+                        return None;
+                    }
+                    let argument = (slot - first_argument) as u8;
+                    object_argument_mask |= 1 << argument;
+                    ObjectLongObjectSource::Argument(argument)
+                };
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::FetchProperty {
+                    object,
+                    cache_ip: ip as u16,
+                    destination: instruction.result,
+                }
+            }
+            opcode if scalar_long_op_kind(opcode).is_some() => {
+                if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                    return None;
+                }
+                let lhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::Arithmetic {
+                    kind: scalar_long_op_kind(opcode)?,
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                }
+            }
+            OpCode::IsEqual | OpCode::IsIdentical => {
+                let lhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::Compare {
+                    kind: ScalarLongConditionKind::Equal,
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                }
+            }
+            OpCode::IsNotEqual | OpCode::IsNotIdentical => {
+                let lhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::Compare {
+                    kind: ScalarLongConditionKind::NotEqual,
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                }
+            }
+            OpCode::IsSmaller => {
+                let lhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::Compare {
+                    kind: ScalarLongConditionKind::LessThan,
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                }
+            }
+            OpCode::IsSmallerOrEqual => {
+                let lhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::Compare {
+                    kind: ScalarLongConditionKind::LessThanOrEqual,
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                }
+            }
+            OpCode::JmpZ | OpCode::JmpNZ => {
+                let target = instruction.op2 as usize;
+                if target <= ip || target >= op_array.instructions.len() {
+                    return None;
+                }
+                let condition = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                if instruction.opcode == OpCode::JmpZ {
+                    ObjectLongOp::JumpIfFalse {
+                        condition,
+                        target: target as u16,
+                    }
+                } else {
+                    ObjectLongOp::JumpIfTrue {
+                        condition,
+                        target: target as u16,
+                    }
+                }
+            }
+            OpCode::Jmp => {
+                let target = instruction.op1 as usize;
+                if target <= ip || target >= op_array.instructions.len() {
+                    return None;
+                }
+                ObjectLongOp::Jump {
+                    target: target as u16,
+                }
+            }
+            OpCode::Return if instruction.extended_value != 0 => {
+                ObjectLongOp::Return {
+                    value: object_long_source(
+                        function,
+                        &initialized,
+                        &mut long_argument_mask,
+                        instruction.op1_type,
+                        instruction.op1,
+                    )?,
+                }
+            }
+            OpCode::Return => ObjectLongOp::Bail,
+            _ => return None,
+        };
+        operations.push(operation);
+    }
+
+    if operations.is_empty()
+        || long_argument_mask & object_argument_mask != 0
+        || !operations
+            .iter()
+            .any(|operation| matches!(operation, ObjectLongOp::FetchProperty { .. }))
+        || !operations
+            .iter()
+            .any(|operation| matches!(operation, ObjectLongOp::Return { .. }))
+    {
+        return None;
+    }
+
+    Some(Box::new(ObjectLongFunctionPlan {
+        public_args: public_args as u8,
+        long_argument_mask,
+        object_argument_mask,
+        slot_count: slot_count as u16,
+        operations: operations.into_boxed_slice(),
     }))
 }
 
@@ -2620,6 +2956,7 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.object_long_plan = build_object_long_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);

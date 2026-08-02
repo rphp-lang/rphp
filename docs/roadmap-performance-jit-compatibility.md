@@ -617,6 +617,27 @@ QuoteRequest/QuoteService-specific kernel. A one-allocation object/property
 representation is also worth revisiting only if it avoids enlarging every
 PhpObject header; the earlier inline-property experiment regressed cache locality.
 
+The first frame-elision step toward that region is a small read-only
+object/Long method program. It recognizes fixed-signature methods made only of
+declared property reads, checked integer arithmetic/comparisons, forward
+branches, local assignments, and a scalar return. Object arguments and typed
+class declarations are validated at the call boundary. Each property read is
+guarded by the canonical `FetchObjR` class/visibility cache; a cold cache,
+different layout, reference, non-Long property, unsupported edge, or overflow
+side-exits before observable state changes. This is a method-shape proof, not a
+corpus class or method-name specialization.
+
+Both typed and untyped `DiscountPolicy::rate()` now use that plan after their
+property caches warm. Corpus frame pushes fall from 2.0 million to 1.5 million
+and CV zeroing from 40 MB to 32 MB. Best-of-five wall time remains within noise
+at approximately 0.187--0.188 s untyped and 0.199--0.200 s typed, versus about
+0.079 s and 0.082--0.083 s in PHP. This proves that the policy frame is
+removable, but also that it is not the dominant remaining cost. The next
+general extension should cover immutable String guards and pure binary scalar
+built-ins such as `intdiv`, which can remove the independent tax-policy frame;
+only then should the measurements decide whether to compose the whole quote
+region or return to allocation/layout work.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:
