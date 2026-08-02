@@ -3276,8 +3276,47 @@ fn op_new_obj<'a>(
     Ok(ColdResult::Done)
 }
 
+/// Execute the common declared-public-property read without leaving the main
+/// dispatch loop. The inline cache proves both the receiver class and stable
+/// property slot; misses retain the complete visibility, magic-method and
+/// dynamic-property behavior in `op_fetch_obj_r_slow`.
+#[inline(always)]
+fn try_cached_fetch_obj_r(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> bool {
+    let obj_val = unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    };
+    if obj_val.value_type() != ValueType::Object {
+        return false;
+    }
+
+    let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let cache = &op_array.cache[ip];
+    if cache.property_flags() & 1 == 0
+        || cache.class_id != object_class_id
+        || object_class_id == 0
+    {
+        return false;
+    }
+
+    let property_ptr = unsafe {
+        obj_val.object_property_slot_unchecked(cache.property_slot())
+    };
+    let result_ptr = unsafe {
+        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+    };
+    unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
+    true
+}
+
 #[inline(never)]
-fn op_fetch_obj_r(
+fn op_fetch_obj_r_slow(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -3293,20 +3332,6 @@ fn op_fetch_obj_r(
 
     let name = prop_name.as_str().unwrap_or("");
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-    let ic = &op_array.cache[ip];
-    let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
-
-    // Cache hit: direct class guard + slot load. No RefCell borrow or hash lookup.
-    if ic.property_flags() & 1 != 0
-        && ic.class_id == object_class_id
-        && object_class_id != 0
-    {
-        let property_ptr = unsafe {
-            obj_val.object_property_slot_unchecked(ic.property_slot())
-        };
-        unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
-        return Ok(());
-    }
 
     if let Some(obj) = obj_val.as_object() {
 
@@ -11110,7 +11135,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchObjR => {
-                op_fetch_obj_r(eg, frame, op_array, opline)?;
+                if !try_cached_fetch_obj_r(frame, op_array, opline) {
+                    op_fetch_obj_r_slow(eg, frame, op_array, opline)?;
+                }
             }
 
             OpCode::AssignObjProp => {

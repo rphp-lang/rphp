@@ -290,6 +290,24 @@ remaining dominant cost is cross-opcode application execution, not one
 especially expensive internal frame. The complete release test suite and all
 31 no-PGO microbenchmark wins remain intact.
 
+The fourth corpus-driven slice starts unifying the baseline object path with
+the guarded machinery already used by the hot tier. A bytecode audit of the
+outer application loop confirms why extending one more loop pattern would not
+help: the current closed-loop planner would have to accept the entire region,
+whose first unsupported arithmetic operation is followed by object allocation,
+constructor execution, a service call, and result extraction. Partial guarded
+application regions with exact resume points remain the structural goal.
+
+Before adding that region boundary, the measured common-case `FetchObjR` path
+now stays in the main dispatch loop. Once a declared public property site has
+resolved, a class-ID guard and stable-slot load replace the outlined resolver;
+cache misses, visibility rules, dynamic properties, references, COW values,
+and `__get` retain the canonical slow path. This is a general DTO and service
+object optimization and applies outside the corpus. On the order pipeline it
+improves the best no-PGO time from approximately 0.320 s to 0.310 s, about
+3 percent, while the complete release suite passes and the 31-workload no-PGO
+matrix remains 31 strict RPHP wins out of 31.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:
