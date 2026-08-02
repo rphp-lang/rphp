@@ -601,6 +601,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
+        compact_class_guard: Cell::new(0),
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
@@ -634,9 +635,10 @@ pub fn make_user_function_typed(
     op_array.prepare_quick_loops();
     // Exact all-`int` parameters use a distinct typed scalar ABI. Keeping it
     // separate leaves the original untyped FastScalar machine path untouched.
-    let has_only_scalar_hints = param_type_hints.iter().all(|h| matches!(h,
+    let has_only_compact_hints = param_type_hints.iter().all(|h| matches!(h,
         ParamTypeHint::None | ParamTypeHint::Int | ParamTypeHint::Float
-        | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed
+        | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Array
+        | ParamTypeHint::ClassName(_) | ParamTypeHint::Mixed
     ));
     let has_no_type_hints = param_type_hints
         .iter()
@@ -663,7 +665,7 @@ pub fn make_user_function_typed(
         CallStrategy::FastScalar
     } else if has_fast_scalar_shape && has_exact_long_params && has_exact_long_return {
         CallStrategy::FastTypedScalar
-    } else if !is_variadic && !op_array.is_generator && has_only_scalar_hints {
+    } else if !is_variadic && !op_array.is_generator && has_only_compact_hints {
         CallStrategy::Fast
     } else {
         CallStrategy::Full
@@ -674,7 +676,8 @@ pub fn make_user_function_typed(
         && op_array.try_entries.is_empty()
         && !op_array.is_generator
         && matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Int
-            | ParamTypeHint::Float | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Mixed)
+            | ParamTypeHint::Float | ParamTypeHint::String | ParamTypeHint::Bool
+            | ParamTypeHint::Array | ParamTypeHint::Mixed)
     { ReturnStrategy::Fast } else { ReturnStrategy::Full };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
@@ -706,6 +709,7 @@ pub fn make_user_function_typed(
         scalar_string_plan: None,
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
+        compact_class_guard: Cell::new(0),
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
@@ -2505,6 +2509,18 @@ pub fn make_direct_internal_function(
 pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> UserFunction {
     function.common.sig.this_offset = 1;
 
+    // `$this` ownership is independent of the public argument ABI. Every
+    // synchronous method executes while its caller still owns the receiver,
+    // so the callee can borrow CV 0 unless it directly transfers that slot as
+    // its return value. Generators are excluded because their frame outlives
+    // the initiating call.
+    function.common.plan.borrow_this = !function.op_array.is_generator
+        && !function.op_array.instructions.iter().any(|instruction| {
+            instruction.opcode == OpCode::Return
+                && instruction.op1_type == OpType::Cv
+                && instruction.op1 == 0
+        });
+
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();
     let can_use_fast_scalar = scalar_strategy.is_some()
@@ -2519,11 +2535,6 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
 
     if can_use_fast_scalar {
         function.common.plan.call = scalar_strategy.unwrap();
-        function.common.plan.borrow_this = !function.op_array.instructions.iter().any(|instruction| {
-            instruction.opcode == OpCode::Return
-                && instruction.op1_type == OpType::Cv
-                && instruction.op1 == 0
-        });
     }
 
     function.long_property_plan = build_long_property_method_plan(&function);

@@ -332,8 +332,9 @@ pub enum CallStrategy {
     /// Enables: inlined scalar SendVal, minimal DoFcall, direct Return.
     /// Typical profile: `fib($n)`, `add($a, $b)`.
     FastScalar,
-    /// No variadics and only compact scalar parameter hints. The call
-    /// boundary validates those hints without entering the canonical checker.
+    /// No variadics and only compact parameter hints. The call boundary
+    /// validates scalar tags, arrays and declared object classes without
+    /// entering the canonical diagnostic/variadic path.
     Fast,
     /// Full validation: arity check, type hints, variadic packing.
     Full,
@@ -582,6 +583,10 @@ pub struct UserFunction {
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
     pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,
+    /// Last one- or two-class argument tuple that satisfied this declaration.
+    /// Stable class IDs make repeated monomorphic DTO/service calls a single
+    /// integer guard while new subclasses retain the canonical hierarchy check.
+    pub compact_class_guard: Cell<u64>,
 }
 
 /// Handler signature for internal (built-in) functions.

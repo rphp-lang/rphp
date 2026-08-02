@@ -5,7 +5,8 @@ use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::function::{
-    ComposedScalarLongOp, ComposedTypedLongOp, ScalarLongCallGuard,
+    CallStrategy, ComposedScalarLongOp, ComposedTypedLongOp, ReturnStrategy,
+    ScalarLongCallGuard,
 };
 use rphp::vm::instruction::{KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS};
 use rphp::vm::opcode::OpCode;
@@ -1365,4 +1366,55 @@ function returnOnly($value): int {
 "#);
     let function = &result.functions[0].1;
     assert!(function.scalar_long_plan.is_some());
+}
+
+#[test]
+fn test_exact_declared_object_argument_skips_repeated_boundary_validation() {
+    let result = compile_types(r#"<?php
+class Payload {}
+class Service {
+    function consume(Payload $payload): array { return []; }
+    function forward(Payload $payload): array {
+        return $this->consume($payload);
+    }
+}
+"#);
+    let service = result
+        .class_defs
+        .iter()
+        .find(|class| class.name == "Service")
+        .unwrap();
+    let consume = service
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "consume")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+    let forward = service
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "forward")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+
+    assert_eq!(consume.common.plan.call, CallStrategy::Fast);
+    assert_eq!(consume.common.plan.ret, ReturnStrategy::Fast);
+    assert!(consume.common.plan.borrow_this);
+    assert!(forward.op_array.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::DoFcall
+            && instruction._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
+    }));
+}
+
+#[test]
+fn test_monomorphic_class_guard_rechecks_a_different_runtime_class() {
+    assert_eq!(run_php(r#"<?php
+class Accepted {}
+class ChildAccepted extends Accepted {}
+class Rejected {}
+function consume(Accepted $value): int { return 1; }
+$accepted = new ChildAccepted();
+for ($i = 0; $i < 20; $i++) { consume($accepted); }
+try { consume(new Rejected()); } catch (TypeError $error) { echo "caught"; }
+"#), "caught");
 }

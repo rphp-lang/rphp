@@ -513,6 +513,7 @@ pub unsafe fn execute_macro(
 
                 if func_common.plan.call != CallStrategy::FastScalar
                     && !super::execute::compact_scalar_call_types_match(
+                        eg,
                         call,
                         func_common,
                         op_array.strict_types,

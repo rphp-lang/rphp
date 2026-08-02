@@ -6,9 +6,10 @@ use super::function::FunctionCommon;
 /// therefore defer its full frame while preserving source evaluation order.
 pub const CALL_FLAG_DEFERRED_SCALAR_CANDIDATE: u16 = 1;
 
-/// DoFcall flag: every actually supplied scalar argument was proven to satisfy
-/// the statically resolved callee declaration. Arity/hole guards remain in the
-/// call protocol; only repeated Value-tag validation may be skipped.
+/// DoFcall flag: every actually supplied argument was proven to satisfy the
+/// statically resolved callee declaration. This includes exact scalar
+/// representations and exact declared receiver classes. Arity/hole guards
+/// remain in the call protocol; only repeated type validation may be skipped.
 pub const CALL_FLAG_EXACT_SCALAR_ARGS: u16 = 1 << 1;
 
 /// InitArray flag: at least one compile-time literal string key guarantees

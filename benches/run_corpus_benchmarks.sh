@@ -43,20 +43,29 @@ measure_best() {
 printf "%-30s %12s %12s %10s\n" "Corpus" "rphp" "PHP" "Ratio"
 printf "%-30s %12s %12s %10s\n" "------------------------------" "------------" "------------" "----------"
 
-measure_best rphp benches/corpus_order_pipeline.php
-rphp_result="$MEASURED_RESULT"
-rphp_time="$MEASURED_BEST"
-measure_best php benches/corpus_order_pipeline.php
-php_result="$MEASURED_RESULT"
-php_time="$MEASURED_BEST"
+benchmark_corpus() {
+    local label="$1"
+    local file="$2"
+    local rphp_result rphp_time php_result php_time ratio
 
-if [ "$rphp_result" != "$php_result" ]; then
-    printf "%-30s  OUTPUT MISMATCH: rphp='%s' php='%s'\n" "Order/service pipeline" "$rphp_result" "$php_result"
-    exit 1
-fi
+    measure_best rphp "$file"
+    rphp_result="$MEASURED_RESULT"
+    rphp_time="$MEASURED_BEST"
+    measure_best php "$file"
+    php_result="$MEASURED_RESULT"
+    php_time="$MEASURED_BEST"
 
-ratio=$(awk "BEGIN { printf \"%.2fx\", ($rphp_time) / ($php_time) }")
-printf "%-30s %11.4fs %11.4fs %10s\n" "Order/service pipeline" "$rphp_time" "$php_time" "$ratio"
+    if [ "$rphp_result" != "$php_result" ]; then
+        printf "%-30s  OUTPUT MISMATCH: rphp='%s' php='%s'\n" "$label" "$rphp_result" "$php_result"
+        exit 1
+    fi
+
+    ratio=$(awk "BEGIN { printf \"%.2fx\", ($rphp_time) / ($php_time) }")
+    printf "%-30s %11.4fs %11.4fs %10s\n" "$label" "$rphp_time" "$php_time" "$ratio"
+}
+
+benchmark_corpus "Order/service pipeline" benches/corpus_order_pipeline.php
+benchmark_corpus "Typed order/service pipeline" benches/corpus_typed_order_pipeline.php
 
 echo ""
 echo "Ratio < 1.00x = rphp faster, > 1.00x = PHP faster"

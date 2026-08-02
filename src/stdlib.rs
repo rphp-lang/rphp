@@ -1869,7 +1869,7 @@ fn fn_get_class(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
         return Ok(());
     }
     if let Some(obj) = v.as_object() {
-        ret!(rv, Value::string(&obj.class_name));
+        ret!(rv, Value::string(obj.class_name.as_ref()));
     }
     ret!(rv, Value::bool(false));
 }
@@ -1889,7 +1889,7 @@ fn fn_method_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGloba
 
     // Resolve the class name: from object or string
     let class_name: String = if let Some(obj) = first.as_object() {
-        obj.class_name.clone()
+        obj.class_name.to_string()
     } else if let Some(s) = first.as_str() {
         s.to_string()
     } else {
@@ -2372,7 +2372,7 @@ fn json_decode_string(s: &str, assoc: bool) -> Value {
 fn get_generator_ref(ed: *mut ExecuteData) -> Option<crate::vm::generator::GeneratorRef> {
     let this_val = arg!(ed, 0);
     if let Some(obj) = this_val.as_object() {
-        if obj.class_name == "Generator" {
+        if obj.class_name.as_ref() == "Generator" {
             if let Some(rc) = this_val.as_object_rc() {
                 let borrowed = rc.borrow();
                 return borrowed.generator.clone();
@@ -2690,7 +2690,7 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
             if let Some(obj) = obj_val.as_object() {
                 // Instance method: [$obj, "method"]
                 // Public: always callable. Private/protected: only from declaring scope.
-                let class_name = obj.class_name.as_str();
+                let class_name = obj.class_name.as_ref();
                 let (visibility, _, func_ptr, declaring) =
                     find_method_in_class_hierarchy(eg, class_name, method_name)?;
                 match visibility {

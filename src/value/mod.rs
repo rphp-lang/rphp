@@ -16,23 +16,42 @@ use crate::vm::function::FunctionCommon;
 /// Names are resolved only on cold/cache-miss paths. Hot property access stores
 /// the numeric slot in the instruction inline cache and indexes `property_values`
 /// directly.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ObjectLayout {
+    /// Canonical class name shared by the class definition and every instance.
+    /// A declared object must not allocate and free an identical class-name
+    /// String on every construction.
+    class_name: Option<Rc<str>>,
     keys: Vec<String>,
     slots: HashMap<String, usize>,
 }
 
 impl ObjectLayout {
-    pub fn new(keys: Vec<String>) -> Self {
+    pub fn new(class_name: impl Into<Rc<str>>, keys: Vec<String>) -> Self {
         let mut slots = HashMap::with_capacity(keys.len());
         for (slot, key) in keys.iter().enumerate() {
             slots.insert(key.clone(), slot);
         }
-        Self { keys, slots }
+        Self {
+            class_name: Some(class_name.into()),
+            keys,
+            slots,
+        }
     }
 
     pub fn empty() -> Self {
-        Self::default()
+        Self {
+            class_name: None,
+            keys: Vec::new(),
+            slots: HashMap::new(),
+        }
+    }
+
+    #[inline]
+    pub fn class_name(&self) -> Rc<str> {
+        self.class_name
+            .clone()
+            .expect("declared object layout must carry its class name")
     }
 
     #[inline]
@@ -54,7 +73,9 @@ impl ObjectLayout {
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
 pub struct PhpObject {
-    pub class_name: String,
+    /// Shared with the class layout for declared objects. Dynamic/internal
+    /// objects still own one interned name for their lifetime.
+    pub class_name: Rc<str>,
     /// Stable numeric class ID — matches ClassDef.class_id. Used for inline cache keying.
     pub class_id: u32,
     /// Shared name → slot mapping owned by the class definition.
@@ -69,12 +90,12 @@ pub struct PhpObject {
 
 impl PhpObject {
     pub fn with_layout(
-        class_name: String,
         class_id: u32,
         property_layout: Rc<ObjectLayout>,
         property_values: Vec<Value>,
     ) -> Self {
         debug_assert_eq!(property_layout.len(), property_values.len());
+        let class_name = property_layout.class_name();
         Self {
             class_name,
             class_id,
@@ -91,7 +112,7 @@ impl PhpObject {
         properties: HashMap<String, Value>,
     ) -> Self {
         Self {
-            class_name,
+            class_name: Rc::from(class_name),
             class_id,
             property_layout: Rc::new(ObjectLayout::empty()),
             property_values: Vec::new(),
@@ -182,9 +203,9 @@ mod object_tests {
 
     #[test]
     fn declared_properties_use_shared_slots() {
-        let layout = Rc::new(ObjectLayout::new(vec!["count".to_string()]));
+        let layout = Rc::new(ObjectLayout::new("Counter", vec!["count".to_string()]));
         let mut object =
-            PhpObject::with_layout("Counter".to_string(), 7, layout.clone(), vec![Value::long(1)]);
+            PhpObject::with_layout(7, layout.clone(), vec![Value::long(1)]);
 
         assert_eq!(object.set_property("count", Value::long(2)), Some(0));
         assert_eq!(object.get_property("count").and_then(Value::as_long), Some(2));
@@ -195,9 +216,8 @@ mod object_tests {
     #[test]
     fn dynamic_properties_are_allocated_lazily() {
         let mut object = PhpObject::with_layout(
-            "Dynamic".to_string(),
             8,
-            Rc::new(ObjectLayout::empty()),
+            Rc::new(ObjectLayout::new("Dynamic", Vec::new())),
             Vec::new(),
         );
 

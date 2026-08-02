@@ -530,6 +530,50 @@ loss. The next type-specific slice is guarded monomorphic method-return
 propagation; the broader corpus priority remains declared-object layout and
 allocation.
 
+The next three type slices make those declarations useful across richer call
+graphs. Statically known method return contracts now attach one receiver-class
+dispatch guard to the call and propagate exact scalar results into all later
+consumers. Conditional scalar bodies compile to guarded programs instead of
+falling back merely because they contain branches. Composed scalar calls can
+mix declared object receivers and Long arguments, so object identity is
+guarded once while nested scalar leaves remain frame-free. Finally, immutable
+typed string results can stay borrowed inside typed consumers: string length
+and literal-concat length observations avoid materializing intermediate PHP
+Values and frames. The typed string chain is approximately 0.015 s RPHP versus
+0.026 s PHP, while typed string fanout falls to approximately 0.033 s and is
+now close to PHP's 0.028 s.
+
+The following corpus checkpoint extends the compact call ABI beyond scalars.
+Fixed user calls with exact `array` and declared-class parameters no longer
+enter the cold diagnostic/variadic path. Exact object facts propagated from
+typed parameters can prove a nested argument at compile time; otherwise a
+successful one- or two-class tuple is retained under stable class IDs and the
+next monomorphic call needs only an integer guard. A new runtime class ID or a
+failed type still executes the canonical hierarchy check and produces the
+ordinary `TypeError`. Array returns use the same fast return boundary.
+
+`$this` ownership is now independent of the scalar planner. Every synchronous
+user method may borrow the receiver from its caller unless it directly returns
+that slot; generator frames remain owning because they outlive the initiating
+call. Declared objects also share their immutable class name with the class
+layout instead of allocating an identical String per instance. An experimental
+three-property inline object store was rejected after measurement: removing a
+property-vector allocation enlarged every object enough to worsen cache
+locality and regress this corpus. The unrestricted compact vector therefore
+remains the better current representation.
+
+To keep this work representative, the corpus now runs identical untyped and
+typed order/service pipelines. Before the compact object ABI, the typed flow
+was approximately 0.287--0.290 s RPHP versus 0.084--0.085 s PHP, compared with
+approximately 0.225 s for untyped RPHP. After compact class/array validation,
+borrowed `$this`, monomorphic class guards and shared class names, final
+best-of-five runs are 0.219--0.224 s untyped and 0.228--0.230 s typed, versus
+0.081--0.083 s and 0.083--0.085 s in PHP. Typed overhead in the real-code flow
+is therefore about three to five percent and its RPHP/PHP ratio (2.72--2.74x)
+is nearly the same as untyped (2.68--2.72x).
+The separate 31-case no-PGO microbenchmark matrix has 29 RPHP wins and two
+marginal losses at 1.03x and 1.06x; no corpus-only fused kernel was introduced.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

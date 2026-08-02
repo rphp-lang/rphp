@@ -462,6 +462,7 @@ fn resolved_init_function_ref_args(
 
 fn known_argument_satisfies_hint(
     known: KnownScalarType,
+    receiver_class: Option<&str>,
     hint: &ParamTypeHint,
     strict: bool,
 ) -> bool {
@@ -474,12 +475,16 @@ fn known_argument_satisfies_hint(
         }
         ParamTypeHint::String => known == KnownScalarType::String,
         ParamTypeHint::Bool => known == KnownScalarType::Bool,
+        ParamTypeHint::ClassName(expected) => receiver_class
+            .is_some_and(|actual| actual.eq_ignore_ascii_case(expected)),
         ParamTypeHint::Nullable(inner) => {
-            known_argument_satisfies_hint(known, inner, strict)
+            known_argument_satisfies_hint(known, receiver_class, inner, strict)
         }
         ParamTypeHint::Union(types) => types
             .iter()
-            .any(|member| known_argument_satisfies_hint(known, member, strict)),
+            .any(|member| {
+                known_argument_satisfies_hint(known, receiver_class, member, strict)
+            }),
         _ => false,
     }
 }
@@ -715,12 +720,14 @@ fn propagate_declared_scalar_types(
                 if exact_long_arguments {
                     op_array.instructions[ip].set_method_long_args_guard();
                 }
+                let allow_exact_argument_skip = exact_ref_args == Some(0)
+                    && exact_parameters.is_some();
                 pending_calls.push(PendingScalarCallFacts {
                     return_type: guarded_return.unwrap_or(KnownScalarType::Unknown),
                     parameter_types: exact_parameters,
                     parameter_offset: 1,
                     ref_args: exact_ref_args,
-                    allow_exact_argument_skip: exact_long_arguments,
+                    allow_exact_argument_skip,
                     arguments_proven: true,
                 });
             }
@@ -750,6 +757,16 @@ fn propagate_declared_scalar_types(
             instruction.op2_type,
             instruction.op2,
         );
+        let argument_receiver_class = if matches!(
+            instruction.op1_type,
+            OpType::Cv | OpType::Tmp | OpType::Var
+        ) {
+            receiver_classes
+                .get(instruction.op1 as usize)
+                .and_then(|class| class.as_deref())
+        } else {
+            None
+        };
         let mut send_var_may_alias = false;
         if matches!(instruction.opcode, OpCode::SendVal) {
             if let Some(call) = pending_calls.last_mut() {
@@ -762,7 +779,12 @@ fn propagate_declared_scalar_types(
                             .and_then(|index| hints.get(index))
                     })
                     .is_some_and(|hint| {
-                        known_argument_satisfies_hint(left, hint, op_array.strict_types)
+                        known_argument_satisfies_hint(
+                            left,
+                            argument_receiver_class,
+                            hint,
+                            op_array.strict_types,
+                        )
                     });
             }
         } else if instruction.opcode == OpCode::SendVarEx {
@@ -781,7 +803,12 @@ fn propagate_declared_scalar_types(
                         .as_ref()
                         .and_then(|hints| parameter_index.and_then(|index| hints.get(index)))
                         .is_some_and(|hint| {
-                            known_argument_satisfies_hint(left, hint, op_array.strict_types)
+                            known_argument_satisfies_hint(
+                                left,
+                                argument_receiver_class,
+                                hint,
+                                op_array.strict_types,
+                            )
                         });
                 }
             } else {

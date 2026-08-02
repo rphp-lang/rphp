@@ -897,6 +897,7 @@ pub fn execute_hot_frame(
                     && opline._pad & CALL_FLAG_EXACT_SCALAR_ARGS == 0
                     && !unsafe {
                         super::execute::compact_scalar_call_types_match(
+                            eg,
                             call,
                             func_common,
                             op_array.strict_types,

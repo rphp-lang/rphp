@@ -232,6 +232,7 @@ pub(crate) fn check_fast_scalar_type_hint(
         ParamTypeHint::Bool => {
             matches!(value.value_type(), ValueType::True | ValueType::False)
         }
+        ParamTypeHint::Array => value.value_type() == ValueType::Array,
         _ => return None,
     })
 }
@@ -306,20 +307,68 @@ pub(crate) fn method_return_dispatch_contract_matches(
 /// report or coerce the value according to normal PHP rules.
 #[inline(always)]
 pub(crate) unsafe fn compact_scalar_call_types_match(
+    eg: &ExecutorGlobals,
     call: *mut ExecuteData,
     common: &FunctionCommon,
     strict: bool,
 ) -> bool {
     let hints = &common.sig.param_type_hints;
     let check_count = std::cmp::min((*call).num_args as usize, hints.len());
+    let mut class_guard = 0u64;
+    let mut class_count = 0usize;
+    let mut class_guard_cacheable = true;
+    for (index, hint) in hints.iter().take(check_count).enumerate() {
+        if !matches!(hint, ParamTypeHint::ClassName(_)) {
+            continue;
+        }
+        if class_count == 2 {
+            class_guard_cacheable = false;
+            break;
+        }
+        let value = &*(*call).cv(common.sig.param_cv_index(index as u32));
+        if value.value_type() != ValueType::Object {
+            class_guard_cacheable = false;
+            break;
+        }
+        let class_id = value.object_class_id_unchecked();
+        if class_id == 0 {
+            class_guard_cacheable = false;
+            break;
+        }
+        class_guard |= (class_id as u64) << (class_count * 32);
+        class_count += 1;
+    }
+    class_guard_cacheable &= class_count != 0;
+    debug_assert!(common.fn_type == FunctionType::User);
+    let user = &*(common as *const FunctionCommon as *const UserFunction);
+    let class_guard_matches = class_guard_cacheable
+        && user.compact_class_guard.get() == class_guard;
+
     for (index, hint) in hints.iter().take(check_count).enumerate() {
         if matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed) {
             continue;
         }
         let value = &*(*call).cv(common.sig.param_cv_index(index as u32));
-        if check_fast_scalar_type_hint(value, hint, strict) != Some(true) {
+        let matches = match check_fast_scalar_type_hint(value, hint, strict) {
+            Some(matches) => matches,
+            None if matches!(hint, ParamTypeHint::ClassName(_)) => {
+                class_guard_matches
+                    || check_type_hint(
+                        value,
+                        hint,
+                        eg,
+                        strict,
+                        eg.declaring_class_of(common as *const FunctionCommon),
+                    )
+            }
+            None => false,
+        };
+        if !matches {
             return false;
         }
+    }
+    if class_guard_cacheable && !class_guard_matches {
+        user.compact_class_guard.set(class_guard);
     }
     true
 }
@@ -2911,7 +2960,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
                 .unwrap_or_default();
             (cls, msg)
         } else {
-            ("Exception".to_string(), exc.echo_to_string())
+            (std::rc::Rc::from("Exception"), exc.echo_to_string())
         };
         return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
     }
@@ -3525,7 +3574,7 @@ fn op_include(
                 .unwrap_or_default();
             (cls, msg)
         } else {
-            ("Exception".to_string(), exc.echo_to_string())
+            (std::rc::Rc::from("Exception"), exc.echo_to_string())
         };
         return Err(VmError::Fatal(format!("Uncaught {}: {}", class_name, message)));
     }
@@ -3660,12 +3709,11 @@ fn op_new_obj<'a>(
         } else {
             (0, std::rc::Rc::new(crate::value::ObjectLayout::empty()), Vec::new())
         };
-    let obj = PhpObject::with_layout(
-        name.to_string(),
-        class_id,
-        property_layout,
-        property_values,
-    );
+    let obj = if class_id == 0 {
+        PhpObject::dynamic(name.to_string(), class_id, std::collections::HashMap::new())
+    } else {
+        PhpObject::with_layout(class_id, property_layout, property_values)
+    };
     unsafe { slot_set(result_ptr, Value::object(obj)) };
 
     // Constructor lookup is invariant for this literal `new ClassName` site.
@@ -3833,7 +3881,7 @@ fn op_fetch_obj_r_slow(
             if let Some(slot) = obj.property_slot(&key) {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let mut flags: u32 = 1; // read-safe
-                let writable = eg.class_table.get(&obj.class_name).is_none_or(|cd| {
+                let writable = eg.class_table.get(obj.class_name.as_ref()).is_none_or(|cd| {
                     !cd.is_enum && !cd.readonly_props.iter().any(|prop| prop == name)
                 });
                 if writable {
@@ -3912,7 +3960,7 @@ fn op_assign_obj_prop<'a>(
         // Enum guard: enum cases are sealed — no property writes allowed
         // Track writability for cache population — enum/readonly are not cacheable for writes.
         let mut prop_is_writable = true;
-        if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
+        if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.is_enum {
                 let err = make_error_value("Error", &format!(
                     "Cannot modify readonly property {}::${}",
@@ -3926,7 +3974,7 @@ fn op_assign_obj_prop<'a>(
             }
         }
         // Readonly property check
-        if let Some(class_def) = eg.class_table.get(&php_obj.class_name) {
+        if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.readonly_props.contains(&name) {
                 prop_is_writable = false;
                 let key_check = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
@@ -4027,13 +4075,13 @@ fn op_init_method_call<'a>(
                     {
                         cc.clone()
                     } else {
-                        target_class_name.clone()
+                        target_class_name.to_string()
                     }
                 } else {
-                    target_class_name.clone()
+                    target_class_name.to_string()
                 }
             } else {
-                target_class_name.clone()
+                target_class_name.to_string()
             };
 
             let full_name = format!("{}::{}", dispatch_class, method);
@@ -4481,7 +4529,7 @@ fn op_foreach_init(
 
     // Check for Generator object
     let is_generator = if let Some(obj) = arr_val.as_object() {
-        obj.class_name == "Generator" && arr_val.as_object_rc().map_or(false, |rc| rc.borrow().generator.is_some())
+        obj.class_name.as_ref() == "Generator" && arr_val.as_object_rc().map_or(false, |rc| rc.borrow().generator.is_some())
     } else {
         false
     };
@@ -4558,7 +4606,7 @@ fn op_foreach_next(
 
     // Check for Generator object
     let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
-        if obj.class_name == "Generator" {
+        if obj.class_name.as_ref() == "Generator" {
             arr_val.as_object_rc().and_then(|rc| rc.borrow().generator.clone())
         } else { None }
     } else { None };
@@ -4718,7 +4766,7 @@ fn op_yield_from<'a>(
 
         // Determine delegate type
         if let Some(obj_data) = source_val.as_object() {
-            if obj_data.class_name == "Generator" {
+            if obj_data.class_name.as_ref() == "Generator" {
                 if let Some(inner_gen_ref) = obj_data.generator.clone() {
                     drop(obj_data);
                     // Start inner generator if needed
@@ -5063,7 +5111,7 @@ fn op_clone_obj<'a>(
     // Enum cases are singletons — cloning is forbidden
     {
         let obj = src_val.as_object().unwrap();
-        if let Some(class_def) = eg.class_table.get(&obj.class_name) {
+        if let Some(class_def) = eg.class_table.get(obj.class_name.as_ref()) {
             if class_def.is_enum {
                 let err = make_error_value("Error", &format!(
                     "Trying to clone an uncloneable object of class {}", obj.class_name
@@ -11720,6 +11768,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let type_ok = opline._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
                             || unsafe {
                                 compact_scalar_call_types_match(
+                                    eg,
                                     call,
                                     func_common_fast,
                                     caller_strict,
@@ -12398,6 +12447,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     || do_fcall._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
                                     || unsafe {
                                         compact_scalar_call_types_match(
+                                            eg,
                                             call,
                                             common,
                                             op_array.strict_types,

@@ -339,7 +339,10 @@ impl ExecutorGlobals {
                 }
             })
             .collect();
-        class_def.property_layout = std::rc::Rc::new(ObjectLayout::new(property_keys));
+        class_def.property_layout = std::rc::Rc::new(ObjectLayout::new(
+            class_name.as_str(),
+            property_keys,
+        ));
 
         // Box to get stable heap address for function pointers
         self.class_table.insert(class_name.clone(), Box::new(class_def));
