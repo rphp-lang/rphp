@@ -6325,24 +6325,54 @@ struct QuickLongArrayLoopKernel {
     exit_target: QuickLongTarget,
 }
 
+/// Read a string-keyed array entry through a validated per-opcode position
+/// hint. Layout changes merely miss the positional check and refresh through
+/// the canonical string index; the key is compared before every hinted read.
+#[inline(always)]
+unsafe fn cached_string_array_value<'a>(
+    op_array: &crate::compiler::OpArray,
+    cache_ip: usize,
+    array: &'a PhpArray,
+    key: &str,
+) -> Option<&'a Value> {
+    let cache = op_array.cache.get_unchecked(cache_ip);
+    if let Some(position) = cache.string_array_position() {
+        if let Some(value) = array.get_positioned_str(key, position) {
+            return Some(value);
+        }
+    }
+
+    let (position, value) = array.get_str_with_position(key)?;
+    let cache = &mut *(op_array.cache.as_ptr().add(cache_ip)
+        as *mut crate::vm::instruction::InlineCache);
+    cache.set_string_array_position(position);
+    Some(value)
+}
+
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
 unsafe fn quick_straight_array_fetch(
     array: QuickLongArray,
     index: QuickArrayIndex,
     op_array: &crate::compiler::OpArray,
+    cache_ip: usize,
 ) -> Option<i64> {
     match index {
         QuickArrayIndex::Long(QuickLongOperand::Const(index)) => {
             array.long_at_int(index)
         }
-        QuickArrayIndex::StringLiteral(literal) => array.long_at_str(
-            op_array
+        QuickArrayIndex::StringLiteral(literal) => {
+            let QuickLongArray::Hash { array } = array else {
+                return None;
+            };
+            let key = op_array
                 .literals
                 .get_unchecked(literal as usize)
                 .as_str()
-                .unwrap_unchecked(),
-        ),
+                .unwrap_unchecked();
+            let value = cached_string_array_value(op_array, cache_ip, &*array, key)?;
+            (value.value_type() == ValueType::Long).then(|| value.raw_long())
+        }
         QuickArrayIndex::Long(QuickLongOperand::Slot(_))
         | QuickArrayIndex::ValueSlot(_) => None,
     }
@@ -6374,7 +6404,12 @@ unsafe fn run_quick_straight_array_region(
     let array = QuickLongArray::from_array(array);
 
     for add in kernel.adds.iter().take(kernel.add_count as usize) {
-        let Some(fetched) = quick_straight_array_fetch(array, add.index, op_array) else {
+        let Some(fetched) = quick_straight_array_fetch(
+            array,
+            add.index,
+            op_array,
+            add.fetch_resume_ip,
+        ) else {
             (*frame).opline = op_array
                 .instructions
                 .as_ptr()
@@ -6398,7 +6433,12 @@ unsafe fn run_quick_straight_array_region(
     }
 
     if let Some(fetch) = kernel.trailing_fetch {
-        let Some(fetched) = quick_straight_array_fetch(array, fetch.index, op_array) else {
+        let Some(fetched) = quick_straight_array_fetch(
+            array,
+            fetch.index,
+            op_array,
+            fetch.resume_ip,
+        ) else {
             (*frame).opline = op_array.instructions.as_ptr().add(fetch.resume_ip);
             stats::inc_quick_loop_deoptimized(0);
             return QuickLoopOutcome::Deoptimized;
@@ -11183,7 +11223,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 if let Some(arr) = arr_val.as_array() {
                     let fetched = match value_to_array_key_ref(idx_val)? {
                         ArrayKeyRef::Int(key) => arr.get_int(key),
-                        ArrayKeyRef::String(key) => arr.get_str(key),
+                        ArrayKeyRef::String(key) => {
+                            let cache_ip = unsafe {
+                                (opline as *const Instruction)
+                                    .offset_from(op_array.instructions.as_ptr())
+                                    as usize
+                            };
+                            unsafe {
+                                cached_string_array_value(
+                                    op_array,
+                                    cache_ip,
+                                    arr,
+                                    key,
+                                )
+                            }
+                        }
                     };
                     let val = fetched.cloned().unwrap_or(Value::null());
                     unsafe { slot_set(result_ptr, val) };

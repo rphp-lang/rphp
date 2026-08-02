@@ -339,6 +339,24 @@ faster than the 0.320 s result before the two latest application slices. The
 complete release suite passes, including fresh-frame and mid-region type
 side-exit tests, and the no-PGO matrix remains 31 strict RPHP wins out of 31.
 
+The sixth corpus-driven slice removes repeated string hashing from associative
+reads without introducing a corpus-only kernel. Each string-key `FetchDimR`
+site can cache the last ordered-entry position. Every use validates both the
+position and the current key against the current array; layout changes, COW,
+different arrays, and changing dynamic keys safely fall back through the
+canonical index and refresh the hint. Baseline execution and dense straight
+regions use the same cache contract, while numeric strings continue through
+ordinary PHP key normalization and the integer-key path.
+
+Two final independent best-of-five runs measure 0.281--0.283 s RPHP versus
+0.078--0.079 s PHP, about 3.60x and another 5--6 percent below the first
+dense-region result. The complete release suite passes, including
+reordered-array coverage. The latest no-PGO matrix contains 30 strict RPHP wins
+and one timing-level tie. Sampling now leaves short associative-array
+construction/destruction and object allocation as the largest runtime-owned
+costs outside general opcode execution, so those lifecycle costs are the next
+candidates for structural analysis.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

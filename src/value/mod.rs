@@ -676,6 +676,36 @@ impl PhpArray {
         }
     }
 
+    /// Validate a cached ordered-entry position for a string key. A position
+    /// is only a hint: mutations, COW detaches, and unrelated array layouts
+    /// safely return `None` before exposing the value.
+    #[inline]
+    pub(crate) fn get_positioned_str(&self, key: &str, position: usize) -> Option<&Value> {
+        let ArrayStorage::Hash { entries, .. } = &self.storage else {
+            return None;
+        };
+        match entries.get(position) {
+            Some((ArrayEntryKey::String(found), value)) if found.as_ref() == key => Some(value),
+            _ => None,
+        }
+    }
+
+    /// Resolve a string key through the index while retaining its ordered
+    /// position for a guarded call-site cache.
+    #[inline]
+    pub(crate) fn get_str_with_position(&self, key: &str) -> Option<(usize, &Value)> {
+        let ArrayStorage::Hash {
+            entries,
+            str_index,
+            ..
+        } = &self.storage
+        else {
+            return None;
+        };
+        let position = *str_index.get(key)?;
+        Some((position, &entries.get(position)?.1))
+    }
+
     #[inline]
     pub fn len(&self) -> usize {
         match &self.storage {
@@ -1054,6 +1084,30 @@ mod php_array_tests {
         };
         let index_key = str_index.keys().next().unwrap();
         assert!(Rc::ptr_eq(&entry_key.0, &index_key.0));
+    }
+
+    #[test]
+    fn string_position_hint_validates_layout_changes() {
+        let mut array = PhpArray::with_hash_capacity(3);
+        array.set_str("first", Value::long(1));
+        array.set_str("target", Value::long(2));
+        array.set_str("last", Value::long(3));
+
+        let (position, value) = array.get_str_with_position("target").unwrap();
+        assert_eq!(position, 1);
+        assert_eq!(value.as_long(), Some(2));
+        assert_eq!(
+            array
+                .get_positioned_str("target", position)
+                .and_then(Value::as_long),
+            Some(2)
+        );
+
+        array.remove(&ArrayKey::String("first".to_string()));
+        assert!(array.get_positioned_str("target", position).is_none());
+        let (new_position, value) = array.get_str_with_position("target").unwrap();
+        assert_eq!(new_position, 0);
+        assert_eq!(value.as_long(), Some(2));
     }
 
     #[test]

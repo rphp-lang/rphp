@@ -116,6 +116,25 @@ impl InlineCache {
         self.prop_info = ((slot as u32) << 2) | flags;
     }
 
+    /// Last validated ordered-entry position for a `FetchDimR` string key.
+    /// The array validates both the position and current key before use, so no
+    /// array identity or mutation version is required for correctness.
+    #[inline(always)]
+    pub fn string_array_position(&self) -> Option<usize> {
+        (self.prop_info != 0).then_some((self.prop_info - 1) as usize)
+    }
+
+    #[inline]
+    pub fn set_string_array_position(&mut self, position: usize) {
+        let encoded = u32::try_from(position)
+            .ok()
+            .and_then(|position| position.checked_add(1))
+            .unwrap_or(0);
+        self.func = std::ptr::null();
+        self.class_id = 0;
+        self.prop_info = encoded;
+    }
+
     /// Cache constructor resolution for a `NewObj` site. A null function with
     /// a non-zero class ID is a valid negative cache entry for classes without
     /// `__construct`.

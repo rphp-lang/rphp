@@ -1750,3 +1750,33 @@ fetch/add/assignment dispatches. Fresh-frame activation and a type change in
 the middle of the region have dedicated end-to-end coverage. The complete
 release suite passes, and all 31 no-PGO comparison workloads remain strict RPHP
 wins.
+
+## Phase 3b result: validated string-key positions at read sites
+
+Fresh sampling after Phase 3a showed that the dense region had removed most of
+its opcode dispatch, but each associative result read still hashed the same
+literal key. The same repeated hashing also exists in ordinary baseline
+`FetchDimR`, so solving it only inside the dense kernel would have made the
+optimization workload-specific.
+
+Every string-key `FetchDimR` site now retains the last ordered-entry position
+in its existing inline-cache slot. A hit is accepted only after loading that
+position from the current array and comparing the actual entry key with the
+current lookup key. A different array, a COW detach, insertion, removal,
+reordering, or a changing dynamic key can therefore only turn the hint into a
+miss. The miss path performs canonical PHP key normalization and the ordinary
+string-index lookup, then refreshes the position. Numeric strings still take
+the integer-key path before this cache is considered.
+
+The baseline interpreter and the straight application region share this
+single helper and validation contract. No array pointer or mutation version is
+cached, and no array representation is changed. Unit coverage moves a cached
+entry by removing an earlier key; end-to-end coverage alternates arrays whose
+identical keys occupy different positions at one bytecode site.
+
+Two final independent best-of-five runs of the representative order pipeline
+measure 0.281--0.283 s RPHP versus 0.078--0.079 s PHP, about 3.60x. This is a
+further 5--6 percent reduction from the Phase 3a result and about 46 percent
+from the original 0.521 s RPHP baseline. The complete release suite passes. In
+the latest no-PGO matrix RPHP has 30 strict wins and one timing-level tie; no
+related regression was found.

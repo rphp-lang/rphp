@@ -33,6 +33,25 @@ fn test_e2e_array_string_key_access() {
 }
 
 #[test]
+fn test_e2e_string_key_position_cache_validates_reordered_arrays() {
+    assert_eq!(
+        run_php(
+            "<?php
+for ($i = 0; $i < 4; $i++) {
+    if (($i % 2) == 0) {
+        $row = ['a' => 1, 'b' => 2];
+    } else {
+        $row = ['b' => 20, 'a' => 10];
+    }
+    echo $row['a'];
+}
+"
+        ),
+        "110110"
+    );
+}
+
+#[test]
 fn test_e2e_array_mixed_keys() {
     assert_eq!(
         run_php("<?php $a = [0 => 'a', 'x' => 'b', 1 => 'c']; echo $a[0]; echo $a['x']; echo $a[1];"),
