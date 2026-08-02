@@ -66,6 +66,8 @@ benchmark_corpus() {
 
 benchmark_corpus "Order/service pipeline" benches/corpus_order_pipeline.php
 benchmark_corpus "Typed order/service pipeline" benches/corpus_typed_order_pipeline.php
+benchmark_corpus "Stateful ledger pipeline" benches/corpus_ledger_pipeline.php
+benchmark_corpus "Typed stateful ledger" benches/corpus_typed_ledger_pipeline.php
 
 echo ""
 echo "Ratio < 1.00x = rphp faster, > 1.00x = PHP faster"

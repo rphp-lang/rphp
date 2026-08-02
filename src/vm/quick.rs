@@ -407,6 +407,17 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Monomorphic pure scalar method with Long arguments and result. Runtime
+    /// validates the receiver/method cache and ScalarLongFunctionPlan once at
+    /// region entry.
+    ScalarMethodCall {
+        guard: ScalarLongCallGuard,
+        arguments: [QuickLongOperand; 8],
+        argument_count: u8,
+        result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     /// Exact PHP evaluation order for `propertyMutator(propertyGetter())`.
     ComposedPropertyCall {
         outer_guard: ScalarLongCallGuard,
@@ -430,6 +441,11 @@ pub enum QuickLongOp {
     Assign {
         destination: u16,
         source: u16,
+        next_target: QuickLongTarget,
+    },
+    AssignLongLiteral {
+        destination: u16,
+        value: i64,
         next_target: QuickLongTarget,
     },
     /// Assign a string literal to a CV retained as a dynamic array key.
@@ -512,9 +528,11 @@ impl QuickLongOp {
             | Self::AddAddAssign { next_target, .. }
             | Self::PropertyMethodCall { next_target, .. }
             | Self::PropertyGetterCall { next_target, .. }
+            | Self::ScalarMethodCall { next_target, .. }
             | Self::ComposedPropertyCall { next_target, .. }
             | Self::VirtualObjectArrayPipeline { next_target, .. }
             | Self::Assign { next_target, .. }
+            | Self::AssignLongLiteral { next_target, .. }
             | Self::AssignStringLiteral { next_target, .. }
             | Self::AssignStringSlot { next_target, .. }
             | Self::PostInc { next_target, .. } => resolve(next_target),
@@ -2195,6 +2213,9 @@ fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
                 straight_region_read(&mut inputs, defined, source)?;
                 straight_region_write(&mut defined, destination)?;
             }
+            QuickLongOp::AssignLongLiteral { destination, .. } => {
+                straight_region_write(&mut defined, destination)?;
+            }
             QuickLongOp::PostInc {
                 value, result, ..
             } => {
@@ -3180,6 +3201,22 @@ fn detect_long_ops_region_inner(
                             next_target: QuickLongTarget::unresolved(ip)?,
                             resume_ip,
                         }
+                    } else if argument_count != 0
+                        && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+                    {
+                        add_mask_slot(
+                            &mut long_output_mask,
+                            do_fcall.result,
+                            total_slots,
+                        )?;
+                        QuickLongOp::ScalarMethodCall {
+                            guard: outer_guard,
+                            arguments,
+                            argument_count: argument_count as u8,
+                            result: do_fcall.result,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                            resume_ip,
+                        }
                     } else {
                         return None;
                     }
@@ -3252,15 +3289,23 @@ fn detect_long_ops_region_inner(
                         _ => return None,
                     }
                 } else {
-                    let source = long_slot(instruction.op2_type, instruction.op2)?;
-                    add_mask_slot(&mut long_input_mask, source, total_slots)?;
                     add_mask_slot(&mut long_output_mask, instruction.op1, total_slots)?;
                     has_assign = true;
                     ip += 1;
-                    QuickLongOp::Assign {
-                        destination: instruction.op1,
-                        source,
-                        next_target: QuickLongTarget::unresolved(ip)?,
+                    if instruction.op2_type == OpType::Const {
+                        QuickLongOp::AssignLongLiteral {
+                            destination: instruction.op1,
+                            value: long_literal(op_array, instruction.op2)?,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                        }
+                    } else {
+                        let source = long_slot(instruction.op2_type, instruction.op2)?;
+                        add_mask_slot(&mut long_input_mask, source, total_slots)?;
+                        QuickLongOp::Assign {
+                            destination: instruction.op1,
+                            source,
+                            next_target: QuickLongTarget::unresolved(ip)?,
+                        }
                     }
                 }
             }
@@ -3333,6 +3378,7 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::Binary { resume_ip, .. }
             | QuickLongOp::PropertyMethodCall { resume_ip, .. }
             | QuickLongOp::PropertyGetterCall { resume_ip, .. }
+            | QuickLongOp::ScalarMethodCall { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
             | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
@@ -3347,6 +3393,7 @@ fn detect_long_ops_region_inner(
                 first_resume_ip, ..
             } => first_resume_ip,
             QuickLongOp::Assign { .. } => ip - 1,
+            QuickLongOp::AssignLongLiteral { .. } => ip - 1,
             QuickLongOp::AssignStringLiteral { .. } => ip - 1,
             QuickLongOp::AssignStringSlot { .. } => ip - 1,
             QuickLongOp::Jump { .. } => ip - 1,

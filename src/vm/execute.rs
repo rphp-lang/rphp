@@ -906,7 +906,10 @@ unsafe fn try_execute_single_long_property_plan(
     }
 
     if written {
-        receiver.object_set_property_slot_unchecked(slot, Value::long(value));
+        Value::write_long(
+            receiver.object_property_slot_unchecked(slot) as *mut Value,
+            value,
+        );
     }
     true
 }
@@ -988,8 +991,97 @@ unsafe fn try_execute_multi_long_property_plan(
 
     for index in 0..plan.properties.len() {
         if written & (1 << index) != 0 {
-            receiver.object_set_property_slot_unchecked(
-                property_slots[index], Value::long(property_values[index]),
+            Value::write_long(
+                receiver.object_property_slot_unchecked(property_slots[index]) as *mut Value,
+                property_values[index],
+            );
+        }
+    }
+    true
+}
+
+/// Closed-region variant whose class/layout/property guards were resolved at
+/// entry. Values remain transactional: all checked operations complete before
+/// any declared property slot is updated.
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn try_execute_resolved_long_property_plan(
+    receiver: &Value,
+    arguments: &[i64; 8],
+    plan: &LongPropertyMethodPlan,
+    property_slots: &[usize; 8],
+    property_count: u8,
+) -> bool {
+    if property_count as usize != plan.properties.len() || property_count > 8 {
+        return false;
+    }
+    let mut property_values = [0i64; 8];
+    for index in 0..property_count as usize {
+        let value = &*receiver.object_property_slot_unchecked(property_slots[index]);
+        if value.value_type() != ValueType::Long {
+            return false;
+        }
+        property_values[index] = value.raw_long();
+    }
+
+    let mut written = 0u8;
+    for operation in plan.operations.iter().copied() {
+        match operation {
+            LongPropertyOp::Add { property, rhs } => {
+                let Some(target) = property_values.get_mut(property as usize) else {
+                    return false;
+                };
+                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments)) else {
+                    return false;
+                };
+                *target = value;
+                written |= 1 << property;
+            }
+            LongPropertyOp::Sub { property, rhs } => {
+                let Some(target) = property_values.get_mut(property as usize) else {
+                    return false;
+                };
+                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments)) else {
+                    return false;
+                };
+                *target = value;
+                written |= 1 << property;
+            }
+            LongPropertyOp::Min { property, candidate } => {
+                let Some(target) = property_values.get_mut(property as usize) else {
+                    return false;
+                };
+                let candidate = resolve_long_plan_source(candidate, arguments);
+                if candidate < *target {
+                    *target = candidate;
+                    written |= 1 << property;
+                }
+            }
+            LongPropertyOp::Max { property, candidate } => {
+                let Some(target) = property_values.get_mut(property as usize) else {
+                    return false;
+                };
+                let candidate = resolve_long_plan_source(candidate, arguments);
+                if candidate > *target {
+                    *target = candidate;
+                    written |= 1 << property;
+                }
+            }
+            LongPropertyOp::Set { property, value } => {
+                let Some(target) = property_values.get_mut(property as usize) else {
+                    return false;
+                };
+                *target = resolve_long_plan_source(value, arguments);
+                written |= 1 << property;
+            }
+        }
+    }
+
+    for index in 0..property_count as usize {
+        if written & (1 << index) != 0 {
+            Value::write_long(
+                receiver.object_property_slot_unchecked(property_slots[index]) as *mut Value,
+                property_values[index],
             );
         }
     }
@@ -1171,6 +1263,7 @@ fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i6
         ScalarLongOpKind::Add => lhs.checked_add(rhs),
         ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
         ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
+        ScalarLongOpKind::IntDivide => lhs.checked_div(rhs),
         ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),
         ScalarLongOpKind::BitwiseXor => Some(lhs ^ rhs),
     }
@@ -7398,13 +7491,18 @@ enum QuickResolvedObjectOp {
     PropertyMethod {
         receiver: *const Value,
         target: *const FunctionCommon,
-        user: *const UserFunction,
         plan: *const LongPropertyMethodPlan,
+        property_slots: [usize; 8],
+        property_count: u8,
     },
     PropertyGetter {
         receiver: *const Value,
         target: *const FunctionCommon,
         property_slot: usize,
+    },
+    ScalarMethod {
+        target: *const FunctionCommon,
+        plan: *const ScalarLongFunctionPlan,
     },
     ComposedProperty {
         outer_receiver: *const Value,
@@ -7442,7 +7540,8 @@ impl QuickObjectCallRecorder<'_> {
                 match *resolved {
                     QuickResolvedObjectOp::None => {}
                     QuickResolvedObjectOp::PropertyMethod { target, .. }
-                    | QuickResolvedObjectOp::PropertyGetter { target, .. } => {
+                    | QuickResolvedObjectOp::PropertyGetter { target, .. }
+                    | QuickResolvedObjectOp::ScalarMethod { target, .. } => {
                         record_scalar_calls_bulk(&*target, *count);
                     }
                     QuickResolvedObjectOp::ComposedProperty {
@@ -7538,11 +7637,32 @@ unsafe fn resolve_quick_object_ops(
                 if property_plan.public_args != argument_count {
                     return None;
                 }
+                if property_plan.properties.len() > 8 {
+                    return None;
+                }
+                let class_id = (*receiver).object_class_id_unchecked();
+                let mut property_slots = [usize::MAX; 8];
+                for (index, property) in property_plan.properties.iter().enumerate() {
+                    let cache = (&*user).op_array.cache.get(property.cache_ip as usize)?;
+                    if cache.class_id != class_id
+                        || cache.property_flags() & property.required_flags as u32
+                            != property.required_flags as u32
+                    {
+                        return None;
+                    }
+                    let slot = cache.property_slot();
+                    let value = &*(*receiver).object_property_slot_unchecked(slot);
+                    if value.value_type() != ValueType::Long {
+                        return None;
+                    }
+                    property_slots[index] = slot;
+                }
                 QuickResolvedObjectOp::PropertyMethod {
                     receiver,
                     target,
-                    user,
                     plan: property_plan,
+                    property_slots,
+                    property_count: property_plan.properties.len() as u8,
                 }
             }
             QuickLongOp::PropertyGetterCall { guard, .. } => {
@@ -7553,6 +7673,26 @@ unsafe fn resolve_quick_object_ops(
                     receiver,
                     target,
                     property_slot,
+                }
+            }
+            QuickLongOp::ScalarMethodCall {
+                guard,
+                argument_count,
+                ..
+            } => {
+                let (_receiver, target, user) = quick_object_method_target(
+                    op_array,
+                    slot_base,
+                    guard,
+                    argument_count as usize,
+                )?;
+                let scalar_plan = (&*user).scalar_long_plan.as_deref()?;
+                if scalar_plan.public_args != argument_count {
+                    return None;
+                }
+                QuickResolvedObjectOp::ScalarMethod {
+                    target,
+                    plan: scalar_plan,
                 }
             }
             QuickLongOp::ComposedPropertyCall {
@@ -11428,8 +11568,9 @@ unsafe fn run_quick_long_ops_loop(
             } => {
                 let QuickResolvedObjectOp::PropertyMethod {
                     receiver,
-                    user,
                     plan: property_plan,
+                    property_slots,
+                    property_count,
                     ..
                 } = *resolved_object_ops.get_unchecked(op_index)
                 else {
@@ -11447,11 +11588,12 @@ unsafe fn run_quick_long_ops_loop(
                         QuickLongOperand::Const(value) => value,
                     };
                 }
-                if try_execute_long_property_plan(
+                if try_execute_resolved_long_property_plan(
                     &*receiver,
                     &values,
                     &*property_plan,
-                    &*user,
+                    &property_slots,
+                    property_count,
                 ) {
                     object_call_recorder.record(op_index);
                     next_target
@@ -11494,6 +11636,47 @@ unsafe fn run_quick_long_ops_loop(
                         dirty_long_mask,
                         dirty_bool_mask,
                     );
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            }
+            QuickLongOp::ScalarMethodCall {
+                arguments,
+                argument_count,
+                result,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                let QuickResolvedObjectOp::ScalarMethod {
+                    plan: scalar_plan, ..
+                } = *resolved_object_ops.get_unchecked(op_index)
+                else {
+                    unreachable!("resolved scalar method operation")
+                };
+                let mut values = [0i64; 8];
+                for (index, source) in arguments
+                    .iter()
+                    .copied()
+                    .take(argument_count as usize)
+                    .enumerate()
+                {
+                    values[index] = quick_long_operand(&slots, source);
+                }
+                if let Some(value) = evaluate_scalar_long_plan(&*scalar_plan, &values) {
+                    slots[result as usize] = value;
+                    dirty_long_mask |= 1u64 << result;
+                    object_call_recorder.record(op_index);
+                    next_target
+                } else {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    string_state.commit();
                     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
                     return Ok(QuickLoopOutcome::Deoptimized);
@@ -11602,6 +11785,15 @@ unsafe fn run_quick_long_ops_loop(
                 next_target,
             } => {
                 slots[destination as usize] = slots[source as usize];
+                dirty_long_mask |= 1u64 << destination;
+                next_target
+            }
+            QuickLongOp::AssignLongLiteral {
+                destination,
+                value,
+                next_target,
+            } => {
+                slots[destination as usize] = value;
                 dirty_long_mask |= 1u64 << destination;
                 next_target
             }

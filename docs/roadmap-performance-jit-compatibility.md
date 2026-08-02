@@ -784,6 +784,40 @@ plan lowering/execution into the unified typed IR. Once that breadth is stable,
 the minimal JIT can lower these already-proven regions instead of inventing a
 second semantic optimizer.
 
+The first independent validation corpus is now a stateful ledger rather than a
+variant of the order pipeline. It keeps one aggregate object alive, computes a
+conditional fee through `intdiv`, and passes that scalar result into a method
+which mutates four declared Long properties. It therefore exercises a different
+lifetime and data-flow shape: no transient request DTO and no result array in
+the hot loop. Typed and untyped mirrors live beside the order corpora and the
+corpus runner verifies all four workloads against PHP.
+
+The shared scalar IR now represents direct `intdiv`, including a conditional
+method whose two paths join at one trailing return. `QuickLongOpsLoop` can keep
+the result of a guarded monomorphic scalar method in its slot file and can
+represent literal Long assignments used to merge branch state. Method identity,
+receiver class, property layout and property slots are resolved once at region
+entry. Property mutations then read and write the already-proven Long slots in
+place; checked operations remain transactional and any mismatch resumes at the
+original PHP opcode before an observable partial update.
+
+On the 500,000-iteration ledger this reduces pushed PHP frames from roughly
+500,000 to seven process-wide cold/startup frames. The closed region records one
+entry, 499,967 iterations, zero guard failures and zero deoptimizations. Ordinary
+Value writes fall to 180 and Long clone/drop traffic to 167/166, instead of
+millions of replacement Values. Stable no-PGO measurements put the untyped
+ledger at about 0.0261 s versus 0.0249 s in PHP (approximately 1.05x) and the
+typed ledger at about 0.0264 s versus 0.0261 s (approximately 1.01x). The order
+corpora remain at parity, the full release suite passes, and the independent
+31-workload matrix still records 29 RPHP wins.
+
+This result supports the architecture rather than a benchmark-specific kernel:
+the same scalar program, guarded method call and declared-property transaction
+are selected from ordinary method bodies. The remaining ledger delta is now
+small enough that the next work should consolidate scalar/property/object plan
+execution into one typed-region representation and measure its dispatch cost,
+instead of adding another corpus-shaped fast path.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

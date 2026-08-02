@@ -115,6 +115,7 @@ pub enum ScalarLongOpKind {
     Add,
     Subtract,
     Multiply,
+    IntDivide,
     Modulo,
     BitwiseXor,
 }

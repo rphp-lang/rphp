@@ -901,13 +901,25 @@ fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
     }
 }
 
+fn scalar_long_instruction_kind(instruction: &Instruction) -> Option<ScalarLongOpKind> {
+    if instruction.opcode == OpCode::DirectInternalCall2
+        && crate::builtin_metadata::DirectInternalKind::from_id(
+            instruction.extended_value,
+        ) == Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
+    {
+        Some(ScalarLongOpKind::IntDivide)
+    } else {
+        scalar_long_op_kind(instruction.opcode)
+    }
+}
+
 fn append_scalar_long_operation(
     function: &UserFunction,
     instruction: &Instruction,
     temporary_results: &mut HashMap<u16, ScalarLongSource>,
     operations: &mut Vec<ScalarLongOp>,
 ) -> Option<()> {
-    let kind = scalar_long_op_kind(instruction.opcode)?;
+    let kind = scalar_long_instruction_kind(instruction)?;
     if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
         || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
     {
@@ -1129,7 +1141,7 @@ fn build_conditional_scalar_long_function_plan(
             ip += 1;
             continue;
         }
-        if scalar_long_op_kind(instruction.opcode).is_some() {
+        if scalar_long_instruction_kind(instruction).is_some() {
             append_scalar_long_operation(
                 function,
                 instruction,
@@ -1292,22 +1304,70 @@ fn build_conditional_scalar_long_function_plan(
 
     let branch_results = temporary_results;
     let mut when_true_results = branch_results.clone();
-    let when_true = scalar_long_return_arm(
-        function,
-        when_true_ip,
-        when_false_ip,
-        &mut when_true_results,
-        &mut operations,
-    )?;
-    let when_true_operation_count = operations.len() - shared_operation_count;
-    let mut when_false_results = branch_results;
-    let when_false = scalar_long_return_arm(
-        function,
-        when_false_ip,
-        instructions.len(),
-        &mut when_false_results,
-        &mut operations,
-    )?;
+    let true_returns = instructions[when_true_ip..when_false_ip]
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Return);
+    let (when_true, when_false, when_true_operation_count) = if true_returns {
+        let when_true = scalar_long_return_arm(
+            function,
+            when_true_ip,
+            when_false_ip,
+            &mut when_true_results,
+            &mut operations,
+        )?;
+        let when_true_operation_count = operations.len() - shared_operation_count;
+        let mut when_false_results = branch_results;
+        let when_false = scalar_long_return_arm(
+            function,
+            when_false_ip,
+            instructions.len(),
+            &mut when_false_results,
+            &mut operations,
+        )?;
+        (when_true, when_false, when_true_operation_count)
+    } else {
+        // Canonical `if ($cond) { $value = expr; } return $value;` has a
+        // shared return at the false/join target. Model it as a select between
+        // the post-body binding and the incoming binding without inventing a
+        // second control-flow representation.
+        for instruction in &instructions[when_true_ip..when_false_ip] {
+            if instruction.opcode == OpCode::AssignCv {
+                bind_scalar_long_local(function, instruction, &mut when_true_results)?;
+            } else {
+                append_scalar_long_operation(
+                    function,
+                    instruction,
+                    &mut when_true_results,
+                    &mut operations,
+                )?;
+            }
+        }
+        let shared_return = instructions.get(when_false_ip)?;
+        if shared_return.opcode != OpCode::Return || shared_return.extended_value == 0 {
+            return None;
+        }
+        let when_true = scalar_long_source(
+            &function.op_array,
+            &when_true_results,
+            function.common.sig.this_offset,
+            public_args,
+            shared_return.op1_type,
+            shared_return.op1,
+        )?;
+        let when_false = scalar_long_source(
+            &function.op_array,
+            &branch_results,
+            function.common.sig.this_offset,
+            public_args,
+            shared_return.op1_type,
+            shared_return.op1,
+        )?;
+        (
+            when_true,
+            when_false,
+            operations.len() - shared_operation_count,
+        )
+    };
 
     Some(Box::new(ScalarLongFunctionPlan {
         public_args: public_args as u8,

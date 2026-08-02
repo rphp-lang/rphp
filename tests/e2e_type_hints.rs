@@ -6,7 +6,7 @@ use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::function::{
     CallStrategy, ComposedScalarLongOp, ComposedTypedLongOp, ReturnStrategy,
-    ScalarLongCallGuard,
+    ScalarLongCallGuard, ScalarLongOpKind,
 };
 use rphp::vm::instruction::{
     KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
@@ -1119,6 +1119,47 @@ class Selector {
         .scalar_long_plan
         .as_ref()
         .is_some_and(|plan| plan.select.is_some()));
+}
+
+#[test]
+fn test_intdiv_conditional_method_composes_into_quick_scalar_loop() {
+    let source = include_str!("../benches/corpus_typed_ledger_pipeline.php");
+    let result = compile_types(source);
+    let fee = result
+        .class_defs
+        .iter()
+        .find(|class| class.name.eq_ignore_ascii_case("TypedLedgerFeePolicy"))
+        .and_then(|class| {
+            class
+                .methods
+                .iter()
+                .find(|(name, ..)| name.eq_ignore_ascii_case("fee"))
+        })
+        .map(|method| &method.4)
+        .expect("fee method");
+    let scalar_plan = fee.scalar_long_plan.as_deref().expect("scalar fee plan");
+    assert!(scalar_plan.select.is_some());
+    assert!(scalar_plan
+        .program
+        .operations
+        .iter()
+        .any(|operation| operation.kind == ScalarLongOpKind::IntDivide));
+
+    let total = result
+        .functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runTypedLedgerPipeline"))
+        .map(|(_, function)| function)
+        .expect("typed ledger function");
+    assert!(total.op_array.block_plans.iter().any(|block| {
+        matches!(
+            block,
+            BlockPlan::QuickLongOps(plan)
+                if plan.ops.iter().any(|operation| {
+                    matches!(operation, QuickLongOp::ScalarMethodCall { .. })
+                })
+        )
+    }));
 }
 
 #[test]
