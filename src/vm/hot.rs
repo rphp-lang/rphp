@@ -447,7 +447,9 @@ pub fn execute_hot_frame(
                     scalar_plan_eligible = user.composed_scalar_long_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
-                        let evaluated = if plan.program.operations.len() == 1 {
+                        let evaluated = if plan.select.is_none()
+                            && plan.program.operations.len() == 1
+                        {
                             unsafe {
                                 super::execute::try_execute_direct_single_scalar_long_op(
                                     frame,
@@ -1236,7 +1238,9 @@ pub fn execute_hot_frame(
                         || user.long_property_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
-                        let evaluated = if plan.program.operations.len() == 1 {
+                        let evaluated = if plan.select.is_none()
+                            && plan.program.operations.len() == 1
+                        {
                             unsafe {
                                 super::execute::try_execute_direct_single_scalar_long_op(
                                     frame,

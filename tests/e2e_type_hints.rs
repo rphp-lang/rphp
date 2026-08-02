@@ -1,6 +1,6 @@
 /// Tests for parameter type hints
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -1072,4 +1072,183 @@ function fromUntypedOverride(UntypedChild $source) {
         .instructions
         .iter()
         .all(|instruction| instruction.opcode != OpCode::Mod_LongLong));
+}
+
+#[test]
+fn test_conditional_scalar_plan_is_compiled_for_function_and_method() {
+    let result = compile_types(r#"<?php
+function choose(int $value): int {
+    if (($value & 1) === 0) {
+        return $value + 3;
+    }
+    return $value - 2;
+}
+class Selector {
+    function choose(int $value): int {
+        if ($value < 10) {
+            return $value * 2;
+        } else {
+            return $value - 4;
+        }
+    }
+}
+"#);
+
+    let function = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "choose")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(function
+        .scalar_long_plan
+        .as_ref()
+        .is_some_and(|plan| plan.select.is_some()));
+
+    let method = &result.class_defs[0].methods[0].4;
+    assert!(method
+        .scalar_long_plan
+        .as_ref()
+        .is_some_and(|plan| plan.select.is_some()));
+}
+
+#[test]
+fn test_conditional_scalar_plan_preserves_both_control_flow_edges() {
+    assert_eq!(run_php(r#"<?php
+function masked(int $value): int {
+    if (($value & 1) === 0) {
+        return $value + 3;
+    }
+    return $value - 2;
+}
+class Selector {
+    function choose(int $value): int {
+        if ($value < 10) {
+            return $value * 2;
+        } else {
+            return $value - 4;
+        }
+    }
+}
+$selector = new Selector();
+echo masked(8) . ":" . masked(9) . ":";
+echo $selector->choose(7) . ":" . $selector->choose(20);
+"#), "11:7:14:16");
+}
+
+#[test]
+fn test_conditional_scalar_plan_falls_back_without_evaluating_inactive_arm() {
+    assert_eq!(run_php(r#"<?php
+function weak($value) {
+    if ($value === 0) {
+        return 3;
+    }
+    return $value - 2;
+}
+function overflow(int $value): int {
+    if ($value === 9223372036854775807) {
+        return 7;
+    }
+    return $value + 1;
+}
+echo weak(5.0) . ":" . overflow(9223372036854775807);
+"#), "3:7");
+}
+
+#[test]
+fn test_composed_scalar_plan_tracks_local_aliases_modulo_and_xor() {
+    let result = compile_types(r#"<?php
+function source(int $value): int {
+    if (($value & 1) === 0) {
+        return $value + 3;
+    }
+    return $value - 2;
+}
+function consume(int $value): int {
+    $local = source($value);
+    return ($local % 97) ^ 13;
+}
+"#);
+
+    let source = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "source")
+        .map(|(_, function)| function)
+        .unwrap();
+    let consume = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consume")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(source.scalar_long_plan.is_some());
+    assert!(consume.composed_scalar_long_plan.is_some());
+}
+
+#[test]
+fn test_scalar_local_alias_keeps_parameter_mutation_in_canonical_vm() {
+    let result = compile_types(r#"<?php
+function localAlias(int $value): int {
+    $local = $value;
+    $local = $local + 1;
+    return $local;
+}
+function parameterMutation(int $value): int {
+    $value = $value + 1;
+    return $value;
+}
+"#);
+
+    let local_alias = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "localAlias")
+        .map(|(_, function)| function)
+        .unwrap();
+    let parameter_mutation = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "parameterMutation")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(local_alias.scalar_long_plan.is_some());
+    assert!(parameter_mutation.scalar_long_plan.is_none());
+    assert_eq!(run_php(r#"<?php
+function localAlias(int $value): int {
+    $local = $value;
+    $local = $local + 1;
+    return $local;
+}
+function parameterMutation(int $value): int {
+    $value = $value + 1;
+    return $value;
+}
+echo localAlias(4) . ":" . parameterMutation(4);
+"#), "5:5");
+}
+
+#[test]
+fn test_scalar_modulo_guard_preserves_division_by_zero_error() {
+    let error = run_php_expect_error(r#"<?php
+function invalidModulo(int $value): int {
+    return ($value % 0) ^ 13;
+}
+invalidModulo(4);
+"#);
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message) if message == "Division by zero"
+    ));
+}
+
+#[test]
+fn test_return_only_int_signature_uses_guarded_scalar_plan() {
+    let result = compile_types(r#"<?php
+function returnOnly($value): int {
+    return (($value * 3) + 1) % 1000003;
+}
+"#);
+    let function = &result.functions[0].1;
+    assert!(function.scalar_long_plan.is_some());
 }

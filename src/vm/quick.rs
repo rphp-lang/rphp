@@ -704,6 +704,7 @@ pub(crate) fn compose_quick_scalar_leaf_program(
     const MAX_FUSED_SCALAR_OPS: usize = 16;
 
     if arguments.output_count != body.public_args
+        || body.select.is_some()
         || arguments.operations.len() > 8
         || body.program.operations.len() > 8
         || body.program.output_count != 1
@@ -3346,6 +3347,7 @@ for ($i = 0; $i < 100; $i++) {
                 outputs: [ScalarLongSource::Temporary(1)],
                 output_count: 1,
             },
+            select: None,
         };
 
         let fused = compose_quick_scalar_leaf_program(&arguments, &body).unwrap();

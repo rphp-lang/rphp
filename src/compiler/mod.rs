@@ -14,7 +14,8 @@ use crate::vm::function::{
     LongRecursiveCondition,
     ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall,
     ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
-    ScalarLongProgram, ScalarLongSource,
+    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
+    ScalarLongSelect, ScalarLongSource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -712,18 +713,23 @@ const SCALAR_LONG_PLAN_MAX_OPS: usize = 8;
 
 fn scalar_long_source(
     op_array: &OpArray,
-    temporary_results: &HashMap<u16, u8>,
+    temporary_results: &HashMap<u16, ScalarLongSource>,
     this_offset: u32,
     public_args: u32,
     op_type: OpType,
     operand: u16,
 ) -> Option<ScalarLongSource> {
     match op_type {
-        OpType::Cv
+        OpType::Cv => {
             if operand as u32 >= this_offset
-                && (operand as u32) < this_offset + public_args =>
-        {
-            Some(ScalarLongSource::Input((operand as u32 - this_offset) as u16))
+                && (operand as u32) < this_offset + public_args
+            {
+                Some(ScalarLongSource::Input(
+                    (operand as u32 - this_offset) as u16,
+                ))
+            } else {
+                temporary_results.get(&operand).copied()
+            }
         }
         OpType::Const => op_array
             .literals
@@ -731,12 +737,8 @@ fn scalar_long_source(
             .filter(|value| value.value_type() == crate::value::ValueType::Long)
             .and_then(Value::as_long)
             .map(ScalarLongSource::Constant),
-        OpType::Tmp | OpType::Var => temporary_results
-            .get(&operand)
-            .copied()
-            .map(ScalarLongSource::Temporary),
+        OpType::Tmp | OpType::Var => temporary_results.get(&operand).copied(),
         OpType::Unused => None,
-        _ => None,
     }
 }
 
@@ -750,13 +752,112 @@ fn build_scalar_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if !common.plan.call.supports_scalar_long_plan()
+    if !common.supports_scalar_long_plan()
         || common.plan.ret != ReturnStrategy::Fast
         || public_args > SCALAR_LONG_PLAN_MAX_ARGS
-        || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 2
+        || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 6
     {
         return None;
     }
+
+    build_straight_scalar_long_function_plan(function).or_else(|| {
+        build_conditional_scalar_long_function_plan(function)
+    })
+}
+
+fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
+    match opcode {
+        OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
+            Some(ScalarLongOpKind::Add)
+        }
+        OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+            Some(ScalarLongOpKind::Subtract)
+        }
+        OpCode::Mul => Some(ScalarLongOpKind::Multiply),
+        OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
+        OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
+            Some(ScalarLongOpKind::BitwiseXor)
+        }
+        _ => None,
+    }
+}
+
+fn append_scalar_long_operation(
+    function: &UserFunction,
+    instruction: &Instruction,
+    temporary_results: &mut HashMap<u16, ScalarLongSource>,
+    operations: &mut Vec<ScalarLongOp>,
+) -> Option<()> {
+    let kind = scalar_long_op_kind(instruction.opcode)?;
+    if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
+        || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+    {
+        return None;
+    }
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    let lhs = scalar_long_source(
+        op_array,
+        temporary_results,
+        common.sig.this_offset,
+        public_args,
+        instruction.op1_type,
+        instruction.op1,
+    )?;
+    let rhs = scalar_long_source(
+        op_array,
+        temporary_results,
+        common.sig.this_offset,
+        public_args,
+        instruction.op2_type,
+        instruction.op2,
+    )?;
+    let result_index = operations.len() as u8;
+    operations.push(ScalarLongOp { kind, lhs, rhs });
+    temporary_results.insert(
+        instruction.result,
+        ScalarLongSource::Temporary(result_index),
+    );
+    Some(())
+}
+
+fn bind_scalar_long_local(
+    function: &UserFunction,
+    instruction: &Instruction,
+    temporary_results: &mut HashMap<u16, ScalarLongSource>,
+) -> Option<()> {
+    if instruction.opcode != OpCode::AssignCv || instruction.op1_type != OpType::Cv {
+        return None;
+    }
+    let destination = instruction.op1 as u32;
+    let first_argument = function.common.sig.this_offset;
+    let argument_end = first_argument + function.common.sig.public_arity();
+    // Mutating `$this` or a public parameter changes what later external Input
+    // sources mean. Keep those CVs canonical; local CVs are aliases here.
+    if destination < first_argument
+        || (destination >= first_argument && destination < argument_end)
+    {
+        return None;
+    }
+    let source = scalar_long_source(
+        &function.op_array,
+        temporary_results,
+        function.common.sig.this_offset,
+        function.common.sig.public_arity(),
+        instruction.op2_type,
+        instruction.op2,
+    )?;
+    temporary_results.insert(instruction.op1, source);
+    Some(())
+}
+
+fn build_straight_scalar_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
 
     let mut temporary_results = HashMap::new();
     let mut operations = Vec::new();
@@ -783,46 +884,329 @@ fn build_scalar_long_function_plan(
                     outputs: [result],
                     output_count: 1,
                 },
+                select: None,
             }));
         }
 
-        let kind = match instruction.opcode {
-            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
-                ScalarLongOpKind::Add
-            }
-            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
-                ScalarLongOpKind::Subtract
-            }
-            OpCode::Mul => ScalarLongOpKind::Multiply,
-            _ => return None,
-        };
-        if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
-            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
-        {
-            return None;
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_long_local(function, instruction, &mut temporary_results)?;
+            continue;
         }
-        let lhs = scalar_long_source(
-            op_array,
-            &temporary_results,
-            common.sig.this_offset,
-            public_args,
-            instruction.op1_type,
-            instruction.op1,
+        append_scalar_long_operation(
+            function,
+            instruction,
+            &mut temporary_results,
+            &mut operations,
         )?;
-        let rhs = scalar_long_source(
-            op_array,
-            &temporary_results,
-            common.sig.this_offset,
-            public_args,
-            instruction.op2_type,
-            instruction.op2,
-        )?;
-        let result_index = operations.len() as u8;
-        operations.push(ScalarLongOp { kind, lhs, rhs });
-        temporary_results.insert(instruction.result, result_index);
     }
 
     None
+}
+
+fn scalar_long_condition_operand(
+    function: &UserFunction,
+    temporary_results: &HashMap<u16, ScalarLongSource>,
+    masked_results: &HashMap<u16, ScalarLongConditionOperand>,
+    op_type: OpType,
+    operand: u16,
+) -> Option<ScalarLongConditionOperand> {
+    if matches!(op_type, OpType::Tmp | OpType::Var) {
+        if let Some(masked) = masked_results.get(&operand) {
+            return Some(*masked);
+        }
+    }
+    scalar_long_source(
+        &function.op_array,
+        temporary_results,
+        function.common.sig.this_offset,
+        function.common.sig.public_arity(),
+        op_type,
+        operand,
+    )
+    .map(ScalarLongConditionOperand::Source)
+}
+
+fn scalar_long_return_arm(
+    function: &UserFunction,
+    start: usize,
+    limit: usize,
+    temporary_results: &mut HashMap<u16, ScalarLongSource>,
+    operations: &mut Vec<ScalarLongOp>,
+) -> Option<ScalarLongSource> {
+    for instruction in function.op_array.instructions.get(start..limit)? {
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 {
+                return None;
+            }
+            return scalar_long_source(
+                &function.op_array,
+                temporary_results,
+                function.common.sig.this_offset,
+                function.common.sig.public_arity(),
+                instruction.op1_type,
+                instruction.op1,
+            );
+        }
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_long_local(function, instruction, temporary_results)?;
+            continue;
+        }
+        append_scalar_long_operation(
+            function,
+            instruction,
+            temporary_results,
+            operations,
+        )?;
+    }
+    None
+}
+
+/// Recognize a pure Long guard clause or `if` body whose two control-flow
+/// edges return scalar expressions. Runtime still validates raw Long inputs
+/// and checked arithmetic; this representation only removes branch bytecode
+/// dispatch and the callee ExecuteData frame.
+fn build_conditional_scalar_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarLongFunctionPlan>> {
+    let instructions = &function.op_array.instructions;
+    let public_args = function.common.sig.public_arity();
+    let mut temporary_results = HashMap::new();
+    let mut masked_results = HashMap::new();
+    let mut operations = Vec::new();
+    let mut ip = 0usize;
+
+    // Allow shared scalar arithmetic and bit masks before the comparison. A
+    // mask remains a predicate operand because PHP integer `&` cannot fail or
+    // overflow once both Long guards have succeeded.
+    while let Some(instruction) = instructions.get(ip) {
+        if instruction.opcode == OpCode::BitwiseAnd {
+            if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                return None;
+            }
+            let lhs = scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            let rhs = scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                instruction.op2_type,
+                instruction.op2,
+            )?;
+            let ScalarLongConditionOperand::Source(lhs) = lhs else {
+                return None;
+            };
+            let ScalarLongConditionOperand::Source(rhs) = rhs else {
+                return None;
+            };
+            masked_results.insert(
+                instruction.result,
+                ScalarLongConditionOperand::BitwiseAnd { lhs, rhs },
+            );
+            ip += 1;
+            continue;
+        }
+        if scalar_long_op_kind(instruction.opcode).is_some() {
+            append_scalar_long_operation(
+                function,
+                instruction,
+                &mut temporary_results,
+                &mut operations,
+            )?;
+            ip += 1;
+            continue;
+        }
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_long_local(function, instruction, &mut temporary_results)?;
+            ip += 1;
+            continue;
+        }
+        break;
+    }
+
+    let condition_instruction = *instructions.get(ip)?;
+    let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
+        OpCode::IsEqual | OpCode::IsIdentical | OpCode::IsEqual_CvConst => (
+            ScalarLongConditionKind::Equal,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::IsNotEqual | OpCode::IsNotIdentical => (
+            ScalarLongConditionKind::NotEqual,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::IsSmaller | OpCode::IsSmaller_CvConst => (
+            ScalarLongConditionKind::LessThan,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::IsSmallerOrEqual | OpCode::IsSmallerOrEqual_CvConst => (
+            ScalarLongConditionKind::LessThanOrEqual,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::JmpZ => (
+            ScalarLongConditionKind::NotEqual,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+            ip,
+            None,
+        ),
+        OpCode::JmpZ_Eq_CvConst
+        | OpCode::JmpZ_Lt_CvConst
+        | OpCode::JmpZ_Le_CvConst => (
+            match condition_instruction.opcode {
+                OpCode::JmpZ_Eq_CvConst => ScalarLongConditionKind::Equal,
+                OpCode::JmpZ_Lt_CvConst => ScalarLongConditionKind::LessThan,
+                OpCode::JmpZ_Le_CvConst => ScalarLongConditionKind::LessThanOrEqual,
+                _ => unreachable!(),
+            },
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip,
+            Some(condition_instruction.result as usize),
+        ),
+        _ => return None,
+    };
+    let shared_operation_count = operations.len();
+
+    let (when_true_ip, when_false_ip) = if let Some(target) = fused_jump_target {
+        // Fused comparisons retain the original JmpZ in the canonical stream
+        // and skip over it on fall-through.
+        (ip + 2, target)
+    } else {
+        let branch = instructions.get(branch_ip)?;
+        if branch.opcode != OpCode::JmpZ {
+            return None;
+        }
+        if branch_ip != ip
+            && (!matches!(condition_instruction.result_type, OpType::Tmp | OpType::Var)
+                || branch.op1_type != condition_instruction.result_type
+                || branch.op1 != condition_instruction.result)
+        {
+            return None;
+        }
+        (branch_ip + 1, branch.op2 as usize)
+    };
+    if when_true_ip >= when_false_ip || when_false_ip >= instructions.len() {
+        return None;
+    }
+
+    let branch_results = temporary_results;
+    let mut when_true_results = branch_results.clone();
+    let when_true = scalar_long_return_arm(
+        function,
+        when_true_ip,
+        when_false_ip,
+        &mut when_true_results,
+        &mut operations,
+    )?;
+    let when_true_operation_count = operations.len() - shared_operation_count;
+    let mut when_false_results = branch_results;
+    let when_false = scalar_long_return_arm(
+        function,
+        when_false_ip,
+        instructions.len(),
+        &mut when_false_results,
+        &mut operations,
+    )?;
+
+    Some(Box::new(ScalarLongFunctionPlan {
+        public_args: public_args as u8,
+        program: ScalarLongProgram {
+            operations: operations.into_boxed_slice(),
+            outputs: [when_true],
+            output_count: 1,
+        },
+        select: Some(ScalarLongSelect {
+            kind,
+            lhs,
+            rhs,
+            shared_operation_count: shared_operation_count as u8,
+            when_true_operation_count: when_true_operation_count as u8,
+            when_true,
+            when_false,
+        }),
+    }))
 }
 
 const COMPOSED_SCALAR_LONG_PLAN_MAX_OPS: usize = 16;
@@ -836,7 +1220,7 @@ fn build_composed_scalar_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if !common.plan.call.supports_scalar_long_plan()
+    if !common.supports_scalar_long_plan()
         || common.plan.ret != ReturnStrategy::Fast
         || public_args > SCALAR_LONG_PLAN_MAX_ARGS
         || op_array.instructions.len() > 32
@@ -912,22 +1296,22 @@ fn build_composed_scalar_long_function_plan(
                 },
                 arguments: arguments.into_boxed_slice(),
             }));
-            temporary_results.insert(do_fcall.result, result_index);
+            temporary_results.insert(
+                do_fcall.result,
+                ScalarLongSource::Temporary(result_index),
+            );
             contains_call = true;
             ip += num_args + 2;
             continue;
         }
 
-        let kind = match instruction.opcode {
-            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
-                ScalarLongOpKind::Add
-            }
-            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
-                ScalarLongOpKind::Subtract
-            }
-            OpCode::Mul => ScalarLongOpKind::Multiply,
-            _ => return None,
-        };
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_long_local(function, instruction, &mut temporary_results)?;
+            ip += 1;
+            continue;
+        }
+
+        let kind = scalar_long_op_kind(instruction.opcode)?;
         if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
             || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
         {
@@ -955,7 +1339,10 @@ fn build_composed_scalar_long_function_plan(
             lhs,
             rhs,
         }));
-        temporary_results.insert(instruction.result, result_index);
+        temporary_results.insert(
+            instruction.result,
+            ScalarLongSource::Temporary(result_index),
+        );
         ip += 1;
     }
 
@@ -1161,7 +1548,7 @@ fn build_property_getter_method_plan(
 ) -> Option<PropertyGetterMethodPlan> {
     let common = &function.common;
     let op_array = &function.op_array;
-    if !common.plan.call.supports_scalar_long_plan()
+    if !common.supports_scalar_long_plan()
         || common.plan.ret != ReturnStrategy::Fast
         || common.sig.this_offset != 1
         || common.sig.public_arity() != 0
@@ -1230,7 +1617,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    if !common.plan.call.supports_scalar_long_plan()
+    if !common.supports_scalar_long_plan()
         || common.sig.this_offset != 1
         || public_args > LONG_PROPERTY_PLAN_MAX_ARGS
         || op_array.instructions.len() > 32

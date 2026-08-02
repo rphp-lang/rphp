@@ -13,7 +13,7 @@ use super::instruction::{
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
@@ -605,7 +605,7 @@ pub(crate) unsafe fn try_send_scalar_method_arg(
         OpCode::SendVal => try_copy_scalar_arg(frame, call, op_array, send),
         OpCode::SendVarEx => {
             let common = &*(*call).func;
-            common.plan.call.supports_scalar_long_plan()
+            common.supports_scalar_long_plan()
                 && !common.sig.is_param_by_ref(send.extended_value)
                 && try_copy_scalar_arg(frame, call, op_array, send)
         }
@@ -1074,6 +1074,8 @@ fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i6
         ScalarLongOpKind::Add => lhs.checked_add(rhs),
         ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
         ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
+        ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),
+        ScalarLongOpKind::BitwiseXor => Some(lhs ^ rhs),
     }
 }
 
@@ -1099,12 +1101,59 @@ fn evaluate_scalar_long_plan(
         return None;
     }
     let mut temporaries = [0i64; 8];
-    for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-        let lhs = resolve_scalar_function_source(operation.lhs, arguments, &temporaries)?;
-        let rhs = resolve_scalar_function_source(operation.rhs, arguments, &temporaries)?;
-        temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
-    }
-    resolve_scalar_function_source(plan.program.outputs[0], arguments, &temporaries)
+    let evaluate_operations = |start: usize, end: usize, temporaries: &mut [i64; 8]| {
+        for index in start..end {
+            let operation = plan.program.operations[index];
+            let lhs = resolve_scalar_function_source(operation.lhs, arguments, temporaries)?;
+            let rhs = resolve_scalar_function_source(operation.rhs, arguments, temporaries)?;
+            temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+        }
+        Some(())
+    };
+    let output = if let Some(select) = plan.select {
+        let shared_end = select.shared_operation_count as usize;
+        let true_end = shared_end.checked_add(select.when_true_operation_count as usize)?;
+        if true_end > plan.program.operations.len() {
+            return None;
+        }
+        evaluate_operations(0, shared_end, &mut temporaries)?;
+        let resolve_condition_operand = |operand| match operand {
+            ScalarLongConditionOperand::Source(source) => {
+                resolve_scalar_function_source(source, arguments, &temporaries)
+            }
+            ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => Some(
+                resolve_scalar_function_source(lhs, arguments, &temporaries)?
+                    & resolve_scalar_function_source(rhs, arguments, &temporaries)?,
+            ),
+        };
+        let lhs = resolve_condition_operand(select.lhs)?;
+        let rhs = resolve_condition_operand(select.rhs)?;
+        let condition = match select.kind {
+            ScalarLongConditionKind::Equal => lhs == rhs,
+            ScalarLongConditionKind::NotEqual => lhs != rhs,
+            ScalarLongConditionKind::LessThan => lhs < rhs,
+            ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
+        };
+        if condition {
+            evaluate_operations(shared_end, true_end, &mut temporaries)?;
+            select.when_true
+        } else {
+            evaluate_operations(
+                true_end,
+                plan.program.operations.len(),
+                &mut temporaries,
+            )?;
+            select.when_false
+        }
+    } else {
+        for (index, operation) in plan.program.operations.iter().copied().enumerate() {
+            let lhs = resolve_scalar_function_source(operation.lhs, arguments, &temporaries)?;
+            let rhs = resolve_scalar_function_source(operation.rhs, arguments, &temporaries)?;
+            temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+        }
+        plan.program.outputs[0]
+    };
+    resolve_scalar_function_source(output, arguments, &temporaries)
 }
 
 #[inline(always)]
@@ -1131,7 +1180,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
     let common = &*(*call).func;
     if !(*call).deferred_scalar_call
         || common.fn_type != FunctionType::User
-        || !common.plan.call.supports_scalar_long_plan()
+        || !common.supports_scalar_long_plan()
         || (*call).num_args != common.sig.public_arity()
         || (*call).named_args_used
     {
@@ -1166,7 +1215,8 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
     }
 
     if let Some(plan) = user.scalar_long_plan.as_deref() {
-        if plan.program.operations.len() == 1
+        if plan.select.is_none()
+            && plan.program.operations.len() == 1
             && plan.program.output_count == 1
             && plan.program.outputs[0] == ScalarLongSource::Temporary(0)
         {
@@ -1178,11 +1228,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
             };
             let lhs = operand(operation.lhs)?;
             let rhs = operand(operation.rhs)?;
-            return match operation.kind {
-                ScalarLongOpKind::Add => lhs.checked_add(rhs),
-                ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
-                ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
-            };
+            return apply_scalar_long_op(operation.kind, lhs, rhs);
         }
         return evaluate_scalar_long_plan(plan, &arguments);
     }
@@ -1218,7 +1264,7 @@ unsafe fn try_execute_deferred_long_property_method(
     let common = &*(*call).func;
     if !(*call).deferred_scalar_call
         || common.fn_type != FunctionType::User
-        || !common.plan.call.supports_scalar_long_plan()
+        || !common.supports_scalar_long_plan()
         || (*call).num_args != common.sig.public_arity()
         || (*call).named_args_used
     {
@@ -1341,8 +1387,9 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
     common: &FunctionCommon,
     plan: &ScalarLongFunctionPlan,
 ) -> Option<(i64, *const Instruction)> {
-    if !common.plan.call.supports_scalar_long_plan()
+    if !common.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
+        || plan.select.is_some()
         || plan.program.operations.len() != 1
         || plan.program.output_count != 1
         || plan.program.outputs[0] != ScalarLongSource::Temporary(0)
@@ -1382,11 +1429,7 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
     };
     let lhs = operand(operation.lhs)?;
     let rhs = operand(operation.rhs)?;
-    let result = match operation.kind {
-        ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
-        ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
-        ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
-    };
+    let result = apply_scalar_long_op(operation.kind, lhs, rhs)?;
     let do_fcall_ptr = sends.add(plan.public_args as usize);
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
@@ -1409,7 +1452,7 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     common: &FunctionCommon,
     plan: &ScalarLongFunctionPlan,
 ) -> Option<(i64, *const Instruction)> {
-    if !common.plan.call.supports_scalar_long_plan()
+    if !common.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
@@ -1535,7 +1578,7 @@ unsafe fn guarded_scalar_user_target(
     }
     let common = &*target;
     if common.fn_type != FunctionType::User
-        || !common.plan.call.supports_scalar_long_plan()
+        || !common.supports_scalar_long_plan()
         || common.sig.public_arity() != argument_count as u32
     {
         return None;
@@ -1657,11 +1700,7 @@ unsafe fn evaluate_composed_scalar_body_plan(
                     arguments,
                     &temporaries,
                 );
-                match operation.kind {
-                    ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
-                    ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
-                    ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
-                }
+                apply_scalar_long_op(operation.kind, lhs, rhs)?
             }
             ComposedScalarLongOp::Call(call) => {
                 let sources = &call.arguments;
@@ -1776,11 +1815,7 @@ unsafe fn evaluate_quick_composed_leaf_body(
                     arguments,
                     &temporaries,
                 );
-                match operation.kind {
-                    ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
-                    ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
-                    ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
-                }
+                apply_scalar_long_op(operation.kind, lhs, rhs)?
             }
             ComposedScalarLongOp::Call(call) => {
                 let sources = &call.arguments;
@@ -1845,7 +1880,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
     }
     let common = &*func;
     if common.fn_type != FunctionType::User
-        || !common.plan.call.supports_scalar_long_plan()
+        || !common.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
@@ -1878,6 +1913,10 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
                 ScalarLongOpKind::Subtract
             }
             OpCode::Mul => ScalarLongOpKind::Multiply,
+            OpCode::Mod | OpCode::Mod_LongLong => ScalarLongOpKind::Modulo,
+            OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
+                ScalarLongOpKind::BitwiseXor
+            }
             _ => return None,
         };
         if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
@@ -1895,11 +1934,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
             instruction.op2_type,
             instruction.op2,
         )?;
-        let value = match kind {
-            ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
-            ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
-            ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
-        };
+        let value = apply_scalar_long_op(kind, lhs, rhs)?;
         cursor = cursor.add(1);
         let send = &*cursor;
         if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
@@ -2021,7 +2056,7 @@ unsafe fn evaluate_composed_scalar_call(
     }
     let common = &*func;
     if common.fn_type != FunctionType::User
-        || !common.plan.call.supports_scalar_long_plan()
+        || !common.supports_scalar_long_plan()
         || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
@@ -2062,6 +2097,10 @@ unsafe fn evaluate_composed_scalar_call(
                 Some(ScalarLongOpKind::Subtract)
             }
             OpCode::Mul => Some(ScalarLongOpKind::Multiply),
+            OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
+            OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
+                Some(ScalarLongOpKind::BitwiseXor)
+            }
             _ => None,
         };
         if let Some(kind) = arithmetic_kind {
@@ -2080,11 +2119,7 @@ unsafe fn evaluate_composed_scalar_call(
                 instruction.op2_type,
                 instruction.op2,
             )?;
-            let value = match kind {
-                ScalarLongOpKind::Add => lhs.checked_add(rhs)?,
-                ScalarLongOpKind::Subtract => lhs.checked_sub(rhs)?,
-                ScalarLongOpKind::Multiply => lhs.checked_mul(rhs)?,
-            };
+            let value = apply_scalar_long_op(kind, lhs, rhs)?;
             cursor = cursor.add(1);
             let send = &*cursor;
             if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
@@ -3757,7 +3792,7 @@ fn op_init_method_call<'a>(
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
                 let common = unsafe { &*resolved };
                 let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
-                    && common.plan.call.supports_scalar_long_plan()
+                    && common.supports_scalar_long_plan()
                 {
                     let user = unsafe { &*(resolved as *const UserFunction) };
                     (
@@ -3789,7 +3824,7 @@ fn op_init_method_call<'a>(
             ));
         }
         let scalar_plan_eligible = common.fn_type == FunctionType::User
-            && common.plan.call.supports_scalar_long_plan()
+            && common.supports_scalar_long_plan()
             && num_args == common.sig.public_arity()
             && {
                 let user = unsafe { &*(func_ptr as *const UserFunction) };
@@ -11891,7 +11926,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array,
                                 opline_ptr.add(1),
                                 num_args,
-                                common.plan.call.supports_scalar_long_plan(),
+                                common.supports_scalar_long_plan(),
                             )
                         };
 

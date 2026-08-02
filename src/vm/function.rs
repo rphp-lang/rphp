@@ -100,6 +100,8 @@ pub enum ScalarLongOpKind {
     Add,
     Subtract,
     Multiply,
+    Modulo,
+    BitwiseXor,
 }
 
 /// One straight-line operation in a pure integer function plan. The result is
@@ -124,6 +126,43 @@ pub struct ScalarLongProgram<Operation = ScalarLongOp, const OUTPUT_CAPACITY: us
     pub output_count: u8,
 }
 
+/// One operand in a pure integer branch predicate. Bitwise masking is kept in
+/// the predicate instead of widening the arithmetic IR: it has no observable
+/// state and is a common way to express flags and parity checks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongConditionOperand {
+    Source(ScalarLongSource),
+    BitwiseAnd {
+        lhs: ScalarLongSource,
+        rhs: ScalarLongSource,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongConditionKind {
+    Equal,
+    NotEqual,
+    LessThan,
+    LessThanOrEqual,
+}
+
+/// A side-effect-free Long predicate evaluated after the shared arithmetic
+/// program. Both return arms are themselves scalar sources in that program.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarLongSelect {
+    pub kind: ScalarLongConditionKind,
+    pub lhs: ScalarLongConditionOperand,
+    pub rhs: ScalarLongConditionOperand,
+    /// Operations before the branch. Predicate temporaries may only refer to
+    /// this prefix.
+    pub shared_operation_count: u8,
+    /// Operations belonging to the true edge. False-edge operations follow
+    /// them in the shared program, allowing runtime to execute only one arm.
+    pub when_true_operation_count: u8,
+    pub when_true: ScalarLongSource,
+    pub when_false: ScalarLongSource,
+}
+
 /// Compile-time proof that a fixed-signature user function or method consists
 /// solely of a small, side-effect-free integer expression and a return.
 ///
@@ -133,6 +172,9 @@ pub struct ScalarLongProgram<Operation = ScalarLongOp, const OUTPUT_CAPACITY: us
 pub struct ScalarLongFunctionPlan {
     pub public_args: u8,
     pub program: ScalarLongProgram<ScalarLongOp, 1>,
+    /// Present for a pure `if`/guard-clause body with one scalar return on each
+    /// edge. `None` preserves the compact straight-line leaf representation.
+    pub select: Option<ScalarLongSelect>,
 }
 
 /// Dispatch identity required by a typed scalar call. Cache positions are
@@ -419,6 +461,28 @@ pub struct FunctionCommon {
 }
 
 impl FunctionCommon {
+    /// Whether this signature can enter a guarded frame-free Long plan.
+    ///
+    /// `Fast` remains the canonical strategy for a return-only `: int`
+    /// declaration so fallback still validates that return. A proven Long
+    /// plan may nevertheless satisfy the same contract when every argument
+    /// is either untyped/mixed or declared int and runtime Long guards pass.
+    #[inline(always)]
+    pub fn supports_scalar_long_plan(&self) -> bool {
+        if self.plan.call.supports_scalar_long_plan() {
+            return true;
+        }
+        self.plan.call == CallStrategy::Fast
+            && self.sig.ref_args == 0
+            && self.sig.param_type_hints.iter().all(|hint| {
+                matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int)
+            })
+            && matches!(
+                self.sig.return_type_hint,
+                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+            )
+    }
+
     /// Whether this function is eligible for hot executor promotion.
     ///
     /// **Single source of truth** — all promotion paths must use this.

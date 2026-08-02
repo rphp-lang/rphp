@@ -98,6 +98,30 @@ confirms that the facts reach ordinary bytecode, but the remaining roughly
 3.8x gap also shows that method/frame execution dominates this workload; tag
 checks in the eight downstream modulo operations are no longer the main cost.
 
+Typed scalar control-flow checkpoint (2026-08-02): the shared Long IR now
+represents pure two-edge `if` and guard-clause bodies. It accepts ordinary and
+compiler-fused equality/range branches, including side-effect-free bit masks,
+and executes only the selected scalar return arm. Runtime Long, dispatch, and
+checked-arithmetic guards still leave the canonical frame untouched on
+failure. The same program has also gained integer modulo, integer XOR, and
+immutable local-CV aliases, so results stored in ordinary local variables can
+flow through composed functions without rebuilding a frame. Mutated public
+parameters remain canonical.
+
+Return-only `: int` functions can use this guarded plan even though their
+canonical call strategy remains `Fast` and continues to validate fallback
+returns. Eligibility is signature-based: parameters must be untyped, `mixed`,
+or `int`, the return must be untyped, `mixed`, or `int`, and references remain
+excluded.
+
+In a five-run no-PGO matrix, the integer call chain is approximately 0.086 s
+RPHP versus 0.097 s PHP untyped and 0.086 s versus 0.105 s typed: both are now
+strict RPHP wins. Integer fanout improves to approximately 0.077 s versus
+0.057 s untyped and 0.076 s versus 0.061 s typed. The remaining method-return
+fanout gap is approximately 3.5x because its consumer has a mixed object/Long
+signature that the scalar-only external ABI cannot yet represent; this is the
+next call-layer boundary, rather than another arithmetic opcode gap.
+
 ## Phase 2: unified typed execution IR
 
 Consolidate the existing scalar, composed-scalar, property, recursion, and
