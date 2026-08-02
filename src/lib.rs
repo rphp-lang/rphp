@@ -12,6 +12,8 @@ pub mod regex;
 pub mod stdlib;
 pub mod base64;
 pub mod builtin_metadata;
+#[cfg(feature = "jit-prototype")]
+pub mod jit;
 
 /// Resolve a PHP built-in constant by name.
 /// Single source of truth — used by both compiler (property defaults) and runtime (FetchConst).

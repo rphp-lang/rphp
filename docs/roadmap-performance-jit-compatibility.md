@@ -963,6 +963,61 @@ Benchmark four modes, including cold and warm behavior:
 Also track compilation latency, code-cache memory, runtime memory, and
 deoptimization frequency.
 
+Implementation prototype checkpoint (2026-08-03): the first native platform
+boundary is proven on macOS ARM64 behind the opt-in `jit-prototype` feature.
+RPHP now owns a minimal binary encoder for register `ADD`, `MUL`, and `RET`,
+maps code through direct operating-system FFI, writes it while the page is RW,
+invalidates the instruction cache, seals it RX, and calls it through the ARM64
+C ABI. The 12-byte demonstration computes `(a + b) * c`; byte-encoding and
+live-execution tests both pass without LLVM, Cranelift, DynASM, an assembler,
+or a new package dependency.
+
+This prototype is intentionally disconnected from PHP execution and does not
+yet implement PHP overflow or deoptimization behavior. The next vertical slice
+is a restricted `ScalarLongProgram` lowering with checked arithmetic and an
+explicit success/side-exit result, still exercised outside the production VM
+before a guarded quick region may call it.
+
+Typed-program prototype checkpoint (2026-08-03): that restricted lowering is
+now complete. Existing straight-line `ScalarLongFunctionPlan` instances with up
+to eight inputs and eight operations lower directly to ARM64. Inputs and the
+single transactional output use a small pointer ABI; temporaries stay in
+caller-saved registers. `Add`, `Subtract`, and `Multiply` detect signed overflow
+in native code and branch to one shared side exit before publishing the output;
+`BitwiseXor`, arbitrary 64-bit constants, and prior temporaries use the same
+lowering. Invalid temporary/input references, conditional plans, division, and
+modulo are rejected before executable memory is created.
+
+The demonstration now builds `(a + b) * c` as the real shared typed IR, emits
+60 native bytes, returns `Value(36)` for `[7, 5, 3]`, and returns `SideExit` for
+an overflowing input. Nine focused tests cover byte encoding, live ABI calls,
+transactional overflow exits, validation, constants, and 40,000 deterministic
+differential arithmetic cases. The next step is to add the remaining scalar
+guards needed by representative plans, then attach a compiled native region to
+an existing guarded quick-plan cache; native entry must happen outside the hot
+per-operation dispatch loop, with the canonical resume point retained.
+
+### Nice to have: persistent compiled artifacts
+
+After the in-memory typed-region JIT is correct and profitable, consider a
+versioned `.rphpc` artifact that can preserve optimization work across process
+and server restarts. The first useful form should store portable typed IR,
+profiles, source and dependency hashes, and the exact RPHP runtime ABI version.
+It may later include target-specific ARM64 and x86-64 native-code sections,
+constant pools, relocation records, and runtime-helper imports.
+
+Loading must validate the source graph, RPHP/ABI version, target architecture,
+CPU features, and optimization configuration before any cached code becomes
+executable. A mismatch discards the affected cache entry and returns to normal
+planning or JIT compilation; baseline bytecode remains authoritative. Native
+code must not be restored as an unchecked raw memory dump because ASLR and
+runtime-helper addresses change between processes.
+
+This is not a prerequisite for the minimal JIT. Its purpose is to remove warmup
+and compilation latency for long-lived production deployments. A later build
+mode may package the same artifact with the RPHP runtime as a standalone
+executable, without requiring an external compiler backend or package.
+
 ## Phase 5: compatibility breadth and production use
 
 Once the execution architecture and minimal JIT are proven, broaden support
