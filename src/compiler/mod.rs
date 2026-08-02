@@ -602,6 +602,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
+        borrowable_heap_args: 0,
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
@@ -611,6 +612,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
 }
 
@@ -710,6 +712,7 @@ pub fn make_user_function_typed(
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
+        borrowable_heap_args: 0,
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
@@ -719,7 +722,77 @@ pub fn make_user_function_typed(
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
+    function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
+}
+
+/// Prove which ordinary heap parameters can use the same synchronous borrowed
+/// ABI as `$this`. Rebinding and String/Array COW mutation stay canonical;
+/// object property mutation remains eligible because PHP shares object identity.
+fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
+    let common = &function.common;
+    let public_args = common.sig.public_arity().min(64);
+    if function.op_array.is_generator
+        || function.op_array.num_cvs + function.op_array.num_temps > 64
+        || !function.op_array.try_entries.is_empty()
+    {
+        return 0;
+    }
+
+    let mut mask = if public_args == 64 {
+        u64::MAX
+    } else {
+        (1u64 << public_args) - 1
+    };
+    mask &= !common.sig.ref_args;
+
+    let clear_cv = |mask: &mut u64, cv: u16| {
+        let cv = cv as u32;
+        if cv >= common.sig.this_offset
+            && cv < common.sig.this_offset + public_args
+        {
+            *mask &= !(1u64 << (cv - common.sig.this_offset));
+        }
+    };
+
+    for instruction in &function.op_array.instructions {
+        match instruction.opcode {
+            // These opcodes may overwrite/drop the parameter variable itself.
+            // Property mutation is intentionally absent: PHP objects have
+            // shared identity, so `$arg->field = ...` is safe and observable.
+            OpCode::AssignCv
+            | OpCode::AssignConcat
+            | OpCode::PreInc
+            | OpCode::PreDec
+            | OpCode::PostInc
+            | OpCode::PostDec
+            | OpCode::BindDefaultParam
+            | OpCode::BindGlobal
+            | OpCode::BindStatic => clear_cv(&mut mask, instruction.op1),
+            // In-place array operations require an owned Rc so make_mut can
+            // observe the caller and detach according to PHP COW semantics.
+            OpCode::AddArrayElement
+            | OpCode::AssignDim
+            | OpCode::ArrayPushOp
+            | OpCode::UnsetDim
+                if instruction.op1_type == OpType::Cv =>
+            {
+                clear_cv(&mut mask, instruction.op1)
+            }
+            // Foreach target placement is intentionally conservative until
+            // its destination CV is explicit in the ownership analysis.
+            OpCode::ForeachNext => return 0,
+            // A direct return transfers a Value out of the frame. Aliases made
+            // through another CV are owned clones and remain eligible.
+            OpCode::Return
+                if instruction.op1_type == OpType::Cv =>
+            {
+                clear_cv(&mut mask, instruction.op1)
+            }
+            _ => {}
+        }
+    }
+    mask
 }
 
 const SCALAR_LONG_PLAN_MAX_ARGS: u32 = 8;
@@ -2515,11 +2588,16 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     // its return value. Generators are excluded because their frame outlives
     // the initiating call.
     function.common.plan.borrow_this = !function.op_array.is_generator
+        // Borrowed slots are represented by an intentionally-clear ownership
+        // bit. Frames wider than the bitmap use full-scan cleanup and must own
+        // `$this` conventionally.
+        && function.op_array.num_cvs + function.op_array.num_temps <= 64
         && !function.op_array.instructions.iter().any(|instruction| {
             instruction.opcode == OpCode::Return
                 && instruction.op1_type == OpType::Cv
                 && instruction.op1 == 0
         });
+    function.borrowable_heap_args = build_borrowable_heap_args(&function);
 
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();

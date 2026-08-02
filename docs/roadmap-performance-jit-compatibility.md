@@ -574,6 +574,49 @@ is nearly the same as untyped (2.68--2.72x).
 The separate 31-case no-PGO microbenchmark matrix has 29 RPHP wins and two
 marginal losses at 1.03x and 1.06x; no corpus-only fused kernel was introduced.
 
+The next corpus profile separated metadata work from irreducible allocation.
+Every literal `new ClassName` site had already cached its constructor, but object
+creation still hashed the same class name and rebuilt declared-property defaults
+for every instance. Registered classes now own one resolved property template
+and a stable class-ID index to boxed metadata. A warm monomorphic `new` therefore
+does an integer lookup and clones the template; abstract/interface/enum checks
+and the canonical name lookup remain on the first/cold resolution.
+
+Synchronous by-value calls now use a compiler-proven borrowed heap-argument
+mask. Parameters that are rebound, returned directly, used in try regions, or
+mutate String/Array storage are excluded. Read-only Strings and Arrays and
+ordinary Objects borrow the caller's Value without an Rc increment. If a nested
+call exposes such a variable by reference, the VM first materializes an owned
+slot and restores normal reference semantics. This extends the `$this` borrowing
+model to application DTOs and immutable request data without weakening COW.
+Finally, a hot frame that fully side-exits both the specialized executor and its
+comparison resume is demoted to baseline. Unsupported heap/string bodies no
+longer pay a failed tier-entry guard on every later call.
+
+The untyped corpus consequently moved from approximately 0.219--0.224 s to
+0.188--0.189 s and the typed corpus from 0.228--0.230 s to 0.200--0.202 s. Their
+corresponding PHP runs were 0.079 s and 0.082--0.083 s, for ratios of
+2.37--2.39x and 2.43--2.46x. The no-PGO
+microbenchmark matrix remains at 29 RPHP wins out of 31; the two losses are the
+already-marginal array-build and scalar-method cases.
+
+The counters explain both the gain and the remaining gap. Object clones fell
+from 3.0 million to 2.0 million, String clones from 3.0 million to 2.0 million,
+cleanup fast-skips rose from effectively zero to 1.0 million, and scanned frame
+slots fell from 21.0 million to 11.0 million. But the workload still pushes and
+pops 2.0 million complete frames and zeroes 40 MB of CV storage. It also creates
+500,000 request objects plus their property vectors and 500,000 short result
+hash arrays. Sampling now places object/array allocation and destruction next
+to baseline opcode/frame dispatch as the dominant named costs.
+
+The next structural target is therefore a guarded application region capable
+of spanning non-escaping DTO construction, nested monomorphic calls, declared
+property reads, and short result extraction. The general win must come from
+scalar replacement and frame elimination under side-exit guards—not from a
+QuoteRequest/QuoteService-specific kernel. A one-allocation object/property
+representation is also worth revisiting only if it avoids enlarging every
+PhpObject header; the earlier inline-property experiment regressed cache locality.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

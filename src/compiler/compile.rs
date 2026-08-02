@@ -1015,6 +1015,9 @@ pub struct ClassDef {
     /// Shared declared-property storage-key → numeric slot layout.
     /// Rebuilt after inheritance and trait properties are merged.
     pub property_layout: std::rc::Rc<ObjectLayout>,
+    /// Fully resolved initial values in property-layout order. Runtime object
+    /// construction clones this immutable template instead of rebuilding it.
+    pub property_defaults: std::rc::Rc<[Value]>,
     pub readonly_props: Vec<String>,  // names of readonly properties
     pub methods: Vec<(String, Visibility, bool, bool, UserFunction)>, // (name, vis, is_static, is_final, func)
     /// Stable numeric ID assigned at registration time. Used as inline cache key.
@@ -2288,6 +2291,7 @@ impl Compiler {
                     uses: resolved_uses,
                     properties: compiled_props,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
+                    property_defaults: std::rc::Rc::from([]),
                     readonly_props,
                     methods: compiled_methods,
                     class_id: 0,
@@ -2358,6 +2362,7 @@ impl Compiler {
                     uses: vec![],
                     properties: vec![],
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
+                    property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
                     methods: compiled_methods,
                     class_id: 0,
@@ -2451,6 +2456,7 @@ impl Compiler {
                     uses: vec![],
                     properties: compiled_props,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
+                    property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
                     methods: compiled_methods,
                     class_id: 0,
@@ -2560,6 +2566,7 @@ impl Compiler {
                     uses: vec![],
                     properties: compiled_props,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
+                    property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
                     methods: compiled_methods,
                     class_id: 0,

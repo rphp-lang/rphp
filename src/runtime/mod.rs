@@ -88,6 +88,9 @@ pub struct ExecutorGlobals {
     pub included_functions: Vec<Box<crate::vm::function::UserFunction>>,
     /// Monotonically increasing counter for class IDs
     next_class_id: u32,
+    /// Stable boxed ClassDef pointers indexed by class ID. Slot zero is
+    /// reserved for dynamic/unknown classes.
+    class_by_id: Vec<*const ClassDef>,
 }
 
 impl ExecutorGlobals {
@@ -115,6 +118,7 @@ impl ExecutorGlobals {
             included_files: std::collections::HashSet::new(),
             included_functions: Vec::new(),
             next_class_id: 1,
+            class_by_id: vec![std::ptr::null()],
         }
     }
 
@@ -143,6 +147,7 @@ impl ExecutorGlobals {
             included_files: std::collections::HashSet::new(),
             included_functions: Vec::new(),
             next_class_id: 1,
+            class_by_id: vec![std::ptr::null()],
         }
     }
 
@@ -151,6 +156,14 @@ impl ExecutorGlobals {
     /// For non-interface, non-abstract classes: validates interface contracts.
     pub fn register_class(&mut self, mut class_def: ClassDef) -> Result<(), String> {
         let class_name = class_def.name.clone();
+        // PHP does not permit class redeclaration. Besides matching that rule,
+        // this guarantees class_by_id pointers remain stable for inline caches.
+        if self.class_table.contains_key(&class_name) {
+            return Err(format!(
+                "Cannot declare class {}, because the name is already in use",
+                class_name
+            ));
+        }
         // Assign stable class ID
         let id = self.next_class_id;
         self.next_class_id += 1;
@@ -343,9 +356,27 @@ impl ExecutorGlobals {
             class_name.as_str(),
             property_keys,
         ));
+        class_def.property_defaults = class_def.properties.iter()
+            .map(|(name, default, _visibility, _declaring)| {
+                default.clone().unwrap_or_else(|| {
+                    if class_def.readonly_props.contains(name) {
+                        crate::value::Value::undef()
+                    } else {
+                        crate::value::Value::null()
+                    }
+                })
+            })
+            .collect::<Vec<_>>()
+            .into();
 
         // Box to get stable heap address for function pointers
         self.class_table.insert(class_name.clone(), Box::new(class_def));
+        let class_ptr = &**self.class_table.get(&class_name).unwrap() as *const ClassDef;
+        let class_id = unsafe { (*class_ptr).class_id as usize };
+        if self.class_by_id.len() <= class_id {
+            self.class_by_id.resize(class_id + 1, std::ptr::null());
+        }
+        self.class_by_id[class_id] = class_ptr;
         // Register child's own method pointers from the stable location
         let class = self.class_table.get(&class_name).unwrap();
         let method_entries: Vec<(String, *const FunctionCommon)> = class.methods.iter()
@@ -374,6 +405,17 @@ impl ExecutorGlobals {
         }
 
         Ok(())
+    }
+
+    /// O(1) metadata lookup used after a monomorphic class site resolves.
+    #[inline(always)]
+    pub fn class_by_id(&self, class_id: u32) -> Option<&ClassDef> {
+        let ptr = *self.class_by_id.get(class_id as usize)?;
+        if ptr.is_null() {
+            None
+        } else {
+            Some(unsafe { &*ptr })
+        }
     }
 
     /// Check if a class is an instance of another (walks parent chain AND implements)

@@ -587,6 +587,9 @@ pub struct UserFunction {
     /// Stable class IDs make repeated monomorphic DTO/service calls a single
     /// integer guard while new subclasses retain the canonical hierarchy check.
     pub compact_class_guard: Cell<u64>,
+    /// Public by-value parameters that may borrow an immutable heap Value from
+    /// their synchronous caller. Indexed by public parameter position.
+    pub borrowable_heap_args: u64,
 }
 
 /// Handler signature for internal (built-in) functions.

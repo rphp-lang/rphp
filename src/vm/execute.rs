@@ -595,6 +595,52 @@ unsafe fn frame_set_borrowed_this(frame: *mut ExecuteData, val: *const Value) {
     Value::raw_copy(val, ptr);
 }
 
+/// Initialize a by-value heap parameter as a synchronous borrow. The caller
+/// keeps the owning Value alive until DoFcall returns, and the callee's proof
+/// excludes direct transfer, rebinding and String/Array COW mutation.
+#[inline(always)]
+unsafe fn try_init_borrowed_heap_arg(
+    call: *mut ExecuteData,
+    public_param: u32,
+    source: *const Value,
+    destination: *mut Value,
+) -> bool {
+    let common = &*(*call).func;
+    if common.fn_type != FunctionType::User
+        || public_param >= 64
+        || common.sig.is_param_by_ref(public_param)
+    {
+        return false;
+    }
+    let user = &*((*call).func as *const UserFunction);
+    if user.borrowable_heap_args & (1u64 << public_param) == 0
+        || !(*source).needs_cleanup()
+    {
+        return false;
+    }
+    Value::raw_copy(source, destination);
+    true
+}
+
+/// Turn an unowned borrowed frame slot into an ordinary owned heap slot before
+/// exposing the variable itself through a PHP reference. A clone increments
+/// the Rc but deliberately does not drop the raw borrowed bits it replaces.
+#[inline(always)]
+unsafe fn materialize_borrowed_slot(frame: *mut ExecuteData, ptr: *mut Value) {
+    let total = (*frame).num_cvs + (*frame).num_temps;
+    if total > 64 || !(*ptr).needs_cleanup() {
+        return;
+    }
+    let idx = slot_idx(frame, ptr);
+    let bit = 1u64 << idx;
+    if (*frame).heap_bitmap & bit == 0 {
+        let owned = (*ptr).clone();
+        ptr.write(owned);
+        (*frame).has_heap_slots = true;
+        (*frame).heap_bitmap |= bit;
+    }
+}
+
 /// Copy a scalar argument operand directly into a pending call frame.
 #[inline(always)]
 unsafe fn try_copy_scalar_arg(
@@ -3662,6 +3708,19 @@ fn op_new_obj<'a>(
     let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let name = class_name.as_str().unwrap_or("");
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let ic = &op_array.cache[ip];
+
+    // Literal object creation is monomorphic in ordinary PHP code. After the
+    // first canonical name lookup, use the stable numeric class index instead
+    // of hashing the same class name on every allocation.
+    let class_def = if ic.class_id != 0 {
+        eg.class_by_id(ic.class_id)
+    } else {
+        eg.class_table.get(name).map(Box::as_ref)
+    };
 
     // Reject instantiation of interfaces, abstract classes, and internal-only classes
     if name == "Generator" {
@@ -3669,7 +3728,7 @@ fn op_new_obj<'a>(
             "The \"Generator\" class is reserved for internal use and cannot be manually instantiated".into()
         ));
     }
-    if let Some(class_def) = eg.class_table.get(name) {
+    if let Some(class_def) = class_def {
         if class_def.is_interface {
             return Err(VmError::Fatal(format!(
                 "Cannot instantiate interface {}",
@@ -3696,16 +3755,12 @@ fn op_new_obj<'a>(
 
     // Create compact declared-property slots from the class layout.
     let (class_id, property_layout, property_values) =
-        if let Some(class_def) = eg.class_table.get(name) {
-            let mut values = Vec::with_capacity(class_def.properties.len());
-            for (prop_name, default_val, _vis, _declaring) in &class_def.properties {
-                let is_readonly = class_def.readonly_props.contains(prop_name);
-                let val = default_val.as_ref()
-                    .map(|v| v.clone())
-                    .unwrap_or(if is_readonly { Value::undef() } else { Value::null() });
-                values.push(val);
-            }
-            (class_def.class_id, class_def.property_layout.clone(), values)
+        if let Some(class_def) = class_def {
+            (
+                class_def.class_id,
+                class_def.property_layout.clone(),
+                class_def.property_defaults.as_ref().to_vec(),
+            )
         } else {
             (0, std::rc::Rc::new(crate::value::ObjectLayout::empty()), Vec::new())
         };
@@ -3722,10 +3777,6 @@ fn op_new_obj<'a>(
     // name every time. A changed/re-registered class gets a different ID and
     // therefore resolves again.
     let num_args = opline.extended_value;
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
-    };
-    let ic = &op_array.cache[ip];
     let func_ptr = if class_id != 0 && ic.class_id == class_id {
         ic.func
     } else {
@@ -9683,6 +9734,11 @@ fn execute_fast_scalar_method_call<'a>(
             super::hot::HotResult::Bailout => match super::hot::resume_after_long_comparison(eg, call)? {
                 super::hot::HotResult::Completed => Ok(ColdResult::Continue),
                 super::hot::HotResult::Bailout => {
+                    // Promotion happens only after caches are warm. If both
+                    // the hot executor and its comparison resume reject this
+                    // frame, keep later calls on the canonical baseline path
+                    // instead of paying the same failed tier entry forever.
+                    func_common.hot_status.set(HotStatus::Cold);
                     let active = eg.current_execute_data.get();
                     Ok(ColdResult::NewFrame(active, unsafe { (*active).op_array() }))
                 }
@@ -11356,12 +11412,28 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 let dst = unsafe {
                     (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
                 };
+                let source = unsafe {
+                    (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                };
+                let common = unsafe { &*(*call).func };
+                let borrowed = opline.op2 as u32 >= common.sig.this_offset
+                    && unsafe {
+                        try_init_borrowed_heap_arg(
+                            call,
+                            opline.op2 as u32 - common.sig.this_offset,
+                            source,
+                            dst,
+                        )
+                    };
                 // For TMP/Var operands that are provably scalar (Long, Double, Bool, Null),
                 // use raw 16-byte bitwise copy — no clone/drop overhead.
                 // TMP values are consumed (not read again), so move semantics are valid.
                 // IMPORTANT: heap types (String, Array, Object, Closure) and References
                 // MUST go through clone to maintain refcount / avoid double-free.
-                if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
+                if borrowed {
+                    // The destination deliberately remains outside the owned
+                    // heap bitmap; cleanup must not decrement the caller's Rc.
+                } else if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
                     let src = unsafe {
                         (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
                     };
@@ -11410,6 +11482,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if (*raw_ptr).is_reference() {
                         (*raw_ptr).as_ref_ptr()
                     } else {
+                        materialize_borrowed_slot(frame, raw_ptr);
                         raw_ptr
                     }
                 };
@@ -11436,6 +11509,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         if (*raw_ptr).is_reference() {
                             (*raw_ptr).as_ref_ptr()
                         } else {
+                            materialize_borrowed_slot(frame, raw_ptr);
                             raw_ptr
                         }
                     };
@@ -11443,10 +11517,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
                 } else {
                     // Same logic as SendVal
-                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                    let cloned = val.clone();
+                    let source = unsafe {
+                        (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+                    };
                     let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
-                    unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
+                    if !unsafe {
+                        try_init_borrowed_heap_arg(
+                            call,
+                            param_idx,
+                            source,
+                            arg_slot as *mut Value,
+                        )
+                    } {
+                        let cloned = unsafe { (&*source).clone() };
+                        unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
+                    }
                 }
             }
 
@@ -11720,6 +11805,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 match super::hot::resume_after_long_comparison(eg, call)? {
                                     super::hot::HotResult::Completed => continue,
                                     super::hot::HotResult::Bailout => {
+                                        func_common_fast.hot_status.set(HotStatus::Cold);
                                         // Callee bailed. It's the active frame with opline at bailout point.
                                         frame = eg.current_execute_data.get();
                                         op_array = unsafe { (*frame).op_array() };
@@ -11826,6 +11912,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     match super::hot::resume_after_long_comparison(eg, call)? {
                                         super::hot::HotResult::Completed => continue,
                                         super::hot::HotResult::Bailout => {
+                                            func_common_fast.hot_status.set(HotStatus::Cold);
                                             frame = eg.current_execute_data.get();
                                             op_array = unsafe { (*frame).op_array() };
                                             continue;

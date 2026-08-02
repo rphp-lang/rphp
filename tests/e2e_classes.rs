@@ -238,3 +238,26 @@ $e = new Empty2();
 echo $e->x ?? "null";
 "#), "null");
 }
+
+#[test]
+fn test_borrowed_object_parameter_materializes_before_nested_by_ref_rebind() {
+    assert_eq!(run_php(r#"<?php
+class BorrowBox {
+    public $value;
+    public function __construct($value) { $this->value = $value; }
+}
+function replaceBorrowBox(&$box) {
+    $box = new BorrowBox(9);
+}
+function observeAndReplaceBorrowBox($box) {
+    $before = $box->value;
+    replaceBorrowBox($box);
+    return $before . ':' . $box->value;
+}
+$original = new BorrowBox(3);
+for ($i = 0; $i < 20; $i++) {
+    $last = observeAndReplaceBorrowBox($original);
+}
+echo $last . '|' . $original->value;
+"#), "3:9|3");
+}
