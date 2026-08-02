@@ -142,6 +142,33 @@ stays within ordinary run-to-run variance. The next decision should therefore
 come from profiling the remaining composed-program and string-return costs,
 not from adding another method-fanout-specific kernel.
 
+Borrowed typed-String checkpoint (2026-08-02): sampling the typed string fanout
+showed roughly three quarters of runtime below the general `execute_ex` loop,
+with frame cleanup and repeated return-contract checks also visible. `strlen`
+itself was not the dominant cost. Pure fixed-signature functions that select
+immutable string literals from guarded Long predicates now expose a borrowed
+String leaf plan. Exact `: string` call facts can feed that result into a typed
+composed consumer without creating a PHP `Value`, changing a reference count,
+or building either function frame.
+
+The typed IR currently observes these borrowed strings through byte-length
+operations. A concatenation with a compile-time string literal carries its
+checked combined length forward, so `strlen(label($value) . '!')` does not
+materialize an intermediate string. Any consumer that needs actual contents,
+an impure or unsupported producer, a failed Long/dispatch guard, references,
+or an unknown return contract remains on canonical PHP execution. String-aware
+operations use a separate composed enum and executor; the established
+two-variant Long executor is deliberately not widened by new value kinds.
+
+In the five-run no-PGO matrix, typed string fanout improves from approximately
+0.086 s to 0.031-0.033 s, close to PHP's 0.028-0.030 s. Typed string chain with
+a literal concat improves from approximately 0.097 s to 0.015 s versus 0.026 s
+for PHP, making RPHP about 1.7x faster. The corresponding untyped workloads are
+unchanged, which is intentional evidence that exact declarations—not a
+benchmark-name special case—license this representation. The next String work
+should add reusable borrowed-content operations only when real corpus shapes
+need them; array/object and general function-frame gaps remain separate.
+
 ## Phase 2: unified typed execution IR
 
 Consolidate the existing scalar, composed-scalar, property, recursion, and

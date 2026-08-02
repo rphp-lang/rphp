@@ -4,7 +4,9 @@ use common::{run_php, run_php_expect_error};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
-use rphp::vm::function::{ComposedScalarLongOp, ScalarLongCallGuard};
+use rphp::vm::function::{
+    ComposedScalarLongOp, ComposedTypedLongOp, ScalarLongCallGuard,
+};
 use rphp::vm::instruction::{KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS};
 use rphp::vm::opcode::OpCode;
 
@@ -1222,6 +1224,80 @@ function consume(Source $source, int $value): int {
         ComposedScalarLongOp::Call(call)
             if matches!(call.guard, ScalarLongCallGuard::MethodCache { .. })
     )));
+}
+
+#[test]
+fn test_typed_string_return_builds_borrowed_leaf_and_length_consumer() {
+    let result = compile_types(r#"<?php
+function label(int $value): string {
+    if (($value & 1) === 0) {
+        return 'even';
+    }
+    return 'odd';
+}
+function consume(int $value): int {
+    $label = label($value);
+    return strlen($label) + strlen($label);
+}
+"#);
+
+    let label = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "label")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(label.scalar_string_plan.is_some());
+
+    let consume = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consume")
+        .map(|(_, function)| function)
+        .unwrap();
+    let plan = consume
+        .composed_typed_long_plan
+        .as_deref()
+        .expect("typed string length consumer plan");
+    assert!(plan.program.operations.iter().any(|operation| {
+        matches!(operation, ComposedTypedLongOp::StringCall(_))
+    }));
+    assert_eq!(
+        plan.program
+            .operations
+            .iter()
+            .filter(|operation| matches!(operation, ComposedTypedLongOp::StringLength(_)))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn test_typed_string_concat_length_stays_in_borrowed_plan() {
+    let result = compile_types(r#"<?php
+function label(int $value): string {
+    if (($value & 1) === 0) {
+        return 'even';
+    }
+    return 'odd';
+}
+function consume(int $value): int {
+    return strlen(label($value) . '!');
+}
+"#);
+    let consume = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consume")
+        .map(|(_, function)| function)
+        .unwrap();
+    let plan = consume
+        .composed_typed_long_plan
+        .as_deref()
+        .expect("borrowed concat length plan");
+    assert!(plan.program.operations.iter().any(|operation| {
+        matches!(operation, ComposedTypedLongOp::StringConcatLiteral { .. })
+    }));
 }
 
 #[test]

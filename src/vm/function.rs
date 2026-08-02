@@ -177,6 +177,27 @@ pub struct ScalarLongFunctionPlan {
     pub select: Option<ScalarLongSelect>,
 }
 
+/// Branch metadata for a pure function that selects one of two immutable
+/// string values from a guarded Long predicate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScalarStringSelect {
+    pub kind: ScalarLongConditionKind,
+    pub lhs: ScalarLongConditionOperand,
+    pub rhs: ScalarLongConditionOperand,
+}
+
+/// Compile-time proof that a fixed-signature function returns an immutable
+/// string selected by a pure Long expression. The strings are owned by the
+/// function plan, so typed consumers may borrow them without constructing a
+/// PHP `Value` or touching a reference count.
+pub struct ScalarStringFunctionPlan {
+    pub public_args: u8,
+    pub operations: Box<[ScalarLongOp]>,
+    pub select: Option<ScalarStringSelect>,
+    pub when_true: Box<str>,
+    pub when_false: Box<str>,
+}
+
 /// Dispatch identity required by a typed scalar call. Cache positions are
 /// relative to the owning canonical bytecode. Method calls additionally bind
 /// the cache identity to the current class of an object CV.
@@ -203,11 +224,34 @@ pub struct ScalarLongCall {
     pub arguments: Box<[ScalarLongSource]>,
 }
 
+/// String result produced by an earlier typed operation. String values remain
+/// separate from Long temporaries even though both use the operation index as
+/// their compact SSA identity.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarStringSource {
+    Temporary(u8),
+}
+
 /// One instruction in a pure scalar body that composes direct user calls with
 /// checked integer arithmetic.
 pub enum ComposedScalarLongOp {
     Arithmetic(ScalarLongOp),
     Call(ScalarLongCall),
+}
+
+/// Typed composed operations that can keep an immutable String borrowed until
+/// it is consumed by a scalar operation. Kept separate from the two-variant
+/// Long enum so adding heap-capable types cannot perturb the established Long
+/// executor's inner dispatch.
+pub enum ComposedTypedLongOp {
+    Arithmetic(ScalarLongOp),
+    Call(ScalarLongCall),
+    StringCall(ScalarLongCall),
+    StringConcatLiteral {
+        value: ScalarStringSource,
+        literal_len: u32,
+    },
+    StringLength(ScalarStringSource),
 }
 
 /// Compile-time proof for a straight-line scalar body containing pure direct
@@ -221,6 +265,13 @@ pub struct ComposedScalarLongFunctionPlan {
     /// never enter `ScalarLongSource` arithmetic.
     pub object_argument_mask: u8,
     pub program: ScalarLongProgram<ComposedScalarLongOp, 1>,
+}
+
+pub struct ComposedTypedLongFunctionPlan {
+    pub public_args: u8,
+    pub long_argument_mask: u8,
+    pub object_argument_mask: u8,
+    pub program: ScalarLongProgram<ComposedTypedLongOp, 1>,
 }
 
 /// Function type discriminant
@@ -528,7 +579,9 @@ pub struct UserFunction {
     pub property_getter_plan: Option<PropertyGetterMethodPlan>,
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
     pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
+    pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,
     pub composed_scalar_long_plan: Option<Box<ComposedScalarLongFunctionPlan>>,
+    pub composed_typed_long_plan: Option<Box<ComposedTypedLongFunctionPlan>>,
 }
 
 /// Handler signature for internal (built-in) functions.

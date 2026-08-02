@@ -240,8 +240,11 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
             common.plan.call = scalar_strategy.unwrap();
         }
         function.scalar_long_plan = super::build_scalar_long_function_plan(function);
+        function.scalar_string_plan = super::build_scalar_string_function_plan(function);
         function.composed_scalar_long_plan =
             super::build_composed_scalar_long_function_plan(function);
+        function.composed_typed_long_plan =
+            super::build_composed_typed_long_function_plan(function);
     }
 }
 
@@ -1213,9 +1216,9 @@ impl Compiler {
         let cache = (0..self.instructions.len()).map(|_| InlineCache::empty()).collect();
         refine_function_global_access(&mut self.functions);
 
-        // Consume exact scalar declarations only after call and quick-region
-        // plans have been selected. This keeps those structural decisions
-        // stable while enriching their canonical fallback bytecode.
+        // Consume exact scalar declarations after the first structural pass.
+        // Quick-region shapes remain stable; typed composed bodies are rebuilt
+        // below so exact String returns can enter the shared typed IR.
         let return_types = declared_function_return_types(&self.functions);
         let parameter_types = declared_function_parameter_types(&self.functions);
         let function_ref_args = declared_function_ref_args(&self.functions);
@@ -1252,6 +1255,22 @@ impl Compiler {
                     parent_class.as_deref(),
                     &method_facts,
                 );
+            }
+        }
+        for (_, function) in &mut self.functions {
+            function.scalar_string_plan = super::build_scalar_string_function_plan(function);
+            function.composed_scalar_long_plan =
+                super::build_composed_scalar_long_function_plan(function);
+            function.composed_typed_long_plan =
+                super::build_composed_typed_long_function_plan(function);
+        }
+        for class in &mut self.class_defs {
+            for (_, _, _, _, method) in &mut class.methods {
+                method.scalar_string_plan = super::build_scalar_string_function_plan(method);
+                method.composed_scalar_long_plan =
+                    super::build_composed_scalar_long_function_plan(method);
+                method.composed_typed_long_plan =
+                    super::build_composed_typed_long_function_plan(method);
             }
         }
 

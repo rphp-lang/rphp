@@ -493,6 +493,84 @@ echo $sum . '|' . $calls . '|' . $i;
 }
 
 #[test]
+fn quick_typed_string_return_is_borrowed_by_length_consumer() {
+    assert_eq!(
+        run_php(
+            "<?php
+function label(int $value): string {
+    if (($value & 1) === 0) {
+        return 'typed-even';
+    }
+    return 'typed-odd';
+}
+function consume(int $value): int {
+    $label = label($value);
+    return strlen($label) + strlen($label) + strlen($label) + strlen($label)
+        + strlen($label) + strlen($label) + strlen($label) + strlen($label);
+}
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += consume($i);
+}
+echo $sum . '|' . $i;
+"
+        ),
+        "76000|1000"
+    );
+}
+
+#[test]
+fn quick_typed_string_return_preserves_impure_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php
+$calls = 0;
+function observedLabel(int $value): string {
+    global $calls;
+    $calls++;
+    return (($value & 1) === 0) ? 'even' : 'odd';
+}
+function consumeObserved(int $value): int {
+    $label = observedLabel($value);
+    return strlen($label) + strlen($label);
+}
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += consumeObserved($i);
+}
+echo $sum . '|' . $calls . '|' . $i;
+"
+        ),
+        "7000|1000|1000"
+    );
+}
+
+#[test]
+fn quick_typed_borrowed_string_concat_feeds_strlen() {
+    assert_eq!(
+        run_php(
+            "<?php
+function label(int $value): string {
+    if (($value & 1) === 0) {
+        return 'even';
+    }
+    return 'odd';
+}
+function consume(int $value): int {
+    return strlen(label($value) . '!');
+}
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += consume($i);
+}
+echo $sum . '|' . $i;
+"
+        ),
+        "4500|1000"
+    );
+}
+
+#[test]
 fn quick_composed_call_guard_preserves_nested_side_effects() {
     assert_eq!(
         run_php(

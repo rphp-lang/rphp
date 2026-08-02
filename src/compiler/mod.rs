@@ -1,7 +1,7 @@
 pub mod compile;
 
 use crate::value::Value;
-use crate::vm::instruction::{Instruction, InlineCache, OpType};
+use crate::vm::instruction::{Instruction, InlineCache, KnownScalarType, OpType};
 use std::cell::Cell;
 use crate::vm::function::{
     FunctionCommon, FunctionType, UserFunction, ParamTypeHint,
@@ -12,10 +12,12 @@ use crate::vm::function::{
     PropertyGetterMethodPlan,
     BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
     LongRecursiveCondition,
-    ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall,
+    ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
+    ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ScalarLongCall,
     ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
-    ScalarLongSelect, ScalarLongSource,
+    ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
+    ScalarStringSelect, ScalarStringSource,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -596,14 +598,18 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         property_getter_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
+        scalar_string_plan: None,
         composed_scalar_long_plan: None,
+        composed_typed_long_plan: None,
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
+    function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
     function
 }
 
@@ -697,14 +703,18 @@ pub fn make_user_function_typed(
         property_getter_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
+        scalar_string_plan: None,
         composed_scalar_long_plan: None,
+        composed_typed_long_plan: None,
     };
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
+    function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
     function
 }
 
@@ -1209,6 +1219,274 @@ fn build_conditional_scalar_long_function_plan(
     }))
 }
 
+fn scalar_string_return_literal(
+    function: &UserFunction,
+    start: usize,
+    limit: usize,
+) -> Option<Box<str>> {
+    let instructions = function.op_array.instructions.get(start..limit)?;
+    if instructions.is_empty() {
+        return None;
+    }
+    let instruction = instructions.first()?;
+    if instruction.opcode != OpCode::Return
+        || instruction.extended_value == 0
+        || instruction.op1_type != OpType::Const
+    {
+        return None;
+    }
+    function
+        .op_array
+        .literals
+        .get(instruction.op1 as usize)?
+        .as_str()
+        .map(Box::<str>::from)
+}
+
+/// Recognize a pure function whose result is an immutable string literal,
+/// optionally selected by the same guarded Long predicates used by scalar
+/// integer plans. The owned plan strings provide a stable borrowed result for
+/// typed consumers without materializing a PHP Value.
+pub(crate) fn build_scalar_string_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarStringFunctionPlan>> {
+    let common = &function.common;
+    let instructions = &function.op_array.instructions;
+    let public_args = common.sig.public_arity();
+    if common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || common.plan.ret != ReturnStrategy::Fast
+        || instructions.len() > 32
+        || !common.sig.param_type_hints.iter().all(|hint| {
+            matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int)
+        })
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::String
+        )
+    {
+        return None;
+    }
+
+    if let Some(value) = scalar_string_return_literal(function, 0, instructions.len()) {
+        return Some(Box::new(ScalarStringFunctionPlan {
+            public_args: public_args as u8,
+            operations: Box::new([]),
+            select: None,
+            when_false: value.clone(),
+            when_true: value,
+        }));
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut masked_results = HashMap::new();
+    let mut operations = Vec::new();
+    let mut ip = 0usize;
+    while let Some(instruction) = instructions.get(ip) {
+        if instruction.opcode == OpCode::BitwiseAnd {
+            if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                return None;
+            }
+            let lhs = scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            let rhs = scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                instruction.op2_type,
+                instruction.op2,
+            )?;
+            let ScalarLongConditionOperand::Source(lhs) = lhs else {
+                return None;
+            };
+            let ScalarLongConditionOperand::Source(rhs) = rhs else {
+                return None;
+            };
+            masked_results.insert(
+                instruction.result,
+                ScalarLongConditionOperand::BitwiseAnd { lhs, rhs },
+            );
+            ip += 1;
+            continue;
+        }
+        if scalar_long_op_kind(instruction.opcode).is_some() {
+            append_scalar_long_operation(
+                function,
+                instruction,
+                &mut temporary_results,
+                &mut operations,
+            )?;
+            ip += 1;
+            continue;
+        }
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_long_local(function, instruction, &mut temporary_results)?;
+            ip += 1;
+            continue;
+        }
+        break;
+    }
+    if operations.len() > SCALAR_LONG_PLAN_MAX_OPS {
+        return None;
+    }
+
+    let condition_instruction = *instructions.get(ip)?;
+    let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
+        OpCode::IsEqual | OpCode::IsIdentical | OpCode::IsEqual_CvConst => (
+            ScalarLongConditionKind::Equal,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::IsNotEqual | OpCode::IsNotIdentical => (
+            ScalarLongConditionKind::NotEqual,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::IsSmaller | OpCode::IsSmaller_CvConst => (
+            ScalarLongConditionKind::LessThan,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::IsSmallerOrEqual | OpCode::IsSmallerOrEqual_CvConst => (
+            ScalarLongConditionKind::LessThanOrEqual,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip + 1,
+            None,
+        ),
+        OpCode::JmpZ => (
+            ScalarLongConditionKind::NotEqual,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+            ip,
+            None,
+        ),
+        OpCode::JmpZ_Eq_CvConst
+        | OpCode::JmpZ_Lt_CvConst
+        | OpCode::JmpZ_Le_CvConst => (
+            match condition_instruction.opcode {
+                OpCode::JmpZ_Eq_CvConst => ScalarLongConditionKind::Equal,
+                OpCode::JmpZ_Lt_CvConst => ScalarLongConditionKind::LessThan,
+                OpCode::JmpZ_Le_CvConst => ScalarLongConditionKind::LessThanOrEqual,
+                _ => unreachable!(),
+            },
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?,
+            scalar_long_condition_operand(
+                function,
+                &temporary_results,
+                &masked_results,
+                condition_instruction.op2_type,
+                condition_instruction.op2,
+            )?,
+            ip,
+            Some(condition_instruction.result as usize),
+        ),
+        _ => return None,
+    };
+
+    let (when_true_ip, when_false_ip) = if let Some(target) = fused_jump_target {
+        (ip + 2, target)
+    } else {
+        let branch = instructions.get(branch_ip)?;
+        if branch.opcode != OpCode::JmpZ {
+            return None;
+        }
+        if branch_ip != ip
+            && (!matches!(condition_instruction.result_type, OpType::Tmp | OpType::Var)
+                || branch.op1_type != condition_instruction.result_type
+                || branch.op1 != condition_instruction.result)
+        {
+            return None;
+        }
+        (branch_ip + 1, branch.op2 as usize)
+    };
+    if when_true_ip >= when_false_ip || when_false_ip >= instructions.len() {
+        return None;
+    }
+    let when_true = scalar_string_return_literal(function, when_true_ip, when_false_ip)?;
+    let when_false = scalar_string_return_literal(function, when_false_ip, instructions.len())?;
+
+    Some(Box::new(ScalarStringFunctionPlan {
+        public_args: public_args as u8,
+        operations: operations.into_boxed_slice(),
+        select: Some(ScalarStringSelect { kind, lhs, rhs }),
+        when_true,
+        when_false,
+    }))
+}
+
 const COMPOSED_SCALAR_LONG_PLAN_MAX_OPS: usize = 16;
 
 fn composed_scalar_argument_masks(function: &UserFunction) -> Option<(u8, u8)> {
@@ -1298,8 +1576,9 @@ fn bind_composed_scalar_long_local(
 }
 
 /// Recognize a straight-line integer body that composes direct user functions
-/// with arithmetic. The target function itself is guarded at runtime and must
-/// expose either a scalar leaf plan or another composed body plan.
+/// with arithmetic. This intentionally retains a two-variant operation enum:
+/// adding String support must not widen dispatch in the established Long-only
+/// executor.
 fn build_composed_scalar_long_function_plan(
     function: &UserFunction,
 ) -> Option<Box<ComposedScalarLongFunctionPlan>> {
@@ -1398,6 +1677,7 @@ fn build_composed_scalar_long_function_plan(
             }
             let do_fcall = &op_array.instructions[ip + 1 + num_args];
             if do_fcall.opcode != OpCode::DoFcall
+                || do_fcall.known_result_type() == KnownScalarType::String
                 || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
             {
                 return None;
@@ -1449,6 +1729,257 @@ fn build_composed_scalar_long_function_plan(
         )?;
         let result_index = operations.len() as u8;
         operations.push(ComposedScalarLongOp::Arithmetic(ScalarLongOp {
+            kind,
+            lhs,
+            rhs,
+        }));
+        temporary_results.insert(
+            instruction.result,
+            ScalarLongSource::Temporary(result_index),
+        );
+        ip += 1;
+    }
+
+    None
+}
+
+/// Recognize a typed composed body whose borrowed String results are consumed
+/// by scalar operations such as `strlen`. Runtime still guards every leaf and
+/// falls back before materializing or observing a speculative value.
+pub(crate) fn build_composed_typed_long_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ComposedTypedLongFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    let (long_argument_mask, object_argument_mask) =
+        composed_scalar_argument_masks(function)?;
+    if common.plan.ret != ReturnStrategy::Fast
+        || op_array.instructions.len() > 32
+    {
+        return None;
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut string_results = HashMap::new();
+    let mut operations = Vec::new();
+    let mut contains_call = false;
+    let mut contains_string = false;
+    let mut ip = 0usize;
+
+    while ip < op_array.instructions.len() {
+        let instruction = &op_array.instructions[ip];
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 || !contains_call || !contains_string {
+                return None;
+            }
+            let result = composed_scalar_long_source(
+                function,
+                long_argument_mask,
+                &temporary_results,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            return Some(Box::new(ComposedTypedLongFunctionPlan {
+                public_args: public_args as u8,
+                long_argument_mask,
+                object_argument_mask,
+                program: ScalarLongProgram {
+                    operations: operations.into_boxed_slice(),
+                    outputs: [result],
+                    output_count: 1,
+                },
+            }));
+        }
+
+        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+            let (num_args, parameter_offset, guard) = match instruction.opcode {
+                OpCode::InitFcall => (
+                    instruction.op1 as usize,
+                    0usize,
+                    ScalarLongCallGuard::FunctionCache {
+                        cache_ip: ip as u32,
+                    },
+                ),
+                OpCode::InitMethodCall if instruction.op1_type == OpType::Cv => {
+                    let receiver_cv = instruction.op1 as u32;
+                    let receiver_index = receiver_cv
+                        .checked_sub(common.sig.this_offset)?;
+                    if receiver_index >= public_args
+                        || object_argument_mask & (1u8 << receiver_index) == 0
+                    {
+                        return None;
+                    }
+                    (
+                        instruction.extended_value as usize,
+                        1usize,
+                        ScalarLongCallGuard::MethodCache {
+                            cache_ip: ip as u32,
+                            receiver_slot: instruction.op1,
+                        },
+                    )
+                }
+                _ => return None,
+            };
+            if num_args > SCALAR_LONG_PLAN_MAX_ARGS as usize
+                || ip > u32::MAX as usize
+                || operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
+                || ip + num_args + 1 >= op_array.instructions.len()
+            {
+                return None;
+            }
+            let mut arguments = Vec::with_capacity(num_args);
+            for argument_index in 0..num_args {
+                let send = &op_array.instructions[ip + 1 + argument_index];
+                if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                    || send.op2 as usize != argument_index + parameter_offset
+                {
+                    return None;
+                }
+                arguments.push(composed_scalar_long_source(
+                    function,
+                    long_argument_mask,
+                    &temporary_results,
+                    send.op1_type,
+                    send.op1,
+                )?);
+            }
+            let do_fcall = &op_array.instructions[ip + 1 + num_args];
+            if do_fcall.opcode != OpCode::DoFcall
+                || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            let result_index = operations.len() as u8;
+            let call = ScalarLongCall {
+                guard,
+                arguments: arguments.into_boxed_slice(),
+            };
+            if do_fcall.known_result_type() == KnownScalarType::String {
+                operations.push(ComposedTypedLongOp::StringCall(call));
+                contains_string = true;
+                string_results.insert(
+                    do_fcall.result,
+                    ScalarStringSource::Temporary(result_index),
+                );
+            } else {
+                operations.push(ComposedTypedLongOp::Call(call));
+                temporary_results.insert(
+                    do_fcall.result,
+                    ScalarLongSource::Temporary(result_index),
+                );
+            }
+            contains_call = true;
+            ip += num_args + 2;
+            continue;
+        }
+
+        if instruction.opcode == OpCode::AssignCv {
+            if matches!(instruction.op2_type, OpType::Tmp | OpType::Var | OpType::Cv)
+                && string_results.contains_key(&instruction.op2)
+            {
+                let destination = instruction.op1 as u32;
+                let argument_start = common.sig.this_offset;
+                let argument_end = argument_start + public_args;
+                if instruction.op1_type != OpType::Cv
+                    || destination < argument_start
+                    || (destination >= argument_start && destination < argument_end)
+                {
+                    return None;
+                }
+                let source = *string_results.get(&instruction.op2)?;
+                string_results.insert(instruction.op1, source);
+                ip += 1;
+                continue;
+            }
+            bind_composed_scalar_long_local(
+                function,
+                long_argument_mask,
+                instruction,
+                &mut temporary_results,
+            )?;
+            ip += 1;
+            continue;
+        }
+
+        if matches!(instruction.opcode, OpCode::Concat | OpCode::Concat_StringString) {
+            if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
+                || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            let (source_operand, literal_operand) =
+                if matches!(instruction.op1_type, OpType::Tmp | OpType::Var | OpType::Cv)
+                    && string_results.contains_key(&instruction.op1)
+                    && instruction.op2_type == OpType::Const
+                {
+                    (instruction.op1, instruction.op2)
+                } else if matches!(instruction.op2_type, OpType::Tmp | OpType::Var | OpType::Cv)
+                    && string_results.contains_key(&instruction.op2)
+                    && instruction.op1_type == OpType::Const
+                {
+                    (instruction.op2, instruction.op1)
+                } else {
+                    return None;
+                };
+            let source = *string_results.get(&source_operand)?;
+            let literal_len = u32::try_from(
+                op_array.literals.get(literal_operand as usize)?.as_str()?.len(),
+            ).ok()?;
+            let result_index = operations.len() as u8;
+            operations.push(ComposedTypedLongOp::StringConcatLiteral {
+                value: source,
+                literal_len,
+            });
+            string_results.insert(
+                instruction.result,
+                ScalarStringSource::Temporary(result_index),
+            );
+            ip += 1;
+            continue;
+        }
+
+        if matches!(instruction.opcode, OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String)
+            && matches!(instruction.op1_type, OpType::Tmp | OpType::Var | OpType::Cv)
+        {
+            let source = *string_results.get(&instruction.op1)?;
+            if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
+                || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            let result_index = operations.len() as u8;
+            operations.push(ComposedTypedLongOp::StringLength(source));
+            temporary_results.insert(
+                instruction.result,
+                ScalarLongSource::Temporary(result_index),
+            );
+            ip += 1;
+            continue;
+        }
+
+        let kind = scalar_long_op_kind(instruction.opcode)?;
+        if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let lhs = composed_scalar_long_source(
+            function,
+            long_argument_mask,
+            &temporary_results,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = composed_scalar_long_source(
+            function,
+            long_argument_mask,
+            &temporary_results,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        let result_index = operations.len() as u8;
+        operations.push(ComposedTypedLongOp::Arithmetic(ScalarLongOp {
             kind,
             lhs,
             rhs,
@@ -2000,8 +2531,10 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.scalar_string_plan = build_scalar_string_function_plan(&function);
     function.composed_scalar_long_plan =
         build_composed_scalar_long_function_plan(&function);
+    function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
 
     function
 }

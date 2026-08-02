@@ -13,7 +13,7 @@ use super::instruction::{
     CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
@@ -1157,6 +1157,47 @@ fn evaluate_scalar_long_plan(
 }
 
 #[inline(always)]
+fn evaluate_scalar_string_plan<'a>(
+    plan: &'a ScalarStringFunctionPlan,
+    arguments: &[i64; 8],
+) -> Option<&'a str> {
+    if plan.operations.len() > 8 {
+        return None;
+    }
+    let mut temporaries = [0i64; 8];
+    for (index, operation) in plan.operations.iter().copied().enumerate() {
+        let lhs = resolve_scalar_function_source(operation.lhs, arguments, &temporaries)?;
+        let rhs = resolve_scalar_function_source(operation.rhs, arguments, &temporaries)?;
+        temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+    }
+    let Some(select) = plan.select else {
+        return Some(&plan.when_true);
+    };
+    let resolve_condition_operand = |operand| match operand {
+        ScalarLongConditionOperand::Source(source) => {
+            resolve_scalar_function_source(source, arguments, &temporaries)
+        }
+        ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => Some(
+            resolve_scalar_function_source(lhs, arguments, &temporaries)?
+                & resolve_scalar_function_source(rhs, arguments, &temporaries)?,
+        ),
+    };
+    let lhs = resolve_condition_operand(select.lhs)?;
+    let rhs = resolve_condition_operand(select.rhs)?;
+    let condition = match select.kind {
+        ScalarLongConditionKind::Equal => lhs == rhs,
+        ScalarLongConditionKind::NotEqual => lhs != rhs,
+        ScalarLongConditionKind::LessThan => lhs < rhs,
+        ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
+    };
+    Some(if condition {
+        &plan.when_true
+    } else {
+        &plan.when_false
+    })
+}
+
+#[inline(always)]
 pub(crate) fn should_defer_scalar_call(
     initializer: &Instruction,
     scalar_plan_eligible: bool,
@@ -1570,6 +1611,16 @@ fn resolve_composed_body_source(
 }
 
 #[inline(always)]
+fn resolve_composed_string_source(
+    source: ScalarStringSource,
+    temporaries: &[Option<usize>; COMPOSED_SCALAR_MAX_OPS],
+) -> Option<usize> {
+    match source {
+        ScalarStringSource::Temporary(index) => temporaries[index as usize],
+    }
+}
+
+#[inline(always)]
 unsafe fn guarded_scalar_user_target(
     target: *const FunctionCommon,
     argument_count: usize,
@@ -1588,7 +1639,24 @@ unsafe fn guarded_scalar_user_target(
 }
 
 #[inline(always)]
-unsafe fn guarded_cached_scalar_call_target(
+unsafe fn guarded_user_target(
+    target: *const FunctionCommon,
+    argument_count: usize,
+) -> Option<*const UserFunction> {
+    if target.is_null() {
+        return None;
+    }
+    let common = &*target;
+    if common.fn_type != FunctionType::User
+        || common.sig.public_arity() != argument_count as u32
+    {
+        return None;
+    }
+    Some(target as *const UserFunction)
+}
+
+#[inline(always)]
+unsafe fn guarded_cached_user_call_target(
     op_array: &crate::compiler::OpArray,
     guard: ScalarLongCallGuard,
     receiver: Option<&Value>,
@@ -1622,14 +1690,31 @@ unsafe fn guarded_cached_scalar_call_target(
             cache.func
         }
     };
-    let user = guarded_scalar_user_target(target, argument_count)?;
+    let user = guarded_user_target(target, argument_count)?;
+    Some((target, user))
+}
+
+#[inline(always)]
+unsafe fn guarded_cached_scalar_call_target(
+    op_array: &crate::compiler::OpArray,
+    guard: ScalarLongCallGuard,
+    receiver: Option<&Value>,
+    argument_count: usize,
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    let (target, user) = guarded_cached_user_call_target(
+        op_array,
+        guard,
+        receiver,
+        argument_count,
+    )?;
+    guarded_scalar_user_target(target, argument_count)?;
     Some((target, user))
 }
 
 /// Resolve and guard one IR `CallScalar` against the canonical inline cache.
 /// A successful result has the exact scalar ABI and arity required by the IR;
 /// every executor backend shares this identity contract.
-unsafe fn guarded_scalar_call_target(
+unsafe fn guarded_typed_call_target(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
     call: &ScalarLongCall,
@@ -1682,12 +1767,28 @@ unsafe fn guarded_scalar_call_target(
             Some(&*receiver)
         }
     };
-    guarded_cached_scalar_call_target(
+    guarded_cached_user_call_target(
         &owner.op_array,
         call.guard,
         receiver,
         call.arguments.len(),
     )
+}
+
+unsafe fn guarded_scalar_call_target(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    call: &ScalarLongCall,
+    object_arguments: &[*const Value; 8],
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    let (target, user) = guarded_typed_call_target(
+        eg,
+        owner,
+        call,
+        object_arguments,
+    )?;
+    guarded_scalar_user_target(target, call.arguments.len())?;
+    Some((target, user))
 }
 
 unsafe fn evaluate_composed_scalar_body_plan(
@@ -1785,6 +1886,65 @@ unsafe fn evaluate_composed_scalar_body_plan(
 /// composed callees retain the general recursive evaluator, while the common
 /// leaf-call shape can avoid repeated cache and function-strategy guards in
 /// every loop iteration.
+unsafe fn resolve_quick_composed_typed_body(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    plan: &ComposedTypedLongFunctionPlan,
+    object_arguments: &[*const Value; 8],
+    targets: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_OPS],
+    scalar_plans: &mut [*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+    string_plans: &mut [*const ScalarStringFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+) -> bool {
+    if plan.program.operations.len() > COMPOSED_SCALAR_MAX_OPS
+        || plan.program.output_count != 1
+    {
+        return false;
+    }
+    let mut call_count = 0usize;
+    for (index, operation) in plan.program.operations.iter().enumerate() {
+        let (call, returns_string) = match operation {
+            ComposedTypedLongOp::Call(call) => (call, false),
+            ComposedTypedLongOp::StringCall(call) => (call, true),
+            ComposedTypedLongOp::Arithmetic(_)
+            | ComposedTypedLongOp::StringConcatLiteral { .. }
+            | ComposedTypedLongOp::StringLength(_) => {
+                continue;
+            }
+        };
+        call_count += 1;
+        if call_count > COMPOSED_SCALAR_MAX_CALLS || call.arguments.len() > 8 {
+            return false;
+        }
+        let Some((target, target_user)) = guarded_typed_call_target(
+            eg,
+            owner,
+            call,
+            object_arguments,
+        ) else {
+            return false;
+        };
+        targets[index] = target;
+        if returns_string {
+            let Some(target_plan) = (&*target_user).scalar_string_plan.as_deref() else {
+                return false;
+            };
+            if target_plan.public_args as usize != call.arguments.len() {
+                return false;
+            }
+            string_plans[index] = target_plan;
+        } else {
+            let Some(target_plan) = (&*target_user).scalar_long_plan.as_deref() else {
+                return false;
+            };
+            if target_plan.public_args as usize != call.arguments.len() {
+                return false;
+            }
+            scalar_plans[index] = target_plan;
+        }
+    }
+    true
+}
+
 unsafe fn resolve_quick_composed_leaf_body(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
@@ -1800,8 +1960,7 @@ unsafe fn resolve_quick_composed_leaf_body(
     }
     let mut call_count = 0usize;
     for (index, operation) in plan.program.operations.iter().enumerate() {
-        let ComposedScalarLongOp::Call(call) = operation
-        else {
+        let ComposedScalarLongOp::Call(call) = operation else {
             continue;
         };
         call_count += 1;
@@ -1854,6 +2013,58 @@ unsafe fn evaluate_quick_composed_leaf_body(
                 apply_scalar_long_op(operation.kind, lhs, rhs)?
             }
             ComposedScalarLongOp::Call(call) => {
+                let target_plan = scalar_plans[operation_index];
+                if target_plan.is_null() {
+                    return None;
+                }
+                let mut target_arguments = [0i64; 8];
+                for (index, source) in call.arguments.iter().copied().enumerate() {
+                    target_arguments[index] = resolve_composed_body_source(
+                        source,
+                        arguments,
+                        &temporaries,
+                    );
+                }
+                evaluate_scalar_long_plan(&*target_plan, &target_arguments)?
+            }
+        };
+    }
+    Some(resolve_composed_body_source(
+        plan.program.outputs[0],
+        arguments,
+        &temporaries,
+    ))
+}
+
+#[inline(always)]
+unsafe fn evaluate_quick_composed_typed_body(
+    plan: &ComposedTypedLongFunctionPlan,
+    arguments: &[i64; 8],
+    scalar_plans: &[*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+    string_plans: &[*const ScalarStringFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
+) -> Option<i64> {
+    if plan.program.output_count != 1 {
+        return None;
+    }
+    let mut temporaries = [0i64; COMPOSED_SCALAR_MAX_OPS];
+    let mut string_temporaries: [Option<usize>; COMPOSED_SCALAR_MAX_OPS] =
+        [None; COMPOSED_SCALAR_MAX_OPS];
+    for (operation_index, operation) in plan.program.operations.iter().enumerate() {
+        temporaries[operation_index] = match operation {
+            ComposedTypedLongOp::Arithmetic(operation) => {
+                let lhs = resolve_composed_body_source(
+                    operation.lhs,
+                    arguments,
+                    &temporaries,
+                );
+                let rhs = resolve_composed_body_source(
+                    operation.rhs,
+                    arguments,
+                    &temporaries,
+                );
+                apply_scalar_long_op(operation.kind, lhs, rhs)?
+            }
+            ComposedTypedLongOp::Call(call) => {
                 let sources = &call.arguments;
                 let target_plan = scalar_plans[operation_index];
                 if target_plan.is_null() {
@@ -1868,6 +2079,37 @@ unsafe fn evaluate_quick_composed_leaf_body(
                     );
                 }
                 evaluate_scalar_long_plan(&*target_plan, &target_arguments)?
+            }
+            ComposedTypedLongOp::StringCall(call) => {
+                let target_plan = string_plans[operation_index];
+                if target_plan.is_null() {
+                    return None;
+                }
+                let mut target_arguments = [0i64; 8];
+                for (index, source) in call.arguments.iter().copied().enumerate() {
+                    target_arguments[index] = resolve_composed_body_source(
+                        source,
+                        arguments,
+                        &temporaries,
+                    );
+                }
+                string_temporaries[operation_index] = Some(
+                    evaluate_scalar_string_plan(&*target_plan, &target_arguments)?.len(),
+                );
+                0
+            }
+            ComposedTypedLongOp::StringConcatLiteral { value, literal_len } => {
+                string_temporaries[operation_index] = Some(
+                    resolve_composed_string_source(*value, &string_temporaries)?
+                        .checked_add(*literal_len as usize)?,
+                );
+                0
+            }
+            ComposedTypedLongOp::StringLength(source) => {
+                i64::try_from(resolve_composed_string_source(
+                    *source,
+                    &string_temporaries,
+                )?).ok()?
             }
         };
     }
@@ -5265,18 +5507,20 @@ unsafe fn prepare_quick_composed_object_arguments(
     caller_op_array: &crate::compiler::OpArray,
     slot_base: *mut Value,
     target: *const FunctionCommon,
-    plan: &ComposedScalarLongFunctionPlan,
+    public_args: u8,
+    long_argument_mask: u8,
+    object_argument_mask: u8,
     argument_plan: &ScalarLongProgram,
 ) -> Option<[*const Value; 8]> {
-    let argument_count = plan.public_args as usize;
+    let argument_count = public_args as usize;
     let expected_mask = if argument_count == 8 {
         u8::MAX
     } else {
         (1u8 << argument_count) - 1
     };
-    if argument_plan.output_count != plan.public_args
-        || plan.long_argument_mask & plan.object_argument_mask != 0
-        || plan.long_argument_mask | plan.object_argument_mask != expected_mask
+    if argument_plan.output_count != public_args
+        || long_argument_mask & object_argument_mask != 0
+        || long_argument_mask | object_argument_mask != expected_mask
     {
         return None;
     }
@@ -5286,7 +5530,7 @@ unsafe fn prepare_quick_composed_object_arguments(
     let mut object_arguments = [std::ptr::null(); 8];
     for index in 0..argument_count {
         let output = argument_plan.outputs[index];
-        if plan.object_argument_mask & (1u8 << index) != 0 {
+        if object_argument_mask & (1u8 << index) != 0 {
             let ScalarLongSource::Input(slot) = output else {
                 return None;
             };
@@ -5753,12 +5997,16 @@ unsafe fn run_quick_long_accumulate_loop(
     let mut scalar_call_plan: *const ScalarLongFunctionPlan = std::ptr::null();
     let mut scalar_call_composed_plan: *const ComposedScalarLongFunctionPlan =
         std::ptr::null();
+    let mut scalar_call_typed_plan: *const ComposedTypedLongFunctionPlan =
+        std::ptr::null();
     let mut scalar_call_long_argument_mask = 0u8;
     let mut scalar_call_object_arguments = [std::ptr::null(); 8];
     let mut scalar_call_fused_program: Option<ScalarLongProgram<ScalarLongOp, 1>> = None;
     let mut quick_composed_targets =
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
     let mut quick_composed_plans =
+        [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
+    let mut quick_composed_string_plans =
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
     let mut quick_composed_leaf_body = false;
     if let QuickLongTerm::ScalarFunctionCall {
@@ -5800,11 +6048,27 @@ unsafe fn run_quick_long_accumulate_loop(
             scalar_call_fused_program =
                 compose_quick_scalar_leaf_program(argument_plan, scalar_plan);
         } else if composed_scalar_bodies_enabled() {
-            let Some(composed_plan) = user.composed_scalar_long_plan.as_deref() else {
+            let (public_args, long_mask, object_mask) = if let Some(composed_plan) =
+                user.composed_scalar_long_plan.as_deref()
+            {
+                scalar_call_composed_plan = composed_plan;
+                (
+                    composed_plan.public_args,
+                    composed_plan.long_argument_mask,
+                    composed_plan.object_argument_mask,
+                )
+            } else if let Some(typed_plan) = user.composed_typed_long_plan.as_deref() {
+                scalar_call_typed_plan = typed_plan;
+                (
+                    typed_plan.public_args,
+                    typed_plan.long_argument_mask,
+                    typed_plan.object_argument_mask,
+                )
+            } else {
                 stats::inc_quick_loop_guard_failed();
                 return Ok(QuickLoopOutcome::GuardFailed);
             };
-            if composed_plan.public_args != argument_count {
+            if public_args != argument_count {
                 stats::inc_quick_loop_guard_failed();
                 return Ok(QuickLoopOutcome::GuardFailed);
             }
@@ -5813,23 +6077,40 @@ unsafe fn run_quick_long_accumulate_loop(
                 op_array,
                 slot_base,
                 cached,
-                composed_plan,
+                public_args,
+                long_mask,
+                object_mask,
                 argument_plan,
             ) else {
                 stats::inc_quick_loop_guard_failed();
                 return Ok(QuickLoopOutcome::GuardFailed);
             };
-            scalar_call_composed_plan = composed_plan;
-            scalar_call_long_argument_mask = composed_plan.long_argument_mask;
+            scalar_call_long_argument_mask = long_mask;
             scalar_call_object_arguments = object_arguments;
-            quick_composed_leaf_body = resolve_quick_composed_leaf_body(
-                eg,
-                user,
-                composed_plan,
-                &scalar_call_object_arguments,
-                &mut quick_composed_targets,
-                &mut quick_composed_plans,
-            );
+            if !scalar_call_typed_plan.is_null() {
+                quick_composed_leaf_body = resolve_quick_composed_typed_body(
+                    eg,
+                    user,
+                    &*scalar_call_typed_plan,
+                    &scalar_call_object_arguments,
+                    &mut quick_composed_targets,
+                    &mut quick_composed_plans,
+                    &mut quick_composed_string_plans,
+                );
+                if !quick_composed_leaf_body {
+                    stats::inc_quick_loop_guard_failed();
+                    return Ok(QuickLoopOutcome::GuardFailed);
+                }
+            } else {
+                quick_composed_leaf_body = resolve_quick_composed_leaf_body(
+                    eg,
+                    user,
+                    &*scalar_call_composed_plan,
+                    &scalar_call_object_arguments,
+                    &mut quick_composed_targets,
+                    &mut quick_composed_plans,
+                );
+            }
         } else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
@@ -6002,7 +6283,11 @@ unsafe fn run_quick_long_accumulate_loop(
                 ..
             } => {
                 debug_assert!(!scalar_call_common.is_null());
-                debug_assert!(!scalar_call_plan.is_null() || !scalar_call_composed_plan.is_null());
+                debug_assert!(
+                    !scalar_call_plan.is_null()
+                        || !scalar_call_composed_plan.is_null()
+                        || !scalar_call_typed_plan.is_null()
+                );
                 let evaluated = if let Some(program) = scalar_call_fused_program.as_ref() {
                     let result = evaluate_quick_fused_scalar_program(
                         program,
@@ -6032,6 +6317,13 @@ unsafe fn run_quick_long_accumulate_loop(
                         )?;
                         let result = if !scalar_call_plan.is_null() {
                             evaluate_scalar_long_plan(&*scalar_call_plan, &arguments)
+                        } else if !scalar_call_typed_plan.is_null() {
+                            evaluate_quick_composed_typed_body(
+                                &*scalar_call_typed_plan,
+                                &arguments,
+                                &quick_composed_plans,
+                                &quick_composed_string_plans,
+                            )
                         } else if quick_composed_leaf_body {
                             evaluate_quick_composed_leaf_body(
                                 &*scalar_call_composed_plan,
