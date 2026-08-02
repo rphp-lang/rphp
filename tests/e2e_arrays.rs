@@ -723,3 +723,42 @@ $key .= '-changed';
 echo $key . '|' . $array['name'];
 "), "name-changed|42");
 }
+
+#[test]
+fn test_hot_dynamic_hash_entry_update_preserves_results() {
+    assert_eq!(run_php("<?php
+$values = ['left' => 3, 'right' => 5];
+$key = 'left';
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $values[$key] + $i;
+    if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; }
+}
+echo $values['left'] . '|' . $values['right'];
+"), "2453|2505");
+}
+
+#[test]
+fn test_hot_hash_update_detaches_shared_array_before_direct_replacement() {
+    assert_eq!(run_php("<?php
+$values = ['left' => 3, 'right' => 5];
+$original = $values;
+$key = 'left';
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $values[$key] + $i;
+    if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; }
+}
+echo $values['left'] . '|' . $values['right'] . '|';
+echo $original['left'] . '|' . $original['right'];
+"), "2453|2505|3|5");
+}
+
+#[test]
+fn test_hot_hash_update_deoptimizes_on_long_overflow() {
+    assert_eq!(run_php("<?php
+$values = ['value' => 9223372036854775772];
+for ($i = 0; $i < 40; $i++) {
+    $values['value'] = $values['value'] + 1;
+}
+echo gettype($values['value']);
+"), "double");
+}

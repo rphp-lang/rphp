@@ -244,6 +244,12 @@ pub enum ObjectLongOp {
         jump_when_equal: bool,
         target: u16,
     },
+    /// Byte length of an immutable positional String argument. The direct
+    /// caller validates the declared/runtime type before entering the plan.
+    StringLength {
+        argument: u8,
+        destination: u16,
+    },
     IntDiv {
         lhs: ObjectLongSource,
         rhs: ObjectLongSource,
@@ -291,6 +297,49 @@ pub struct ObjectLongStringIntDivSelect {
     pub default_arm: ObjectLongIntDivArm,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectLongModuloEqualTerm {
+    pub input: ObjectLongSource,
+    pub divisor: i64,
+    pub expected: i64,
+}
+
+/// Direct lowering for a short-circuit disjunction of integer modulo/equality
+/// predicates followed by two constant Long return arms. Checked remainder
+/// failure side-exits to the canonical body before producing a result.
+pub struct ObjectLongModuloAnySelect {
+    pub terms: Box<[ObjectLongModuloEqualTerm]>,
+    pub when_match: i64,
+    pub when_miss: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectLongStringAdjustment {
+    pub literal: u16,
+    pub addend: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectLongConditionalAdjustment {
+    pub kind: ScalarLongConditionKind,
+    pub lhs: ObjectLongSource,
+    pub rhs: ObjectLongSource,
+    pub addend: i64,
+}
+
+/// High-level lowering for a typed weighted score with String-length input,
+/// mutually exclusive String-literal adjustments, and scalar threshold
+/// adjustments. This common policy shape remains fully checked at runtime.
+pub struct ObjectLongWeightedStringScore {
+    pub weighted_input: ObjectLongSource,
+    pub multiplier: i64,
+    pub additive_input: ObjectLongSource,
+    pub divisor: i64,
+    pub string_argument: u8,
+    pub string_adjustments: Box<[ObjectLongStringAdjustment]>,
+    pub conditional_adjustments: Box<[ObjectLongConditionalAdjustment]>,
+}
+
 /// Compile-time proof for a fixed-signature method that only reads declared
 /// object properties and performs checked integer work. Property inline
 /// caches remain authoritative at runtime, preserving class layout and PHP
@@ -301,8 +350,11 @@ pub struct ObjectLongFunctionPlan {
     pub object_argument_mask: u8,
     pub string_argument_mask: u8,
     pub slot_count: u16,
+    /// Semantic one-op-per-bytecode program with stable branch indices.
     pub operations: Box<[ObjectLongOp]>,
     pub string_intdiv_select: Option<Box<ObjectLongStringIntDivSelect>>,
+    pub modulo_any_select: Option<Box<ObjectLongModuloAnySelect>>,
+    pub weighted_string_score: Option<Box<ObjectLongWeightedStringScore>>,
 }
 
 /// Scalar/value input in a small read-only application method. Property

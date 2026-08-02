@@ -44,6 +44,20 @@ pub enum QuickArrayIndex {
     ValueSlot(u16),
 }
 
+/// A straight-line `fetch -> scalar arithmetic -> replace existing entry`
+/// sequence attached to its fetch operation. Other control-flow entries keep
+/// the original operations, while the common path performs one lookup and one
+/// quick-op dispatch.
+#[derive(Debug, Clone, Copy)]
+pub struct QuickArrayUpdateFusion {
+    pub kind: ScalarLongOpKind,
+    pub lhs: QuickLongOperand,
+    pub rhs: QuickLongOperand,
+    pub result: u16,
+    pub next_target: QuickLongTarget,
+    pub arithmetic_resume_ip: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickStringAppendSource {
     Literal(u16),
@@ -228,6 +242,23 @@ pub struct QuickTypedMethodCall {
     pub resume_ip: usize,
 }
 
+/// Positional input to a read-only mixed scalar method. The enclosing region
+/// retains Longs unboxed and immutable Strings as borrowed slot state.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickObjectLongArgument {
+    Long(QuickLongOperand),
+    StringSlot(u16),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuickObjectLongMethodCall {
+    pub guard: ScalarLongCallGuard,
+    pub arguments: [QuickObjectLongArgument; 8],
+    pub argument_count: u8,
+    pub next_target: QuickLongTarget,
+    pub resume_ip: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickLongCondition {
     Lt { lhs: u16, rhs: QuickLongOperand },
@@ -339,6 +370,16 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Replace an existing Long array entry selected by the same normalized
+    /// integer/string key rules as canonical AssignDim. Planning admits this
+    /// only when a preceding guarded fetch proved that the key exists.
+    StoreArrayLong {
+        array: u16,
+        index: QuickArrayIndex,
+        value: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     /// Append a retained Long value to a unique COW array. Runtime resolves
     /// the mutable packed/hash storage once at region entry.
     ArrayPushLong {
@@ -368,6 +409,17 @@ pub enum QuickLongOp {
         lhs: QuickLongOperand,
         rhs: QuickLongOperand,
         result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// General checked arithmetic immediately materialized into a CV. Unlike
+    /// AddAssign this also admits literals, subtraction, and multiplication.
+    BinaryAssign {
+        kind: ScalarLongOpKind,
+        lhs: QuickLongOperand,
+        rhs: QuickLongOperand,
+        result: u16,
+        destination: u16,
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
@@ -414,6 +466,12 @@ pub enum QuickLongOp {
     /// Monomorphic pure scalar method with Long result.
     ScalarMethodCall {
         call: QuickTypedMethodCall,
+        result: u16,
+    },
+    /// Monomorphic read-only method with mixed Long/String inputs and a Long
+    /// result, executed through ObjectLongFunctionPlan without a PHP frame.
+    ObjectLongMethodCall {
+        call: QuickObjectLongMethodCall,
         result: u16,
     },
     /// Exact PHP evaluation order for `propertyMutator(propertyGetter())`.
@@ -517,10 +575,12 @@ impl QuickLongOp {
             }
             Self::ModConst { next_target, .. }
             | Self::FetchArrayLong { next_target, .. }
+            | Self::StoreArrayLong { next_target, .. }
             | Self::ArrayPushLong { next_target, .. }
             | Self::StringAppend { next_target, .. }
             | Self::Add { next_target, .. }
             | Self::Binary { next_target, .. }
+            | Self::BinaryAssign { next_target, .. }
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
             | Self::AddAddAssign { next_target, .. }
@@ -534,6 +594,7 @@ impl QuickLongOp {
             Self::PropertyMethodCall { call }
             | Self::PropertyGetterCall { call, .. }
             | Self::ScalarMethodCall { call, .. } => resolve(&mut call.next_target),
+            Self::ObjectLongMethodCall { call, .. } => resolve(&mut call.next_target),
             Self::PostIncJump { target, .. } | Self::Jump { target } => resolve(target),
             Self::PostIncLoopLt {
                 body_target,
@@ -554,6 +615,7 @@ pub struct QuickLongOpsLoop {
     pub header_ip: usize,
     pub backedge_ip: usize,
     pub ops: Vec<QuickLongOp>,
+    pub array_update_fusions: Vec<Option<QuickArrayUpdateFusion>>,
     pub entry_op: u16,
     op_ips: Vec<u32>,
     pub long_input_mask: u64,
@@ -578,6 +640,87 @@ impl QuickLongOpsLoop {
             None => target.exit_ip(),
         }
     }
+}
+
+fn detect_array_update_fusions(
+    ops: &[QuickLongOp],
+) -> Vec<Option<QuickArrayUpdateFusion>> {
+    let mut fusions = vec![None; ops.len()];
+    for index in 0..ops.len().saturating_sub(2) {
+        let QuickLongOp::FetchArrayLong {
+            array,
+            index: array_index,
+            result: fetch_result,
+            next_target: fetch_next,
+            ..
+        } = ops[index]
+        else {
+            continue;
+        };
+        if fetch_next.op_index() != Some(index + 1)
+            || ops.iter().any(|operation| {
+                matches!(operation, QuickLongOp::ArrayPushLong { array: pushed, .. } if *pushed == array)
+            })
+        {
+            continue;
+        }
+
+        let (kind, lhs, rhs, result, arithmetic_next, arithmetic_resume_ip) =
+            match ops[index + 1] {
+                QuickLongOp::Add {
+                    lhs,
+                    rhs,
+                    result,
+                    next_target,
+                    resume_ip,
+                } => (
+                    ScalarLongOpKind::Add,
+                    QuickLongOperand::Slot(lhs),
+                    QuickLongOperand::Slot(rhs),
+                    result,
+                    next_target,
+                    resume_ip,
+                ),
+                QuickLongOp::Binary {
+                    kind,
+                    lhs,
+                    rhs,
+                    result,
+                    next_target,
+                    resume_ip,
+                } => (kind, lhs, rhs, result, next_target, resume_ip),
+                _ => continue,
+            };
+        if arithmetic_next.op_index() != Some(index + 2)
+            || !matches!(lhs, QuickLongOperand::Slot(slot) if slot == fetch_result)
+                && !matches!(rhs, QuickLongOperand::Slot(slot) if slot == fetch_result)
+        {
+            continue;
+        }
+
+        let QuickLongOp::StoreArrayLong {
+            array: store_array,
+            index: store_index,
+            value,
+            next_target,
+            ..
+        } = ops[index + 2]
+        else {
+            continue;
+        };
+        if store_array != array || store_index != array_index || value != result {
+            continue;
+        }
+        fusions[index] = Some(QuickArrayUpdateFusion {
+            kind,
+            lhs,
+            rhs,
+            result,
+            next_target,
+            arithmetic_resume_ip,
+        });
+    }
+    fusions
 }
 
 pub const QUICK_STRAIGHT_ARRAY_MAX_ADDS: usize = 4;
@@ -2128,6 +2271,18 @@ fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
                 straight_region_read_operand(&mut inputs, defined, rhs)?;
                 straight_region_write(&mut defined, result)?;
             }
+            QuickLongOp::BinaryAssign {
+                lhs,
+                rhs,
+                result,
+                destination,
+                ..
+            } => {
+                straight_region_read_operand(&mut inputs, defined, lhs)?;
+                straight_region_read_operand(&mut inputs, defined, rhs)?;
+                straight_region_write(&mut defined, result)?;
+                straight_region_write(&mut defined, destination)?;
+            }
             QuickLongOp::FetchArrayLong {
                 index,
                 result,
@@ -2633,6 +2788,77 @@ fn detect_long_ops_region_inner(
                     resume_ip,
                 }
             }
+            OpCode::AssignDim => {
+                if instruction.op1_type != OpType::Cv
+                    || !matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                let array = instruction.op1;
+                let index = match instruction.op2_type {
+                    OpType::Cv | OpType::Tmp => {
+                        if instruction.op2_type == OpType::Cv
+                            && string_key_assignment_mask & (1u64 << instruction.op2) != 0
+                        {
+                            add_mask_slot(&mut string_input_mask, instruction.op2, total_slots)?;
+                            QuickArrayIndex::ValueSlot(instruction.op2)
+                        } else {
+                            add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
+                            QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
+                        }
+                    }
+                    OpType::Const => array_literal_index(op_array, instruction.op2)?,
+                    _ => return None,
+                };
+
+                // Updating through a retained raw array view is safe only when
+                // a preceding fetch proved that this exact key already exists;
+                // replacement then cannot resize or reorder the array.
+                let [.., fetch, arithmetic] = ops.as_slice() else {
+                    return None;
+                };
+                let (fetch_array, fetch_index, fetch_result) = match *fetch {
+                    QuickLongOp::FetchArrayLong {
+                        array,
+                        index,
+                        result,
+                        ..
+                    } => (array, index, result),
+                    _ => return None,
+                };
+                let (arithmetic_result, consumes_fetch) = match *arithmetic {
+                    QuickLongOp::Add { lhs, rhs, result, .. } => {
+                        (result, lhs == fetch_result || rhs == fetch_result)
+                    }
+                    QuickLongOp::Binary { lhs, rhs, result, .. } => (
+                        result,
+                        lhs == QuickLongOperand::Slot(fetch_result)
+                            || rhs == QuickLongOperand::Slot(fetch_result),
+                    ),
+                    _ => return None,
+                };
+                if fetch_array != array
+                    || fetch_index != index
+                    || arithmetic_result != instruction.result
+                    || !consumes_fetch
+                {
+                    return None;
+                }
+
+                add_mask_slot(&mut array_input_mask, array, total_slots)?;
+                add_mask_slot(&mut array_output_mask, array, total_slots)?;
+                add_mask_slot(&mut long_input_mask, instruction.result, total_slots)?;
+                has_assign = true;
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::StoreArrayLong {
+                    array,
+                    index,
+                    value: instruction.result,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
+                }
+            }
             OpCode::ArrayPushOp => {
                 if instruction.op1_type != OpType::Cv
                     || instruction.result_type != OpType::Unused
@@ -2835,14 +3061,37 @@ fn detect_long_ops_region_inner(
                 add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
                 has_add = true;
                 let resume_ip = ip;
-                ip += 1;
-                QuickLongOp::Binary {
-                    kind: ScalarLongOpKind::Add,
-                    lhs,
-                    rhs,
-                    result: instruction.result,
-                    next_target: QuickLongTarget::unresolved(ip)?,
-                    resume_ip,
+                let destination = op_array
+                    .instructions
+                    .get(ip + 1)
+                    .copied()
+                    .and_then(long_assign)
+                    .and_then(|(destination, source)| {
+                        (source == instruction.result).then_some(destination)
+                    });
+                if let Some(destination) = destination {
+                    add_mask_slot(&mut long_output_mask, destination, total_slots)?;
+                    has_assign = true;
+                    ip += 2;
+                    QuickLongOp::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs,
+                        rhs,
+                        result: instruction.result,
+                        destination,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    ip += 1;
+                    QuickLongOp::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs,
+                        rhs,
+                        result: instruction.result,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
                 }
             }
             OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp | OpCode::Mul => {
@@ -2871,14 +3120,37 @@ fn detect_long_ops_region_inner(
                     ScalarLongOpKind::Subtract
                 };
                 let resume_ip = ip;
-                ip += 1;
-                QuickLongOp::Binary {
-                    kind,
-                    lhs,
-                    rhs,
-                    result: instruction.result,
-                    next_target: QuickLongTarget::unresolved(ip)?,
-                    resume_ip,
+                let destination = op_array
+                    .instructions
+                    .get(ip + 1)
+                    .copied()
+                    .and_then(long_assign)
+                    .and_then(|(destination, source)| {
+                        (source == instruction.result).then_some(destination)
+                    });
+                if let Some(destination) = destination {
+                    add_mask_slot(&mut long_output_mask, destination, total_slots)?;
+                    has_assign = true;
+                    ip += 2;
+                    QuickLongOp::BinaryAssign {
+                        kind,
+                        lhs,
+                        rhs,
+                        result: instruction.result,
+                        destination,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    ip += 1;
+                    QuickLongOp::Binary {
+                        kind,
+                        lhs,
+                        rhs,
+                        result: instruction.result,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
                 }
             }
             OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp => {
@@ -3142,19 +3414,30 @@ fn detect_long_ops_region_inner(
                         return None;
                     }
                     let mut arguments = [QuickLongOperand::Const(0); 8];
+                    let mut object_long_arguments = [
+                        QuickObjectLongArgument::Long(QuickLongOperand::Const(0));
+                        8
+                    ];
+                    let mut has_string_argument = false;
                     let mut cursor = ip + 1;
-                    for (argument_index, argument) in arguments
-                        .iter_mut()
-                        .enumerate()
-                        .take(argument_count)
-                    {
+                    for argument_index in 0..argument_count {
                         let send = *op_array.instructions.get(cursor)?;
                         if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
                             || send.op2 as usize != argument_index + 1
                         {
                             return None;
                         }
-                        *argument = match send.op1_type {
+                        if send.op1_type == OpType::Cv
+                            && string_key_assignment_mask & (1u64 << send.op1) != 0
+                        {
+                            add_mask_slot(&mut string_input_mask, send.op1, total_slots)?;
+                            object_long_arguments[argument_index] =
+                                QuickObjectLongArgument::StringSlot(send.op1);
+                            has_string_argument = true;
+                            cursor += 1;
+                            continue;
+                        }
+                        let argument = match send.op1_type {
                             OpType::Cv | OpType::Tmp | OpType::Var => {
                                 add_mask_slot(
                                     &mut long_input_mask,
@@ -3169,14 +3452,40 @@ fn detect_long_ops_region_inner(
                             )?),
                             OpType::Unused => return None,
                         };
+                        arguments[argument_index] = argument;
+                        object_long_arguments[argument_index] =
+                            QuickObjectLongArgument::Long(argument);
                         cursor += 1;
                     }
                     let do_fcall = *op_array.instructions.get(cursor)?;
                     if do_fcall.opcode != OpCode::DoFcall {
                         return None;
                     }
+                    let destination = matches!(
+                        do_fcall.result_type,
+                        OpType::Tmp | OpType::Var
+                    )
+                    .then(|| {
+                        op_array
+                            .instructions
+                            .get(cursor + 1)
+                            .copied()
+                            .and_then(long_assign)
+                            .and_then(|(destination, source)| {
+                                (source == do_fcall.result).then_some(destination)
+                            })
+                    })
+                    .flatten();
                     let resume_ip = ip;
                     ip = cursor + 1;
+                    if destination.is_some() {
+                        has_assign = true;
+                        ip += 1;
+                    }
+                    // A consumed DoFcall TMP is dead after the skipped
+                    // canonical Assign. Write the quick result directly into
+                    // that CV so the hot opcode stays compact.
+                    let call_result = destination.unwrap_or(do_fcall.result);
                     let call = QuickTypedMethodCall {
                         guard: outer_guard,
                         arguments,
@@ -3184,31 +3493,50 @@ fn detect_long_ops_region_inner(
                         next_target: QuickLongTarget::unresolved(ip)?,
                         resume_ip,
                     };
-                    if do_fcall.result_type == OpType::Unused {
+                    if has_string_argument
+                        && argument_count != 0
+                        && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+                    {
+                        add_mask_slot(
+                            &mut long_output_mask,
+                            call_result,
+                            total_slots,
+                        )?;
+                        QuickLongOp::ObjectLongMethodCall {
+                            call: QuickObjectLongMethodCall {
+                                guard: outer_guard,
+                                arguments: object_long_arguments,
+                                argument_count: argument_count as u8,
+                                next_target: call.next_target,
+                                resume_ip,
+                            },
+                            result: call_result,
+                        }
+                    } else if do_fcall.result_type == OpType::Unused {
                         QuickLongOp::PropertyMethodCall { call }
                     } else if argument_count == 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
                     {
                         add_mask_slot(
                             &mut long_output_mask,
-                            do_fcall.result,
+                            call_result,
                             total_slots,
                         )?;
                         QuickLongOp::PropertyGetterCall {
                             call,
-                            result: do_fcall.result,
+                            result: call_result,
                         }
                     } else if argument_count != 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
                     {
                         add_mask_slot(
                             &mut long_output_mask,
-                            do_fcall.result,
+                            call_result,
                             total_slots,
                         )?;
                         QuickLongOp::ScalarMethodCall {
                             call,
-                            result: do_fcall.result,
+                            result: call_result,
                         }
                     } else {
                         return None;
@@ -3365,10 +3693,12 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::BranchUnlessLe { resume_ip, .. }
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
+            | QuickLongOp::StoreArrayLong { resume_ip, .. }
             | QuickLongOp::ArrayPushLong { resume_ip, .. }
             | QuickLongOp::StringAppend { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
             | QuickLongOp::Binary { resume_ip, .. }
+            | QuickLongOp::BinaryAssign { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
             | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
@@ -3377,6 +3707,7 @@ fn detect_long_ops_region_inner(
             QuickLongOp::PropertyMethodCall { call }
             | QuickLongOp::PropertyGetterCall { call, .. }
             | QuickLongOp::ScalarMethodCall { call, .. } => call.resume_ip,
+            QuickLongOp::ObjectLongMethodCall { call, .. } => call.resume_ip,
             QuickLongOp::AddAssign { add_resume_ip, .. } => add_resume_ip,
             QuickLongOp::ConditionalAddAssign {
                 condition_resume_ip,
@@ -3493,7 +3824,7 @@ fn detect_long_ops_region_inner(
 
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
-        || array_input_mask & (long_mask | bool_output_mask | array_output_mask) != 0
+        || array_input_mask & (long_mask | bool_output_mask) != 0
         || array_output_mask & (long_mask | bool_output_mask) != 0
         || string_input_mask
             & (long_mask
@@ -3531,10 +3862,12 @@ fn detect_long_ops_region_inner(
         | string_append_mask
         | object_input_mask;
 
+    let array_update_fusions = detect_array_update_fusions(&ops);
     let mut plan = QuickLongOpsLoop {
         header_ip,
         backedge_ip,
         ops,
+        array_update_fusions,
         entry_op,
         op_ips,
         long_input_mask,
@@ -4399,6 +4732,30 @@ for ($i = 0; $i < 4; $i++) {
     }
 
     #[test]
+    fn fuses_general_binary_results_materialized_into_loop_cvs() {
+        let plan = long_ops_plan(
+            "<?php
+$last = 0;
+$product = 0;
+for ($i = 0; $i < 100; $i++) {
+    $last = 20 + ($i % 400);
+    $product = $i * 73;
+}
+echo $last + $product;
+",
+        );
+        assert_eq!(
+            plan.ops
+                .iter()
+                .filter(|operation| matches!(operation, QuickLongOp::BinaryAssign { .. }))
+                .count(),
+            2,
+            "{:#?}",
+            plan.ops
+        );
+    }
+
+    #[test]
     fn detects_string_literal_hash_read_as_typed_op() {
         let plan = long_ops_plan(
             "<?php
@@ -4645,6 +5002,98 @@ for ($i = 0; $i < 100; $i++) {
     }
 
     #[test]
+    fn fuses_existing_dynamic_hash_entry_update_without_structural_writes() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['left' => 3, 'right' => 5];
+$key = 'left';
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $values[$key] + $i;
+    if (($i % 2) == 0) {
+        $key = 'right';
+    } else {
+        $key = 'left';
+    }
+}
+",
+        );
+        let fetch = plan
+            .ops
+            .iter()
+            .position(|operation| matches!(operation, QuickLongOp::FetchArrayLong { .. }))
+            .expect("dynamic hash fetch");
+        let fusion = plan.array_update_fusions[fetch].expect("array update fusion");
+        assert_eq!(fusion.kind, ScalarLongOpKind::Add);
+        assert!(fusion.next_target.op_index().is_some());
+    }
+
+    #[test]
+    fn detects_mixed_string_method_and_control_flow_method_in_one_hash_loop() {
+        let plan = long_ops_plan(
+            "<?php
+class Mixer {
+    public function score(int $value, string $key): int {
+        return $value + strlen($key);
+    }
+    public function accepted(int $value, int $sequence): int {
+        if (($value % 11) == 0 || ($sequence % 17) == 0) { return 1; }
+        return 0;
+    }
+}
+$mixer = new Mixer();
+$values = ['left' => 0, 'right' => 0];
+$key = 'left';
+$accepted = 0;
+for ($i = 0; $i < 100; $i++) {
+    if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; }
+    $score = $mixer->score($i, $key);
+    $values[$key] = $values[$key] + $score;
+    $isAccepted = $mixer->accepted($score, $i);
+    $accepted = $accepted + $isAccepted;
+}
+",
+        );
+        assert!(plan
+            .ops
+            .iter()
+            .any(|operation| matches!(
+                operation,
+                QuickLongOp::ObjectLongMethodCall { .. }
+            )));
+        assert!(plan
+            .ops
+            .iter()
+            .any(|operation| matches!(
+                operation,
+                QuickLongOp::ScalarMethodCall { .. }
+            )));
+        assert!(!plan
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::Assign { .. })));
+        assert!(plan.array_update_fusions.iter().any(Option::is_some));
+    }
+
+    #[test]
+    fn structural_array_push_disables_cached_entry_pointer_fusion() {
+        let plan = long_ops_plan(
+            "<?php
+$values = ['left' => 3];
+$key = 'left';
+for ($i = 0; $i < 100; $i++) {
+    $values[$key] = $values[$key] + 1;
+    $values[] = $i;
+}
+",
+        );
+        assert!(plan
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::StoreArrayLong { .. })));
+        assert!(plan.array_update_fusions.iter().all(Option::is_none));
+    }
+
+    #[test]
     fn sizes_dynamic_string_cache_from_distinct_loop_literals() {
         let plan = long_ops_plan(
             "<?php
@@ -4729,4 +5178,5 @@ for ($i = 0; $i < 100; $i++) {
             2
         );
     }
+
 }

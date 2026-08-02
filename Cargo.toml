@@ -12,3 +12,11 @@ vm-stats = []
 serde_json = "1.0.149"
 
 [dev-dependencies]
+
+# Benchmark/production ceiling build. Keep the ordinary release profile fast
+# enough for day-to-day development; this profile deliberately trades build
+# time for whole-program optimization.
+[profile.max-perf]
+inherits = "release"
+lto = "fat"
+codegen-units = 1

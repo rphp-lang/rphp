@@ -20,7 +20,7 @@ use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
-    QuickTypedMethodCall,
+    QuickObjectLongArgument, QuickObjectLongMethodCall, QuickTypedMethodCall,
     QuickObjectArrayConsumer, QuickStringAppendSource, QuickVirtualValueSource,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
@@ -1271,6 +1271,20 @@ fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i6
 }
 
 #[inline(always)]
+fn apply_scalar_long_condition(
+    kind: ScalarLongConditionKind,
+    lhs: i64,
+    rhs: i64,
+) -> bool {
+    match kind {
+        ScalarLongConditionKind::Equal => lhs == rhs,
+        ScalarLongConditionKind::NotEqual => lhs != rhs,
+        ScalarLongConditionKind::LessThan => lhs < rhs,
+        ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
+    }
+}
+
+#[inline(always)]
 fn resolve_scalar_function_source(
     source: ScalarLongSource,
     arguments: &[i64; 8],
@@ -1954,9 +1968,54 @@ unsafe fn evaluate_object_long_plan(
             .checked_div(arm.divisor);
     }
 
+    if let Some(select) = plan.modulo_any_select.as_deref() {
+        for term in select.terms.iter().copied() {
+            let input = resolve_object_long_source(term.input, slots, initialized)?;
+            if input.checked_rem(term.divisor)? == term.expected {
+                return Some(select.when_match);
+            }
+        }
+        return Some(select.when_miss);
+    }
+
+    if let Some(score) = plan.weighted_string_score.as_deref() {
+        let weighted = resolve_object_long_source(score.weighted_input, slots, initialized)?;
+        let additive = resolve_object_long_source(score.additive_input, slots, initialized)?;
+        let pointer = *string_arguments.get(score.string_argument as usize)?;
+        if pointer.is_null() {
+            return None;
+        }
+        let string = (&*pointer).as_str()?;
+        let mut value = weighted
+            .checked_mul(score.multiplier)?
+            .checked_add(additive)?
+            .checked_div(score.divisor)?
+            .checked_add(i64::try_from(string.len()).ok()?)?;
+        for adjustment in score.string_adjustments.iter().copied() {
+            let literal = callee
+                .op_array
+                .literals
+                .get(adjustment.literal as usize)?
+                .as_str()?;
+            if string == literal {
+                value = value.checked_add(adjustment.addend)?;
+                break;
+            }
+        }
+        for adjustment in score.conditional_adjustments.iter().copied() {
+            let lhs = resolve_object_long_source(adjustment.lhs, slots, initialized)?;
+            let rhs = resolve_object_long_source(adjustment.rhs, slots, initialized)?;
+            if apply_scalar_long_condition(adjustment.kind, lhs, rhs) {
+                value = value.checked_add(adjustment.addend)?;
+            }
+        }
+        return Some(value);
+    }
+
+    let operations = &plan.operations;
     let mut ip = 0usize;
-    while ip < plan.operations.len() {
-        match plan.operations[ip] {
+    while ip < operations.len() {
+        match operations[ip] {
             ObjectLongOp::Noop => {}
             ObjectLongOp::Assign {
                 destination,
@@ -2056,12 +2115,7 @@ unsafe fn evaluate_object_long_plan(
             } => {
                 let lhs = resolve_object_long_source(lhs, slots, initialized)?;
                 let rhs = resolve_object_long_source(rhs, slots, initialized)?;
-                let value = match kind {
-                    ScalarLongConditionKind::Equal => lhs == rhs,
-                    ScalarLongConditionKind::NotEqual => lhs != rhs,
-                    ScalarLongConditionKind::LessThan => lhs < rhs,
-                    ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
-                };
+                let value = apply_scalar_long_condition(kind, lhs, rhs);
                 slots[destination as usize].write(value as i64);
                 initialized |= 1u64 << destination;
             }
@@ -2081,6 +2135,22 @@ unsafe fn evaluate_object_long_plan(
                     ip = target as usize;
                     continue;
                 }
+                if matches!(operations.get(ip + 1), Some(ObjectLongOp::Noop)) {
+                    ip += 2;
+                    continue;
+                }
+            }
+            ObjectLongOp::StringLength {
+                argument,
+                destination,
+            } => {
+                let pointer = *string_arguments.get(argument as usize)?;
+                if pointer.is_null() {
+                    return None;
+                }
+                let length = i64::try_from((&*pointer).as_str()?.len()).ok()?;
+                slots[destination as usize].write(length);
+                initialized |= 1u64 << destination;
             }
             ObjectLongOp::IntDiv {
                 lhs,
@@ -7505,6 +7575,12 @@ enum QuickResolvedObjectOp {
         target: *const FunctionCommon,
         plan: *const ScalarLongFunctionPlan,
     },
+    ObjectLongMethod {
+        receiver: *const Value,
+        target: *const FunctionCommon,
+        user: *const UserFunction,
+        plan: *const ObjectLongFunctionPlan,
+    },
     ComposedProperty {
         outer_receiver: *const Value,
         outer_target: *const FunctionCommon,
@@ -7542,7 +7618,8 @@ impl QuickObjectCallRecorder<'_> {
                     QuickResolvedObjectOp::None => {}
                     QuickResolvedObjectOp::PropertyMethod { target, .. }
                     | QuickResolvedObjectOp::PropertyGetter { target, .. }
-                    | QuickResolvedObjectOp::ScalarMethod { target, .. } => {
+                    | QuickResolvedObjectOp::ScalarMethod { target, .. }
+                    | QuickResolvedObjectOp::ObjectLongMethod { target, .. } => {
                         record_scalar_calls_bulk(&*target, *count);
                     }
                     QuickResolvedObjectOp::ComposedProperty {
@@ -7583,7 +7660,11 @@ unsafe fn quick_object_method_target(
         return None;
     };
     let receiver = slot_base.add(receiver_slot as usize);
-    let (target, user) = guarded_cached_scalar_call_target(
+    // Dispatch identity (the warmed function/method cache, receiver class and
+    // arity) is shared by every frame-free user plan.  Do not require the
+    // scalar-only ABI here: callers below validate the concrete property,
+    // scalar or mixed object/Long/String plan before executing it.
+    let (target, user) = guarded_cached_user_call_target(
         op_array,
         guard,
         Some(&*receiver),
@@ -7609,6 +7690,47 @@ unsafe fn quick_property_getter_slot(
         return None;
     }
     Some(slot)
+}
+
+#[cfg(feature = "quick-loops")]
+fn quick_object_long_arguments_match(
+    user: &UserFunction,
+    plan: &ObjectLongFunctionPlan,
+    arguments: &[QuickObjectLongArgument; 8],
+    argument_count: u8,
+) -> bool {
+    if plan.public_args != argument_count || plan.object_argument_mask != 0 {
+        return false;
+    }
+    for (index, source) in arguments
+        .iter()
+        .copied()
+        .take(argument_count as usize)
+        .enumerate()
+    {
+        let bit = 1u8 << index;
+        let is_long = matches!(source, QuickObjectLongArgument::Long(_));
+        let is_string = matches!(source, QuickObjectLongArgument::StringSlot(_));
+        if (plan.long_argument_mask & bit != 0 && !is_long)
+            || (plan.string_argument_mask & bit != 0 && !is_string)
+        {
+            return false;
+        }
+        let hint = user
+            .common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        if !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed)
+            && !matches!((hint, source),
+                (ParamTypeHint::Int, QuickObjectLongArgument::Long(_))
+                    | (ParamTypeHint::String, QuickObjectLongArgument::StringSlot(_)))
+        {
+            return false;
+        }
+    }
+    true
 }
 
 #[cfg(feature = "quick-loops")]
@@ -7676,19 +7798,59 @@ unsafe fn resolve_quick_object_ops(
                 }
             }
             QuickLongOp::ScalarMethodCall { call, .. } => {
-                let (_receiver, target, user) = quick_object_method_target(
+                let (receiver, target, user) = quick_object_method_target(
                     op_array,
                     slot_base,
                     call.guard,
                     call.argument_count as usize,
                 )?;
-                let scalar_plan = (&*user).scalar_long_plan.as_deref()?;
-                if scalar_plan.public_args != call.argument_count {
+                if let Some(scalar_plan) = (&*user).scalar_long_plan.as_deref()
+                    && scalar_plan.public_args == call.argument_count
+                {
+                    QuickResolvedObjectOp::ScalarMethod {
+                        target,
+                        plan: scalar_plan,
+                    }
+                } else {
+                    let object_plan = (&*user).object_long_plan.as_deref()?;
+                    let arguments = call.arguments.map(QuickObjectLongArgument::Long);
+                    if !quick_object_long_arguments_match(
+                        &*user,
+                        object_plan,
+                        &arguments,
+                        call.argument_count,
+                    ) {
+                        return None;
+                    }
+                    QuickResolvedObjectOp::ObjectLongMethod {
+                        receiver,
+                        target,
+                        user,
+                        plan: object_plan,
+                    }
+                }
+            }
+            QuickLongOp::ObjectLongMethodCall { call, .. } => {
+                let (receiver, target, user) = quick_object_method_target(
+                    op_array,
+                    slot_base,
+                    call.guard,
+                    call.argument_count as usize,
+                )?;
+                let object_plan = (&*user).object_long_plan.as_deref()?;
+                if !quick_object_long_arguments_match(
+                    &*user,
+                    object_plan,
+                    &call.arguments,
+                    call.argument_count,
+                ) {
                     return None;
                 }
-                QuickResolvedObjectOp::ScalarMethod {
+                QuickResolvedObjectOp::ObjectLongMethod {
+                    receiver,
                     target,
-                    plan: scalar_plan,
+                    user,
+                    plan: object_plan,
                 }
             }
             QuickLongOp::ComposedPropertyCall {
@@ -8554,6 +8716,7 @@ struct QuickStringFetchCacheEntry {
     key_len: usize,
     array_slot: u16,
     value: i64,
+    value_ptr: *mut Value,
     valid: bool,
 }
 
@@ -8564,6 +8727,7 @@ impl QuickStringFetchCacheEntry {
         key_len: 0,
         array_slot: 0,
         value: 0,
+        value_ptr: std::ptr::null_mut(),
         valid: false,
     };
 }
@@ -9059,6 +9223,7 @@ impl QuickStringFetchCache {
                 key_len,
                 array_slot,
                 value,
+                value_ptr: std::ptr::null_mut(),
                 valid: true,
             };
             self.next += 1;
@@ -9067,6 +9232,76 @@ impl QuickStringFetchCache {
             }
         }
         Some(value)
+    }
+
+    /// Resolve a writable existing entry only from the array pointer whose COW
+    /// uniqueness was guarded at region entry. Cached pointers are retained
+    /// only for plans without structural writes to this array.
+    #[inline(always)]
+    unsafe fn long_entry_at_mut(
+        &mut self,
+        array_slot: u16,
+        array: *mut PhpArray,
+        key: &str,
+    ) -> Option<(i64, *mut Value)> {
+        let key_data = key.as_ptr();
+        let key_len = key.len();
+        let mut cached_index = None;
+        for (index, entry) in self.entries.iter().take(self.capacity).enumerate() {
+            if entry.valid
+                && entry.array_slot == array_slot
+                && entry.key_data == key_data
+                && entry.key_len == key_len
+            {
+                if !entry.value_ptr.is_null() {
+                    return Some((entry.value, entry.value_ptr));
+                }
+                cached_index = Some(index);
+                break;
+            }
+        }
+
+        let value = match canonical_decimal_array_key(key) {
+            Some(key) => (*array).get_int_mut(key),
+            None => (*array).get_str_mut(key),
+        }?;
+        if value.value_type() != ValueType::Long {
+            return None;
+        }
+        let resolved = (value.raw_long(), value as *mut Value);
+        let entry = QuickStringFetchCacheEntry {
+            key_data,
+            key_len,
+            array_slot,
+            value: resolved.0,
+            value_ptr: resolved.1,
+            valid: true,
+        };
+        if let Some(index) = cached_index {
+            self.entries[index] = entry;
+        } else if self.capacity != 0 {
+            self.entries[self.next] = entry;
+            self.next += 1;
+            if self.next == self.capacity {
+                self.next = 0;
+            }
+        }
+        Some(resolved)
+    }
+
+    #[inline(always)]
+    fn store_long(&mut self, array_slot: u16, key: &str, value: i64) {
+        let key_data = key.as_ptr();
+        let key_len = key.len();
+        for entry in self.entries.iter_mut().take(self.capacity) {
+            if entry.valid
+                && entry.array_slot == array_slot
+                && entry.key_data == key_data
+                && entry.key_len == key_len
+            {
+                entry.value = value;
+            }
+        }
     }
 }
 
@@ -9136,6 +9371,35 @@ impl QuickLongArray {
             QuickArrayIndex::ValueSlot(_) => None,
         }
     }
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn mutable_long_entry_at(
+    array: *mut PhpArray,
+    index: QuickArrayIndex,
+    slots: &[i64; 64],
+    op_array: &crate::compiler::OpArray,
+) -> Option<(i64, *mut Value)> {
+    let value = match index {
+        QuickArrayIndex::Long(index) => {
+            (*array).get_int_mut(quick_long_operand(slots, index))
+        }
+        QuickArrayIndex::StringLiteral(literal) => {
+            let key = op_array
+                .literals
+                .get_unchecked(literal as usize)
+                .as_str()
+                .unwrap_unchecked();
+            match canonical_decimal_array_key(key) {
+                Some(key) => (*array).get_int_mut(key),
+                None => (*array).get_str_mut(key),
+            }
+        }
+        QuickArrayIndex::ValueSlot(_) => return None,
+    }?;
+    (value.value_type() == ValueType::Long)
+        .then(|| (value.raw_long(), value as *mut Value))
 }
 
 #[derive(Clone, Copy)]
@@ -9981,6 +10245,51 @@ fn quick_typed_method_arguments(
         arguments[index] = quick_long_operand(slots, source);
     }
     arguments
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn evaluate_quick_object_long_method(
+    receiver: *const Value,
+    user: *const UserFunction,
+    plan: *const ObjectLongFunctionPlan,
+    arguments: &[QuickObjectLongArgument; 8],
+    argument_count: u8,
+    long_slots: &[i64; 64],
+    string_state: &QuickStringSlotState,
+) -> Option<i64> {
+    let mut slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
+    let mut initialized = 0u64;
+    let object_arguments = [ObjectLongArgument::None; 8];
+    let mut string_arguments = [std::ptr::null(); 8];
+
+    for (index, source) in arguments
+        .iter()
+        .copied()
+        .take(argument_count as usize)
+        .enumerate()
+    {
+        match source {
+            QuickObjectLongArgument::Long(source) => {
+                let slot = (*user).common.sig.param_cv_index(index as u32) as usize;
+                slots[slot].write(quick_long_operand(long_slots, source));
+                initialized |= 1u64 << slot;
+            }
+            QuickObjectLongArgument::StringSlot(slot) => {
+                string_arguments[index] = string_state.value(slot) as *const Value;
+            }
+        }
+    }
+
+    evaluate_object_long_plan(
+        &*receiver,
+        &object_arguments,
+        &string_arguments,
+        &mut slots,
+        initialized,
+        &*user,
+        &*plan,
+    )
 }
 
 #[inline(always)]
@@ -11345,6 +11654,69 @@ unsafe fn run_quick_long_ops_loop(
                 next_target,
                 resume_ip,
             } => {
+                if let Some(fusion) = *plan.array_update_fusions.get_unchecked(op_index) {
+                    let entry = match index {
+                        QuickArrayIndex::ValueSlot(slot) => {
+                            let key = string_state.value(slot).as_str().unwrap_unchecked();
+                            string_fetch_cache.long_entry_at_mut(
+                                array,
+                                mutable_arrays[array as usize],
+                                key,
+                            )
+                        }
+                        _ => mutable_long_entry_at(
+                            mutable_arrays[array as usize],
+                            index,
+                            &slots,
+                            op_array,
+                        ),
+                    };
+                    let Some((fetched, value_ptr)) = entry else {
+                        commit_quick_long_ops_slots(
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                        );
+                        (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                        stats::inc_quick_loop_deoptimized(iterations);
+                        return Ok(QuickLoopOutcome::Deoptimized);
+                    };
+                    debug_assert!(!value_ptr.is_null());
+                    slots[result as usize] = fetched;
+                    dirty_long_mask |= 1u64 << result;
+                    if let Some(destination) = destination {
+                        slots[destination as usize] = fetched;
+                        dirty_long_mask |= 1u64 << destination;
+                    }
+
+                    let Some(stored) = apply_scalar_long_op(
+                        fusion.kind,
+                        quick_long_operand(&slots, fusion.lhs),
+                        quick_long_operand(&slots, fusion.rhs),
+                    ) else {
+                        commit_quick_long_ops_slots(
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                        );
+                        (*frame).opline = op_array
+                            .instructions
+                            .as_ptr()
+                            .add(fusion.arithmetic_resume_ip);
+                        stats::inc_quick_loop_deoptimized(iterations);
+                        return Ok(QuickLoopOutcome::Deoptimized);
+                    };
+                    slots[fusion.result as usize] = stored;
+                    dirty_long_mask |= 1u64 << fusion.result;
+                    Value::write_long(value_ptr, stored);
+                    if let QuickArrayIndex::ValueSlot(slot) = index {
+                        let key = string_state.value(slot).as_str().unwrap_unchecked();
+                        string_fetch_cache.store_long(array, key, stored);
+                    }
+                    fusion.next_target
+                } else {
                 let fetched = match index {
                     QuickArrayIndex::ValueSlot(slot) => {
                         let key = string_state.value(slot).as_str().unwrap_unchecked();
@@ -11368,6 +11740,48 @@ unsafe fn run_quick_long_ops_loop(
                 if let Some(destination) = destination {
                     slots[destination as usize] = fetched;
                     dirty_long_mask |= 1u64 << destination;
+                }
+                next_target
+                }
+            }
+            QuickLongOp::StoreArrayLong {
+                array,
+                index,
+                value,
+                next_target,
+                ..
+            } => {
+                let stored = slots[value as usize];
+                let array_ptr = mutable_arrays[array as usize];
+                debug_assert!(!array_ptr.is_null());
+                match index {
+                    QuickArrayIndex::Long(index) => {
+                        (*array_ptr).set_int(
+                            quick_long_operand(&slots, index),
+                            Value::long(stored),
+                        );
+                    }
+                    QuickArrayIndex::StringLiteral(literal) => {
+                        let key = op_array
+                            .literals
+                            .get_unchecked(literal as usize)
+                            .as_str()
+                            .unwrap_unchecked();
+                        if let Some(key) = canonical_decimal_array_key(key) {
+                            (*array_ptr).set_int(key, Value::long(stored));
+                        } else {
+                            (*array_ptr).set_str(key, Value::long(stored));
+                        }
+                    }
+                    QuickArrayIndex::ValueSlot(slot) => {
+                        let key = string_state.value(slot).as_str().unwrap_unchecked();
+                        if let Some(normalized) = canonical_decimal_array_key(key) {
+                            (*array_ptr).set_int(normalized, Value::long(stored));
+                        } else {
+                            (*array_ptr).set_str(key, Value::long(stored));
+                        }
+                        string_fetch_cache.store_long(array, key, stored);
+                    }
                 }
                 next_target
             }
@@ -11446,6 +11860,38 @@ unsafe fn run_quick_long_ops_loop(
                 Some(value) => {
                     slots[result as usize] = value;
                     dirty_long_mask |= 1u64 << result;
+                    next_target
+                }
+                None => {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    string_state.commit();
+                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                    stats::inc_quick_loop_deoptimized(iterations);
+                    return Ok(QuickLoopOutcome::Deoptimized);
+                }
+            },
+            QuickLongOp::BinaryAssign {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                resume_ip,
+            } => match apply_scalar_long_op(
+                kind,
+                quick_long_operand(&slots, lhs),
+                quick_long_operand(&slots, rhs),
+            ) {
+                Some(value) => {
+                    slots[result as usize] = value;
+                    slots[destination as usize] = value;
+                    dirty_long_mask |= (1u64 << result) | (1u64 << destination);
                     next_target
                 }
                 None => {
@@ -11665,13 +12111,32 @@ unsafe fn run_quick_long_ops_loop(
                 }
             }
             QuickLongOp::ScalarMethodCall { call, result } => {
-                let QuickResolvedObjectOp::ScalarMethod { plan, .. } =
-                    *resolved_object_ops.get_unchecked(op_index)
-                else {
-                    unreachable!("resolved scalar method operation")
-                };
                 let arguments = quick_typed_method_arguments(&slots, &call);
-                if let Some(value) = evaluate_scalar_long_plan(&*plan, &arguments) {
+                let value = match *resolved_object_ops.get_unchecked(op_index) {
+                    QuickResolvedObjectOp::ScalarMethod { plan, .. } => {
+                        evaluate_scalar_long_plan(&*plan, &arguments)
+                    }
+                    QuickResolvedObjectOp::ObjectLongMethod {
+                        receiver,
+                        user,
+                        plan,
+                        ..
+                    } => {
+                        let object_arguments =
+                            call.arguments.map(QuickObjectLongArgument::Long);
+                        evaluate_quick_object_long_method(
+                            receiver,
+                            user,
+                            plan,
+                            &object_arguments,
+                            call.argument_count,
+                            &slots,
+                            &string_state,
+                        )
+                    }
+                    _ => unreachable!("resolved scalar method operation"),
+                };
+                if let Some(value) = value {
                     slots[result as usize] = value;
                     dirty_long_mask |= 1u64 << result;
                     object_call_recorder.record(op_index);
@@ -11686,6 +12151,43 @@ unsafe fn run_quick_long_ops_loop(
                         dirty_bool_mask,
                         &mut string_state,
                         call,
+                        iterations,
+                    ));
+                }
+            }
+            QuickLongOp::ObjectLongMethodCall { call, result } => {
+                let QuickResolvedObjectOp::ObjectLongMethod {
+                    receiver,
+                    user,
+                    plan,
+                    ..
+                } = *resolved_object_ops.get_unchecked(op_index)
+                else {
+                    unreachable!("resolved object-long method operation")
+                };
+                if let Some(value) = evaluate_quick_object_long_method(
+                    receiver,
+                    user,
+                    plan,
+                    &call.arguments,
+                    call.argument_count,
+                    &slots,
+                    &string_state,
+                ) {
+                    slots[result as usize] = value;
+                    dirty_long_mask |= 1u64 << result;
+                    object_call_recorder.record(op_index);
+                    call.next_target
+                } else {
+                    string_state.commit();
+                    return Ok(deopt_quick_long_kernel(
+                        frame,
+                        op_array,
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        call.resume_ip,
                         iterations,
                     ));
                 }

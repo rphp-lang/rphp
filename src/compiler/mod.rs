@@ -18,9 +18,11 @@ use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
     ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource,
-    ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongObjectSource,
-    ObjectLongOp, ObjectLongSource, ObjectLongStringIntDivCase,
-    ObjectLongStringIntDivSelect, ObjectArrayEntry, ObjectArrayFunctionPlan,
+    ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
+    ObjectLongModuloEqualTerm, ObjectLongObjectSource, ObjectLongOp,
+    ObjectLongSource, ObjectLongStringAdjustment, ObjectLongStringIntDivCase,
+    ObjectLongStringIntDivSelect, ObjectLongConditionalAdjustment,
+    ObjectLongWeightedStringScore, ObjectArrayEntry, ObjectArrayFunctionPlan,
     ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource,
 };
 use std::collections::HashMap;
@@ -1526,6 +1528,387 @@ fn build_object_long_string_intdiv_select(
     }))
 }
 
+/// Recognize the canonical short-circuit shape produced for
+/// `($x % C) == K || ...` followed by two constant integer return arms.
+/// The semantic ObjectLong program remains authoritative for every rejected
+/// shape and for checked-remainder failure at runtime.
+fn build_object_long_modulo_any_select(
+    operations: &[ObjectLongOp],
+) -> Option<Box<ObjectLongModuloAnySelect>> {
+    let mut terms = Vec::new();
+    let mut ip = 0usize;
+    let mut match_target = None;
+
+    while terms.len() < 8 && ip + 2 < operations.len() {
+        let ObjectLongOp::Arithmetic {
+            kind: ScalarLongOpKind::Modulo,
+            lhs: input,
+            rhs: ObjectLongSource::Constant(divisor),
+            destination: remainder,
+        } = operations[ip]
+        else {
+            break;
+        };
+        let ObjectLongOp::Compare {
+            kind: ScalarLongConditionKind::Equal,
+            lhs,
+            rhs,
+            destination: condition,
+        } = operations[ip + 1]
+        else {
+            break;
+        };
+        let expected = match (lhs, rhs) {
+            (ObjectLongSource::Slot(slot), ObjectLongSource::Constant(expected))
+                if slot == remainder => expected,
+            (ObjectLongSource::Constant(expected), ObjectLongSource::Slot(slot))
+                if slot == remainder => expected,
+            _ => break,
+        };
+        let ObjectLongOp::JumpIfTrue {
+            condition: ObjectLongSource::Slot(jump_condition),
+            target,
+        } = operations[ip + 2]
+        else {
+            break;
+        };
+        if jump_condition != condition
+            || match_target.is_some_and(|match_target| match_target != target)
+        {
+            break;
+        }
+        match_target = Some(target);
+        terms.push(ObjectLongModuloEqualTerm {
+            input,
+            divisor,
+            expected,
+        });
+        ip += 3;
+    }
+
+    if terms.is_empty() || ip + 5 >= operations.len() {
+        return None;
+    }
+    let ObjectLongOp::Assign {
+        destination: boolean_slot,
+        source: ObjectLongSource::Constant(miss_flag),
+    } = operations[ip]
+    else {
+        return None;
+    };
+    let ObjectLongOp::Jump { target: branch_target } = operations[ip + 1] else {
+        return None;
+    };
+    if match_target? as usize != ip + 2 || branch_target as usize != ip + 3 {
+        return None;
+    }
+    let ObjectLongOp::Assign {
+        destination: match_slot,
+        source: ObjectLongSource::Constant(match_flag),
+    } = operations[ip + 2]
+    else {
+        return None;
+    };
+    if match_slot != boolean_slot {
+        return None;
+    }
+
+    let branch_ip = ip + 3;
+    let (jump_when_true, return_target) = match operations[branch_ip] {
+        ObjectLongOp::JumpIfFalse {
+            condition: ObjectLongSource::Slot(slot),
+            target,
+        } if slot == boolean_slot => (false, target as usize),
+        ObjectLongOp::JumpIfTrue {
+            condition: ObjectLongSource::Slot(slot),
+            target,
+        } if slot == boolean_slot => (true, target as usize),
+        _ => return None,
+    };
+    let fallthrough = branch_ip + 1;
+    let return_constant = |index: usize| match operations.get(index).copied()? {
+        ObjectLongOp::Return {
+            value: ObjectLongSource::Constant(value),
+        } => Some(value),
+        _ => None,
+    };
+    let select_return = |flag: i64| {
+        let condition = flag != 0;
+        let index = if condition == jump_when_true {
+            return_target
+        } else {
+            fallthrough
+        };
+        return_constant(index)
+    };
+    let when_match = select_return(match_flag)?;
+    let when_miss = select_return(miss_flag)?;
+    let last_return = return_target.max(fallthrough);
+    if operations
+        .get(last_return + 1..)?
+        .iter()
+        .any(|operation| !matches!(operation, ObjectLongOp::Noop | ObjectLongOp::Bail))
+    {
+        return None;
+    }
+
+    Some(Box::new(ObjectLongModuloAnySelect {
+        terms: terms.into_boxed_slice(),
+        when_match,
+        when_miss,
+    }))
+}
+
+/// Recognize a typed weighted score whose category and threshold branches
+/// only add constants to one accumulator. This is a high-level policy shape,
+/// not a source-name match: every operand, edge, and checked arithmetic step
+/// is proven from the canonical ObjectLong program.
+fn build_object_long_weighted_string_score(
+    operations: &[ObjectLongOp],
+    first_argument: u32,
+    argument_end: u32,
+) -> Option<Box<ObjectLongWeightedStringScore>> {
+    if operations.len() < 7 {
+        return None;
+    }
+    let direct_source = |source: ObjectLongSource| match source {
+        ObjectLongSource::Constant(_) => true,
+        ObjectLongSource::Slot(slot) => {
+            let slot = u32::from(slot);
+            slot >= first_argument && slot < argument_end
+        }
+    };
+
+    let ObjectLongOp::Arithmetic {
+        kind: ScalarLongOpKind::Multiply,
+        lhs: multiply_lhs,
+        rhs: multiply_rhs,
+        destination: multiply_result,
+    } = operations[0]
+    else {
+        return None;
+    };
+    let (weighted_input, multiplier) = match (multiply_lhs, multiply_rhs) {
+        (input, ObjectLongSource::Constant(multiplier)) if direct_source(input) => {
+            (input, multiplier)
+        }
+        (ObjectLongSource::Constant(multiplier), input) if direct_source(input) => {
+            (input, multiplier)
+        }
+        _ => return None,
+    };
+
+    let ObjectLongOp::Arithmetic {
+        kind: ScalarLongOpKind::Add,
+        lhs: base_lhs,
+        rhs: base_rhs,
+        destination: base_sum,
+    } = operations[1]
+    else {
+        return None;
+    };
+    let additive_input = match (base_lhs, base_rhs) {
+        (ObjectLongSource::Slot(slot), input)
+            if slot == multiply_result && direct_source(input) => input,
+        (input, ObjectLongSource::Slot(slot))
+            if slot == multiply_result && direct_source(input) => input,
+        _ => return None,
+    };
+    let ObjectLongOp::IntDiv {
+        lhs: ObjectLongSource::Slot(dividend),
+        rhs: ObjectLongSource::Constant(divisor),
+        destination: quotient,
+    } = operations[2]
+    else {
+        return None;
+    };
+    if dividend != base_sum {
+        return None;
+    }
+    let ObjectLongOp::StringLength {
+        argument: string_argument,
+        destination: string_length,
+    } = operations[3]
+    else {
+        return None;
+    };
+    let ObjectLongOp::Arithmetic {
+        kind: ScalarLongOpKind::Add,
+        lhs: score_lhs,
+        rhs: score_rhs,
+        destination: score_result,
+    } = operations[4]
+    else {
+        return None;
+    };
+    if !matches!(
+        (score_lhs, score_rhs),
+        (ObjectLongSource::Slot(lhs), ObjectLongSource::Slot(rhs))
+            if (lhs == quotient && rhs == string_length)
+                || (lhs == string_length && rhs == quotient)
+    ) {
+        return None;
+    }
+    let ObjectLongOp::Assign {
+        destination: accumulator,
+        source: ObjectLongSource::Slot(source),
+    } = operations[5]
+    else {
+        return None;
+    };
+    if source != score_result {
+        return None;
+    }
+
+    let mut string_adjustments = Vec::new();
+    let mut string_end_target = None;
+    let mut ip = 6usize;
+    while string_adjustments.len() < 8 {
+        let Some(ObjectLongOp::StringLiteralBranch {
+            argument,
+            literal,
+            jump_when_equal: false,
+            target,
+        }) = operations.get(ip).copied()
+        else {
+            break;
+        };
+        if argument != string_argument
+            || !matches!(operations.get(ip + 1), Some(ObjectLongOp::Noop))
+        {
+            return None;
+        }
+        let Some(ObjectLongOp::Arithmetic {
+            kind: ScalarLongOpKind::Add,
+            lhs,
+            rhs,
+            destination: adjusted,
+        }) = operations.get(ip + 2).copied()
+        else {
+            return None;
+        };
+        let addend = match (lhs, rhs) {
+            (ObjectLongSource::Slot(slot), ObjectLongSource::Constant(addend))
+                if slot == accumulator => addend,
+            (ObjectLongSource::Constant(addend), ObjectLongSource::Slot(slot))
+                if slot == accumulator => addend,
+            _ => return None,
+        };
+        if !matches!(
+            operations.get(ip + 3),
+            Some(ObjectLongOp::Assign {
+                destination,
+                source: ObjectLongSource::Slot(source),
+            }) if *destination == accumulator && *source == adjusted
+        ) {
+            return None;
+        }
+        string_adjustments.push(ObjectLongStringAdjustment { literal, addend });
+
+        let after_body = ip + 4;
+        if let Some(ObjectLongOp::Jump { target: end_target }) =
+            operations.get(after_body).copied()
+        {
+            if target as usize != after_body + 1
+                || string_end_target.is_some_and(|target| target != end_target)
+            {
+                return None;
+            }
+            string_end_target = Some(end_target);
+            ip = after_body + 1;
+        } else {
+            if target as usize != after_body {
+                return None;
+            }
+            ip = after_body;
+            break;
+        }
+    }
+    if string_end_target.is_some_and(|target| target as usize != ip) {
+        return None;
+    }
+
+    let mut conditional_adjustments = Vec::new();
+    while conditional_adjustments.len() < 8 {
+        let Some(ObjectLongOp::Compare {
+            kind,
+            lhs,
+            rhs,
+            destination: condition,
+        }) = operations.get(ip).copied()
+        else {
+            break;
+        };
+        if !direct_source(lhs) || !direct_source(rhs) {
+            return None;
+        }
+        if !matches!(
+            operations.get(ip + 1),
+            Some(ObjectLongOp::JumpIfFalse {
+                condition: ObjectLongSource::Slot(slot),
+                target,
+            }) if *slot == condition && *target as usize == ip + 4
+        ) {
+            return None;
+        }
+        let Some(ObjectLongOp::Arithmetic {
+            kind: ScalarLongOpKind::Add,
+            lhs: add_lhs,
+            rhs: add_rhs,
+            destination: adjusted,
+        }) = operations.get(ip + 2).copied()
+        else {
+            return None;
+        };
+        let addend = match (add_lhs, add_rhs) {
+            (ObjectLongSource::Slot(slot), ObjectLongSource::Constant(addend))
+                if slot == accumulator => addend,
+            (ObjectLongSource::Constant(addend), ObjectLongSource::Slot(slot))
+                if slot == accumulator => addend,
+            _ => return None,
+        };
+        if !matches!(
+            operations.get(ip + 3),
+            Some(ObjectLongOp::Assign {
+                destination,
+                source: ObjectLongSource::Slot(source),
+            }) if *destination == accumulator && *source == adjusted
+        ) {
+            return None;
+        }
+        conditional_adjustments.push(ObjectLongConditionalAdjustment {
+            kind,
+            lhs,
+            rhs,
+            addend,
+        });
+        ip += 4;
+    }
+
+    if !matches!(
+        operations.get(ip),
+        Some(ObjectLongOp::Return {
+            value: ObjectLongSource::Slot(slot),
+        }) if *slot == accumulator
+    ) || operations
+        .get(ip + 1..)?
+        .iter()
+        .any(|operation| !matches!(operation, ObjectLongOp::Noop | ObjectLongOp::Bail))
+    {
+        return None;
+    }
+
+    Some(Box::new(ObjectLongWeightedStringScore {
+        weighted_input,
+        multiplier,
+        additive_input,
+        divisor,
+        string_argument,
+        string_adjustments: string_adjustments.into_boxed_slice(),
+        conditional_adjustments: conditional_adjustments.into_boxed_slice(),
+    }))
+}
+
 /// Recognize a small, side-effect-free method program that reads declared
 /// properties from its receiver or positional object arguments and otherwise
 /// stays in checked Long operations. Keeping one plan operation per canonical
@@ -1586,22 +1969,38 @@ fn build_object_long_function_plan(
         }
         let operation = match instruction.opcode {
             OpCode::AssignCv => {
-                if instruction.op1_type != OpType::Cv {
+                if !matches!(instruction.op1_type, OpType::Cv | OpType::Tmp | OpType::Var) {
                     return None;
                 }
                 let destination = instruction.op1 as u32;
                 // Rebinding `$this` or a public input would invalidate the
                 // adapter-owned object/Long bindings.
-                if destination < first_argument || destination < argument_end {
+                if instruction.op1_type == OpType::Cv && destination < argument_end {
                     return None;
                 }
-                let source = object_long_source(
-                    function,
-                    &initialized,
-                    &mut long_argument_mask,
-                    instruction.op2_type,
-                    instruction.op2,
-                )?;
+                let source = if instruction.op1_type != OpType::Cv
+                    && instruction.op2_type == OpType::Const
+                {
+                    match op_array.literals.get(instruction.op2 as usize)?.value_type() {
+                        crate::value::ValueType::False => ObjectLongSource::Constant(0),
+                        crate::value::ValueType::True => ObjectLongSource::Constant(1),
+                        _ => object_long_source(
+                            function,
+                            &initialized,
+                            &mut long_argument_mask,
+                            instruction.op2_type,
+                            instruction.op2,
+                        )?,
+                    }
+                } else {
+                    object_long_source(
+                        function,
+                        &initialized,
+                        &mut long_argument_mask,
+                        instruction.op2_type,
+                        instruction.op2,
+                    )?
+                };
                 initialized[destination as usize] = true;
                 ObjectLongOp::Assign {
                     destination: instruction.op1,
@@ -1788,6 +2187,24 @@ fn build_object_long_function_plan(
                     target: target as u16,
                 }
             }
+            OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String => {
+                if instruction.op1_type != OpType::Cv
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                let slot = instruction.op1 as u32;
+                if slot < first_argument || slot >= argument_end {
+                    return None;
+                }
+                let argument = (slot - first_argument) as u8;
+                string_argument_mask |= 1 << argument;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::StringLength {
+                    argument,
+                    destination: instruction.result,
+                }
+            }
             OpCode::DirectInternalCall2 => {
                 if crate::builtin_metadata::DirectInternalKind::from_id(
                     instruction.extended_value,
@@ -1870,7 +2287,6 @@ fn build_object_long_function_plan(
     if operations.is_empty()
         || long_argument_mask & (object_argument_mask | string_argument_mask) != 0
         || object_argument_mask & string_argument_mask != 0
-        || (object_argument_mask | string_argument_mask) == 0
         || !operations
             .iter()
             .any(|operation| matches!(operation, ObjectLongOp::Return { .. }))
@@ -1879,6 +2295,12 @@ fn build_object_long_function_plan(
     }
 
     let string_intdiv_select = build_object_long_string_intdiv_select(&operations);
+    let modulo_any_select = build_object_long_modulo_any_select(&operations);
+    let weighted_string_score = build_object_long_weighted_string_score(
+        &operations,
+        first_argument,
+        argument_end,
+    );
     Some(Box::new(ObjectLongFunctionPlan {
         public_args: public_args as u8,
         long_argument_mask,
@@ -1887,6 +2309,8 @@ fn build_object_long_function_plan(
         slot_count: slot_count as u16,
         operations: operations.into_boxed_slice(),
         string_intdiv_select,
+        modulo_any_select,
+        weighted_string_score,
     }))
 }
 

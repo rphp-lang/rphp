@@ -843,6 +843,101 @@ the semantic typed IR, then lower them to specialized executable forms before
 entering the loop. The future JIT can consume the same semantic nodes without
 forcing the no-JIT executor to pay a generic body-dispatch cost.
 
+An intentionally unseen routing/admission holdout then tested whether this
+architecture generalizes beyond the named corpus. Its loop combines typed
+`int + string -> int` methods, short-circuit scalar control flow, changing
+string hash keys, two existing-entry updates, and aggregate branches. The
+initial implementation created 1.5 million frames and did not select a quick
+region: ordinary release measured about 0.179 s and the first maximum-build
+prototype about 0.153 s, versus about 0.0654 s in PHP (2.35x).
+
+The resulting extension remains shape-based. `ObjectLongFunctionPlan` now
+accepts immutable positional Strings, `strlen`, boolean TMP assignments and
+pure scalar CFG methods without requiring an object/property input. General
+quick regions carry mixed Long/String method arguments under the same warmed
+receiver-class and method-cache identity guard as the established scalar
+forms. Dynamic hash replacement is admitted only after an exact-key Long fetch
+proves that the entry exists. A generic fetch/arithmetic/store superinstruction
+then performs one mutable lookup on an array whose COW uniqueness is guarded at
+region entry; structural writes such as `[]` push disable cached entry pointers.
+Overflow, missing/non-Long values, references, COW aliases, changed receiver
+classes, and plan mismatches retain canonical side exits.
+
+The complete holdout loop now enters once, completes 749,967 quick iterations
+with no guard failure or deoptimization, and reduces actual frame pushes from
+1.5 million to six. The array superinstruction alone improves the ordinary
+release path by roughly another seven percent. A same-batch eleven-run result
+is 0.1048 s ordinary release, 0.0913 s maximum PGO build, and 0.0660 s PHP; the
+machine-specific build is therefore about 1.38x behind PHP instead of 2.35x,
+while the unseen RPHP workload is about 1.68x faster than the preceding maximum
+build. Output is identical in all three modes.
+
+The maximum-build prototype is deliberately separate from developer release:
+fat LTO, one codegen unit, `target-cpu=native`, and matched-LLVM PGO trained on
+60 `bench_*`/`corpus_*` workloads. The holdout filename is outside those globs,
+so this measurement tests profile and runtime generalization rather than
+training on the answer. The full release correctness suite passes, including
+new planner, COW, structural-write, overflow and mixed-method regressions.
+
+Sampling before the array fusion attributed about 27 percent of the remaining
+holdout time to the two generic object/Long plan interpreters; most of the rest
+was dispatch inside the general quick operation loop. The next no-JIT step is
+therefore not another routing-specific kernel. It is a common lowering that
+reduces typed method-plan and quick-operation dispatch while keeping the same
+guards and side exits. This is also a concrete signal that the project is
+approaching the typed-region JIT decision gate below.
+
+That lowering has now passed its first decision cycle. Two tempting generic
+ObjectLong fusion layouts were rejected after exact A/B builds: embedding large
+fused payloads slowed the holdout by roughly five percent, while a side table or
+compact fusion marker was neutral to twelve percent slower. Both forms made the
+ordinary method dispatch representation costlier than the semantic operations
+they removed. Canonical ObjectLong IR therefore stays compact.
+
+The retained quick-loop lowering only combines proven materialization edges.
+General checked arithmetic followed immediately by a CV assignment is one
+`BinaryAssign` operation, including literals, subtraction and multiplication.
+A typed method result whose canonical TMP is consumed by the following assign
+is written directly to the destination CV; the dead TMP needs neither a larger
+opcode nor a second dispatch. Exact same-layout A/B runs improve the unseen
+holdout by about 11.6 percent and another five percent respectively.
+
+Two high-level typed method plans remove the remaining branch-materialization
+tax without changing canonical PHP bytecode. `ObjectLongModuloAnySelect`
+recognizes a bounded short-circuit disjunction of checked modulo/equality terms
+with two constant Long returns. `ObjectLongWeightedStringScore` recognizes a
+checked weighted integer score with String length, mutually exclusive literal
+adjustments and scalar threshold adjustments. They are selected solely from
+types, operands and CFG edges; names and the holdout file never participate.
+Every overflow, zero divisor, type mismatch or cache mismatch side-exits before
+an observable result. The two plans improve the same workload by about 15--16
+percent and 18 percent in isolated A/B runs.
+
+After these changes all release tests pass. On nine interleaved 7.5-million
+iteration runs with identical output, PHP 8.4.12 CLI with OPcache/JIT disabled
+has a 0.6721 s median, ordinary RPHP release 0.7171 s, and the untrained
+`max-perf` fat-LTO build 0.6298 s. The production-ceiling no-JIT build is thus
+about 6.3 percent faster than PHP on this intentionally excluded holdout; the
+ordinary developer release remains about 6.7 percent behind. The holdout has
+moved from roughly 0.179 s per 750,000 iterations to about 0.063 s in the
+maximum build, approximately 2.8x faster than the initial RPHP path.
+
+PGO remains optional rather than intrinsically superior. The 60-workload
+profile still excludes the holdout and predates coverage of the new high-level
+plans. Its profile-use build records about 0.653 s against a same-batch 0.663 s
+PHP median, but direct comparison consistently loses to the untrained
+fat-LTO binary. A performance build should therefore publish both modes and
+accept PGO only after an independent validation matrix confirms a net win.
+
+Final sampling assigns about 81 percent of CPU to the general quick-loop
+executor itself and about 15 percent to the two already-specialized method-plan
+entries; hash lookup and key normalization are only a few percent combined.
+The dominant remaining tax is therefore typed-region dispatch, not frames,
+arrays, strings, or an unfused PHP operation. This satisfies the JIT decision
+gate: further no-JIT work should be limited to independently recurring
+superinstructions, while the main performance effort moves to lowering this
+same guarded typed IR as a native region.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

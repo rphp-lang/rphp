@@ -773,6 +773,25 @@ impl PhpArray {
         }
     }
 
+    /// Mutable lookup used only after the caller has established unique COW
+    /// ownership. Replacing the returned entry cannot change array structure.
+    #[cfg(feature = "quick-loops")]
+    #[inline(always)]
+    pub(crate) fn get_int_mut(&mut self, key: i64) -> Option<&mut Value> {
+        match &mut self.storage {
+            ArrayStorage::Packed(values) if key >= 0 => values.get_mut(key as usize),
+            ArrayStorage::Packed(_) => None,
+            ArrayStorage::SmallHash(small) => {
+                let position = small.find_int(key)?;
+                small.entries.get_mut(position)?.as_mut().map(|entry| &mut entry.1)
+            }
+            ArrayStorage::Hash { entries, int_index, .. } => {
+                let position = *int_index.get(&key)?;
+                entries.get_mut(position).map(|entry| &mut entry.1)
+            }
+        }
+    }
+
     /// Whether hash storage is likely to satisfy integer reads through the
     /// validated ordered-entry fast path.
     ///
@@ -924,6 +943,24 @@ impl PhpArray {
                 .map(|entry| &entry.1),
             ArrayStorage::Hash { entries, str_index, .. } => {
                 str_index.get(key).map(|&idx| &entries[idx].1)
+            }
+        }
+    }
+
+    /// Mutable string-key lookup for guarded replacement of an existing
+    /// entry. The key/index storage remains untouched.
+    #[cfg(feature = "quick-loops")]
+    #[inline(always)]
+    pub(crate) fn get_str_mut(&mut self, key: &str) -> Option<&mut Value> {
+        match &mut self.storage {
+            ArrayStorage::Packed(_) => None,
+            ArrayStorage::SmallHash(small) => {
+                let position = small.find_str(key)?;
+                small.entries.get_mut(position)?.as_mut().map(|entry| &mut entry.1)
+            }
+            ArrayStorage::Hash { entries, str_index, .. } => {
+                let position = *str_index.get(key)?;
+                entries.get_mut(position).map(|entry| &mut entry.1)
             }
         }
     }

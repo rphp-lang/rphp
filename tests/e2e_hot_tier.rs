@@ -15,7 +15,7 @@ use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::function::{
-    CallStrategy, ComposedScalarLongOp, ScalarLongCallGuard,
+    CallStrategy, ComposedScalarLongOp, ObjectLongOp, ScalarLongCallGuard,
 };
 
 // ══════════════════════════════════════════════════════════════════════
@@ -1218,4 +1218,146 @@ for ($i = 0; $i < 50; $i++) {
 }
 echo $a->get() . '|' . $b->get();
 "), "50|200");
+}
+
+#[test]
+fn test_hot_mixed_scalar_methods_feed_dynamic_hash_updates() {
+    assert_eq!(run_php("<?php
+class MixedRouter {
+    public function score(int $base, string $route): int {
+        $value = $base + strlen($route);
+        if ($route == 'left') {
+            $value = $value + 7;
+        } else if ($route == 'right') {
+            $value = $value + 11;
+        } else {
+            $value = $value + 13;
+        }
+        return $value;
+    }
+
+    public function accepts(int $score, int $sequence): int {
+        if (($score % 11) == 0 || ($sequence % 17) == 0) { return 1; }
+        return 0;
+    }
+}
+
+$router = new MixedRouter();
+$totals = ['left' => 0, 'right' => 0, 'other' => 0];
+$accepted = 0;
+for ($i = 0; $i < 200; $i++) {
+    $remainder = $i % 3;
+    if ($remainder == 0) {
+        $route = 'left';
+    } else if ($remainder == 1) {
+        $route = 'right';
+    } else {
+        $route = 'other';
+    }
+    $score = $router->score($i * 5, $route);
+    $totals[$route] = $totals[$route] + $score;
+    $accepted = $accepted + $router->accepts($score, $i);
+}
+echo $totals['left'] . '|' . $totals['right'] . '|';
+echo $totals['other'] . '|' . $accepted;
+"), "33902|34572|34023|30");
+}
+
+#[test]
+fn test_object_long_plan_keeps_semantic_control_flow() {
+    let source = "<?php
+class LoweredPolicy {
+    public function score(int $latency, int $bytes, string $route): int {
+        $score = intdiv(($latency * 17) + $bytes, 13) + strlen($route);
+        if ($route == 'write') {
+            $score = $score + 37;
+        } elseif ($route == 'delete') {
+            $score = $score + 83;
+        }
+        if ($latency >= 300) { $score = $score + 101; }
+        return $score;
+    }
+    public function accepts(int $score, int $sequence): int {
+        if (($score % 11) == 0 || ($sequence % 17) == 0) { return 0; }
+        return 1;
+    }
+}
+$policy = new LoweredPolicy();
+$policy->score(10, 60, 'write');
+$policy->accepts(11, 1);
+";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let class = &result.class_defs[0];
+    let score = class
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case("score"))
+        .map(|(_, _, _, _, method)| method)
+        .unwrap();
+    let accepted = class
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case("accepts"))
+        .map(|(_, _, _, _, method)| method)
+        .unwrap();
+
+    let score = score.object_long_plan.as_deref().unwrap();
+    assert!(score
+        .operations
+        .iter()
+        .any(|operation| matches!(operation, ObjectLongOp::Arithmetic { .. })));
+    assert!(score
+        .operations
+        .iter()
+        .any(|operation| matches!(operation, ObjectLongOp::StringLength { .. })));
+    let weighted = score.weighted_string_score.as_deref().unwrap();
+    assert_eq!(weighted.multiplier, 17);
+    assert_eq!(weighted.divisor, 13);
+    assert_eq!(weighted.string_adjustments.len(), 2);
+    assert_eq!(weighted.conditional_adjustments.len(), 1);
+
+    let accepted = accepted.object_long_plan.as_deref().unwrap();
+    assert!(accepted
+        .operations
+        .iter()
+        .any(|operation| matches!(operation, ObjectLongOp::Compare { .. })));
+    assert!(accepted.operations.iter().any(|operation| matches!(
+        operation,
+        ObjectLongOp::JumpIfFalse { .. } | ObjectLongOp::JumpIfTrue { .. }
+    )));
+    let modulo = accepted.modulo_any_select.as_deref().unwrap();
+    assert_eq!(modulo.terms.len(), 2);
+    assert_eq!(modulo.when_match, 0);
+    assert_eq!(modulo.when_miss, 1);
+}
+
+#[test]
+fn test_hot_weighted_string_score_preserves_all_adjustment_paths() {
+    assert_eq!(run_php("<?php
+class WeightedScoreModel {
+    public function score(int $latency, int $bytes, string $route): int {
+        $score = intdiv(($latency * 17) + $bytes, 13) + strlen($route);
+        if ($route == 'write') {
+            $score = $score + 37;
+        } elseif ($route == 'delete') {
+            $score = $score + 83;
+        }
+        if ($latency >= 300) {
+            $score = $score + 101;
+        }
+        return $score;
+    }
+}
+$model = new WeightedScoreModel();
+$warm = 0;
+for ($i = 0; $i < 100; $i++) {
+    $warm = $warm + $model->score(20, 128, 'read');
+}
+echo $warm . '|';
+echo $model->score(20, 128, 'read') . '|';
+echo $model->score(300, 128, 'write') . '|';
+echo $model->score(419, 8319, 'delete');
+"), "4000|40|545|1377");
 }
