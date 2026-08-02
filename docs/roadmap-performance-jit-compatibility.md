@@ -308,6 +308,37 @@ improves the best no-PGO time from approximately 0.320 s to 0.310 s, about
 3 percent, while the complete release suite passes and the 31-workload no-PGO
 matrix remains 31 strict RPHP wins out of 31.
 
+The fifth corpus-driven slice implements the first guarded application region
+between call events. Constructors and the service method still execute through
+the canonical call engine. After the service returns its associative result,
+the compiler can select a straight-line typed region for repeated
+`FetchArrayLong` and `AddAssign` operations and resume baseline at the following
+comparison. The operation graph, target encoding, hotness counters, Long and
+array guards, and exact side-exit positions are shared with `QuickLongOpsLoop`;
+the new work is region selection outside a closed loop.
+
+Straight-region input analysis is read-before-write aware, so temporaries
+produced inside the region are not incorrectly guarded as pre-existing inputs.
+This permits activation in fresh function frames as well as in one long-lived
+loop frame. Calls, returns, control-flow edges, array mutation, and observable
+side effects remain hard boundaries in this first slice.
+
+The initial generic typed-op execution was correct and completed 499,968
+regions with no guard failures or deoptimizations, but regressed the corpus to
+approximately 0.343 s. This established a profitability rule now enforced by
+the compiler: a short straight region is installed only when its typed graph
+has a preselected dense execution shape. The first shape compresses one to four
+array-fetch/add-assign pairs, plus an optional trailing fetch, without using
+source names or literal values. It preserves already-completed additions and
+resumes at the current fetch or addition on a non-Long value or overflow.
+
+With dense selection moved entirely out of the hot path, the order pipeline is
+approximately 0.299 s RPHP versus 0.079 s PHP, about 3.78x. This is roughly
+3.7 percent faster than the 0.310 s cached-property baseline and 6.7 percent
+faster than the 0.320 s result before the two latest application slices. The
+complete release suite passes, including fresh-frame and mid-region type
+side-exit tests, and the no-PGO matrix remains 31 strict RPHP wins out of 31.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

@@ -493,6 +493,7 @@ pub struct QuickLongOpsLoop {
     pub object_input_mask: u64,
     pub string_cache_capacity: u8,
     pub involved_mask: u64,
+    pub straight_array_kernel: Option<QuickStraightArrayRegionKernel>,
 }
 
 impl QuickLongOpsLoop {
@@ -503,6 +504,167 @@ impl QuickLongOpsLoop {
             None => target.exit_ip(),
         }
     }
+}
+
+pub const QUICK_STRAIGHT_ARRAY_MAX_ADDS: usize = 4;
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuickStraightArrayFetchAdd {
+    pub index: QuickArrayIndex,
+    pub fetch_result: u16,
+    pub accumulator: u16,
+    pub add_result: u16,
+    pub fetch_resume_ip: usize,
+    pub add_resume_ip: usize,
+}
+
+impl QuickStraightArrayFetchAdd {
+    const EMPTY: Self = Self {
+        index: QuickArrayIndex::Long(QuickLongOperand::Const(0)),
+        fetch_result: 0,
+        accumulator: 0,
+        add_result: 0,
+        fetch_resume_ip: 0,
+        add_resume_ip: 0,
+    };
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuickStraightArrayFetch {
+    pub index: QuickArrayIndex,
+    pub result: u16,
+    pub resume_ip: usize,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuickStraightArrayRegionKernel {
+    pub array: u16,
+    pub adds: [QuickStraightArrayFetchAdd; QUICK_STRAIGHT_ARRAY_MAX_ADDS],
+    pub add_count: u8,
+    pub trailing_fetch: Option<QuickStraightArrayFetch>,
+    pub exit_target: QuickLongTarget,
+}
+
+/// Select a measured superinstruction from the general typed graph. PHP names,
+/// literal keys, and source-level workload identity never participate; this
+/// only compresses adjacent FetchArrayLong/AddAssign operations over one
+/// immutable result array.
+fn detect_straight_array_region_kernel(
+    plan: &QuickLongOpsLoop,
+) -> Option<QuickStraightArrayRegionKernel> {
+    if plan.entry_op != 0
+        || plan.ops.len() < 2
+        || plan.array_input_mask.count_ones() != 1
+        || plan.array_output_mask != 0
+        || plan.string_input_mask != 0
+        || plan.string_output_mask != 0
+        || plan.string_append_mask != 0
+        || plan.object_input_mask != 0
+    {
+        return None;
+    }
+
+    let array = plan.array_input_mask.trailing_zeros() as u16;
+    let mut adds = [QuickStraightArrayFetchAdd::EMPTY; QUICK_STRAIGHT_ARRAY_MAX_ADDS];
+    let mut add_count = 0usize;
+    let mut cursor = 0usize;
+    let mut exit_target = None;
+
+    while cursor + 1 < plan.ops.len() && add_count < adds.len() {
+        let QuickLongOp::FetchArrayLong {
+            array: fetch_array,
+            index,
+            result: fetch_result,
+            destination: None,
+            next_target: fetch_next,
+            resume_ip: fetch_resume_ip,
+        } = plan.ops[cursor]
+        else {
+            break;
+        };
+        if fetch_array != array
+            || matches!(index, QuickArrayIndex::ValueSlot(_))
+            || fetch_next.op_index() != Some(cursor + 1)
+        {
+            return None;
+        }
+        let QuickLongOp::AddAssign {
+            lhs,
+            rhs,
+            result: add_result,
+            destination,
+            next_target,
+            add_resume_ip,
+        } = plan.ops[cursor + 1]
+        else {
+            break;
+        };
+        let accumulator = if lhs == destination && rhs == fetch_result {
+            lhs
+        } else if rhs == destination && lhs == fetch_result {
+            rhs
+        } else {
+            return None;
+        };
+        adds[add_count] = QuickStraightArrayFetchAdd {
+            index,
+            fetch_result,
+            accumulator,
+            add_result,
+            fetch_resume_ip,
+            add_resume_ip,
+        };
+        add_count += 1;
+        cursor += 2;
+        if cursor < plan.ops.len() {
+            if next_target.op_index() != Some(cursor) {
+                return None;
+            }
+        } else {
+            exit_target = Some(next_target);
+        }
+    }
+
+    let trailing_fetch = if cursor < plan.ops.len() {
+        if cursor + 1 != plan.ops.len() {
+            return None;
+        }
+        let QuickLongOp::FetchArrayLong {
+            array: fetch_array,
+            index,
+            result,
+            destination: None,
+            next_target,
+            resume_ip,
+        } = plan.ops[cursor]
+        else {
+            return None;
+        };
+        if fetch_array != array || matches!(index, QuickArrayIndex::ValueSlot(_)) {
+            return None;
+        }
+        exit_target = Some(next_target);
+        Some(QuickStraightArrayFetch {
+            index,
+            result,
+            resume_ip,
+        })
+    } else {
+        None
+    };
+
+    if add_count == 0 {
+        return None;
+    }
+    let exit_target = exit_target?;
+    exit_target.exit_ip()?;
+    Some(QuickStraightArrayRegionKernel {
+        array,
+        adds,
+        add_count: add_count as u8,
+        trailing_fetch,
+        exit_target,
+    })
 }
 
 fn long_literal(op_array: &OpArray, index: u16) -> Option<i64> {
@@ -1604,6 +1766,145 @@ fn conditional_add_assign(
     (source == result && false_ip == next_ip).then_some((lhs, rhs, result, destination, next_ip))
 }
 
+/// Determine the Long values that must exist before a straight-line region
+/// starts. Temporaries produced earlier in the same region are deliberately
+/// excluded, so a region can activate in a fresh function frame rather than
+/// depending on stale temporary-slot contents from an earlier execution.
+fn straight_region_read(inputs: &mut u64, defined: u64, slot: u16) -> Option<()> {
+    let bit = 1u64.checked_shl(u32::from(slot))?;
+    if defined & bit == 0 {
+        *inputs |= bit;
+    }
+    Some(())
+}
+
+fn straight_region_write(defined: &mut u64, slot: u16) -> Option<()> {
+    *defined |= 1u64.checked_shl(u32::from(slot))?;
+    Some(())
+}
+
+fn straight_region_read_operand(
+    inputs: &mut u64,
+    defined: u64,
+    operand: QuickLongOperand,
+) -> Option<()> {
+    match operand {
+        QuickLongOperand::Slot(slot) => straight_region_read(inputs, defined, slot),
+        QuickLongOperand::Const(_) => Some(()),
+    }
+}
+
+fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
+    let mut inputs = 0u64;
+    let mut defined = 0u64;
+
+    for op in ops {
+        match *op {
+            QuickLongOp::ModConst { value, result, .. } => {
+                straight_region_read(&mut inputs, defined, value)?;
+                straight_region_write(&mut defined, result)?;
+            }
+            QuickLongOp::FetchArrayLong {
+                index,
+                result,
+                destination,
+                ..
+            } => {
+                if let QuickArrayIndex::Long(operand) = index {
+                    straight_region_read_operand(&mut inputs, defined, operand)?;
+                }
+                straight_region_write(&mut defined, result)?;
+                if let Some(destination) = destination {
+                    straight_region_write(&mut defined, destination)?;
+                }
+            }
+            QuickLongOp::Add {
+                lhs, rhs, result, ..
+            } => {
+                straight_region_read(&mut inputs, defined, lhs)?;
+                straight_region_read(&mut inputs, defined, rhs)?;
+                straight_region_write(&mut defined, result)?;
+            }
+            QuickLongOp::AddAssign {
+                lhs,
+                rhs,
+                result,
+                destination,
+                ..
+            } => {
+                straight_region_read(&mut inputs, defined, lhs)?;
+                straight_region_read(&mut inputs, defined, rhs)?;
+                straight_region_write(&mut defined, result)?;
+                straight_region_write(&mut defined, destination)?;
+            }
+            QuickLongOp::ConditionalAddAssign {
+                condition,
+                condition_tmp,
+                lhs,
+                rhs,
+                result,
+                destination,
+                ..
+            } => {
+                match condition {
+                    QuickLongCondition::Lt { lhs, rhs }
+                    | QuickLongCondition::Eq { lhs, rhs } => {
+                        straight_region_read(&mut inputs, defined, lhs)?;
+                        straight_region_read_operand(&mut inputs, defined, rhs)?;
+                    }
+                }
+                if let Some(condition_tmp) = condition_tmp {
+                    straight_region_write(&mut defined, condition_tmp)?;
+                }
+                straight_region_read(&mut inputs, defined, lhs)?;
+                straight_region_read(&mut inputs, defined, rhs)?;
+                straight_region_write(&mut defined, result)?;
+                straight_region_write(&mut defined, destination)?;
+            }
+            QuickLongOp::AddAddAssign {
+                first_lhs,
+                first_rhs,
+                first_result,
+                second_lhs,
+                second_rhs,
+                second_result,
+                destination,
+                ..
+            } => {
+                straight_region_read(&mut inputs, defined, first_lhs)?;
+                straight_region_read(&mut inputs, defined, first_rhs)?;
+                straight_region_write(&mut defined, first_result)?;
+                straight_region_read(&mut inputs, defined, second_lhs)?;
+                straight_region_read(&mut inputs, defined, second_rhs)?;
+                straight_region_write(&mut defined, second_result)?;
+                straight_region_write(&mut defined, destination)?;
+            }
+            QuickLongOp::Assign {
+                destination,
+                source,
+                ..
+            } => {
+                straight_region_read(&mut inputs, defined, source)?;
+                straight_region_write(&mut defined, destination)?;
+            }
+            QuickLongOp::PostInc {
+                value, result, ..
+            } => {
+                straight_region_read(&mut inputs, defined, value)?;
+                if let Some(result) = result {
+                    straight_region_write(&mut defined, result)?;
+                }
+                straight_region_write(&mut defined, value)?;
+            }
+            // The first application-region slice is intentionally bounded by
+            // calls, observable mutation, and control-flow edges. Closed loops
+            // continue to use the complete operation vocabulary.
+            _ => return None,
+        }
+    }
+    Some(inputs)
+}
+
 /// Build a small typed program for a closed scalar loop.
 ///
 /// This deliberately supports only side-effect-free long operations and
@@ -1614,6 +1915,27 @@ pub fn detect_long_ops_loop(
     header_ip: usize,
     backedge_ip: usize,
 ) -> Option<QuickLongOpsLoop> {
+    detect_long_ops_region_inner(op_array, header_ip, backedge_ip, true)
+}
+
+/// Build a typed, straight-line application region between semantic events.
+/// Calls, returns, visible mutation, and control-flow edges remain baseline
+/// boundaries; the returned plan shares the exact side-exit contract and
+/// executor with closed quick loops.
+pub fn detect_long_ops_region(
+    op_array: &OpArray,
+    entry_ip: usize,
+    end_ip: usize,
+) -> Option<QuickLongOpsLoop> {
+    detect_long_ops_region_inner(op_array, entry_ip, end_ip, false)
+}
+
+fn detect_long_ops_region_inner(
+    op_array: &OpArray,
+    header_ip: usize,
+    backedge_ip: usize,
+    closed_loop: bool,
+) -> Option<QuickLongOpsLoop> {
     if header_ip >= backedge_ip
         || backedge_ip >= op_array.instructions.len()
         || backedge_ip - header_ip >= u16::MAX as usize
@@ -1621,11 +1943,13 @@ pub fn detect_long_ops_loop(
         return None;
     }
 
-    let backedge = op_array.instructions[backedge_ip];
-    if !matches!(backedge.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
-        || backedge.op1 as usize != header_ip
-    {
-        return None;
+    if closed_loop {
+        let backedge = op_array.instructions[backedge_ip];
+        if !matches!(backedge.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+            || backedge.op1 as usize != header_ip
+        {
+            return None;
+        }
     }
 
     let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
@@ -2394,7 +2718,7 @@ pub fn detect_long_ops_loop(
                 }
                 has_post_inc = true;
                 let resume_ip = ip;
-                if ip + 1 == backedge_ip {
+                if closed_loop && ip + 1 == backedge_ip {
                     let jump = op_array.instructions[backedge_ip];
                     if !matches!(jump.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
                         || jump.op1 as usize != header_ip
@@ -2420,7 +2744,7 @@ pub fn detect_long_ops_loop(
             }
             OpCode::Jmp | OpCode::QuickLongLoopJmp => {
                 let target_ip = instruction.op1 as usize;
-                if ip == backedge_ip {
+                if closed_loop && ip == backedge_ip {
                     if target_ip != header_ip {
                         return None;
                     }
@@ -2471,7 +2795,7 @@ pub fn detect_long_ops_loop(
         ops.push(op);
     }
 
-    if let (
+    if closed_loop && let (
         Some(QuickLongOp::BranchUnlessLt {
             lhs,
             rhs,
@@ -2508,25 +2832,32 @@ pub fn detect_long_ops_loop(
             QuickLongOp::BranchUnlessLt { .. } | QuickLongOp::BranchUnlessEq { .. }
         )
     });
-    if !(has_add
-        || has_assign
-        || has_internal_branch
-        || has_object_call
-        || has_array_push
-        || has_string_append)
-        || !has_post_inc
-        || !matches!(
-            ops.first(),
-            Some(QuickLongOp::BranchUnlessLt { false_target, .. })
-                if matches!(false_target.unresolved_ip(), Some(ip) if ip > backedge_ip)
-        )
-        || !(matches!(
-            ops.last(),
-            Some(QuickLongOp::Jump { target } | QuickLongOp::PostIncJump { target, .. })
-                if target.unresolved_ip() == Some(header_ip)
-        ) || matches!(ops.last(), Some(QuickLongOp::PostIncLoopLt { .. })))
-    {
-        return None;
+    if closed_loop {
+        if !(has_add
+            || has_assign
+            || has_internal_branch
+            || has_object_call
+            || has_array_push
+            || has_string_append)
+            || !has_post_inc
+            || !matches!(
+                ops.first(),
+                Some(QuickLongOp::BranchUnlessLt { false_target, .. })
+                    if matches!(false_target.unresolved_ip(), Some(ip) if ip > backedge_ip)
+            )
+            || !(matches!(
+                ops.last(),
+                Some(QuickLongOp::Jump { target } | QuickLongOp::PostIncJump { target, .. })
+                    if target.unresolved_ip() == Some(header_ip)
+            ) || matches!(ops.last(), Some(QuickLongOp::PostIncLoopLt { .. })))
+        {
+            return None;
+        }
+    } else {
+        if ops.len() < 2 || !(has_add || has_assign) {
+            return None;
+        }
+        long_input_mask = straight_long_region_inputs(&ops)?;
     }
 
     let entry_op = ip_to_op.first().copied()?;
@@ -2582,7 +2913,7 @@ pub fn detect_long_ops_loop(
         | string_append_mask
         | object_input_mask;
 
-    Some(QuickLongOpsLoop {
+    let mut plan = QuickLongOpsLoop {
         header_ip,
         backedge_ip,
         ops,
@@ -2599,7 +2930,10 @@ pub fn detect_long_ops_loop(
         object_input_mask,
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
-    })
+        straight_array_kernel: None,
+    };
+    plan.straight_array_kernel = detect_straight_array_region_kernel(&plan);
+    Some(plan)
 }
 
 #[cfg(test)]
@@ -2609,6 +2943,7 @@ mod tests {
     use crate::compiler::make_user_function;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
+    use crate::vm::planner::BlockPlan;
 
     fn compile_main(source: &str) -> crate::vm::function::UserFunction {
         let tokens = Lexer::new(source).tokenize().unwrap();
@@ -2683,6 +3018,47 @@ mod tests {
                     main.op_array.instructions
                 )
             })
+    }
+
+    #[test]
+    #[cfg(feature = "quick-loops")]
+    fn selects_straight_array_application_region_from_general_typed_ops() {
+        let main = compile_main(
+            "<?php
+$row = ['a' => 2, 'b' => 3, 'c' => 4];
+$a = 10;
+$b = 20;
+$c = 30;
+$a = $a + $row['a'];
+$b = $b + $row['b'];
+$c = $c + $row['c'];
+echo $a + $b + $c;
+",
+        );
+        let (entry_ip, entry) = main
+            .op_array
+            .instructions
+            .iter()
+            .enumerate()
+            .find(|(_, instruction)| {
+                instruction.opcode == OpCode::FetchDimR
+                    && instruction.extended_value != 0
+            })
+            .expect("compiler should mark a straight typed region entry");
+        let block_idx = entry.extended_value as usize - 1;
+        let BlockPlan::QuickLongOps(plan) = &main.op_array.block_plans[block_idx]
+        else {
+            panic!("marked entry must reference a typed region plan");
+        };
+        assert_eq!(plan.header_ip, entry_ip);
+        assert!(plan.straight_array_kernel.is_some());
+
+        let first_fetch_result = entry.result;
+        assert_eq!(
+            plan.long_input_mask & (1u64 << first_fetch_result),
+            0,
+            "a temporary produced inside the region is not an entry input"
+        );
     }
 
     #[test]

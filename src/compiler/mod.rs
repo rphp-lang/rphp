@@ -320,6 +320,7 @@ impl OpArray {
         }
 
         let mut candidates = Vec::new();
+        let mut closed_region_ip = vec![false; self.instructions.len()];
 
         for backedge_ip in 0..self.instructions.len() {
             let backedge = self.instructions[backedge_ip];
@@ -359,6 +360,7 @@ impl OpArray {
             if let Some(plan) = plan {
                 let block_idx = *self.ip_to_block.get(header_ip).unwrap_or(&u16::MAX);
                 if block_idx != u16::MAX {
+                    closed_region_ip[header_ip..=backedge_ip].fill(true);
                     candidates.push((backedge_ip, block_idx, plan));
                 }
             }
@@ -368,6 +370,61 @@ impl OpArray {
             self.block_plans[block_idx as usize] = plan;
             self.instructions[backedge_ip].opcode = OpCode::QuickLongLoopJmp;
             self.instructions[backedge_ip].extended_value = block_idx as u32 + 1;
+        }
+
+        // Select a first straight-line application-region slice. Calls and
+        // other semantic events stay in baseline; a subsequent array-result
+        // extraction can reuse the same typed operation graph and exact side
+        // exits as closed loops. `FetchDimR::extended_value` is otherwise
+        // unused and stores the owning block plan index + 1.
+        const MAX_STRAIGHT_REGION_INSTRUCTIONS: usize = 32;
+        for entry_ip in 0..self.instructions.len() {
+            let entry = self.instructions[entry_ip];
+            if closed_region_ip[entry_ip]
+                || entry.opcode != OpCode::FetchDimR
+                || entry.extended_value != 0
+            {
+                continue;
+            }
+            let block_idx = *self.ip_to_block.get(entry_ip).unwrap_or(&u16::MAX);
+            if block_idx == u16::MAX
+                || !matches!(
+                    self.block_plans.get(block_idx as usize),
+                    Some(BlockPlan::Interpret)
+                )
+            {
+                continue;
+            }
+            let block_end = self.block_info[block_idx as usize].end_ip as usize;
+            let last_ip = block_end.min(
+                entry_ip
+                    .saturating_add(MAX_STRAIGHT_REGION_INSTRUCTIONS - 1),
+            );
+            if last_ip <= entry_ip {
+                continue;
+            }
+
+            for end_ip in (entry_ip + 1..=last_ip).rev() {
+                if closed_region_ip[entry_ip..=end_ip].iter().any(|covered| *covered) {
+                    continue;
+                }
+                let Some(plan) = crate::vm::quick::detect_long_ops_region(
+                    self,
+                    entry_ip,
+                    end_ip,
+                ) else {
+                    continue;
+                };
+                // Short straight-line regions must have a preselected dense
+                // execution shape. Falling back to generic typed-op dispatch
+                // here costs more than the baseline instructions it replaces.
+                if plan.straight_array_kernel.is_none() {
+                    continue;
+                }
+                self.block_plans[block_idx as usize] = BlockPlan::QuickLongOps(plan);
+                self.instructions[entry_ip].extended_value = u32::from(block_idx) + 1;
+                break;
+            }
         }
     }
 }

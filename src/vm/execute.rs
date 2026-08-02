@@ -6325,6 +6325,95 @@ struct QuickLongArrayLoopKernel {
     exit_target: QuickLongTarget,
 }
 
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn quick_straight_array_fetch(
+    array: QuickLongArray,
+    index: QuickArrayIndex,
+    op_array: &crate::compiler::OpArray,
+) -> Option<i64> {
+    match index {
+        QuickArrayIndex::Long(QuickLongOperand::Const(index)) => {
+            array.long_at_int(index)
+        }
+        QuickArrayIndex::StringLiteral(literal) => array.long_at_str(
+            op_array
+                .literals
+                .get_unchecked(literal as usize)
+                .as_str()
+                .unwrap_unchecked(),
+        ),
+        QuickArrayIndex::Long(QuickLongOperand::Slot(_))
+        | QuickArrayIndex::ValueSlot(_) => None,
+    }
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn run_quick_straight_array_region(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    kernel: crate::vm::quick::QuickStraightArrayRegionKernel,
+) -> QuickLoopOutcome {
+    let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    let mut input_mask = plan.long_input_mask;
+    while input_mask != 0 {
+        let slot = input_mask.trailing_zeros() as usize;
+        input_mask &= input_mask - 1;
+        if (*slot_base.add(slot)).value_type() != ValueType::Long {
+            stats::inc_quick_loop_guard_failed();
+            return QuickLoopOutcome::GuardFailed;
+        }
+    }
+
+    let Some(array) = (*slot_base.add(kernel.array as usize)).as_array() else {
+        stats::inc_quick_loop_guard_failed();
+        return QuickLoopOutcome::GuardFailed;
+    };
+    let array = QuickLongArray::from_array(array);
+
+    for add in kernel.adds.iter().take(kernel.add_count as usize) {
+        let Some(fetched) = quick_straight_array_fetch(array, add.index, op_array) else {
+            (*frame).opline = op_array
+                .instructions
+                .as_ptr()
+                .add(add.fetch_resume_ip);
+            stats::inc_quick_loop_deoptimized(0);
+            return QuickLoopOutcome::Deoptimized;
+        };
+        Value::write_long(slot_base.add(add.fetch_result as usize), fetched);
+
+        let accumulator = (*slot_base.add(add.accumulator as usize)).raw_long();
+        let Some(sum) = accumulator.checked_add(fetched) else {
+            (*frame).opline = op_array
+                .instructions
+                .as_ptr()
+                .add(add.add_resume_ip);
+            stats::inc_quick_loop_deoptimized(0);
+            return QuickLoopOutcome::Deoptimized;
+        };
+        Value::write_long(slot_base.add(add.add_result as usize), sum);
+        Value::write_long(slot_base.add(add.accumulator as usize), sum);
+    }
+
+    if let Some(fetch) = kernel.trailing_fetch {
+        let Some(fetched) = quick_straight_array_fetch(array, fetch.index, op_array) else {
+            (*frame).opline = op_array.instructions.as_ptr().add(fetch.resume_ip);
+            stats::inc_quick_loop_deoptimized(0);
+            return QuickLoopOutcome::Deoptimized;
+        };
+        Value::write_long(slot_base.add(fetch.result as usize), fetched);
+    }
+
+    (*frame).opline = op_array
+        .instructions
+        .as_ptr()
+        .add(kernel.exit_target.exit_ip().unwrap_unchecked());
+    stats::inc_quick_loop_completed(0);
+    QuickLoopOutcome::Completed
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 fn quick_long_array_loop_kernel(
@@ -7979,6 +8068,15 @@ unsafe fn run_quick_long_ops_loop(
         return Ok(QuickLoopOutcome::GuardFailed);
     }
 
+    if let Some(kernel) = plan.straight_array_kernel {
+        return Ok(run_quick_straight_array_region(
+            frame,
+            op_array,
+            plan,
+            kernel,
+        ));
+    }
+
     let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     let mut slots = [0i64; 64];
     let mut input_mask = plan.long_input_mask;
@@ -8683,6 +8781,64 @@ unsafe fn run_quick_long_ops_loop(
         (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
         stats::inc_quick_loop_completed(iterations);
         return Ok(QuickLoopOutcome::Completed);
+    }
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn execute_quick_region_entry(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<bool, VmError> {
+    let block_idx = opline.extended_value as usize - 1;
+    let Some(super::planner::BlockPlan::QuickLongOps(plan)) =
+        op_array.block_plans.get(block_idx)
+    else {
+        return Ok(false);
+    };
+    if plan.header_ip
+        != (opline as *const Instruction)
+            .offset_from(op_array.instructions().as_ptr()) as usize
+    {
+        return Ok(false);
+    }
+
+    let hot_counter = &op_array.block_counters[block_idx];
+    let count = hot_counter.get();
+    if count == QUICK_LOOP_DISABLED {
+        return Ok(false);
+    }
+    let hot_progress = count % QUICK_LOOP_COUNTER_STRIDE;
+    if hot_progress < QUICK_LOOP_HOT_THRESHOLD {
+        hot_counter.set(count + 1);
+        return Ok(false);
+    }
+
+    match run_quick_long_ops_loop(eg, frame, op_array, plan)? {
+        QuickLoopOutcome::Completed => {
+            hot_counter.set(QUICK_LOOP_HOT_THRESHOLD);
+            Ok(true)
+        }
+        QuickLoopOutcome::Deoptimized => {
+            let failures = count / QUICK_LOOP_COUNTER_STRIDE + 1;
+            hot_counter.set(if failures >= QUICK_LOOP_FAILURE_LIMIT {
+                QUICK_LOOP_DISABLED
+            } else {
+                failures * QUICK_LOOP_COUNTER_STRIDE
+            });
+            Ok(true)
+        }
+        QuickLoopOutcome::GuardFailed => {
+            let failures = count / QUICK_LOOP_COUNTER_STRIDE + 1;
+            hot_counter.set(if failures >= QUICK_LOOP_FAILURE_LIMIT {
+                QUICK_LOOP_DISABLED
+            } else {
+                failures * QUICK_LOOP_COUNTER_STRIDE
+            });
+            Ok(false)
+        }
     }
 }
 
@@ -11010,6 +11166,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchDimR => {
+                #[cfg(feature = "quick-loops")]
+                if opline.extended_value != 0
+                    && unsafe {
+                        execute_quick_region_entry(eg, frame, op_array, opline)?
+                    }
+                {
+                    continue;
+                }
+
                 // result = op1[op2]
                 let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };

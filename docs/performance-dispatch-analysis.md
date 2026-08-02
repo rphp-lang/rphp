@@ -1707,3 +1707,46 @@ all features and with `--no-default-features`; warning-free checks pass for both
 configurations. Parameters, values loaded from arrays or calls, concatenated
 strings, and temporary-producing expressions remain deliberately outside this
 proof until the typed IR can represent and guard their producers directly.
+
+## Phase 3a result: first region between call events
+
+The representative order/service corpus demonstrated the limitation of the
+closed-loop selector. Its outer loop contains scalar preparation, DTO
+construction, a heap-returning service call, associative result extraction,
+and aggregation. Requiring one typed plan to accept the entire backedge meant
+that no quick region could run even though the straight-line result-consumer
+after the service call was already expressible by `FetchArrayLong` and
+`AddAssign`.
+
+The compiler now considers a bounded straight region beginning at an array
+read inside one basic block. Calls, returns, control-flow edges, mutation, and
+observable side effects terminate the candidate. Detection uses the existing
+`QuickLongOp` graph and target resolver. A read-before-write pass derives the
+true external Long inputs, excluding temporaries produced earlier in the same
+region; this is required for repeated activation in fresh function frames.
+`FetchDimR` carries the discardable block-plan index in its otherwise-unused
+extended field, so ordinary array reads pay no global per-opcode region lookup.
+
+The first implementation deliberately ran the selected seven-operation graph
+through the generic typed executor. It was semantically exact—499,968
+completions, zero guard failures, and zero deoptimizations—but changed the
+corpus from approximately 0.310 s to 0.343 s. Region entry setup and typed-op
+dispatch cost more than the ten baseline instructions removed. The result was
+not retained as a performance regression.
+
+Instead, the general graph is inspected once during compilation for a dense
+array-result accumulation shape: one to four adjacent
+`FetchArrayLong`/`AddAssign` pairs and an optional trailing fetch over the same
+immutable array. No source variable, class, method, key name, or key value is
+part of selection. If no dense shape exists, the compiler keeps baseline rather
+than installing the slower generic short region. Successful operations commit
+in PHP order; a missing or non-Long fetch resumes that `FetchDimR`, and overflow
+materializes the completed fetch before resuming its baseline addition.
+
+The dense application region measures approximately 0.299 s RPHP versus
+0.079 s PHP on 500,000 order quotes, about 3.78x. It is roughly 3.7 percent
+faster than the cached-property baseline and removes 4.5 million baseline
+fetch/add/assignment dispatches. Fresh-frame activation and a type change in
+the middle of the region have dedicated end-to-end coverage. The complete
+release suite passes, and all 31 no-PGO comparison workloads remain strict RPHP
+wins.

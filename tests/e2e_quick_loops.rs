@@ -3,6 +3,61 @@ mod common;
 use common::run_php;
 
 #[test]
+fn quick_straight_array_region_runs_across_fresh_function_frames() {
+    assert_eq!(
+        run_php(
+            "<?php
+function collect($row) {
+    $a = 10;
+    $b = 20;
+    $c = 30;
+    $a = $a + $row['a'];
+    $b = $b + $row['b'];
+    $c = $c + $row['c'];
+    return $a + $b + $c;
+}
+$total = 0;
+for ($i = 0; $i < 200; $i++) {
+    $total = $total + collect(['a' => 2, 'b' => 3, 'c' => 4]);
+}
+echo $total;
+"
+        ),
+        "13800"
+    );
+}
+
+#[test]
+fn quick_straight_array_region_missing_value_resumes_current_fetch() {
+    assert_eq!(
+        run_php(
+            "<?php
+function collect($row) {
+    $a = 10;
+    $b = 20;
+    $c = 30;
+    $a = $a + $row['a'];
+    $b = $b + $row['b'];
+    $c = $c + $row['c'];
+    return $a + $b + $c;
+}
+$total = 0;
+for ($i = 0; $i < 100; $i++) {
+    if ($i == 80) {
+        $row = ['a' => 2, 'b' => 3.5, 'c' => 4];
+    } else {
+        $row = ['a' => 2, 'b' => 3, 'c' => 4];
+    }
+    $total = $total + collect($row);
+}
+echo $total;
+"
+        ),
+        "6900.5"
+    );
+}
+
+#[test]
 fn quick_long_loop_in_main_keeps_exact_result() {
     assert_eq!(
         run_php(
