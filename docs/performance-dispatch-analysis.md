@@ -1780,3 +1780,35 @@ further 5--6 percent reduction from the Phase 3a result and about 46 percent
 from the original 0.521 s RPHP baseline. The complete release suite passes. In
 the latest no-PGO matrix RPHP has 30 strict wins and one timing-level tie; no
 related regression was found.
+
+## Phase 3c result: allocation-free small ordered hashes
+
+The post-Phase-3b sample separated lookup cost from lifecycle cost. Constructing
+each three-key result still allocated an entries vector and a string hash index,
+hashed all three insertions, and freed both allocations shortly afterward.
+Together construction, insertion, and destruction accounted for roughly
+17--18 percent of samples even though repeated reads had become positional.
+
+`PhpArray` now has a third dynamically selected representation. `SmallHash`
+stores up to three explicit integer or string entries directly inside the
+existing array allocation. The dense prefix is terminated by its first empty
+slot, avoiding separate length metadata. Three optional entries occupy 96
+bytes and the complete storage enum remains 104 bytes, so `PhpArray` remains
+112 bytes: packed and general hash arrays do not grow to fund the optimization.
+
+Lookup and mutation preserve normal PHP behavior through short linear scans or
+validated ordered positions. Overwriting an existing key remains inline. A
+fourth new key promotes once to the existing ordered entries plus split string
+and integer indexes, moving keys and values without cloning them. The general
+representation has no size limit. Remove, pop, shift, iteration, cloning, COW,
+integer renumbering, and guarded ordered-value layouts support both explicit
+representations under the same public API.
+
+Two independent best-of-five corpus runs measure 0.2404--0.2406 s RPHP versus
+0.0785--0.0789 s PHP, about 3.05--3.06x. This is approximately 14.5 percent
+below Phase 3b and 54 percent below the original 0.521 s RPHP baseline. The
+complete release suite passes, and the no-PGO matrix remains 30 strict RPHP
+wins plus one timing-level tie. Fresh sampling reduces `with_hash_capacity`
+from 88 samples to 3 and leaves the complete small-array lifecycle near 6
+percent. Object creation and destruction are now the largest named runtime
+lifecycle cost at roughly 20 percent combined.

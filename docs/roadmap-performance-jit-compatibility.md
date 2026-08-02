@@ -357,6 +357,30 @@ construction/destruction and object allocation as the largest runtime-owned
 costs outside general opcode execution, so those lifecycle costs are the next
 candidates for structural analysis.
 
+The seventh corpus-driven slice adds an allocation-free small ordered-hash
+representation. Up to three explicit integer or string entries live directly
+inside the existing `PhpArray` allocation; the fourth new key dynamically
+promotes to the unrestricted indexed representation. This is not a PHP array
+size limit. Existing keys can be overwritten inline, and ordering, COW,
+remove/pop/shift, iteration, integer renumbering, and guarded position reads
+retain their ordinary semantics across promotion.
+
+Three optional entries fit without enlarging `ArrayStorage` or the 112-byte
+`PhpArray`, so packed and larger hash arrays do not carry additional object
+size. The common short result avoids its entries-vector and string-index heap
+allocations, insertion hashes, and corresponding frees. Two independent
+best-of-five runs measure 0.2404--0.2406 s RPHP versus 0.0785--0.0789 s PHP,
+about 3.05--3.06x and roughly 14.5 percent below the validated-position result.
+The complete release suite passes and the no-PGO matrix remains 30 strict wins
+plus one timing-level tie.
+
+Post-change sampling reduces short-array construction and destruction from
+roughly 17--18 percent to about 6 percent. Object creation and destruction now
+form the largest named runtime lifecycle block at approximately 20 percent
+combined. The next no-JIT structural target is therefore declared-object
+layout and allocation, while dynamic properties and magic behavior must keep
+their canonical fallbacks.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:
