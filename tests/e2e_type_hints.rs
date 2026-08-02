@@ -14,7 +14,7 @@ use rphp::vm::instruction::{
 };
 use rphp::vm::opcode::OpCode;
 use rphp::vm::planner::BlockPlan;
-use rphp::vm::quick::QuickLongOp;
+use rphp::vm::quick::{QuickLongOp, QuickTypedMethodCall};
 
 fn compile_types(source: &str) -> rphp::compiler::compile::CompileResult {
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -1156,7 +1156,16 @@ fn test_intdiv_conditional_method_composes_into_quick_scalar_loop() {
             block,
             BlockPlan::QuickLongOps(plan)
                 if plan.ops.iter().any(|operation| {
-                    matches!(operation, QuickLongOp::ScalarMethodCall { .. })
+                    matches!(
+                        operation,
+                        QuickLongOp::ScalarMethodCall {
+                            call: QuickTypedMethodCall {
+                                argument_count: 2,
+                                ..
+                            },
+                            ..
+                        }
+                    )
                 })
         )
     }));

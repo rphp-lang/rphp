@@ -20,6 +20,7 @@ use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
+    QuickTypedMethodCall,
     QuickObjectArrayConsumer, QuickStringAppendSource, QuickVirtualValueSource,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
@@ -7622,22 +7623,17 @@ unsafe fn resolve_quick_object_ops(
     let mut resolved = vec![QuickResolvedObjectOp::None; plan.ops.len()];
     for (index, operation) in plan.ops.iter().copied().enumerate() {
         resolved[index] = match operation {
-            QuickLongOp::PropertyMethodCall {
-                guard,
-                argument_count,
-                ..
-            } => {
+            QuickLongOp::PropertyMethodCall { call } => {
                 let (receiver, target, user) = quick_object_method_target(
                     op_array,
                     slot_base,
-                    guard,
-                    argument_count as usize,
+                    call.guard,
+                    call.argument_count as usize,
                 )?;
                 let property_plan = (&*user).long_property_plan.as_deref()?;
-                if property_plan.public_args != argument_count {
-                    return None;
-                }
-                if property_plan.properties.len() > 8 {
+                if property_plan.public_args != call.argument_count
+                    || property_plan.properties.len() > 8
+                {
                     return None;
                 }
                 let class_id = (*receiver).object_class_id_unchecked();
@@ -7665,9 +7661,13 @@ unsafe fn resolve_quick_object_ops(
                     property_count: property_plan.properties.len() as u8,
                 }
             }
-            QuickLongOp::PropertyGetterCall { guard, .. } => {
-                let (receiver, target, user) =
-                    quick_object_method_target(op_array, slot_base, guard, 0)?;
+            QuickLongOp::PropertyGetterCall { call, .. } => {
+                let (receiver, target, user) = quick_object_method_target(
+                    op_array,
+                    slot_base,
+                    call.guard,
+                    call.argument_count as usize,
+                )?;
                 let property_slot = quick_property_getter_slot(receiver, user)?;
                 QuickResolvedObjectOp::PropertyGetter {
                     receiver,
@@ -7675,19 +7675,15 @@ unsafe fn resolve_quick_object_ops(
                     property_slot,
                 }
             }
-            QuickLongOp::ScalarMethodCall {
-                guard,
-                argument_count,
-                ..
-            } => {
+            QuickLongOp::ScalarMethodCall { call, .. } => {
                 let (_receiver, target, user) = quick_object_method_target(
                     op_array,
                     slot_base,
-                    guard,
-                    argument_count as usize,
+                    call.guard,
+                    call.argument_count as usize,
                 )?;
                 let scalar_plan = (&*user).scalar_long_plan.as_deref()?;
-                if scalar_plan.public_args != argument_count {
+                if scalar_plan.public_args != call.argument_count {
                     return None;
                 }
                 QuickResolvedObjectOp::ScalarMethod {
@@ -9970,6 +9966,25 @@ fn quick_long_operand(slots: &[i64; 64], operand: QuickLongOperand) -> i64 {
 
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
+fn quick_typed_method_arguments(
+    slots: &[i64; 64],
+    call: &QuickTypedMethodCall,
+) -> [i64; 8] {
+    let mut arguments = [0i64; 8];
+    for (index, source) in call
+        .arguments
+        .iter()
+        .copied()
+        .take(call.argument_count as usize)
+        .enumerate()
+    {
+        arguments[index] = quick_long_operand(slots, source);
+    }
+    arguments
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
 unsafe fn deopt_quick_long_kernel(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -9989,6 +10004,32 @@ unsafe fn deopt_quick_long_kernel(
     (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
     stats::inc_quick_loop_deoptimized(iterations);
     QuickLoopOutcome::Deoptimized
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn deopt_quick_typed_method_call(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    slot_base: *mut Value,
+    slots: &[i64; 64],
+    dirty_long_mask: u64,
+    dirty_bool_mask: u64,
+    string_state: &mut QuickStringSlotState,
+    call: QuickTypedMethodCall,
+    iterations: u64,
+) -> QuickLoopOutcome {
+    string_state.commit();
+    deopt_quick_long_kernel(
+        frame,
+        op_array,
+        slot_base,
+        slots,
+        dirty_long_mask,
+        dirty_bool_mask,
+        call.resume_ip,
+        iterations,
+    )
 }
 
 #[inline(never)]
@@ -11559,16 +11600,10 @@ unsafe fn run_quick_long_ops_loop(
                     (1u64 << second_result) | (1u64 << destination);
                 next_target
             }
-            QuickLongOp::PropertyMethodCall {
-                arguments,
-                argument_count,
-                next_target,
-                resume_ip,
-                ..
-            } => {
+            QuickLongOp::PropertyMethodCall { call } => {
                 let QuickResolvedObjectOp::PropertyMethod {
                     receiver,
-                    plan: property_plan,
+                    plan,
                     property_slots,
                     property_count,
                     ..
@@ -11576,45 +11611,31 @@ unsafe fn run_quick_long_ops_loop(
                 else {
                     unreachable!("resolved property method operation")
                 };
-                let mut values = [0i64; 8];
-                for (index, source) in arguments
-                    .iter()
-                    .copied()
-                    .take(argument_count as usize)
-                    .enumerate()
-                {
-                    values[index] = match source {
-                        QuickLongOperand::Slot(slot) => slots[slot as usize],
-                        QuickLongOperand::Const(value) => value,
-                    };
-                }
+                let arguments = quick_typed_method_arguments(&slots, &call);
                 if try_execute_resolved_long_property_plan(
                     &*receiver,
-                    &values,
-                    &*property_plan,
+                    &arguments,
+                    &*plan,
                     &property_slots,
                     property_count,
                 ) {
                     object_call_recorder.record(op_index);
-                    next_target
+                    call.next_target
                 } else {
-                    commit_quick_long_ops_slots(
+                    return Ok(deopt_quick_typed_method_call(
+                        frame,
+                        op_array,
                         slot_base,
                         &slots,
                         dirty_long_mask,
                         dirty_bool_mask,
-                    );
-                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
-                    stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                        &mut string_state,
+                        call,
+                        iterations,
+                    ));
                 }
             }
-            QuickLongOp::PropertyGetterCall {
-                result,
-                next_target,
-                resume_ip,
-                ..
-            } => {
+            QuickLongOp::PropertyGetterCall { call, result } => {
                 let QuickResolvedObjectOp::PropertyGetter {
                     receiver,
                     property_slot,
@@ -11628,58 +11649,45 @@ unsafe fn run_quick_long_ops_loop(
                     slots[result as usize] = property.raw_long();
                     dirty_long_mask |= 1u64 << result;
                     object_call_recorder.record(op_index);
-                    next_target
+                    call.next_target
                 } else {
-                    commit_quick_long_ops_slots(
+                    return Ok(deopt_quick_typed_method_call(
+                        frame,
+                        op_array,
                         slot_base,
                         &slots,
                         dirty_long_mask,
                         dirty_bool_mask,
-                    );
-                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
-                    stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                        &mut string_state,
+                        call,
+                        iterations,
+                    ));
                 }
             }
-            QuickLongOp::ScalarMethodCall {
-                arguments,
-                argument_count,
-                result,
-                next_target,
-                resume_ip,
-                ..
-            } => {
-                let QuickResolvedObjectOp::ScalarMethod {
-                    plan: scalar_plan, ..
-                } = *resolved_object_ops.get_unchecked(op_index)
+            QuickLongOp::ScalarMethodCall { call, result } => {
+                let QuickResolvedObjectOp::ScalarMethod { plan, .. } =
+                    *resolved_object_ops.get_unchecked(op_index)
                 else {
                     unreachable!("resolved scalar method operation")
                 };
-                let mut values = [0i64; 8];
-                for (index, source) in arguments
-                    .iter()
-                    .copied()
-                    .take(argument_count as usize)
-                    .enumerate()
-                {
-                    values[index] = quick_long_operand(&slots, source);
-                }
-                if let Some(value) = evaluate_scalar_long_plan(&*scalar_plan, &values) {
+                let arguments = quick_typed_method_arguments(&slots, &call);
+                if let Some(value) = evaluate_scalar_long_plan(&*plan, &arguments) {
                     slots[result as usize] = value;
                     dirty_long_mask |= 1u64 << result;
                     object_call_recorder.record(op_index);
-                    next_target
+                    call.next_target
                 } else {
-                    commit_quick_long_ops_slots(
+                    return Ok(deopt_quick_typed_method_call(
+                        frame,
+                        op_array,
                         slot_base,
                         &slots,
                         dirty_long_mask,
                         dirty_bool_mask,
-                    );
-                    string_state.commit();
-                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
-                    stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
+                        &mut string_state,
+                        call,
+                        iterations,
+                    ));
                 }
             }
             QuickLongOp::ComposedPropertyCall {

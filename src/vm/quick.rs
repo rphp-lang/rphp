@@ -216,6 +216,18 @@ pub enum QuickLongOperand {
     Const(i64),
 }
 
+/// Shared guarded ABI for every frame-free typed method call in a general
+/// scalar region. Executable variants retain their proven body kind so the hot
+/// loop does not redispatch it on every call.
+#[derive(Debug, Clone, Copy)]
+pub struct QuickTypedMethodCall {
+    pub guard: ScalarLongCallGuard,
+    pub arguments: [QuickLongOperand; 8],
+    pub argument_count: u8,
+    pub next_target: QuickLongTarget,
+    pub resume_ip: usize,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum QuickLongCondition {
     Lt { lhs: u16, rhs: QuickLongOperand },
@@ -390,33 +402,19 @@ pub enum QuickLongOp {
         first_resume_ip: usize,
         second_resume_ip: usize,
     },
-    /// Frame-free compiler-proven property mutator with zero to eight Long
-    /// arguments. Dispatch and property layout are guarded at region entry.
+    /// Frame-free compiler-proven property mutator.
     PropertyMethodCall {
-        guard: ScalarLongCallGuard,
-        arguments: [QuickLongOperand; 8],
-        argument_count: u8,
-        next_target: QuickLongTarget,
-        resume_ip: usize,
+        call: QuickTypedMethodCall,
     },
-    /// Compiler-proven declared-property getter whose scalar result remains in
-    /// the typed loop slot file.
+    /// Compiler-proven declared-property getter.
     PropertyGetterCall {
-        guard: ScalarLongCallGuard,
+        call: QuickTypedMethodCall,
         result: u16,
-        next_target: QuickLongTarget,
-        resume_ip: usize,
     },
-    /// Monomorphic pure scalar method with Long arguments and result. Runtime
-    /// validates the receiver/method cache and ScalarLongFunctionPlan once at
-    /// region entry.
+    /// Monomorphic pure scalar method with Long result.
     ScalarMethodCall {
-        guard: ScalarLongCallGuard,
-        arguments: [QuickLongOperand; 8],
-        argument_count: u8,
+        call: QuickTypedMethodCall,
         result: u16,
-        next_target: QuickLongTarget,
-        resume_ip: usize,
     },
     /// Exact PHP evaluation order for `propertyMutator(propertyGetter())`.
     ComposedPropertyCall {
@@ -526,9 +524,6 @@ impl QuickLongOp {
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
             | Self::AddAddAssign { next_target, .. }
-            | Self::PropertyMethodCall { next_target, .. }
-            | Self::PropertyGetterCall { next_target, .. }
-            | Self::ScalarMethodCall { next_target, .. }
             | Self::ComposedPropertyCall { next_target, .. }
             | Self::VirtualObjectArrayPipeline { next_target, .. }
             | Self::Assign { next_target, .. }
@@ -536,6 +531,9 @@ impl QuickLongOp {
             | Self::AssignStringLiteral { next_target, .. }
             | Self::AssignStringSlot { next_target, .. }
             | Self::PostInc { next_target, .. } => resolve(next_target),
+            Self::PropertyMethodCall { call }
+            | Self::PropertyGetterCall { call, .. }
+            | Self::ScalarMethodCall { call, .. } => resolve(&mut call.next_target),
             Self::PostIncJump { target, .. } | Self::Jump { target } => resolve(target),
             Self::PostIncLoopLt {
                 body_target,
@@ -3179,14 +3177,15 @@ fn detect_long_ops_region_inner(
                     }
                     let resume_ip = ip;
                     ip = cursor + 1;
+                    let call = QuickTypedMethodCall {
+                        guard: outer_guard,
+                        arguments,
+                        argument_count: argument_count as u8,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    };
                     if do_fcall.result_type == OpType::Unused {
-                        QuickLongOp::PropertyMethodCall {
-                            guard: outer_guard,
-                            arguments,
-                            argument_count: argument_count as u8,
-                            next_target: QuickLongTarget::unresolved(ip)?,
-                            resume_ip,
-                        }
+                        QuickLongOp::PropertyMethodCall { call }
                     } else if argument_count == 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
                     {
@@ -3196,10 +3195,8 @@ fn detect_long_ops_region_inner(
                             total_slots,
                         )?;
                         QuickLongOp::PropertyGetterCall {
-                            guard: outer_guard,
+                            call,
                             result: do_fcall.result,
-                            next_target: QuickLongTarget::unresolved(ip)?,
-                            resume_ip,
                         }
                     } else if argument_count != 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
@@ -3210,12 +3207,8 @@ fn detect_long_ops_region_inner(
                             total_slots,
                         )?;
                         QuickLongOp::ScalarMethodCall {
-                            guard: outer_guard,
-                            arguments,
-                            argument_count: argument_count as u8,
+                            call,
                             result: do_fcall.result,
-                            next_target: QuickLongTarget::unresolved(ip)?,
-                            resume_ip,
                         }
                     } else {
                         return None;
@@ -3376,14 +3369,14 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::StringAppend { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
             | QuickLongOp::Binary { resume_ip, .. }
-            | QuickLongOp::PropertyMethodCall { resume_ip, .. }
-            | QuickLongOp::PropertyGetterCall { resume_ip, .. }
-            | QuickLongOp::ScalarMethodCall { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
             | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
             | QuickLongOp::PostIncJump { resume_ip, .. }
             | QuickLongOp::PostIncLoopLt { resume_ip, .. } => resume_ip,
+            QuickLongOp::PropertyMethodCall { call }
+            | QuickLongOp::PropertyGetterCall { call, .. }
+            | QuickLongOp::ScalarMethodCall { call, .. } => call.resume_ip,
             QuickLongOp::AddAssign { add_resume_ip, .. } => add_resume_ip,
             QuickLongOp::ConditionalAddAssign {
                 condition_resume_ip,
@@ -3713,7 +3706,10 @@ for ($i = 0; $i < 100; $i++) {
         assert!(plan.ops.iter().any(|operation| matches!(
             operation,
             QuickLongOp::PropertyMethodCall {
-                argument_count: 0,
+                call: QuickTypedMethodCall {
+                    argument_count: 0,
+                    ..
+                },
                 ..
             }
         )));

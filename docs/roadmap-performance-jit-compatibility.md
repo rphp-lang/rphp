@@ -818,6 +818,31 @@ small enough that the next work should consolidate scalar/property/object plan
 execution into one typed-region representation and measure its dispatch cost,
 instead of adding another corpus-shaped fast path.
 
+The first consolidation checkpoint now separates semantic call ABI from
+executable body shape. Direct scalar methods, declared-property getters and
+property mutators share `QuickTypedMethodCall`: one receiver/method guard, one
+eight-slot argument description, one resume point and one next target. Argument
+materialization and exact side-exit publication are also shared. The executable
+IR deliberately retains three body-specific variants, however, so a proven body
+kind is not redispatched inside every hot iteration.
+
+This distinction is performance-critical. A prototype with one dynamically
+tagged method-body variant was semantically clean but slowed the 15-million-call
+method-chain workload from roughly 0.094 s to 0.131 s. Keeping specialized
+executable variants removed that branch, and passing the common argument payload
+by reference removed an additional eight-operand copy. The retained design
+measures about 0.0846 s on the same workload versus about 0.1525 s in PHP
+(approximately 0.55x); application-like object dispatch measures about 0.0709 s
+versus 0.0883 s (approximately 0.80x). The 31-workload matrix remains at 29
+strict RPHP wins, while both application corpora retain their previous parity
+and exact VM counters.
+
+The architectural rule for subsequent consolidation is therefore explicit:
+unify guards, operands, ownership publication and deoptimization contracts in
+the semantic typed IR, then lower them to specialized executable forms before
+entering the loop. The future JIT can consume the same semantic nodes without
+forcing the no-JIT executor to pay a generic body-dispatch cost.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:
