@@ -747,6 +747,43 @@ already-guarded virtual pipeline into a closed scalar loop region, so those
 operations stay in native Rust locals across iterations while all existing
 guards and canonical side exits remain reusable.
 
+That complete loop composition is now selected through the general
+`QuickLongOpsLoop` graph. Escape markers are established before loop planning,
+and the typed vocabulary now admits checked literal/slot arithmetic,
+less-than-or-equal branches, immutable string selection, and a composed
+virtual-constructor/ObjectArray operation. Compiler temporaries produced inside
+the region are distinguished from CVs that carry state across iterations, so a
+conditionally produced TMP is not incorrectly required to contain a stale
+entry value. Overflow and every unsupported edge still publish the retained
+CV/TMP/string state and resume at the exact original opcode.
+
+Loop-invariant constructor class/signature, method identity, declared-property
+layout, argument representation, and receiver guards are resolved once at
+region entry. Each iteration consequently keeps subtotal, level, accumulator,
+branch, virtual-property and result values in the scalar slot file. Only the
+nested value-dependent object plans and checked business arithmetic execute;
+the request/result objects, their frames, caller opcode dispatch, and the
+per-iteration region string clone are absent.
+
+Best-of-five no-PGO corpus time falls from about 0.115 s to 0.080 s untyped and
+from about 0.128 s to 0.085 s typed. On the same run PHP measures about 0.080 s
+and 0.083 s respectively: the representative no-JIT application pipeline is
+therefore at parity (approximately 0.99x and 1.02x), rather than 1.45--1.53x
+behind. The 500,000-iteration statistics show one successful quick-region
+entry, 499,967 quick iterations, zero guard failures/deoptimizations, only 46
+String clones and 138 ordinary Value writes. The full release suite passes and
+the independent matrix remains at 29 RPHP wins out of 31; the same isolated
+array-build and scalar-method workloads remain the two small losses.
+
+This is the intended decision boundary for the no-JIT architecture: a mixed
+typed application region can now carry control flow, arithmetic, strings,
+objects, composed calls, scalar replacement and precise side exits as one
+guarded program. The next systematic work should validate this representation
+against additional independent application corpora and consolidate duplicated
+plan lowering/execution into the unified typed IR. Once that breadth is stable,
+the minimal JIT can lower these already-proven regions instead of inventing a
+second semantic optimizer.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

@@ -13,6 +13,8 @@ use rphp::vm::instruction::{
     NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
 };
 use rphp::vm::opcode::OpCode;
+use rphp::vm::planner::BlockPlan;
+use rphp::vm::quick::QuickLongOp;
 
 fn compile_types(source: &str) -> rphp::compiler::compile::CompileResult {
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -1643,6 +1645,15 @@ echo runPipeline(100);
         instruction.opcode == OpCode::NewObj
             && instruction._pad & NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE != 0
     }));
+    assert!(run.op_array.block_plans.iter().any(|block| {
+        matches!(
+            block,
+            BlockPlan::QuickLongOps(plan)
+                if plan.ops.iter().any(|operation| {
+                    matches!(operation, QuickLongOp::VirtualObjectArrayPipeline { .. })
+                })
+        )
+    }));
     assert_eq!(run_php(source), "500");
 }
 
@@ -1689,10 +1700,38 @@ class Service {
         return ['value' => $value];
     }
 }
+
 $service = new Service(new Policy());
 $request = new Request();
 $sum = 9223372036854775780;
 for ($i = 0; $i < 50; $i++) {
+    $result = $service->quote($request);
+    $sum = $sum + $result['value'];
+}
+echo gettype($sum);
+"#), "double");
+}
+
+#[test]
+fn test_virtual_pipeline_loop_overflow_side_exits_to_canonical_addition() {
+    assert_eq!(run_php(r#"<?php
+class Request {
+    public $value = 0;
+    public function __construct($value) { $this->value = $value; }
+}
+class Policy { public function amount($request) { return $request->value; } }
+class Service {
+    public $policy;
+    public function __construct($policy) { $this->policy = $policy; }
+    public function quote($request) {
+        $value = $this->policy->amount($request);
+        return ['value' => $value];
+    }
+}
+$service = new Service(new Policy());
+$sum = 9223372036854775767;
+for ($i = 0; $i < 50; $i++) {
+    $request = new Request(1);
     $result = $service->quote($request);
     $sum = $sum + $result['value'];
 }

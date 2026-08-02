@@ -50,6 +50,26 @@ pub enum QuickStringAppendSource {
     Slot(u16),
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickVirtualValueSource {
+    Long(QuickLongOperand),
+    StringLiteral(u16),
+    StringSlot(u16),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuickObjectArrayConsumer {
+    pub key_literal: u16,
+    pub accumulator: u16,
+}
+
+impl QuickObjectArrayConsumer {
+    pub const EMPTY: Self = Self {
+        key_literal: 0,
+        accumulator: 0,
+    };
+}
+
 #[derive(Debug, Clone)]
 pub enum QuickLongTerm {
     /// Add the induction variable directly to the accumulator.
@@ -284,6 +304,14 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    BranchUnlessLe {
+        lhs: QuickLongOperand,
+        rhs: QuickLongOperand,
+        condition_tmp: Option<u16>,
+        false_target: QuickLongTarget,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     ModConst {
         value: u16,
         divisor: i64,
@@ -317,6 +345,16 @@ pub enum QuickLongOp {
     Add {
         lhs: u16,
         rhs: u16,
+        result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// Checked scalar arithmetic when either operand may be a literal. The
+    /// older Add variants retain their denser accumulator fusions.
+    Binary {
+        kind: ScalarLongOpKind,
+        lhs: QuickLongOperand,
+        rhs: QuickLongOperand,
         result: u16,
         next_target: QuickLongTarget,
         resume_ip: usize,
@@ -373,6 +411,19 @@ pub enum QuickLongOp {
     ComposedPropertyCall {
         outer_guard: ScalarLongCallGuard,
         inner_guard: ScalarLongCallGuard,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// A compiler-proven non-escaping constructor → ObjectArray call whose
+    /// immediate scalar consumers are part of this closed typed region.
+    VirtualObjectArrayPipeline {
+        constructor_arguments: [QuickVirtualValueSource; 8],
+        argument_count: u8,
+        consumers: [QuickObjectArrayConsumer; 4],
+        consumer_count: u8,
+        trailing_key_literal: Option<u16>,
+        trailing_result: u16,
+        output_mask: u64,
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
@@ -441,6 +492,11 @@ impl QuickLongOp {
                 false_target,
                 next_target,
                 ..
+            }
+            | Self::BranchUnlessLe {
+                false_target,
+                next_target,
+                ..
             } => {
                 resolve(false_target)?;
                 resolve(next_target)
@@ -450,12 +506,14 @@ impl QuickLongOp {
             | Self::ArrayPushLong { next_target, .. }
             | Self::StringAppend { next_target, .. }
             | Self::Add { next_target, .. }
+            | Self::Binary { next_target, .. }
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
             | Self::AddAddAssign { next_target, .. }
             | Self::PropertyMethodCall { next_target, .. }
             | Self::PropertyGetterCall { next_target, .. }
             | Self::ComposedPropertyCall { next_target, .. }
+            | Self::VirtualObjectArrayPipeline { next_target, .. }
             | Self::Assign { next_target, .. }
             | Self::AssignStringLiteral { next_target, .. }
             | Self::AssignStringSlot { next_target, .. }
@@ -1906,6 +1964,18 @@ fn long_slot(op_type: OpType, slot: u16) -> Option<u16> {
     matches!(op_type, OpType::Cv | OpType::Tmp).then_some(slot)
 }
 
+fn quick_long_operand(
+    op_array: &OpArray,
+    op_type: OpType,
+    operand: u16,
+) -> Option<QuickLongOperand> {
+    match op_type {
+        OpType::Cv | OpType::Tmp => Some(QuickLongOperand::Slot(operand)),
+        OpType::Const => Some(QuickLongOperand::Const(long_literal(op_array, operand)?)),
+        _ => None,
+    }
+}
+
 fn instruction_writes_cv(instruction: crate::vm::instruction::Instruction, cv: u16) -> bool {
     if instruction.result_type == OpType::Cv && instruction.result == cv {
         return true;
@@ -2033,6 +2103,13 @@ fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
         match *op {
             QuickLongOp::ModConst { value, result, .. } => {
                 straight_region_read(&mut inputs, defined, value)?;
+                straight_region_write(&mut defined, result)?;
+            }
+            QuickLongOp::Binary {
+                lhs, rhs, result, ..
+            } => {
+                straight_region_read_operand(&mut inputs, defined, lhs)?;
+                straight_region_read_operand(&mut inputs, defined, rhs)?;
                 straight_region_write(&mut defined, result)?;
             }
             QuickLongOp::FetchArrayLong {
@@ -2221,8 +2298,33 @@ fn detect_long_ops_region_inner(
         }
     }
 
+    // A non-escaping virtual constructor may also retain a string CV even
+    // though it is never used as an array key in the caller. Admit only CVs
+    // whose complete visible assignment set below proves immutable strings.
+    let mut virtual_string_candidate_mask = 0u64;
+    for (relative_ip, instruction) in region.iter().copied().enumerate() {
+        if instruction.opcode != OpCode::NewObj
+            || instruction._pad
+                & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
+                == 0
+        {
+            continue;
+        }
+        let new_ip = header_ip + relative_ip;
+        for index in 0..instruction.extended_value as usize {
+            let send = *op_array.instructions.get(new_ip + 1 + index)?;
+            if send.op1_type == OpType::Cv {
+                add_mask_slot(
+                    &mut virtual_string_candidate_mask,
+                    send.op1,
+                    total_slots,
+                )?;
+            }
+        }
+    }
+
     let mut string_key_assignment_mask = 0u64;
-    let mut candidates = array_index_cv_mask;
+    let mut candidates = array_index_cv_mask | virtual_string_candidate_mask;
     while candidates != 0 {
         let key = candidates.trailing_zeros() as u16;
         candidates &= candidates - 1;
@@ -2652,6 +2754,114 @@ fn detect_long_ops_region_inner(
                     op
                 }
             }
+            OpCode::IsSmallerOrEqual => {
+                let lhs = quick_long_operand(
+                    op_array,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = quick_long_operand(
+                    op_array,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                let branch = *op_array.instructions.get(ip + 1)?;
+                if instruction.result_type != OpType::Tmp
+                    || branch.opcode != OpCode::JmpZ
+                    || branch.op1_type != OpType::Tmp
+                    || branch.op1 != instruction.result
+                    || branch.op2_type != OpType::Unused
+                {
+                    return None;
+                }
+                for operand in [lhs, rhs] {
+                    if let QuickLongOperand::Slot(slot) = operand {
+                        add_mask_slot(&mut long_input_mask, slot, total_slots)?;
+                    }
+                }
+                add_mask_slot(&mut bool_output_mask, instruction.result, total_slots)?;
+                let op = QuickLongOp::BranchUnlessLe {
+                    lhs,
+                    rhs,
+                    condition_tmp: Some(instruction.result),
+                    false_target: QuickLongTarget::unresolved(branch.op2 as usize)?,
+                    next_target: QuickLongTarget::unresolved(ip + 2)?,
+                    resume_ip: ip,
+                };
+                ip += 2;
+                op
+            }
+            OpCode::Add
+                if long_slot(instruction.op1_type, instruction.op1).is_none()
+                    || long_slot(instruction.op2_type, instruction.op2).is_none() =>
+            {
+                if instruction.result_type != OpType::Tmp {
+                    return None;
+                }
+                let lhs = quick_long_operand(
+                    op_array,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = quick_long_operand(
+                    op_array,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                for operand in [lhs, rhs] {
+                    if let QuickLongOperand::Slot(slot) = operand {
+                        add_mask_slot(&mut long_input_mask, slot, total_slots)?;
+                    }
+                }
+                add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                has_add = true;
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs,
+                    rhs,
+                    result: instruction.result,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
+                }
+            }
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp | OpCode::Mul => {
+                if instruction.result_type != OpType::Tmp {
+                    return None;
+                }
+                let lhs = quick_long_operand(
+                    op_array,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = quick_long_operand(
+                    op_array,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                for operand in [lhs, rhs] {
+                    if let QuickLongOperand::Slot(slot) = operand {
+                        add_mask_slot(&mut long_input_mask, slot, total_slots)?;
+                    }
+                }
+                add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                let kind = if instruction.opcode == OpCode::Mul {
+                    ScalarLongOpKind::Multiply
+                } else {
+                    ScalarLongOpKind::Subtract
+                };
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::Binary {
+                    kind,
+                    lhs,
+                    rhs,
+                    result: instruction.result,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
+                }
+            }
             OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp => {
                 let (lhs, rhs, result) = long_add(instruction)?;
                 add_mask_slot(&mut long_input_mask, lhs, total_slots)?;
@@ -2729,6 +2939,127 @@ fn detect_long_ops_region_inner(
                         next_target: QuickLongTarget::unresolved(ip)?,
                         resume_ip: ip - 1,
                     }
+                }
+            }
+            OpCode::NewObj => {
+                if instruction._pad
+                    & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
+                    == 0
+                {
+                    return None;
+                }
+                let next_ip = detect_virtual_object_array_pipeline_span(op_array, ip)?;
+                if next_ip <= ip || next_ip > backedge_ip {
+                    return None;
+                }
+
+                let mut constructor_arguments =
+                    [QuickVirtualValueSource::Long(QuickLongOperand::Const(0)); 8];
+                for (index, argument) in constructor_arguments
+                    .iter_mut()
+                    .enumerate()
+                    .take(instruction.extended_value as usize)
+                {
+                    let send = *op_array.instructions.get(ip + 1 + index)?;
+                    *argument = match send.op1_type {
+                        OpType::Cv | OpType::Tmp => {
+                            let bit = 1u64.checked_shl(u32::from(send.op1))?;
+                            if string_key_assignment_mask & bit != 0 {
+                                add_mask_slot(
+                                    &mut string_input_mask,
+                                    send.op1,
+                                    total_slots,
+                                )?;
+                                QuickVirtualValueSource::StringSlot(send.op1)
+                            } else {
+                                add_mask_slot(
+                                    &mut long_input_mask,
+                                    send.op1,
+                                    total_slots,
+                                )?;
+                                QuickVirtualValueSource::Long(
+                                    QuickLongOperand::Slot(send.op1),
+                                )
+                            }
+                        }
+                        OpType::Const => {
+                            let value = op_array.literals.get(send.op1 as usize)?;
+                            if let Some(value) = value.as_long() {
+                                QuickVirtualValueSource::Long(
+                                    QuickLongOperand::Const(value),
+                                )
+                            } else if value.as_str().is_some() {
+                                QuickVirtualValueSource::StringLiteral(send.op1)
+                            } else {
+                                return None;
+                            }
+                        }
+                        _ => return None,
+                    };
+                }
+
+                let constructor_do_ip = ip + 1 + instruction.extended_value as usize;
+                let method_ip = constructor_do_ip + 2;
+                let method = *op_array.instructions.get(method_ip)?;
+                if method.opcode != OpCode::InitMethodCall
+                    || method.op1_type != OpType::Cv
+                    || method.extended_value != 1
+                {
+                    return None;
+                }
+                add_mask_slot(&mut object_input_mask, method.op1, total_slots)?;
+
+                let method_do_ip = method_ip + 1 + method.extended_value as usize;
+                let mut cursor = method_do_ip + 2;
+                let mut output_mask = 0u64;
+                let mut consumer_count = 0usize;
+                let mut consumers = [QuickObjectArrayConsumer::EMPTY; 4];
+                let mut trailing_key_literal = None;
+                let mut trailing_result = 0;
+                while cursor < next_ip {
+                    let fetch = *op_array.instructions.get(cursor)?;
+                    if fetch.opcode != OpCode::FetchDimR {
+                        return None;
+                    }
+                    let add = op_array.instructions.get(cursor + 1).copied();
+                    let assign = op_array.instructions.get(cursor + 2).copied();
+                    if let (Some(add), Some(assign)) = (add, assign)
+                        && let Some(accumulator) =
+                            object_array_add_consumer(fetch, add, assign)
+                    {
+                        add_mask_slot(&mut long_input_mask, accumulator, total_slots)?;
+                        add_mask_slot(&mut long_output_mask, accumulator, total_slots)?;
+                        output_mask |= 1u64 << accumulator;
+                        *consumers.get_mut(consumer_count)? = QuickObjectArrayConsumer {
+                            key_literal: fetch.op2,
+                            accumulator,
+                        };
+                        consumer_count += 1;
+                        cursor += 3;
+                    } else {
+                        add_mask_slot(&mut long_output_mask, fetch.result, total_slots)?;
+                        output_mask |= 1u64 << fetch.result;
+                        trailing_key_literal = Some(fetch.op2);
+                        trailing_result = fetch.result;
+                        cursor += 1;
+                    }
+                }
+                if cursor != next_ip || consumer_count == 0 {
+                    return None;
+                }
+                has_object_call = true;
+                let resume_ip = ip;
+                ip = next_ip;
+                QuickLongOp::VirtualObjectArrayPipeline {
+                    constructor_arguments,
+                    argument_count: instruction.extended_value as u8,
+                    consumers,
+                    consumer_count: consumer_count as u8,
+                    trailing_key_literal,
+                    trailing_result,
+                    output_mask,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
                 }
             }
             OpCode::InitMethodCall => {
@@ -2993,14 +3324,17 @@ fn detect_long_ops_region_inner(
         let op_ip = match op {
             QuickLongOp::BranchUnlessLt { resume_ip, .. }
             | QuickLongOp::BranchUnlessEq { resume_ip, .. }
+            | QuickLongOp::BranchUnlessLe { resume_ip, .. }
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
             | QuickLongOp::ArrayPushLong { resume_ip, .. }
             | QuickLongOp::StringAppend { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
+            | QuickLongOp::Binary { resume_ip, .. }
             | QuickLongOp::PropertyMethodCall { resume_ip, .. }
             | QuickLongOp::PropertyGetterCall { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
+            | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
             | QuickLongOp::PostInc { resume_ip, .. }
             | QuickLongOp::PostIncJump { resume_ip, .. }
             | QuickLongOp::PostIncLoopLt { resume_ip, .. } => resume_ip,
@@ -3060,7 +3394,9 @@ fn detect_long_ops_region_inner(
     let has_internal_branch = ops.iter().skip(1).any(|op| {
         matches!(
             op,
-            QuickLongOp::BranchUnlessLt { .. } | QuickLongOp::BranchUnlessEq { .. }
+            QuickLongOp::BranchUnlessLt { .. }
+                | QuickLongOp::BranchUnlessEq { .. }
+                | QuickLongOp::BranchUnlessLe { .. }
         )
     });
     if closed_loop {
@@ -3103,6 +3439,17 @@ fn detect_long_ops_region_inner(
             &ip_to_op,
         )?;
     }
+
+    // Compiler temporaries are single-definition values inside this OpArray.
+    // If this region produces a TMP, every valid use is dominated by that
+    // definition and the stale frame representation is not an entry input.
+    // Keep CV read/write overlap intact because CVs carry loop state.
+    let cv_mask = if op_array.num_cvs == 64 {
+        u64::MAX
+    } else {
+        (1u64 << op_array.num_cvs) - 1
+    };
+    long_input_mask &= !(long_output_mask & !cv_mask);
 
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
