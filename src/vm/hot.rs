@@ -94,7 +94,10 @@ use crate::runtime::ExecutorGlobals;
 use super::execute::VmError;
 use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
 use super::function::{CallStrategy, FunctionType, UserFunction, HotStatus, FUNC_HOT_THRESHOLD};
-use super::instruction::{Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE};
+use super::instruction::{
+    Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_EXACT_SCALAR_ARGS,
+};
 use super::opcode::OpCode;
 use super::stack;
 use super::stats;
@@ -701,12 +704,88 @@ pub fn execute_hot_frame(
                 continue;
             }
 
+            // ── Declaration/flow-proven Long arithmetic ──
+            // The compiler has already proved both representations. Do not
+            // repeat reference and Value-tag guards in the hot tier.
+            OpCode::Add_LongLong
+            | OpCode::Sub_LongLong
+            | OpCode::Mul_LongLong
+            | OpCode::Mod_LongLong
+            | OpCode::BitwiseXor_LongLong => {
+                let operand = |op_type: OpType, slot: u16| -> Option<*const Value> {
+                    match op_type {
+                        OpType::Cv => Some(unsafe { (*frame).cv(slot as u32) as *const Value }),
+                        OpType::Tmp | OpType::Var => Some(unsafe {
+                            (frame as *const Value).add(CALL_FRAME_SLOTS + slot as usize)
+                        }),
+                        OpType::Const => Some(&op_array.literals()[slot as usize] as *const Value),
+                        OpType::Unused => None,
+                    }
+                };
+                let Some(left_ptr) = operand(opline.op1_type, opline.op1) else {
+                    return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);
+                };
+                let Some(right_ptr) = operand(opline.op2_type, opline.op2) else {
+                    return bailout(frame, opline_ptr, HotBailReason::NonScalarOperand);
+                };
+                debug_assert_eq!(unsafe { (*left_ptr).value_type() }, ValueType::Long);
+                debug_assert_eq!(unsafe { (*right_ptr).value_type() }, ValueType::Long);
+                let left = unsafe { (*left_ptr).raw_long() };
+                let right = unsafe { (*right_ptr).raw_long() };
+                let result_ptr = match opline.result_type {
+                    OpType::Tmp | OpType::Var => unsafe {
+                        (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
+                    },
+                    OpType::Cv => unsafe { (*frame).cv_mut(opline.result as u32) as *mut Value },
+                    _ => return bailout(frame, opline_ptr, HotBailReason::ComplexResultTarget),
+                };
+
+                match opline.opcode {
+                    OpCode::Add_LongLong => match left.checked_add(right) {
+                        Some(value) => unsafe { Value::write_long(result_ptr, value) },
+                        None => unsafe {
+                            result_ptr.write(Value::double(left as f64 + right as f64))
+                        },
+                    },
+                    OpCode::Sub_LongLong => match left.checked_sub(right) {
+                        Some(value) => unsafe { Value::write_long(result_ptr, value) },
+                        None => unsafe {
+                            result_ptr.write(Value::double(left as f64 - right as f64))
+                        },
+                    },
+                    OpCode::Mul_LongLong => match left.checked_mul(right) {
+                        Some(value) => unsafe { Value::write_long(result_ptr, value) },
+                        None => unsafe {
+                            result_ptr.write(Value::double(left as f64 * right as f64))
+                        },
+                    },
+                    OpCode::Mod_LongLong => {
+                        if right == 0 {
+                            return Err(VmError::Fatal("Division by zero".into()));
+                        }
+                        let remainder = left.checked_rem(right).unwrap_or(0);
+                        unsafe { Value::write_long(result_ptr, remainder) };
+                    }
+                    OpCode::BitwiseXor_LongLong => unsafe {
+                        Value::write_long(result_ptr, left ^ right)
+                    },
+                    _ => unreachable!(),
+                }
+                opline_ptr = unsafe { opline_ptr.add(1) };
+                continue;
+            }
+
             // ── General arithmetic — integer-only fast path ──
             // Handles any operand type combo (Cv, Tmp, Var, Const).
             // Bails on non-integer. Covers Add, Sub, Mul, Div, Mod.
             // Div: exact PHP semantics — divisible → long, else → double. Div-by-zero → fatal.
             // Mod: integer-only (PHP semantics). Div-by-zero → fatal.
-            OpCode::Add | OpCode::Add_CvTmp | OpCode::Sub_TmpTmp | OpCode::Mul | OpCode::Div | OpCode::Mod => {
+            OpCode::Add
+            | OpCode::Add_CvTmp
+            | OpCode::Sub_TmpTmp
+            | OpCode::Mul
+            | OpCode::Div
+            | OpCode::Mod => {
                 let op1_val = match opline.op1_type {
                     OpType::Cv => {
                         let cv = unsafe { (*frame).cv(opline.op1 as u32) };
@@ -750,8 +829,12 @@ pub fn execute_hot_frame(
                             if l2 == 0 {
                                 return Err(VmError::Fatal("Division by zero".into()));
                             }
-                            if l1 % l2 == 0 {
-                                unsafe { Value::write_long(result_ptr, l1 / l2) };
+                            if let Some(quotient) = l1.checked_div(l2) {
+                                if l1.checked_rem(l2) == Some(0) {
+                                    unsafe { Value::write_long(result_ptr, quotient) };
+                                } else {
+                                    unsafe { result_ptr.write(Value::double(l1 as f64 / l2 as f64)) };
+                                }
                             } else {
                                 unsafe { result_ptr.write(Value::double(l1 as f64 / l2 as f64)) };
                             }
@@ -760,7 +843,8 @@ pub fn execute_hot_frame(
                             if l2 == 0 {
                                 return Err(VmError::Fatal("Division by zero".into()));
                             }
-                            unsafe { Value::write_long(result_ptr, l1 % l2) };
+                            let remainder = l1.checked_rem(l2).unwrap_or(0);
+                            unsafe { Value::write_long(result_ptr, remainder) };
                         },
                         _ => unreachable!(),
                     }
@@ -808,6 +892,7 @@ pub fn execute_hot_frame(
                 }
 
                 if func_common.plan.call != CallStrategy::FastScalar
+                    && opline._pad & CALL_FLAG_EXACT_SCALAR_ARGS == 0
                     && !unsafe {
                         super::execute::compact_scalar_call_types_match(
                             call,
@@ -903,11 +988,19 @@ pub fn execute_hot_frame(
                     // discards its value. Side-exit at the untouched Return so
                     // baseline constructs the canonical TypeError.
                     let common = unsafe { &*(*frame).func };
-                    if super::execute::check_fast_scalar_type_hint(
-                        unsafe { &*retval_ptr },
-                        &common.sig.return_type_hint,
-                        op_array.strict_types,
-                    ) != Some(true) {
+                    let return_type_proven =
+                        super::execute::known_scalar_satisfies_type_hint(
+                            opline.known_result_type(),
+                            &common.sig.return_type_hint,
+                            op_array.strict_types,
+                        );
+                    if !return_type_proven
+                        && super::execute::check_fast_scalar_type_hint(
+                            unsafe { &*retval_ptr },
+                            &common.sig.return_type_hint,
+                            op_array.strict_types,
+                        ) != Some(true)
+                    {
                         return bailout(frame, opline_ptr, HotBailReason::UnsupportedReturnType);
                     }
 

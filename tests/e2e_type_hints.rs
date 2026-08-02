@@ -1,6 +1,17 @@
 /// Tests for parameter type hints
 mod common;
 use common::run_php;
+use rphp::compiler::compile::Compiler;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::instruction::{KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS};
+use rphp::vm::opcode::OpCode;
+
+fn compile_types(source: &str) -> rphp::compiler::compile::CompileResult {
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    Compiler::new().compile(&statements).unwrap()
+}
 
 // ── Basic scalar type hints ──
 
@@ -721,4 +732,136 @@ declare(strict_types=0);
 function f(float $x): void { echo $x; }
 f(10);
 "#), "10");
+}
+
+// ── Declaration-derived scalar propagation ──
+
+#[test]
+fn test_exact_int_return_flows_into_caller_bytecode() {
+    let result = compile_types(r#"<?php
+function source(int $value): int { return $value % 97; }
+function consume(int $value): int { return (source($value) % 13) ^ 3; }
+"#);
+    let consume = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consume")
+        .unwrap()
+        .1
+        .op_array;
+
+    assert!(consume.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::DoFcall
+            && instruction.known_result_type() == KnownScalarType::Long
+            && instruction._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
+    }));
+    assert!(consume
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Mod_LongLong));
+    assert!(consume
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::BitwiseXor_LongLong));
+}
+
+#[test]
+fn test_exact_string_return_flows_through_concat_and_strlen() {
+    let result = compile_types(r#"<?php
+function source(string $value): string { return $value; }
+function consume(string $value): int { return strlen(source($value) . "!"); }
+"#);
+    let consume = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consume")
+        .unwrap()
+        .1
+        .op_array;
+
+    assert!(consume.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::DoFcall
+            && instruction.known_result_type() == KnownScalarType::String
+    }));
+    assert!(consume
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Concat_StringString));
+    assert!(consume
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Strlen_String));
+}
+
+#[test]
+fn test_mutable_typed_parameter_stays_on_guarded_strlen() {
+    let result = compile_types(r#"<?php
+function consume(int $value, bool $change): int {
+    if ($change) { $value = "changed"; }
+    return strlen($value);
+}
+"#);
+    let consume = &result.functions[0].1.op_array;
+    assert!(!consume
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Strlen_String));
+}
+
+#[test]
+fn test_unknown_argument_keeps_runtime_typed_call_guard() {
+    let result = compile_types(r#"<?php
+function target(int $value): int { return $value; }
+function forward($value): int { return target($value); }
+"#);
+    let forward = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "forward")
+        .unwrap()
+        .1
+        .op_array;
+    assert!(forward.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::DoFcall
+            && instruction._pad & CALL_FLAG_EXACT_SCALAR_ARGS == 0
+    }));
+}
+
+#[test]
+fn test_propagated_int_and_string_operations_preserve_results() {
+    assert_eq!(run_php(r#"<?php
+function sourceInt(int $value): int { return $value % 97; }
+function consumeInt(int $value): int { return (sourceInt($value) % 13) ^ 3; }
+function sourceString(string $value): string { return $value; }
+function consumeString(string $value): int { return strlen(sourceString($value) . "!"); }
+echo consumeInt(12345);
+echo ":";
+echo consumeString("typed");
+"#), "3:6");
+}
+
+#[test]
+fn test_bad_declared_return_never_reaches_unguarded_consumer() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+function source(): int { return "bad"; }
+function consume(): int { return source() % 7; }
+try { consume(); } catch (TypeError $error) { echo "caught"; }
+"#), "caught");
+}
+
+#[test]
+fn test_proven_long_modulo_handles_integer_minimum() {
+    assert_eq!(run_php(r#"<?php
+function remainder(int $left, int $right): int { return $left % $right; }
+echo remainder(PHP_INT_MIN, -1);
+"#), "0");
+}
+
+#[test]
+fn test_proven_long_addition_still_validates_overflowed_return() {
+    assert_eq!(run_php(r#"<?php
+function add(int $left, int $right): int { return $left + $right; }
+try { add(PHP_INT_MAX, 1); } catch (TypeError $error) { echo "caught"; }
+"#), "caught");
 }

@@ -412,6 +412,36 @@ the no-PGO matrix remains 30 RPHP wins with one marginal 1.05x packed-array
 build loss. Work can now return to declared-object layout and allocation with
 the scalar type boundary ready for the later typed-region JIT.
 
+The ninth corpus-era checkpoint carries that scalar contract across function
+boundaries. Exact `int`, `string`, and `bool` facts now flow from immutable
+declared parameters and statically resolved named returns through literals,
+safe assignments, and exact-result operations. Conservative invalidation at
+branches, defaults, aliases, references, globals/statics, and foreach keeps the
+canonical interpreter authoritative.
+
+The existing 16-byte instruction stores the fact in unused padding. Baseline
+and hot execution consume specialized Long arithmetic/modulo/xor, string
+concat/strlen, and scalar echo instructions without repeating Value-tag probes.
+When a statically resolved argument already proves its callee hint, the call
+site also skips only the redundant type guard; arity, error, overflow, and
+fallback behavior remain unchanged. Unknown or overflow-capable values still
+take the canonical checker.
+
+The typed integer return-chain workload improves from approximately 0.318 s to
+0.251 s and the typed string chain from 0.105 s to 0.092 s. Operation-derived
+facts also improve equivalent untyped code, as intended. Typed code is not yet
+uniformly faster than untyped code because validation boundaries and heap
+string returns remain measurable, but its declarations now eliminate
+downstream work and form reusable input for the future JIT.
+
+Two independent order-pipeline runs are 0.2207--0.2273 s RPHP versus
+0.0788--0.0806 s PHP, improving the preceding 0.2344--0.2369 s checkpoint.
+Both release configurations pass, the type suite contains 80 tests, and the
+31-case no-PGO matrix remains 30 RPHP wins with one marginal 1.03x array-build
+loss. The next type-specific slice is guarded monomorphic method-return
+propagation; the broader corpus priority remains declared-object layout and
+allocation.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

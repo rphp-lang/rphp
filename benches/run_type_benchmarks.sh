@@ -27,6 +27,14 @@ BENCHMARKS=(
     "bench_type_scalar_function_typed.php:Scalar function typed"
     "bench_type_scalar_method_untyped.php:Scalar method untyped"
     "bench_type_scalar_method_typed.php:Scalar method typed"
+    "bench_type_chain_int_untyped.php:Int return chain untyped"
+    "bench_type_chain_int_typed.php:Int return chain typed"
+    "bench_type_chain_string_untyped.php:String return chain untyped"
+    "bench_type_chain_string_typed.php:String return chain typed"
+    "bench_type_return_fanout_int_untyped.php:Int return fanout untyped"
+    "bench_type_return_fanout_int_typed.php:Int return fanout typed"
+    "bench_type_return_fanout_string_untyped.php:String return fanout untyped"
+    "bench_type_return_fanout_string_typed.php:String return fanout typed"
 )
 
 measure_best() {

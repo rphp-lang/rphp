@@ -9,7 +9,8 @@ use crate::parser::Visibility;
 use crate::vm::stats;
 use super::opcode::OpCode;
 use super::instruction::{
-    Instruction, OpType, ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    Instruction, KnownScalarType, OpType, ARRAY_INIT_HASH_HINT,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ScalarLongCall, ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource};
@@ -109,6 +110,25 @@ fn composed_property_calls_enabled() -> bool {
     #[cfg(not(feature = "vm-stats"))]
     {
         true
+    }
+}
+
+/// Resolve an operand whose exact, non-reference representation was proven by
+/// the compiler. Unlike `get_op_ptr`, a CV does not need a reference-tag test.
+#[inline(always)]
+unsafe fn proven_scalar_op_ptr(
+    frame: *const ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    operand: u16,
+    op_type: OpType,
+) -> *const Value {
+    match op_type {
+        OpType::Const => &op_array.literals()[operand as usize] as *const Value,
+        OpType::Cv => (*frame).cv(operand as u32) as *const Value,
+        OpType::Tmp | OpType::Var => {
+            (frame as *const Value).add(CALL_FRAME_SLOTS + operand as usize)
+        }
+        OpType::Unused => unreachable!("proven scalar operand cannot be unused"),
     }
 }
 
@@ -214,6 +234,33 @@ pub(crate) fn check_fast_scalar_type_hint(
         }
         _ => return None,
     })
+}
+
+/// Whether a compiler-proven representation makes a scalar return check
+/// redundant. Unknown facts never bypass the canonical validator.
+#[inline(always)]
+pub(crate) fn known_scalar_satisfies_type_hint(
+    known: KnownScalarType,
+    hint: &ParamTypeHint,
+    strict: bool,
+) -> bool {
+    match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed => true,
+        ParamTypeHint::Int => known == KnownScalarType::Long,
+        ParamTypeHint::Float => {
+            known == KnownScalarType::Double
+                || (!strict && known == KnownScalarType::Long)
+        }
+        ParamTypeHint::String => known == KnownScalarType::String,
+        ParamTypeHint::Bool => known == KnownScalarType::Bool,
+        ParamTypeHint::Nullable(inner) => {
+            known_scalar_satisfies_type_hint(known, inner, strict)
+        }
+        ParamTypeHint::Union(types) => types
+            .iter()
+            .any(|member| known_scalar_satisfies_type_hint(known, member, strict)),
+        _ => false,
+    }
 }
 
 /// Validate the already-bound public arguments for compact user-call ABIs.
@@ -9483,9 +9530,96 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::Echo_String => {
+                let value = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
+                };
+                debug_assert_eq!(value.value_type(), ValueType::String);
+                let string = unsafe { value.as_str().unwrap_unchecked() };
+                eg.write_output(string.as_bytes());
+            }
+
+            OpCode::Echo_Long => {
+                let value = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
+                };
+                debug_assert_eq!(value.value_type(), ValueType::Long);
+                use std::io::Write;
+                let mut buffer = [0u8; 20];
+                let length = {
+                    let mut cursor = std::io::Cursor::new(&mut buffer[..]);
+                    write!(cursor, "{}", unsafe { value.raw_long() }).unwrap();
+                    cursor.position() as usize
+                };
+                eg.write_output(&buffer[..length]);
+            }
+
             // ── Specialized arithmetic opcodes ──────────────────────────
             // Inline operand access: no get_op_ptr match, no ref check.
             // Fall through to general handler on non-Long operands.
+
+            OpCode::Add_LongLong
+            | OpCode::Sub_LongLong
+            | OpCode::Mul_LongLong
+            | OpCode::Mod_LongLong
+            | OpCode::BitwiseXor_LongLong => {
+                let left = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
+                };
+                let right = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op2, opline.op2_type)
+                };
+                debug_assert_eq!(left.value_type(), ValueType::Long);
+                debug_assert_eq!(right.value_type(), ValueType::Long);
+                let lhs = unsafe { left.raw_long() };
+                let rhs = unsafe { right.raw_long() };
+                let result_ptr = unsafe {
+                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                };
+                match opline.opcode {
+                    OpCode::Add_LongLong => match lhs.checked_add(rhs) {
+                        Some(result) => unsafe { frame_tmp_set_long(frame, result_ptr, result) },
+                        None => unsafe {
+                            frame_tmp_set(
+                                frame,
+                                result_ptr,
+                                Value::double(lhs as f64 + rhs as f64),
+                            )
+                        },
+                    },
+                    OpCode::Sub_LongLong => match lhs.checked_sub(rhs) {
+                        Some(result) => unsafe { frame_tmp_set_long(frame, result_ptr, result) },
+                        None => unsafe {
+                            frame_tmp_set(
+                                frame,
+                                result_ptr,
+                                Value::double(lhs as f64 - rhs as f64),
+                            )
+                        },
+                    },
+                    OpCode::Mul_LongLong => match lhs.checked_mul(rhs) {
+                        Some(result) => unsafe { frame_tmp_set_long(frame, result_ptr, result) },
+                        None => unsafe {
+                            frame_tmp_set(
+                                frame,
+                                result_ptr,
+                                Value::double(lhs as f64 * rhs as f64),
+                            )
+                        },
+                    },
+                    OpCode::Mod_LongLong => {
+                        if rhs == 0 {
+                            return Err(VmError::Fatal("Division by zero".into()));
+                        }
+                        let remainder = lhs.checked_rem(rhs).unwrap_or(0);
+                        unsafe { frame_tmp_set_long(frame, result_ptr, remainder) };
+                    }
+                    OpCode::BitwiseXor_LongLong => unsafe {
+                        frame_tmp_set_long(frame, result_ptr, lhs ^ rhs)
+                    },
+                    _ => unreachable!(),
+                }
+            }
 
             OpCode::Add_TmpTmp => {
                 let base = frame as *const Value;
@@ -9885,8 +10019,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     // PHP: if both are long and divisible, result is long
                     if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
-                        if l2 != 0 && l1 % l2 == 0 {
-                            unsafe { frame_tmp_set_long(frame, result_ptr, l1 / l2) };
+                        if let Some(quotient) = l1.checked_div(l2) {
+                            if l1.checked_rem(l2) == Some(0) {
+                                unsafe { frame_tmp_set_long(frame, result_ptr, quotient) };
+                            } else {
+                                unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
+                            }
                         } else {
                             unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 / d2)) };
                         }
@@ -9907,10 +10045,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if l2 == 0 {
                         return Err(VmError::Fatal("Division by zero".into()));
                     }
-                    unsafe { frame_tmp_set_long(frame, result_ptr, l1 % l2) };
+                    let remainder = l1.checked_rem(l2).unwrap_or(0);
+                    unsafe { frame_tmp_set_long(frame, result_ptr, remainder) };
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for %".into()));
                 }
+            }
+
+            OpCode::Concat_StringString => {
+                let left = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
+                };
+                let right = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op2, opline.op2_type)
+                };
+                debug_assert_eq!(left.value_type(), ValueType::String);
+                debug_assert_eq!(right.value_type(), ValueType::String);
+                let lhs = unsafe { left.as_str().unwrap_unchecked() };
+                let rhs = unsafe { right.as_str().unwrap_unchecked() };
+                let mut concatenated = String::with_capacity(lhs.len() + rhs.len());
+                concatenated.push_str(lhs);
+                concatenated.push_str(rhs);
+                let result_ptr = unsafe {
+                    (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                };
+                unsafe {
+                    frame_tmp_set(frame, result_ptr, Value::string(concatenated))
+                };
             }
 
             OpCode::Concat => {
@@ -10253,6 +10414,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     debug_assert!(matches!(opline.result_type, OpType::Tmp | OpType::Var));
                     unsafe { Value::write_long(result_ptr, length) };
+                }
+            }
+
+            OpCode::Strlen_String => {
+                let argument = unsafe {
+                    &*proven_scalar_op_ptr(frame, op_array, opline.op1, opline.op1_type)
+                };
+                debug_assert_eq!(argument.value_type(), ValueType::String);
+                let length = unsafe { argument.as_str().unwrap_unchecked().len() as i64 };
+
+                if opline.result_type != OpType::Unused {
+                    let result_ptr = unsafe {
+                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+                    };
+                    if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                        unsafe { Value::write_long(result_ptr, length) };
+                    } else {
+                        unsafe { slot_set(result_ptr, Value::long(length)) };
+                    }
                 }
             }
 
@@ -11002,13 +11182,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         && num_args_fast <= func_common_fast.sig.public_arity()
                     {
                         let caller_strict = op_array.strict_types;
-                        let type_ok = unsafe {
-                            compact_scalar_call_types_match(
-                                call,
-                                func_common_fast,
-                                caller_strict,
-                            )
-                        };
+                        let type_ok = opline._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
+                            || unsafe {
+                                compact_scalar_call_types_match(
+                                    call,
+                                    func_common_fast,
+                                    caller_strict,
+                                )
+                            };
                         if !type_ok {
                             // Fall through to full path for proper TypeError
                         } else {
@@ -11927,7 +12108,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // value. Complex hints use ReturnStrategy::Full.
                     let ret_hint = &func_common_ret.sig.return_type_hint;
                     let has_return_type = !matches!(ret_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
-                    if has_return_type && opline.op1_type != OpType::Unused {
+                    let return_type_proven = known_scalar_satisfies_type_hint(
+                        opline.known_result_type(),
+                        ret_hint,
+                        op_array.strict_types,
+                    );
+                    if has_return_type
+                        && !return_type_proven
+                        && opline.op1_type != OpType::Unused
+                    {
                         let retval = unsafe {
                             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };

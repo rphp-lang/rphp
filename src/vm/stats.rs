@@ -278,6 +278,12 @@ mod inner {
             211 => Some("JmpZ_Eq_CvConst"), 212 => Some("JmpNZ_Eq_CvConst"),
             213 => Some("QuickLongLoopJmp"),
             214 => Some("Strlen_Cv"),
+            215 => Some("Add_LongLong"), 216 => Some("Sub_LongLong"),
+            217 => Some("Mul_LongLong"), 218 => Some("Mod_LongLong"),
+            219 => Some("Concat_StringString"),
+            220 => Some("Strlen_String"),
+            221 => Some("Echo_String"), 222 => Some("Echo_Long"),
+            223 => Some("BitwiseXor_LongLong"),
             _ => None,
         }
     }

@@ -1873,3 +1873,65 @@ and with `--no-default-features`; the type-hint suite has 72 tests. The 31-case
 no-PGO matrix remains 30 RPHP wins with one marginal packed-array build loss at
 1.05x. Declared object layout and allocation therefore remain the next
 corpus-driven no-JIT target.
+
+## Phase 3e result: exact scalar facts across function boundaries
+
+The typed ABI removed the separate slow frame protocol, but a declaration was
+still forgotten immediately after its boundary check. A caller receiving an
+`int` or `string` result therefore repeated Value-tag and coercion probes in
+every following operation. The hot executor repeated the same probes even
+after canonical bytecode had selected a typed opcode.
+
+The compiler now propagates exact scalar representations through already
+planned function and method bodies. `int`, `string`, and `bool` parameter
+declarations seed immutable, non-reference CVs. Statically resolved named
+function returns seed `DoFcall` results; literals, exact operation results, and
+safe straight-line assignments extend the fact. Branch-assigned parameters,
+defaults, references, `global`, `static`, and foreach boundaries conservatively
+discard it. Weak `float` declarations remain unproven because they do not
+currently guarantee one representation.
+
+The fact occupies three previously unused high padding bits in the existing
+16-byte instruction. Proven operations lower to `LongLong` arithmetic and
+modulo/xor instructions, `StringString` concat, exact-string `strlen`, and exact
+scalar echo. Both baseline and hot executors consume those opcodes without
+repeating tag guards. Checked arithmetic preserves PHP overflow to `double`,
+and modulo preserves `PHP_INT_MIN % -1 == 0`. A proven return operand skips only
+the redundant scalar return check; unknown or overflow-capable results retain
+canonical validation and `TypeError` construction.
+
+Argument facts also flow into statically resolved calls. A `DoFcall` is marked
+only when every supplied argument is already proven to satisfy its declared
+type. Arity and hole checks remain. Unknown, named, reference, dynamic, method,
+or aliased inputs retain the ordinary runtime type guard. This establishes the
+intended contract for a later JIT: validate once, carry the proof, and
+deoptimize before any assumption can become invalid.
+
+Best-of-five no-PGO measurements for the new cross-call workloads are:
+
+| Variant | RPHP | PHP 8.4.12, no CLI opcache | RPHP / PHP |
+|---|---:|---:|---:|
+| Integer return chain, untyped | 0.2341 s | 0.0970 s | 2.41x |
+| Integer return chain, typed | 0.2506 s | 0.1054 s | 2.38x |
+| String return chain, untyped | 0.0923 s | 0.0251 s | 3.67x |
+| String return chain, typed | 0.0922 s | 0.0258 s | 3.58x |
+| Integer return fan-out, untyped | 0.1411 s | 0.0571 s | 2.47x |
+| Integer return fan-out, typed | 0.1513 s | 0.0615 s | 2.46x |
+| String return fan-out, untyped | 0.0780 s | 0.0265 s | 2.94x |
+| String return fan-out, typed | 0.0866 s | 0.0289 s | 3.00x |
+
+The integer typed-chain RPHP time fell from the pre-pass 0.318 s to 0.251 s,
+about 21 percent; the typed string chain fell from 0.105 s to 0.092 s, about 12
+percent. Untyped code also benefits when operation semantics alone prove the
+next result, which is intentional. Typed code is not universally faster than
+untyped code yet: parameter/return boundaries and heap string returns still
+carry real costs. The important result is that declarations now remove work
+downstream instead of only adding validation.
+
+Two independent order/service corpus runs measure 0.2207--0.2273 s RPHP versus
+0.0788--0.0806 s PHP, about 2.80--2.82x and below the preceding
+0.2344--0.2369 s checkpoint. The 31-case no-PGO matrix remains 30 RPHP wins
+with one marginal array-build loss at 1.03x. Both complete release
+configurations pass, and the focused type suite now contains 80 tests. The
+next typed-boundary extension is guarded monomorphic method-return propagation;
+string heap return/ownership remains a separate hot-executor problem.

@@ -7,12 +7,12 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-use crate::value::{ObjectLayout, Value};
+use crate::value::{ObjectLayout, Value, ValueType};
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{
-    Instruction, InlineCache, OpType, ARRAY_INIT_HASH_HINT,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    Instruction, InlineCache, KnownScalarType, OpType, ARRAY_INIT_HASH_HINT,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
 };
 use super::OpArray;
 
@@ -242,6 +242,393 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
         function.scalar_long_plan = super::build_scalar_long_function_plan(function);
         function.composed_scalar_long_plan =
             super::build_composed_scalar_long_function_plan(function);
+    }
+}
+
+fn exact_declared_scalar_type(hint: &ParamTypeHint) -> KnownScalarType {
+    match hint {
+        ParamTypeHint::Int => KnownScalarType::Long,
+        ParamTypeHint::String => KnownScalarType::String,
+        ParamTypeHint::Bool => KnownScalarType::Bool,
+        // A weak `float` declaration also accepts Long in the current PHP
+        // boundary semantics, so it does not prove one exact representation.
+        _ => KnownScalarType::Unknown,
+    }
+}
+
+fn literal_scalar_type(value: &Value) -> KnownScalarType {
+    match value.value_type() {
+        ValueType::Long => KnownScalarType::Long,
+        ValueType::Double => KnownScalarType::Double,
+        ValueType::String => KnownScalarType::String,
+        ValueType::True | ValueType::False => KnownScalarType::Bool,
+        _ => KnownScalarType::Unknown,
+    }
+}
+
+fn declared_function_return_types(
+    functions: &[(String, UserFunction)],
+) -> HashMap<String, KnownScalarType> {
+    functions
+        .iter()
+        .filter_map(|(name, function)| {
+            let known = exact_declared_scalar_type(&function.common.sig.return_type_hint);
+            (known != KnownScalarType::Unknown)
+                .then_some((name.to_ascii_lowercase(), known))
+        })
+        .collect()
+}
+
+fn declared_function_parameter_types(
+    functions: &[(String, UserFunction)],
+) -> HashMap<String, Vec<ParamTypeHint>> {
+    functions
+        .iter()
+        .map(|(name, function)| {
+            (
+                name.to_ascii_lowercase(),
+                function.common.sig.param_type_hints.clone(),
+            )
+        })
+        .collect()
+}
+
+fn resolved_init_function_return_type(
+    op_array: &OpArray,
+    instruction: &Instruction,
+    return_types: &HashMap<String, KnownScalarType>,
+) -> KnownScalarType {
+    let primary = op_array
+        .literals
+        .get(instruction.op2 as usize)
+        .and_then(Value::as_str)
+        .and_then(|name| return_types.get(&name.to_ascii_lowercase()))
+        .copied();
+    primary
+        .or_else(|| {
+            if instruction.extended_value == 0 {
+                return None;
+            }
+            op_array
+                .literals
+                .get(instruction.extended_value as usize)
+                .and_then(Value::as_str)
+                .and_then(|name| return_types.get(&name.to_ascii_lowercase()))
+                .copied()
+        })
+        .unwrap_or(KnownScalarType::Unknown)
+}
+
+fn resolved_init_function_parameter_types(
+    op_array: &OpArray,
+    instruction: &Instruction,
+    parameter_types: &HashMap<String, Vec<ParamTypeHint>>,
+) -> Option<Vec<ParamTypeHint>> {
+    let primary = op_array
+        .literals
+        .get(instruction.op2 as usize)
+        .and_then(Value::as_str)
+        .and_then(|name| parameter_types.get(&name.to_ascii_lowercase()))
+        .cloned();
+    primary.or_else(|| {
+        if instruction.extended_value == 0 {
+            return None;
+        }
+        op_array
+            .literals
+            .get(instruction.extended_value as usize)
+            .and_then(Value::as_str)
+            .and_then(|name| parameter_types.get(&name.to_ascii_lowercase()))
+            .cloned()
+    })
+}
+
+fn known_argument_satisfies_hint(
+    known: KnownScalarType,
+    hint: &ParamTypeHint,
+    strict: bool,
+) -> bool {
+    match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed => true,
+        ParamTypeHint::Int => known == KnownScalarType::Long,
+        ParamTypeHint::Float => {
+            known == KnownScalarType::Double
+                || (!strict && known == KnownScalarType::Long)
+        }
+        ParamTypeHint::String => known == KnownScalarType::String,
+        ParamTypeHint::Bool => known == KnownScalarType::Bool,
+        ParamTypeHint::Nullable(inner) => {
+            known_argument_satisfies_hint(known, inner, strict)
+        }
+        ParamTypeHint::Union(types) => types
+            .iter()
+            .any(|member| known_argument_satisfies_hint(known, member, strict)),
+        _ => false,
+    }
+}
+
+struct PendingScalarCallFacts {
+    return_type: KnownScalarType,
+    parameter_types: Option<Vec<ParamTypeHint>>,
+    arguments_proven: bool,
+}
+
+fn operand_scalar_type(
+    op_array: &OpArray,
+    slots: &[KnownScalarType],
+    op_type: OpType,
+    operand: u16,
+) -> KnownScalarType {
+    match op_type {
+        OpType::Cv | OpType::Tmp | OpType::Var => slots
+            .get(operand as usize)
+            .copied()
+            .unwrap_or(KnownScalarType::Unknown),
+        OpType::Const => op_array
+            .literals
+            .get(operand as usize)
+            .map(literal_scalar_type)
+            .unwrap_or(KnownScalarType::Unknown),
+        OpType::Unused => KnownScalarType::Unknown,
+    }
+}
+
+/// Propagate exact scalar facts through one already-planned function body.
+///
+/// Function plans and quick regions are selected before this pass. Rewriting
+/// only their canonical bytecode fallback therefore cannot change selection;
+/// it makes ordinary execution consume the same type contract that a later
+/// native-code tier will receive.
+fn propagate_declared_scalar_types(
+    op_array: &mut OpArray,
+    this_offset: u32,
+    param_type_hints: &[ParamTypeHint],
+    ref_args: u64,
+    return_types: &HashMap<String, KnownScalarType>,
+    parameter_types: &HashMap<String, Vec<ParamTypeHint>>,
+) {
+    let slot_count = (op_array.num_cvs + op_array.num_temps) as usize;
+    let mut slots = vec![KnownScalarType::Unknown; slot_count];
+    let mut mutable_params = vec![false; param_type_hints.len()];
+
+    for instruction in &op_array.instructions {
+        let mut mark_mutable = |slot: u16| {
+            let slot = slot as u32;
+            if slot >= this_offset && slot < this_offset + param_type_hints.len() as u32 {
+                mutable_params[(slot - this_offset) as usize] = true;
+            }
+        };
+        match instruction.opcode {
+            OpCode::AssignCv
+            | OpCode::AssignConcat
+            | OpCode::PreInc
+            | OpCode::PreDec
+            | OpCode::PostInc
+            | OpCode::PostDec
+            | OpCode::BindDefaultParam
+            | OpCode::BindGlobal
+            | OpCode::BindStatic => mark_mutable(instruction.op1),
+            OpCode::SendRef | OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
+                mark_mutable(instruction.op1)
+            }
+            OpCode::ForeachNext => mutable_params.fill(true),
+            _ => {}
+        }
+    }
+
+    for (index, hint) in param_type_hints.iter().enumerate() {
+        if !mutable_params[index] && (index >= 64 || ref_args & (1u64 << index) == 0) {
+            let cv = this_offset as usize + index;
+            if cv < slots.len() {
+                slots[cv] = exact_declared_scalar_type(hint);
+            }
+        }
+    }
+
+    let straight_line = !op_array.instructions.iter().any(|instruction| {
+        matches!(
+            instruction.opcode,
+            OpCode::Jmp
+                | OpCode::JmpZ
+                | OpCode::JmpNZ
+                | OpCode::QuickLongLoopJmp
+                | OpCode::ForeachInit
+                | OpCode::ForeachNext
+                | OpCode::BindDefaultParam
+        )
+    });
+    let mut pending_calls = Vec::new();
+
+    for ip in 0..op_array.instructions.len() {
+        let instruction = op_array.instructions[ip];
+
+        // A CV exposed by reference can be changed by code outside this body.
+        // Forget any straight-line fact before later instructions consume it.
+        match instruction.opcode {
+            OpCode::SendRef | OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
+                if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
+                    *slot = KnownScalarType::Unknown;
+                }
+            }
+            OpCode::BindGlobal | OpCode::BindStatic => {
+                if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
+                    *slot = KnownScalarType::Unknown;
+                }
+            }
+            OpCode::ForeachNext => slots.fill(KnownScalarType::Unknown),
+            _ => {}
+        }
+
+        match instruction.opcode {
+            OpCode::InitFcall => pending_calls.push(PendingScalarCallFacts {
+                return_type: resolved_init_function_return_type(
+                    op_array,
+                    &instruction,
+                    return_types,
+                ),
+                parameter_types: resolved_init_function_parameter_types(
+                    op_array,
+                    &instruction,
+                    parameter_types,
+                ),
+                arguments_proven: true,
+            }),
+            OpCode::InitMethodCall
+            | OpCode::InitStaticCall
+            | OpCode::InitDynamicCall
+            | OpCode::InitUserCall
+            | OpCode::NewObj => pending_calls.push(PendingScalarCallFacts {
+                return_type: KnownScalarType::Unknown,
+                parameter_types: None,
+                arguments_proven: false,
+            }),
+            _ => {}
+        }
+
+        let left = operand_scalar_type(
+            op_array,
+            &slots,
+            instruction.op1_type,
+            instruction.op1,
+        );
+        let right = operand_scalar_type(
+            op_array,
+            &slots,
+            instruction.op2_type,
+            instruction.op2,
+        );
+        if matches!(instruction.opcode, OpCode::SendVal) {
+            if let Some(call) = pending_calls.last_mut() {
+                call.arguments_proven &= call
+                    .parameter_types
+                    .as_ref()
+                    .and_then(|hints| hints.get(instruction.op2 as usize))
+                    .is_some_and(|hint| {
+                        known_argument_satisfies_hint(left, hint, op_array.strict_types)
+                    });
+            }
+        } else if matches!(
+            instruction.opcode,
+            OpCode::SendRef | OpCode::SendVarEx | OpCode::SendNamed | OpCode::SendUser
+        ) {
+            if let Some(call) = pending_calls.last_mut() {
+                call.arguments_proven = false;
+            }
+        }
+        let mut result = KnownScalarType::Unknown;
+        let mut exact_call_arguments = false;
+        let rewritten = match instruction.opcode {
+            OpCode::Add if left == KnownScalarType::Long && right == KnownScalarType::Long => {
+                OpCode::Add_LongLong
+            }
+            OpCode::Sub if left == KnownScalarType::Long && right == KnownScalarType::Long => {
+                OpCode::Sub_LongLong
+            }
+            OpCode::Mul if left == KnownScalarType::Long && right == KnownScalarType::Long => {
+                OpCode::Mul_LongLong
+            }
+            OpCode::Mod if left == KnownScalarType::Long && right == KnownScalarType::Long => {
+                result = KnownScalarType::Long;
+                OpCode::Mod_LongLong
+            }
+            OpCode::BitwiseXor
+                if left == KnownScalarType::Long && right == KnownScalarType::Long =>
+            {
+                result = KnownScalarType::Long;
+                OpCode::BitwiseXor_LongLong
+            }
+            OpCode::Concat
+                if left == KnownScalarType::String && right == KnownScalarType::String =>
+            {
+                result = KnownScalarType::String;
+                OpCode::Concat_StringString
+            }
+            OpCode::Strlen | OpCode::Strlen_Cv if left == KnownScalarType::String => {
+                result = KnownScalarType::Long;
+                OpCode::Strlen_String
+            }
+            OpCode::Echo if left == KnownScalarType::String => OpCode::Echo_String,
+            OpCode::Echo if left == KnownScalarType::Long => OpCode::Echo_Long,
+            _ => instruction.opcode,
+        };
+
+        match instruction.opcode {
+            OpCode::DoFcall => {
+                if let Some(call) = pending_calls.pop() {
+                    result = call.return_type;
+                    exact_call_arguments =
+                        call.arguments_proven && call.parameter_types.is_some();
+                }
+            }
+            OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String => {
+                result = KnownScalarType::Long;
+            }
+            OpCode::Concat | OpCode::Concat_StringString => {
+                result = KnownScalarType::String;
+            }
+            OpCode::Mod_LongLong | OpCode::BitwiseXor_LongLong => {
+                result = KnownScalarType::Long;
+            }
+            OpCode::BitwiseAnd
+            | OpCode::BitwiseOr
+            | OpCode::BitwiseXor
+            | OpCode::ShiftLeft
+            | OpCode::ShiftRight
+            | OpCode::BitwiseNot => result = KnownScalarType::Long,
+            OpCode::IsEqual
+            | OpCode::IsNotEqual
+            | OpCode::IsSmaller
+            | OpCode::IsSmallerOrEqual
+            | OpCode::IsIdentical
+            | OpCode::IsNotIdentical
+            | OpCode::Isset
+            | OpCode::BoolNot
+            | OpCode::Instanceof => result = KnownScalarType::Bool,
+            OpCode::AssignCv if straight_line => {
+                if instruction.op1_type == OpType::Cv {
+                    if let Some(destination) = slots.get_mut(instruction.op1 as usize) {
+                        *destination = right;
+                    }
+                }
+                result = right;
+            }
+            OpCode::Return => result = left,
+            _ => {}
+        }
+
+        let rewritten_instruction = &mut op_array.instructions[ip];
+        rewritten_instruction.opcode = rewritten;
+        if exact_call_arguments {
+            rewritten_instruction._pad |= CALL_FLAG_EXACT_SCALAR_ARGS;
+        }
+        rewritten_instruction.set_known_result_type(result);
+        if result != KnownScalarType::Unknown
+            && matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var)
+        {
+            if let Some(destination) = slots.get_mut(instruction.result as usize) {
+                *destination = result;
+            }
+        }
     }
 }
 
@@ -517,6 +904,36 @@ impl Compiler {
 
         let cache = (0..self.instructions.len()).map(|_| InlineCache::empty()).collect();
         refine_function_global_access(&mut self.functions);
+
+        // Consume exact scalar declarations only after call and quick-region
+        // plans have been selected. This keeps those structural decisions
+        // stable while enriching their canonical fallback bytecode.
+        let return_types = declared_function_return_types(&self.functions);
+        let parameter_types = declared_function_parameter_types(&self.functions);
+        for (_, function) in &mut self.functions {
+            let signature = &function.common.sig;
+            propagate_declared_scalar_types(
+                &mut function.op_array,
+                signature.this_offset,
+                &signature.param_type_hints,
+                signature.ref_args,
+                &return_types,
+                &parameter_types,
+            );
+        }
+        for class in &mut self.class_defs {
+            for (_, _, _, _, method) in &mut class.methods {
+                let signature = &method.common.sig;
+                propagate_declared_scalar_types(
+                    &mut method.op_array,
+                    signature.this_offset,
+                    &signature.param_type_hints,
+                    signature.ref_args,
+                    &return_types,
+                    &parameter_types,
+                );
+            }
+        }
 
         Ok(CompileResult {
             main: OpArray {

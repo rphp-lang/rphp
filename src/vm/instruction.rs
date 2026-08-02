@@ -6,9 +6,31 @@ use super::function::FunctionCommon;
 /// therefore defer its full frame while preserving source evaluation order.
 pub const CALL_FLAG_DEFERRED_SCALAR_CANDIDATE: u16 = 1;
 
+/// DoFcall flag: every actually supplied scalar argument was proven to satisfy
+/// the statically resolved callee declaration. Arity/hole guards remain in the
+/// call protocol; only repeated Value-tag validation may be skipped.
+pub const CALL_FLAG_EXACT_SCALAR_ARGS: u16 = 1 << 1;
+
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.
 pub const ARRAY_INIT_HASH_HINT: u16 = 1;
+
+/// Exact scalar representation proven for an instruction result. The fact is
+/// stored in otherwise-unused high padding bits so later compiler tiers and a
+/// future JIT can consume the same declaration-derived contract without
+/// widening the 16-byte instruction.
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum KnownScalarType {
+    Unknown = 0,
+    Long = 1,
+    Double = 2,
+    String = 3,
+    Bool = 4,
+}
+
+const KNOWN_RESULT_TYPE_SHIFT: u16 = 13;
+const KNOWN_RESULT_TYPE_MASK: u16 = 0b111 << KNOWN_RESULT_TYPE_SHIFT;
 
 /// Operand type — where to find the operand
 #[repr(u8)]
@@ -55,6 +77,23 @@ impl Instruction {
             _pad: 0,
             extended_value: 0,
         }
+    }
+
+    #[inline(always)]
+    pub fn known_result_type(&self) -> KnownScalarType {
+        match (self._pad & KNOWN_RESULT_TYPE_MASK) >> KNOWN_RESULT_TYPE_SHIFT {
+            1 => KnownScalarType::Long,
+            2 => KnownScalarType::Double,
+            3 => KnownScalarType::String,
+            4 => KnownScalarType::Bool,
+            _ => KnownScalarType::Unknown,
+        }
+    }
+
+    #[inline]
+    pub fn set_known_result_type(&mut self, known: KnownScalarType) {
+        self._pad = (self._pad & !KNOWN_RESULT_TYPE_MASK)
+            | ((known as u16) << KNOWN_RESULT_TYPE_SHIFT);
     }
 }
 

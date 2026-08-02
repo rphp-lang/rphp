@@ -180,4 +180,17 @@ pub enum OpCode {
     /// strlen(CV) → TMP/Unused without generic operand dispatch.
     Strlen_Cv = 214,
 
+    // Declaration-derived scalar specializations. Their inputs are proven by
+    // parameter boundaries or exact return hints, so handlers skip repeated
+    // Value tag/coercion probes while preserving overflow and error behavior.
+    Add_LongLong = 215,
+    Sub_LongLong = 216,
+    Mul_LongLong = 217,
+    Mod_LongLong = 218,
+    Concat_StringString = 219,
+    Strlen_String = 220,
+    Echo_String = 221,
+    Echo_Long = 222,
+    BitwiseXor_LongLong = 223,
+
 }
