@@ -35,6 +35,8 @@ BENCHMARKS=(
     "bench_type_return_fanout_int_typed.php:Int return fanout typed"
     "bench_type_return_fanout_string_untyped.php:String return fanout untyped"
     "bench_type_return_fanout_string_typed.php:String return fanout typed"
+    "bench_type_method_return_fanout_untyped.php:Method return fanout untyped"
+    "bench_type_method_return_fanout_typed.php:Method return fanout typed"
 )
 
 measure_best() {

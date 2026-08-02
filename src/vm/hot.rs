@@ -1154,6 +1154,12 @@ pub fn execute_hot_frame(
                 }
                 let func_ptr = ic.func;
                 let func_common = unsafe { &*func_ptr };
+                if !super::execute::method_return_dispatch_contract_matches(
+                    opline,
+                    func_common,
+                ) {
+                    return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
+                }
                 let num_args = opline.extended_value;
                 let mut scalar_plan_eligible = false;
 

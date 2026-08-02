@@ -263,6 +263,44 @@ pub(crate) fn known_scalar_satisfies_type_hint(
     }
 }
 
+#[inline(always)]
+fn exact_method_return_matches(
+    hint: &ParamTypeHint,
+    expected: KnownScalarType,
+) -> bool {
+    matches!(
+        (hint, expected),
+        (ParamTypeHint::Int, KnownScalarType::Long)
+            | (ParamTypeHint::String, KnownScalarType::String)
+            | (ParamTypeHint::Bool, KnownScalarType::Bool)
+    )
+}
+
+/// Validate the exact return contract attached to a statically typed method
+/// call against the method selected by the receiver-class inline cache. This
+/// is the single dispatch guard that licenses all downstream scalar rewrites.
+#[inline(always)]
+pub(crate) fn method_return_dispatch_contract_matches(
+    initializer: &Instruction,
+    common: &FunctionCommon,
+) -> bool {
+    let expected = initializer.method_return_guard_type();
+    let return_contract_matches = expected == KnownScalarType::Unknown
+        || (common.fn_type == FunctionType::User
+            && exact_method_return_matches(&common.sig.return_type_hint, expected));
+    let argument_contract_matches = !initializer.has_method_long_args_guard()
+        || (common.fn_type == FunctionType::User
+            && common.sig.ref_args == 0
+            && common.sig.public_arity() == initializer.extended_value
+            && !common.sig.param_type_hints.is_empty()
+            && common
+                .sig
+                .param_type_hints
+                .iter()
+                .all(|hint| matches!(hint, ParamTypeHint::Int)));
+    return_contract_matches && argument_contract_matches
+}
+
 /// Validate the already-bound public arguments for compact user-call ABIs.
 /// A failed guard leaves the frame untouched so the canonical call path can
 /// report or coerce the value according to normal PHP rules.
@@ -3744,6 +3782,12 @@ fn op_init_method_call<'a>(
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
         let common = unsafe { &*func_ptr };
+        if !method_return_dispatch_contract_matches(opline, common) {
+            return Err(VmError::Fatal(
+                "Resolved method signature is incompatible with the statically declared receiver contract"
+                    .into(),
+            ));
+        }
         let scalar_plan_eligible = common.fn_type == FunctionType::User
             && common.plan.call.supports_scalar_long_plan()
             && num_args == common.sig.public_arity()
@@ -11074,11 +11118,13 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 if func_common_fast.fn_type == FunctionType::User
-                    && func_common_fast.plan.call == CallStrategy::FastScalar
-                    // FastScalar is fixed-arity by construction, so the
-                    // required public count is also its exact arity. This
-                    // avoids recomputing public_arity() on every normal call
-                    // while still excluding the hidden method `$this`.
+                    && (func_common_fast.plan.call == CallStrategy::FastScalar
+                        || (func_common_fast.plan.call == CallStrategy::FastTypedScalar
+                            && opline._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0))
+                    // Both scalar ABIs are fixed-arity here; the typed variant
+                    // enters only when the compiler proved every supplied
+                    // argument. The required public count is therefore the
+                    // exact arity, excluding the hidden method `$this`.
                     && unsafe { (*call).num_args } == func_common_fast.sig.required_num_args
                     && eg.pending_invoke_this.is_none()
                     && eg.pending_named_variadic.is_empty()
@@ -11648,7 +11694,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
                     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
                     let ic = &op_array.cache[ip];
-                    if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
+                    if !ic.func.is_null()
+                        && ic.class_id == obj_class_id
+                        && obj_class_id != 0
+                        && method_return_dispatch_contract_matches(
+                            opline,
+                            unsafe { &*ic.func },
+                        )
+                    {
                         let func_ptr = ic.func;
                         let common = unsafe { &*func_ptr };
                         let num_args = opline.extended_value;
@@ -11848,18 +11901,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // the ordinary `$object->method(...)` protocol.
                         if ic.method_fusion_eligible()
                             && bound == num_args as usize
-                            && (common.plan.call == CallStrategy::FastScalar
-                                || unsafe {
-                                    compact_scalar_call_types_match(
-                                        call,
-                                        common,
-                                        op_array.strict_types,
-                                    )
-                                })
                         {
                             let do_fcall_ptr = unsafe { opline_ptr.add(1 + bound) };
                             let do_fcall = unsafe { &*do_fcall_ptr };
-                            if do_fcall.opcode == OpCode::DoFcall {
+                            let argument_contract_satisfied =
+                                common.plan.call == CallStrategy::FastScalar
+                                    || do_fcall._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
+                                    || unsafe {
+                                        compact_scalar_call_types_match(
+                                            call,
+                                            common,
+                                            op_array.strict_types,
+                                        )
+                                    };
+                            if do_fcall.opcode == OpCode::DoFcall
+                                && argument_contract_satisfied
+                            {
                                 match execute_fast_scalar_method_call(
                                     eg,
                                     frame,

@@ -31,6 +31,9 @@ pub enum KnownScalarType {
 
 const KNOWN_RESULT_TYPE_SHIFT: u16 = 13;
 const KNOWN_RESULT_TYPE_MASK: u16 = 0b111 << KNOWN_RESULT_TYPE_SHIFT;
+const METHOD_RETURN_GUARD_SHIFT: u16 = 10;
+const METHOD_RETURN_GUARD_MASK: u16 = 0b111 << METHOD_RETURN_GUARD_SHIFT;
+const METHOD_LONG_ARGS_GUARD: u16 = 1 << 9;
 
 /// Operand type — where to find the operand
 #[repr(u8)]
@@ -88,6 +91,37 @@ impl Instruction {
             4 => KnownScalarType::Bool,
             _ => KnownScalarType::Unknown,
         }
+    }
+
+    /// Exact return representation promised by the statically known receiver
+    /// contract at an InitMethodCall site. Runtime method dispatch validates
+    /// the resolved override once; downstream bytecode can then consume the
+    /// result fact without repeating that guard for every operation.
+    #[inline(always)]
+    pub fn set_method_return_guard_type(&mut self, known: KnownScalarType) {
+        self._pad = (self._pad & !METHOD_RETURN_GUARD_MASK)
+            | ((known as u16) << METHOD_RETURN_GUARD_SHIFT);
+    }
+
+    #[inline(always)]
+    pub fn method_return_guard_type(&self) -> KnownScalarType {
+        match (self._pad & METHOD_RETURN_GUARD_MASK) >> METHOD_RETURN_GUARD_SHIFT {
+            1 => KnownScalarType::Long,
+            2 => KnownScalarType::Double,
+            3 => KnownScalarType::String,
+            4 => KnownScalarType::Bool,
+            _ => KnownScalarType::Unknown,
+        }
+    }
+
+    #[inline(always)]
+    pub fn set_method_long_args_guard(&mut self) {
+        self._pad |= METHOD_LONG_ARGS_GUARD;
+    }
+
+    #[inline(always)]
+    pub fn has_method_long_args_guard(&self) -> bool {
+        self._pad & METHOD_LONG_ARGS_GUARD != 0
     }
 
     #[inline]
@@ -160,7 +194,7 @@ impl InlineCache {
     /// array identity or mutation version is required for correctness.
     #[inline(always)]
     pub fn string_array_position(&self) -> Option<usize> {
-        (self.prop_info != 0).then_some((self.prop_info - 1) as usize)
+        (self.prop_info != 0).then(|| (self.prop_info - 1) as usize)
     }
 
     #[inline]

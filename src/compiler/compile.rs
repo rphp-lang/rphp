@@ -293,6 +293,96 @@ fn declared_function_parameter_types(
         .collect()
 }
 
+fn declared_function_ref_args(
+    functions: &[(String, UserFunction)],
+) -> HashMap<String, u64> {
+    functions
+        .iter()
+        .map(|(name, function)| {
+            (name.to_ascii_lowercase(), function.common.sig.ref_args)
+        })
+        .collect()
+}
+
+#[derive(Clone)]
+struct DeclaredMethodFacts {
+    return_type: KnownScalarType,
+    parameter_types: Vec<ParamTypeHint>,
+    ref_args: u64,
+}
+
+/// Declaration contracts indexed by receiver class + method. Direct methods,
+/// including untyped overrides, win. Missing methods inherit to a fixed point
+/// because source class definitions are not guaranteed to be parent-first.
+fn declared_method_facts(
+    class_defs: &[ClassDef],
+) -> HashMap<(String, String), DeclaredMethodFacts> {
+    let mut result = HashMap::new();
+    for class in class_defs {
+        let class_name = class.name.to_ascii_lowercase();
+        for (method_name, _, _, _, method) in &class.methods {
+            result.insert(
+                (class_name.clone(), method_name.to_ascii_lowercase()),
+                DeclaredMethodFacts {
+                    return_type: exact_declared_scalar_type(
+                        &method.common.sig.return_type_hint,
+                    ),
+                    parameter_types: method.common.sig.param_type_hints.clone(),
+                    ref_args: method.common.sig.ref_args,
+                },
+            );
+        }
+    }
+
+    loop {
+        let snapshot = result.clone();
+        let mut changed = false;
+        for class in class_defs {
+            let Some(parent) = class.parent.as_ref() else {
+                continue;
+            };
+            let class_name = class.name.to_ascii_lowercase();
+            let parent_name = parent.to_ascii_lowercase();
+            for ((owner, method_name), facts) in &snapshot {
+                if owner == &parent_name
+                    && !result.contains_key(&(class_name.clone(), method_name.clone()))
+                {
+                    result.insert(
+                        (class_name.clone(), method_name.clone()),
+                        facts.clone(),
+                    );
+                    changed = true;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    result
+}
+
+fn declared_receiver_class(
+    hint: &ParamTypeHint,
+    current_class: Option<&str>,
+    parent_class: Option<&str>,
+) -> Option<String> {
+    match hint {
+        ParamTypeHint::ClassName(name) => match name.to_ascii_lowercase().as_str() {
+            "self" | "static" => current_class.map(str::to_ascii_lowercase),
+            "parent" => parent_class.map(str::to_ascii_lowercase),
+            _ => Some(name.to_ascii_lowercase()),
+        },
+        // A non-null method call proves the nullable value is an object on the
+        // continuing path. Nullsafe calls are excluded separately.
+        ParamTypeHint::Nullable(inner) => {
+            declared_receiver_class(inner, current_class, parent_class)
+        }
+        _ => None,
+    }
+}
+
 fn resolved_init_function_return_type(
     op_array: &OpArray,
     instruction: &Instruction,
@@ -343,6 +433,30 @@ fn resolved_init_function_parameter_types(
     })
 }
 
+fn resolved_init_function_ref_args(
+    op_array: &OpArray,
+    instruction: &Instruction,
+    ref_args: &HashMap<String, u64>,
+) -> Option<u64> {
+    let primary = op_array
+        .literals
+        .get(instruction.op2 as usize)
+        .and_then(Value::as_str)
+        .and_then(|name| ref_args.get(&name.to_ascii_lowercase()))
+        .copied();
+    primary.or_else(|| {
+        if instruction.extended_value == 0 {
+            return None;
+        }
+        op_array
+            .literals
+            .get(instruction.extended_value as usize)
+            .and_then(Value::as_str)
+            .and_then(|name| ref_args.get(&name.to_ascii_lowercase()))
+            .copied()
+    })
+}
+
 fn known_argument_satisfies_hint(
     known: KnownScalarType,
     hint: &ParamTypeHint,
@@ -370,6 +484,9 @@ fn known_argument_satisfies_hint(
 struct PendingScalarCallFacts {
     return_type: KnownScalarType,
     parameter_types: Option<Vec<ParamTypeHint>>,
+    parameter_offset: usize,
+    ref_args: Option<u64>,
+    allow_exact_argument_skip: bool,
     arguments_proven: bool,
 }
 
@@ -406,45 +523,17 @@ fn propagate_declared_scalar_types(
     ref_args: u64,
     return_types: &HashMap<String, KnownScalarType>,
     parameter_types: &HashMap<String, Vec<ParamTypeHint>>,
+    function_ref_args: &HashMap<String, u64>,
+    current_class: Option<&str>,
+    parent_class: Option<&str>,
+    method_facts: &HashMap<(String, String), DeclaredMethodFacts>,
 ) {
     let slot_count = (op_array.num_cvs + op_array.num_temps) as usize;
     let mut slots = vec![KnownScalarType::Unknown; slot_count];
-    let mut mutable_params = vec![false; param_type_hints.len()];
-
-    for instruction in &op_array.instructions {
-        let mut mark_mutable = |slot: u16| {
-            let slot = slot as u32;
-            if slot >= this_offset && slot < this_offset + param_type_hints.len() as u32 {
-                mutable_params[(slot - this_offset) as usize] = true;
-            }
-        };
-        match instruction.opcode {
-            OpCode::AssignCv
-            | OpCode::AssignConcat
-            | OpCode::PreInc
-            | OpCode::PreDec
-            | OpCode::PostInc
-            | OpCode::PostDec
-            | OpCode::BindDefaultParam
-            | OpCode::BindGlobal
-            | OpCode::BindStatic => mark_mutable(instruction.op1),
-            OpCode::SendRef | OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
-                mark_mutable(instruction.op1)
-            }
-            OpCode::ForeachNext => mutable_params.fill(true),
-            _ => {}
-        }
-    }
-
-    for (index, hint) in param_type_hints.iter().enumerate() {
-        if !mutable_params[index] && (index >= 64 || ref_args & (1u64 << index) == 0) {
-            let cv = this_offset as usize + index;
-            if cv < slots.len() {
-                slots[cv] = exact_declared_scalar_type(hint);
-            }
-        }
-    }
-
+    let mut receiver_classes = vec![None::<String>; slot_count];
+    let mut directly_mutated_params = vec![false; param_type_hints.len()];
+    let mut maybe_aliased_params = vec![false; param_type_hints.len()];
+    let mut aliased_cvs = vec![false; op_array.num_cvs as usize];
     let straight_line = !op_array.instructions.iter().any(|instruction| {
         matches!(
             instruction.opcode,
@@ -457,6 +546,65 @@ fn propagate_declared_scalar_types(
                 | OpCode::BindDefaultParam
         )
     });
+
+    for instruction in &op_array.instructions {
+        let mark_param = |params: &mut [bool], slot: u16| {
+            let slot = slot as u32;
+            if slot >= this_offset && slot < this_offset + param_type_hints.len() as u32 {
+                params[(slot - this_offset) as usize] = true;
+            }
+        };
+        match instruction.opcode {
+            OpCode::AssignCv
+            | OpCode::AssignConcat
+            | OpCode::PreInc
+            | OpCode::PreDec
+            | OpCode::PostInc
+            | OpCode::PostDec
+            | OpCode::BindDefaultParam => {
+                mark_param(&mut directly_mutated_params, instruction.op1)
+            }
+            OpCode::BindGlobal | OpCode::BindStatic => {
+                mark_param(&mut directly_mutated_params, instruction.op1);
+                mark_param(&mut maybe_aliased_params, instruction.op1);
+                if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
+                    *aliased = true;
+                }
+            }
+            OpCode::SendRef | OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
+                mark_param(&mut maybe_aliased_params, instruction.op1);
+                if let Some(aliased) = aliased_cvs.get_mut(instruction.op1 as usize) {
+                    *aliased = true;
+                }
+            }
+            OpCode::ForeachNext => directly_mutated_params.fill(true),
+            _ => {}
+        }
+    }
+
+    for (index, hint) in param_type_hints.iter().enumerate() {
+        if index < 64 && ref_args & (1u64 << index) != 0 {
+            let cv = this_offset as usize + index;
+            if let Some(aliased) = aliased_cvs.get_mut(cv) {
+                *aliased = true;
+            }
+        }
+        if !directly_mutated_params[index]
+            && (straight_line || !maybe_aliased_params[index])
+            && (index >= 64 || ref_args & (1u64 << index) == 0)
+        {
+            let cv = this_offset as usize + index;
+            if cv < slots.len() {
+                slots[cv] = exact_declared_scalar_type(hint);
+                receiver_classes[cv] =
+                    declared_receiver_class(hint, current_class, parent_class);
+            }
+        }
+    }
+    if this_offset == 1 && !aliased_cvs.first().copied().unwrap_or(false) {
+        receiver_classes[0] = current_class.map(str::to_ascii_lowercase);
+    }
+
     let mut pending_calls = Vec::new();
 
     for ip in 0..op_array.instructions.len() {
@@ -465,17 +613,26 @@ fn propagate_declared_scalar_types(
         // A CV exposed by reference can be changed by code outside this body.
         // Forget any straight-line fact before later instructions consume it.
         match instruction.opcode {
-            OpCode::SendRef | OpCode::SendVarEx if instruction.op1_type == OpType::Cv => {
+            OpCode::SendRef if instruction.op1_type == OpType::Cv => {
                 if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
                     *slot = KnownScalarType::Unknown;
+                }
+                if let Some(slot) = receiver_classes.get_mut(instruction.op1 as usize) {
+                    *slot = None;
                 }
             }
             OpCode::BindGlobal | OpCode::BindStatic => {
                 if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
                     *slot = KnownScalarType::Unknown;
                 }
+                if let Some(slot) = receiver_classes.get_mut(instruction.op1 as usize) {
+                    *slot = None;
+                }
             }
-            OpCode::ForeachNext => slots.fill(KnownScalarType::Unknown),
+            OpCode::ForeachNext => {
+                slots.fill(KnownScalarType::Unknown);
+                receiver_classes.fill(None);
+            }
             _ => {}
         }
 
@@ -491,15 +648,88 @@ fn propagate_declared_scalar_types(
                     &instruction,
                     parameter_types,
                 ),
+                parameter_offset: 0,
+                ref_args: resolved_init_function_ref_args(
+                    op_array,
+                    &instruction,
+                    function_ref_args,
+                ),
+                allow_exact_argument_skip: true,
                 arguments_proven: true,
             }),
-            OpCode::InitMethodCall
-            | OpCode::InitStaticCall
+            OpCode::InitMethodCall => {
+                let nullsafe = ip > 0
+                    && op_array.instructions[ip - 1].opcode == OpCode::NullSafeCheck;
+                let receiver_stable = match instruction.op1_type {
+                    OpType::Cv => aliased_cvs
+                        .get(instruction.op1 as usize)
+                        .is_some_and(|aliased| !aliased),
+                    OpType::Tmp | OpType::Var => true,
+                    _ => false,
+                };
+                let receiver_class = if matches!(
+                    instruction.op1_type,
+                    OpType::Cv | OpType::Tmp | OpType::Var
+                ) {
+                    receiver_classes
+                        .get(instruction.op1 as usize)
+                        .and_then(|class| class.as_deref())
+                } else {
+                    None
+                };
+                let method_name = op_array
+                    .literals
+                    .get(instruction.op2 as usize)
+                    .and_then(Value::as_str)
+                    .map(str::to_ascii_lowercase);
+                let declaration = receiver_class
+                    .zip(method_name.as_deref())
+                    .and_then(|(class, method)| {
+                        method_facts
+                            .get(&(class.to_string(), method.to_string()))
+                            .cloned()
+                    });
+                let exact_return = declaration
+                    .as_ref()
+                    .map(|facts| facts.return_type)
+                    .filter(|known| *known != KnownScalarType::Unknown);
+                let exact_parameters = declaration
+                    .as_ref()
+                    .map(|facts| facts.parameter_types.clone());
+                let exact_ref_args = declaration.as_ref().map(|facts| facts.ref_args);
+                let guarded_return = (!nullsafe && receiver_stable)
+                    .then_some(exact_return)
+                    .flatten();
+                if let Some(return_type) = guarded_return {
+                    op_array.instructions[ip]
+                        .set_method_return_guard_type(return_type);
+                }
+                let exact_long_arguments = exact_parameters.as_ref().is_some_and(|hints| {
+                    !hints.is_empty()
+                        && hints.iter().all(|hint| matches!(hint, ParamTypeHint::Int))
+                        && exact_ref_args == Some(0)
+                });
+                if exact_long_arguments {
+                    op_array.instructions[ip].set_method_long_args_guard();
+                }
+                pending_calls.push(PendingScalarCallFacts {
+                    return_type: guarded_return.unwrap_or(KnownScalarType::Unknown),
+                    parameter_types: exact_parameters,
+                    parameter_offset: 1,
+                    ref_args: exact_ref_args,
+                    allow_exact_argument_skip: exact_long_arguments,
+                    arguments_proven: true,
+                });
+            }
+            OpCode::InitStaticCall
             | OpCode::InitDynamicCall
             | OpCode::InitUserCall
             | OpCode::NewObj => pending_calls.push(PendingScalarCallFacts {
                 return_type: KnownScalarType::Unknown,
                 parameter_types: None,
+                parameter_offset: 0,
+                ref_args: None,
+                allow_exact_argument_skip: false,
                 arguments_proven: false,
             }),
             _ => {}
@@ -517,25 +747,69 @@ fn propagate_declared_scalar_types(
             instruction.op2_type,
             instruction.op2,
         );
+        let mut send_var_may_alias = false;
         if matches!(instruction.opcode, OpCode::SendVal) {
             if let Some(call) = pending_calls.last_mut() {
                 call.arguments_proven &= call
                     .parameter_types
                     .as_ref()
-                    .and_then(|hints| hints.get(instruction.op2 as usize))
+                    .and_then(|hints| {
+                        (instruction.op2 as usize)
+                            .checked_sub(call.parameter_offset)
+                            .and_then(|index| hints.get(index))
+                    })
                     .is_some_and(|hint| {
                         known_argument_satisfies_hint(left, hint, op_array.strict_types)
                     });
             }
+        } else if instruction.opcode == OpCode::SendVarEx {
+            if let Some(call) = pending_calls.last_mut() {
+                let parameter_index = (instruction.op2 as usize)
+                    .checked_sub(call.parameter_offset);
+                let passed_by_reference = parameter_index
+                    .and_then(|index| call.ref_args.map(|mask| (index < 64) && mask & (1u64 << index) != 0))
+                    .unwrap_or(true);
+                if passed_by_reference {
+                    call.arguments_proven = false;
+                    send_var_may_alias = true;
+                } else {
+                    call.arguments_proven &= call
+                        .parameter_types
+                        .as_ref()
+                        .and_then(|hints| parameter_index.and_then(|index| hints.get(index)))
+                        .is_some_and(|hint| {
+                            known_argument_satisfies_hint(left, hint, op_array.strict_types)
+                        });
+                }
+            } else {
+                send_var_may_alias = true;
+            }
         } else if matches!(
             instruction.opcode,
-            OpCode::SendRef | OpCode::SendVarEx | OpCode::SendNamed | OpCode::SendUser
+            OpCode::SendRef | OpCode::SendNamed | OpCode::SendUser
         ) {
             if let Some(call) = pending_calls.last_mut() {
                 call.arguments_proven = false;
             }
         }
+        if send_var_may_alias && instruction.op1_type == OpType::Cv {
+            if let Some(slot) = slots.get_mut(instruction.op1 as usize) {
+                *slot = KnownScalarType::Unknown;
+            }
+            if let Some(slot) = receiver_classes.get_mut(instruction.op1 as usize) {
+                *slot = None;
+            }
+        }
         let mut result = KnownScalarType::Unknown;
+        let mut result_receiver_class = (instruction.opcode == OpCode::NewObj)
+            .then(|| {
+                op_array
+                    .literals
+                    .get(instruction.op1 as usize)
+                    .and_then(Value::as_str)
+                    .map(str::to_ascii_lowercase)
+            })
+            .flatten();
         let mut exact_call_arguments = false;
         let rewritten = match instruction.opcode {
             OpCode::Add if left == KnownScalarType::Long && right == KnownScalarType::Long => {
@@ -577,7 +851,9 @@ fn propagate_declared_scalar_types(
                 if let Some(call) = pending_calls.pop() {
                     result = call.return_type;
                     exact_call_arguments =
-                        call.arguments_proven && call.parameter_types.is_some();
+                        call.allow_exact_argument_skip
+                            && call.arguments_proven
+                            && call.parameter_types.is_some();
                 }
             }
             OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String => {
@@ -606,11 +882,38 @@ fn propagate_declared_scalar_types(
             | OpCode::Instanceof => result = KnownScalarType::Bool,
             OpCode::AssignCv if straight_line => {
                 if instruction.op1_type == OpType::Cv {
+                    let assigned_receiver_class = if matches!(
+                        instruction.op2_type,
+                        OpType::Cv | OpType::Tmp | OpType::Var
+                    ) {
+                        receiver_classes
+                            .get(instruction.op2 as usize)
+                            .cloned()
+                            .flatten()
+                    } else {
+                        None
+                    };
                     if let Some(destination) = slots.get_mut(instruction.op1 as usize) {
                         *destination = right;
                     }
+                    if let Some(destination) =
+                        receiver_classes.get_mut(instruction.op1 as usize)
+                    {
+                        *destination = assigned_receiver_class;
+                    }
                 }
                 result = right;
+                result_receiver_class = if matches!(
+                    instruction.op2_type,
+                    OpType::Cv | OpType::Tmp | OpType::Var
+                ) {
+                    receiver_classes
+                        .get(instruction.op2 as usize)
+                        .cloned()
+                        .flatten()
+                } else {
+                    None
+                };
             }
             OpCode::Return => result = left,
             _ => {}
@@ -627,6 +930,11 @@ fn propagate_declared_scalar_types(
         {
             if let Some(destination) = slots.get_mut(instruction.result as usize) {
                 *destination = result;
+            }
+        }
+        if matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var) {
+            if let Some(destination) = receiver_classes.get_mut(instruction.result as usize) {
+                *destination = result_receiver_class;
             }
         }
     }
@@ -910,6 +1218,8 @@ impl Compiler {
         // stable while enriching their canonical fallback bytecode.
         let return_types = declared_function_return_types(&self.functions);
         let parameter_types = declared_function_parameter_types(&self.functions);
+        let function_ref_args = declared_function_ref_args(&self.functions);
+        let method_facts = declared_method_facts(&self.class_defs);
         for (_, function) in &mut self.functions {
             let signature = &function.common.sig;
             propagate_declared_scalar_types(
@@ -919,9 +1229,15 @@ impl Compiler {
                 signature.ref_args,
                 &return_types,
                 &parameter_types,
+                &function_ref_args,
+                None,
+                None,
+                &method_facts,
             );
         }
         for class in &mut self.class_defs {
+            let class_name = class.name.clone();
+            let parent_class = class.parent.clone();
             for (_, _, _, _, method) in &mut class.methods {
                 let signature = &method.common.sig;
                 propagate_declared_scalar_types(
@@ -931,6 +1247,10 @@ impl Compiler {
                     signature.ref_args,
                     &return_types,
                     &parameter_types,
+                    &function_ref_args,
+                    Some(&class_name),
+                    parent_class.as_deref(),
+                    &method_facts,
                 );
             }
         }

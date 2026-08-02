@@ -865,3 +865,211 @@ function add(int $left, int $right): int { return $left + $right; }
 try { add(PHP_INT_MAX, 1); } catch (TypeError $error) { echo "caught"; }
 "#), "caught");
 }
+
+#[test]
+fn test_method_return_contract_selects_one_dispatch_guard_and_scalar_consumers() {
+    let result = compile_types(r#"<?php
+class Source {
+    function value(int $value): int {
+        if (($value & 1) === 0) { return $value + 3; }
+        return $value - 2;
+    }
+    function label(int $value): string {
+        if (($value & 1) === 0) { return "even"; }
+        return "odd";
+    }
+}
+function consumeInt(Source $source, int $value): int {
+    $result = $source->value($value);
+    return ($result % 97) ^ 3;
+}
+function consumeString(Source $source, int $value): int {
+    return strlen($source->label($value));
+}
+"#);
+    let consume_int = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consumeInt")
+        .unwrap()
+        .1
+        .op_array;
+    let guarded_init = consume_int
+        .instructions
+        .iter()
+        .find(|instruction| instruction.opcode == OpCode::InitMethodCall)
+        .unwrap();
+    assert_eq!(
+        guarded_init.method_return_guard_type(),
+        KnownScalarType::Long
+    );
+    assert!(guarded_init.has_method_long_args_guard());
+    assert!(consume_int
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Mod_LongLong));
+    assert!(consume_int.instructions.iter().any(|instruction| {
+        instruction.opcode == OpCode::DoFcall
+            && instruction._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
+    }));
+    assert!(consume_int
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::BitwiseXor_LongLong));
+
+    let consume_string = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "consumeString")
+        .unwrap()
+        .1
+        .op_array;
+    let string_init = consume_string
+        .instructions
+        .iter()
+        .find(|instruction| instruction.opcode == OpCode::InitMethodCall)
+        .unwrap();
+    assert_eq!(
+        string_init.method_return_guard_type(),
+        KnownScalarType::String
+    );
+    assert!(consume_string
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Strlen_String));
+
+    assert_eq!(run_php(r#"<?php
+class RuntimeSource {
+    function value(int $value): int { return $value + 2; }
+    function label(int $value): string { return "typed"; }
+}
+function runtimeConsume(RuntimeSource $source, int $value): int {
+    return ($source->value($value) % 7) + strlen($source->label($value));
+}
+echo runtimeConsume(new RuntimeSource(), 5);
+"#), "5");
+}
+
+#[test]
+fn test_polymorphic_method_return_dispatch_accepts_compatible_override() {
+    assert_eq!(run_php(r#"<?php
+class IntegerSource { function value($value): int { return $value + 2; } }
+class ShiftedSource extends IntegerSource { function value($value): int { return $value + 4; } }
+function consume(IntegerSource $source, $value) { return $source->value($value) + 1; }
+$integer = new IntegerSource();
+$shifted = new ShiftedSource();
+for ($i = 0; $i < 20; $i++) {
+    consume($integer, $i);
+    consume($shifted, $i);
+}
+echo consume($integer, 4);
+echo ":";
+echo consume($shifted, 4);
+"#), "7:9");
+}
+
+#[test]
+fn test_bad_typed_method_return_throws_before_guarded_consumer() {
+    assert_eq!(run_php(r#"<?php
+declare(strict_types=1);
+class BadSource { function value(): int { return "bad"; } }
+function consume(BadSource $source) { return $source->value() % 7; }
+try { consume(new BadSource()); } catch (TypeError $error) { echo "caught"; }
+"#), "caught");
+}
+
+#[test]
+fn test_nullsafe_and_reference_receivers_do_not_use_method_return_guard() {
+    let result = compile_types(r#"<?php
+class Source { function label(): string { return "value"; } }
+function nullable(?Source $source): int { return strlen($source?->label()); }
+function referenced(Source &$source): int { return strlen($source->label()); }
+"#);
+    for name in ["nullable", "referenced"] {
+        let function = &result
+            .functions
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .unwrap()
+            .1
+            .op_array;
+        assert!(function.instructions.iter().all(|instruction| {
+            instruction.opcode != OpCode::InitMethodCall
+                || instruction.method_return_guard_type() == KnownScalarType::Unknown
+        }));
+        assert!(function.instructions.iter().all(|instruction| {
+            instruction.opcode != OpCode::Strlen_String
+        }));
+    }
+}
+
+#[test]
+fn test_method_contract_flows_from_new_this_and_inheritance() {
+    let result = compile_types(r#"<?php
+class Source {
+    function value(): int { return 42; }
+    function fromThis(): int { return $this->value() % 5; }
+}
+class Child extends Source {}
+class UntypedChild extends Source {
+    function value() { return 42.5; }
+}
+function fromNew(): int {
+    $source = new Source();
+    return $source->value() % 5;
+}
+function fromInherited(Child $source): int {
+    return $source->value() % 5;
+}
+function fromUntypedOverride(UntypedChild $source) {
+    return $source->value() % 5;
+}
+"#);
+
+    for name in ["fromNew", "fromInherited"] {
+        let function = &result
+            .functions
+            .iter()
+            .find(|(candidate, _)| candidate == name)
+            .unwrap()
+            .1
+            .op_array;
+        assert!(function
+            .instructions
+            .iter()
+            .any(|instruction| instruction.opcode == OpCode::Mod_LongLong));
+    }
+
+    let source = result
+        .class_defs
+        .iter()
+        .find(|class| class.name == "Source")
+        .unwrap();
+    let from_this = &source
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "fromThis")
+        .unwrap()
+        .4
+        .op_array;
+    assert!(from_this
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::Mod_LongLong));
+
+    let untyped = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "fromUntypedOverride")
+        .unwrap()
+        .1
+        .op_array;
+    assert!(untyped.instructions.iter().all(|instruction| {
+        instruction.opcode != OpCode::InitMethodCall
+            || instruction.method_return_guard_type() == KnownScalarType::Unknown
+    }));
+    assert!(untyped
+        .instructions
+        .iter()
+        .all(|instruction| instruction.opcode != OpCode::Mod_LongLong));
+}

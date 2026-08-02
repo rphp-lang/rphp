@@ -81,6 +81,23 @@ combined array build-and-sum workload a 0.0037 s versus 0.0040 s RPHP win. This
 is retained as a measured runtime cost, not as a reason to add a benchmark-only
 kernel before the real-code corpus establishes its importance.
 
+Typed-declaration checkpoint (2026-08-02): exact method contracts now propagate
+from class-typed parameters, `$this`, `new`, straight-line assignments, and
+inherited declarations. The receiver class and resolved method signature are
+guarded once at `InitMethodCall`; downstream integer and string operations use
+the existing declaration-proven opcodes without repeating that dispatch guard.
+Exact all-`int`, non-reference method arguments also reuse the typed scalar ABI
+only when the runtime override retains the same ABI. Nullsafe calls, referenced
+receivers, untyped overrides, and failed signature guards retain canonical
+execution.
+
+In the method-return fanout workload, an interleaved seven-run no-PGO sample has
+an RPHP median of approximately 0.271 s typed versus 0.276 s untyped. PHP
+without JIT is approximately 0.071 s versus 0.070 s. The small RPHP typed win
+confirms that the facts reach ordinary bytecode, but the remaining roughly
+3.8x gap also shows that method/frame execution dominates this workload; tag
+checks in the eight downstream modulo operations are no longer the main cost.
+
 ## Phase 2: unified typed execution IR
 
 Consolidate the existing scalar, composed-scalar, property, recursion, and
