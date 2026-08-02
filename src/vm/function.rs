@@ -200,6 +200,7 @@ pub enum ObjectLongObjectSource {
 /// forward branches need no separate CFG or target rewriting.
 #[derive(Debug, Clone, Copy)]
 pub enum ObjectLongOp {
+    Noop,
     Assign {
         destination: u16,
         source: ObjectLongSource,
@@ -217,6 +218,17 @@ pub enum ObjectLongOp {
     },
     Compare {
         kind: ScalarLongConditionKind,
+        lhs: ObjectLongSource,
+        rhs: ObjectLongSource,
+        destination: u16,
+    },
+    StringLiteralBranch {
+        argument: u8,
+        literal: u16,
+        jump_when_equal: bool,
+        target: u16,
+    },
+    IntDiv {
         lhs: ObjectLongSource,
         rhs: ObjectLongSource,
         destination: u16,
@@ -240,6 +252,29 @@ pub enum ObjectLongOp {
     Bail,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectLongIntDivArm {
+    pub multiplier: i64,
+    pub divisor: i64,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ObjectLongStringIntDivCase {
+    pub literal: u16,
+    pub arm: ObjectLongIntDivArm,
+}
+
+/// Compact lowering for a common policy/router shape: select an integer
+/// multiply+intdiv return arm by comparing one immutable String argument with
+/// a short list of literals. The canonical operation program remains the
+/// fallback and future JIT input.
+pub struct ObjectLongStringIntDivSelect {
+    pub string_argument: u8,
+    pub input: ObjectLongSource,
+    pub cases: Box<[ObjectLongStringIntDivCase]>,
+    pub default_arm: ObjectLongIntDivArm,
+}
+
 /// Compile-time proof for a fixed-signature method that only reads declared
 /// object properties and performs checked integer work. Property inline
 /// caches remain authoritative at runtime, preserving class layout and PHP
@@ -248,8 +283,10 @@ pub struct ObjectLongFunctionPlan {
     pub public_args: u8,
     pub long_argument_mask: u8,
     pub object_argument_mask: u8,
+    pub string_argument_mask: u8,
     pub slot_count: u16,
     pub operations: Box<[ObjectLongOp]>,
+    pub string_intdiv_select: Option<Box<ObjectLongStringIntDivSelect>>,
 }
 
 /// Branch metadata for a pure function that selects one of two immutable

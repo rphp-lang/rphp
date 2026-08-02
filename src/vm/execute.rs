@@ -1391,6 +1391,98 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
     Some(result)
 }
 
+/// Consume a deferred method activation after all argument expressions have
+/// executed, without expanding it into the callee's complete CV/TMP frame.
+#[inline(never)]
+unsafe fn try_execute_deferred_object_long_call(
+    eg: &ExecutorGlobals,
+    call: *mut ExecuteData,
+) -> Option<i64> {
+    let common = &*(*call).func;
+    if !(*call).deferred_scalar_call
+        || common.fn_type != FunctionType::User
+        || !common.plan.call.is_compact_user_call()
+        || common.plan.ret != ReturnStrategy::Fast
+        || (*call).num_args != common.sig.public_arity()
+        || (*call).named_args_used
+    {
+        return None;
+    }
+    let callee = &*((*call).func as *const UserFunction);
+    let plan = callee.object_long_plan.as_deref()?;
+    if plan.public_args as u32 != common.sig.public_arity() {
+        return None;
+    }
+
+    let receiver = (*call).cv(0);
+    if receiver.value_type() != ValueType::Object || receiver.is_reference() {
+        return None;
+    }
+    let caller = (*call).prev_execute_data;
+    if caller.is_null() {
+        return None;
+    }
+    let caller_op_array = (*caller).op_array();
+    let declaring_class = eg.declaring_class_of(&callee.common as *const FunctionCommon);
+    let mut slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
+    let mut initialized = 0u64;
+    let mut object_arguments = [std::ptr::null(); 8];
+    let mut string_arguments = [std::ptr::null(); 8];
+
+    for index in 0..plan.public_args as usize {
+        let value = (*call).cv(common.sig.param_cv_index(index as u32));
+        if value.is_reference() {
+            return None;
+        }
+        let hint = common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        if !check_type_hint(
+            value,
+            hint,
+            eg,
+            caller_op_array.strict_types,
+            declaring_class,
+        ) {
+            return None;
+        }
+
+        let bit = 1u8 << index;
+        if plan.long_argument_mask & bit != 0 {
+            if value.value_type() != ValueType::Long {
+                return None;
+            }
+            let slot = common.sig.param_cv_index(index as u32) as usize;
+            slots[slot].write(value.raw_long());
+            initialized |= 1u64 << slot;
+        }
+        if plan.object_argument_mask & bit != 0 {
+            if value.value_type() != ValueType::Object {
+                return None;
+            }
+            object_arguments[index] = value as *const Value;
+        }
+        if plan.string_argument_mask & bit != 0 {
+            if value.value_type() != ValueType::String {
+                return None;
+            }
+            string_arguments[index] = value as *const Value;
+        }
+    }
+
+    evaluate_object_long_plan(
+        receiver,
+        &object_arguments,
+        &string_arguments,
+        &mut slots,
+        initialized,
+        callee,
+        plan,
+    )
+}
+
 /// Execute a deferred compiler-proven property mutator from arguments already
 /// captured in its compact activation.  As with the contiguous variant, all
 /// type/cache/arithmetic guards complete before the first property write.
@@ -1494,7 +1586,8 @@ pub(crate) unsafe fn resolve_deferred_scalar_call(
         do_fcall.result_type,
         OpType::Tmp | OpType::Var | OpType::Unused
     ) {
-        try_execute_deferred_scalar_long_call(eg, compact)
+        try_execute_deferred_object_long_call(eg, compact)
+            .or_else(|| try_execute_deferred_scalar_long_call(eg, compact))
     } else {
         None
     };
@@ -1659,6 +1752,7 @@ fn resolve_object_long_source(
 unsafe fn evaluate_object_long_plan(
     receiver: &Value,
     object_arguments: &[*const Value; 8],
+    string_arguments: &[*const Value; 8],
     slots: &mut [std::mem::MaybeUninit<i64>; 64],
     mut initialized: u64,
     callee: &UserFunction,
@@ -1671,9 +1765,34 @@ unsafe fn evaluate_object_long_plan(
         return None;
     }
 
+    if let Some(select) = plan.string_intdiv_select.as_deref() {
+        let pointer = *string_arguments.get(select.string_argument as usize)?;
+        if pointer.is_null() {
+            return None;
+        }
+        let value = (&*pointer).as_str()?;
+        let mut arm = select.default_arm;
+        for case in select.cases.iter().copied() {
+            let literal = callee
+                .op_array
+                .literals
+                .get(case.literal as usize)?
+                .as_str()?;
+            if value == literal {
+                arm = case.arm;
+                break;
+            }
+        }
+        let input = resolve_object_long_source(select.input, slots, initialized)?;
+        return input
+            .checked_mul(arm.multiplier)?
+            .checked_div(arm.divisor);
+    }
+
     let mut ip = 0usize;
     while ip < plan.operations.len() {
         match plan.operations[ip] {
+            ObjectLongOp::Noop => {}
             ObjectLongOp::Assign {
                 destination,
                 source,
@@ -1743,6 +1862,33 @@ unsafe fn evaluate_object_long_plan(
                 slots[destination as usize].write(value as i64);
                 initialized |= 1u64 << destination;
             }
+            ObjectLongOp::StringLiteralBranch {
+                argument,
+                literal,
+                jump_when_equal,
+                target,
+            } => {
+                let pointer = *string_arguments.get(argument as usize)?;
+                if pointer.is_null() {
+                    return None;
+                }
+                let argument = (&*pointer).as_str()?;
+                let literal = callee.op_array.literals.get(literal as usize)?.as_str()?;
+                if (argument == literal) == jump_when_equal {
+                    ip = target as usize;
+                    continue;
+                }
+            }
+            ObjectLongOp::IntDiv {
+                lhs,
+                rhs,
+                destination,
+            } => {
+                let lhs = resolve_object_long_source(lhs, slots, initialized)?;
+                let rhs = resolve_object_long_source(rhs, slots, initialized)?;
+                slots[destination as usize].write(lhs.checked_div(rhs)?);
+                initialized |= 1u64 << destination;
+            }
             ObjectLongOp::JumpIfFalse { condition, target } => {
                 if resolve_object_long_source(condition, slots, initialized)? == 0 {
                     ip = target as usize;
@@ -1769,11 +1915,13 @@ unsafe fn evaluate_object_long_plan(
     None
 }
 
-/// Borrow a contiguous positional Send sequence and execute a guarded method
-/// that reads object properties and returns a Long. Argument declarations are
-/// validated before the body plan, including unused typed parameters.
+/// Borrow a positional Send sequence and execute a guarded method that reads
+/// object properties and returns a Long. A warmed, declared `FetchObjR`
+/// immediately feeding a Send is also a safe borrowed argument producer.
+/// Argument declarations are validated before the body plan, including unused
+/// typed parameters.
 #[inline(never)]
-unsafe fn try_execute_direct_object_long_call(
+pub(crate) unsafe fn try_execute_direct_object_long_call(
     eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
@@ -1796,23 +1944,65 @@ unsafe fn try_execute_direct_object_long_call(
     let mut slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
     let mut initialized = 0u64;
     let mut object_arguments = [std::ptr::null(); 8];
+    let mut string_arguments = [std::ptr::null(); 8];
+    let instruction_base = caller_op_array.instructions.as_ptr();
+    let mut cursor = sends;
     for index in 0..plan.public_args as usize {
-        let send = &*sends.add(index);
-        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
-            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
-        {
+        let instruction = &*cursor;
+        let (send, value) = if matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            let value = match instruction.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(
+                        instruction.op1 as u32,
+                        instruction.op1_type,
+                        caller_op_array,
+                    )
+                }
+                OpType::Unused => return None,
+            };
+            cursor = cursor.add(1);
+            (instruction, value)
+        } else if instruction.opcode == OpCode::FetchObjR {
+            let send = &*cursor.add(1);
+            if instruction.op2_type != OpType::Const
+                || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                || !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                || send.op1_type != instruction.result_type
+                || send.op1 != instruction.result
+            {
+                return None;
+            }
+            let object = match instruction.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(
+                        instruction.op1 as u32,
+                        instruction.op1_type,
+                        caller_op_array,
+                    )
+                }
+                OpType::Unused => return None,
+            };
+            if object.value_type() != ValueType::Object || object.is_reference() {
+                return None;
+            }
+            let class_id = object.object_class_id_unchecked();
+            let fetch_ip = cursor.offset_from(instruction_base);
+            if class_id == 0 || fetch_ip < 0 {
+                return None;
+            }
+            let cache = caller_op_array.cache.get(fetch_ip as usize)?;
+            if cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+                return None;
+            }
+            let value = &*object.object_property_slot_unchecked(cache.property_slot());
+            cursor = cursor.add(2);
+            (send, value)
+        } else {
+            return None;
+        };
+        if send.op2 as u32 != common.sig.param_cv_index(index as u32) {
             return None;
         }
-        let value = match send.op1_type {
-            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                &*(*caller).get_op_ptr(
-                    send.op1 as u32,
-                    send.op1_type,
-                    caller_op_array,
-                )
-            }
-            OpType::Unused => return None,
-        };
         if value.is_reference() {
             return None;
         }
@@ -1846,9 +2036,15 @@ unsafe fn try_execute_direct_object_long_call(
             }
             object_arguments[index] = value as *const Value;
         }
+        if plan.string_argument_mask & bit != 0 {
+            if value.value_type() != ValueType::String {
+                return None;
+            }
+            string_arguments[index] = value as *const Value;
+        }
     }
 
-    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall_ptr = cursor;
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
         || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
@@ -1858,6 +2054,7 @@ unsafe fn try_execute_direct_object_long_call(
     let result = evaluate_object_long_plan(
         receiver,
         &object_arguments,
+        &string_arguments,
         &mut slots,
         initialized,
         callee,
@@ -1886,7 +2083,7 @@ const COMPOSED_SCALAR_MAX_OPS: usize = 16;
 const QUICK_SCALAR_MAX_RECORDED_CALLS: usize = COMPOSED_SCALAR_MAX_CALLS + 1;
 
 #[inline(always)]
-fn record_scalar_call(common: &FunctionCommon) {
+pub(crate) fn record_scalar_call(common: &FunctionCommon) {
     stats::inc_do_fcall_fast();
     stats::inc_return_fast();
     let count = common.call_count.get();
@@ -12635,6 +12832,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
 
                             if let Some(plan) = user.object_long_plan.as_deref() {
+                                scalar_plan_eligible = true;
                                 if let Some((result, do_fcall_ptr)) = unsafe {
                                     try_execute_direct_object_long_call(
                                         eg,
@@ -12659,7 +12857,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
 
                             scalar_plan_eligible =
-                                user.composed_scalar_long_plan.is_some()
+                                scalar_plan_eligible
+                                    || user.composed_scalar_long_plan.is_some()
                                     || user.long_property_plan.is_some();
                             if let Some(plan) = user.scalar_long_plan.as_deref() {
                                 scalar_plan_eligible = true;

@@ -1425,6 +1425,13 @@ class DiscountPolicy {
         return $rate;
     }
 }
+class TaxPolicy {
+    public function amount(int $net, string $region): int {
+        if ($region == 'EU') return intdiv($net * 2100, 10000);
+        if ($region == 'US') return intdiv($net * 725, 10000);
+        return intdiv($net * 1200, 10000);
+    }
+}
 "#);
     let policy = result
         .class_defs
@@ -1444,6 +1451,27 @@ class DiscountPolicy {
     assert_eq!(plan.public_args, 1);
     assert_eq!(plan.object_argument_mask, 1);
     assert_eq!(plan.long_argument_mask, 0);
+
+    let tax = result
+        .class_defs
+        .iter()
+        .find(|class| class.name == "TaxPolicy")
+        .unwrap()
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "amount")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+    let tax_plan = tax
+        .object_long_plan
+        .as_deref()
+        .expect("typed String-guarded intdiv plan");
+    assert_eq!(tax_plan.long_argument_mask, 1);
+    assert_eq!(tax_plan.string_argument_mask, 2);
+    assert!(tax_plan.string_intdiv_select.is_some());
+    assert!(tax_plan.operations.iter().any(|operation| {
+        matches!(operation, rphp::vm::function::ObjectLongOp::IntDiv { .. })
+    }));
 }
 
 #[test]

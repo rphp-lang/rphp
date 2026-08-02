@@ -638,6 +638,29 @@ built-ins such as `intdiv`, which can remove the independent tax-policy frame;
 only then should the measurements decide whether to compose the whole quote
 region or return to allocation/layout work.
 
+That String/binary-scalar extension now lowers literal equality guard chains
+whose return arms are checked integer multiply+`intdiv` expressions. The
+generic guarded program remains available for side exits and future lowering,
+while the no-JIT executor uses a compact string-select representation instead
+of interpreting the same PHP opcodes through a second dispatch loop. Calls
+whose argument expressions contain an immediately-consumed, warmed declared
+`FetchObjR` may borrow that property directly. The caller's class/read-safety
+cache guards the layout and visibility; polymorphic, dynamic, magic, reference,
+type-mismatched, and cold cases execute the original fetch/send/call sequence.
+
+Consequently both `TaxPolicy::amount()` variants become frame-free even though
+their region argument originates at `$request->region`. Full frame pushes fall
+again from 1.5 million to 1.0 million, String clones from 2.0 million to 1.5
+million, and the timed body executes 500,000 fewer `FetchObjR`, `SendVal`,
+`DoFcall`, `Return`, multiplication, and direct-`intdiv` opcodes. Best-of-five
+corpus time improves to approximately 0.184 s untyped and 0.195 s typed, versus
+roughly 0.080 s and 0.083 s in PHP (about 2.30x and 2.36x). The remaining one
+million complete frames are principally request construction and
+`QuoteService::quote()`; the workload also still allocates 500,000 request
+objects and 500,000 result arrays. The next measurement should therefore test
+composition of the quote region and non-escaping request scalar replacement,
+not add another leaf-only method kernel.
+
 ## Phase 4: minimal typed-region JIT
 
 Lower only already-proven typed plans at first:

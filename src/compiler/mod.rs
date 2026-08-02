@@ -18,8 +18,9 @@ use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
     ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource,
-    ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp,
-    ObjectLongSource,
+    ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongObjectSource,
+    ObjectLongOp, ObjectLongSource, ObjectLongStringIntDivCase,
+    ObjectLongStringIntDivSelect,
 };
 use std::collections::HashMap;
 use crate::vm::opcode::OpCode;
@@ -1342,6 +1343,104 @@ fn object_long_source(
     }
 }
 
+fn object_long_intdiv_arm(
+    operations: &[ObjectLongOp],
+) -> Option<(ObjectLongSource, ObjectLongIntDivArm)> {
+    let [
+        ObjectLongOp::Arithmetic {
+            kind: ScalarLongOpKind::Multiply,
+            lhs,
+            rhs,
+            destination: multiplied,
+        },
+        ObjectLongOp::IntDiv {
+            lhs: ObjectLongSource::Slot(dividend),
+            rhs: ObjectLongSource::Constant(divisor),
+            destination: divided,
+        },
+        ObjectLongOp::Return {
+            value: ObjectLongSource::Slot(returned),
+        },
+    ] = operations
+    else {
+        return None;
+    };
+    if multiplied != dividend || divided != returned || *divisor == 0 {
+        return None;
+    }
+    let (input, multiplier) = match (*lhs, *rhs) {
+        (input @ ObjectLongSource::Slot(_), ObjectLongSource::Constant(multiplier))
+        | (ObjectLongSource::Constant(multiplier), input @ ObjectLongSource::Slot(_)) => {
+            (input, multiplier)
+        }
+        _ => return None,
+    };
+    Some((
+        input,
+        ObjectLongIntDivArm {
+            multiplier,
+            divisor: *divisor,
+        },
+    ))
+}
+
+fn build_object_long_string_intdiv_select(
+    operations: &[ObjectLongOp],
+) -> Option<Box<ObjectLongStringIntDivSelect>> {
+    let mut ip = 0usize;
+    let mut string_argument = None;
+    let mut input = None;
+    let mut cases = Vec::new();
+
+    while let Some(ObjectLongOp::StringLiteralBranch {
+        argument,
+        literal,
+        jump_when_equal: false,
+        target,
+    }) = operations.get(ip)
+    {
+        let target = *target as usize;
+        if !matches!(operations.get(ip + 1), Some(ObjectLongOp::Noop))
+            || target <= ip + 2
+            || target > operations.len()
+            || cases.len() == 8
+        {
+            return None;
+        }
+        let (arm_input, arm) = object_long_intdiv_arm(&operations[ip + 2..target])?;
+        if string_argument.replace(*argument).is_some_and(|found| found != *argument)
+            || input.replace(arm_input).is_some_and(|found| found != arm_input)
+        {
+            return None;
+        }
+        cases.push(ObjectLongStringIntDivCase {
+            literal: *literal,
+            arm,
+        });
+        ip = target;
+    }
+    if cases.is_empty() {
+        return None;
+    }
+
+    let remaining = operations.get(ip..)?;
+    let remaining = match remaining.last() {
+        Some(ObjectLongOp::Bail) => &remaining[..remaining.len() - 1],
+        _ => remaining,
+    };
+    let (default_input, default_arm) = object_long_intdiv_arm(remaining)?;
+    if input != Some(default_input) {
+        return None;
+    }
+
+    Some(Box::new(ObjectLongStringIntDivSelect {
+        string_argument: string_argument?,
+        input: default_input,
+        cases: cases.into_boxed_slice(),
+        default_arm,
+    }))
+}
+
 /// Recognize a small, side-effect-free method program that reads declared
 /// properties from its receiver or positional object arguments and otherwise
 /// stays in checked Long operations. Keeping one plan operation per canonical
@@ -1374,6 +1473,7 @@ fn build_object_long_function_plan(
                 ParamTypeHint::None
                     | ParamTypeHint::Mixed
                     | ParamTypeHint::Int
+                    | ParamTypeHint::String
                     | ParamTypeHint::ClassName(_)
             )
         })
@@ -1384,11 +1484,21 @@ fn build_object_long_function_plan(
     let mut initialized = [false; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
     let mut long_argument_mask = 0u8;
     let mut object_argument_mask = 0u8;
+    let mut string_argument_mask = 0u8;
     let mut operations = Vec::with_capacity(op_array.instructions.len());
     let first_argument = common.sig.this_offset;
     let argument_end = first_argument + public_args;
+    let mut dead_fused_branch = None;
 
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        if dead_fused_branch == Some(ip) {
+            if !matches!(instruction.opcode, OpCode::JmpZ | OpCode::JmpNZ) {
+                return None;
+            }
+            operations.push(ObjectLongOp::Noop);
+            dead_fused_branch = None;
+            continue;
+        }
         let operation = match instruction.opcode {
             OpCode::AssignCv => {
                 if instruction.op1_type != OpType::Cv {
@@ -1561,6 +1671,67 @@ fn build_object_long_function_plan(
                     destination: instruction.result,
                 }
             }
+            OpCode::JmpZ_Eq_CvConst | OpCode::JmpNZ_Eq_CvConst => {
+                if instruction.op1_type != OpType::Cv
+                    || instruction.op2_type != OpType::Const
+                {
+                    return None;
+                }
+                let slot = instruction.op1 as u32;
+                if slot < first_argument || slot >= argument_end {
+                    return None;
+                }
+                let argument = (slot - first_argument) as u8;
+                if op_array
+                    .literals
+                    .get(instruction.op2 as usize)
+                    .and_then(Value::as_str)
+                    .is_none()
+                {
+                    return None;
+                }
+                let target = instruction.result as usize;
+                if target <= ip || target >= op_array.instructions.len() {
+                    return None;
+                }
+                string_argument_mask |= 1 << argument;
+                dead_fused_branch = Some(ip + 1);
+                ObjectLongOp::StringLiteralBranch {
+                    argument,
+                    literal: instruction.op2,
+                    jump_when_equal: instruction.opcode == OpCode::JmpNZ_Eq_CvConst,
+                    target: target as u16,
+                }
+            }
+            OpCode::DirectInternalCall2 => {
+                if crate::builtin_metadata::DirectInternalKind::from_id(
+                    instruction.extended_value,
+                ) != Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                let lhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                initialized[instruction.result as usize] = true;
+                ObjectLongOp::IntDiv {
+                    lhs,
+                    rhs,
+                    destination: instruction.result,
+                }
+            }
             OpCode::JmpZ | OpCode::JmpNZ => {
                 let target = instruction.op2 as usize;
                 if target <= ip || target >= op_array.instructions.len() {
@@ -1612,10 +1783,9 @@ fn build_object_long_function_plan(
     }
 
     if operations.is_empty()
-        || long_argument_mask & object_argument_mask != 0
-        || !operations
-            .iter()
-            .any(|operation| matches!(operation, ObjectLongOp::FetchProperty { .. }))
+        || long_argument_mask & (object_argument_mask | string_argument_mask) != 0
+        || object_argument_mask & string_argument_mask != 0
+        || (object_argument_mask | string_argument_mask) == 0
         || !operations
             .iter()
             .any(|operation| matches!(operation, ObjectLongOp::Return { .. }))
@@ -1623,12 +1793,15 @@ fn build_object_long_function_plan(
         return None;
     }
 
+    let string_intdiv_select = build_object_long_string_intdiv_select(&operations);
     Some(Box::new(ObjectLongFunctionPlan {
         public_args: public_args as u8,
         long_argument_mask,
         object_argument_mask,
+        string_argument_mask,
         slot_count: slot_count as u16,
         operations: operations.into_boxed_slice(),
+        string_intdiv_select,
     }))
 }
 

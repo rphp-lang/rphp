@@ -1235,7 +1235,34 @@ pub fn execute_hot_frame(
                         }
                     }
 
-                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some()
+                    if let Some(plan) = user.object_long_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_direct_object_long_call(
+                                eg,
+                                frame,
+                                op_array,
+                                obj_val,
+                                opline_ptr.add(1),
+                                user,
+                                plan,
+                            )
+                        } {
+                            super::execute::record_scalar_call(func_common);
+                            unsafe {
+                                super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+
+                    scalar_plan_eligible = scalar_plan_eligible
+                        || user.composed_scalar_long_plan.is_some()
                         || user.long_property_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
