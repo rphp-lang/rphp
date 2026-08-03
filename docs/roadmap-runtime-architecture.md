@@ -148,6 +148,18 @@ reduce the median delta to +0.07 percent and paired median to +0.35 percent,
 with overlapping quartiles and identical output. Default, all-feature,
 no-default, corpus, quick-loop, type-hint and ARM64/JIT matrices all pass.
 
+Seventh checkpoint (2026-08-04): the baseline-dispatch track begins by moving
+already-cold helpers into execution entry/API (494 lines), include/throw control
+(237), object and call initialization (990), foreach and generators (399),
+named arguments (137), nullsafe/clone object values (104), and concatenation
+(73). The central `execute_ex` loop is deliberately untouched, so the split
+adds no opcode-level call or abstraction. `execute.rs` falls to 9,262 lines,
+and all 101,015 moved source bytes reconstruct exactly. The native-CPU
+`max-perf` binary and Mach-O segment sizes remain unchanged. Across 101
+randomized A/B pairs, all four corpus workloads and the routing holdout retain
+identical output and range from -0.25 to +0.30 percent. Default, all-feature,
+no-default, corpus, quick-loop, type-hint and ARM64/JIT matrices all pass.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
