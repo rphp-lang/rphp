@@ -939,6 +939,48 @@ fn native_mixed_hash_region_replays_taken_cold_edge_after_prior_store() {
 }
 
 #[test]
+fn real_php_routing_holdout_enters_multi_method_native_region() {
+    let source = include_str!("../benches/holdout_routing_pipeline.php")
+        .replace("$start = microtime(true);", "")
+        .replace("$elapsed = microtime(true) - $start;", "$elapsed = 0;");
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "290394364,154183816,54660174,384960,192495,64134,108411|0"
+    );
+    let plan = functions
+        .iter()
+        .find_map(|(_, function)| {
+            function.op_array.block_plans.iter().find_map(|plan| match plan {
+                BlockPlan::QuickLongOps(plan) => Some(plan),
+                _ => None,
+            })
+        })
+        .expect("compiler should select the routing holdout as one typed loop");
+    assert_eq!(plan.ops.len(), 28);
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_scalar_function_enters_native_accumulate_region() {
     let source = "<?php function calculateNative(int $value): int { return ($value * 2) + 1; } $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += calculateNative($i); } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();

@@ -1264,7 +1264,11 @@ fn emit_conditional_long_loop_state(
     assembler.store_u64(addition_executed, control, 0);
 }
 
-pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 12;
+/// Upper bound for one closed native scalar/mixed region. The byte-sized
+/// branch ABI still leaves ample headroom; 48 admits application-shaped
+/// regions with multiple inlined typed calls without making the shadow slot
+/// namespace or compile-time validation dynamic.
+pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 48;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeStraightLongConditionOperand {
@@ -1392,7 +1396,7 @@ pub struct NativeStraightLongLoopConfig {
 }
 
 impl NativeStraightLongLoopConfig {
-    pub fn body_output_mask(self) -> u64 {
+    pub fn body_output_mask(&self) -> u64 {
         self.operations
             .iter()
             .copied()
@@ -1400,7 +1404,7 @@ impl NativeStraightLongLoopConfig {
             .fold(0, |mask, operation| mask | operation.output_mask())
     }
 
-    pub fn output_mask_before(self, operation_index: u8) -> u64 {
+    pub fn output_mask_before(&self, operation_index: u8) -> u64 {
         self.operations
             .iter()
             .copied()
@@ -1448,13 +1452,36 @@ pub struct CompiledQuickLongStraightLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
     config: NativeStraightLongLoopConfig,
+    required_context_mask: u16,
 }
 
 impl CompiledQuickLongStraightLoop {
     pub fn compile(
         config: NativeStraightLongLoopConfig,
     ) -> Result<Self, QuickLongAccumulateJitError> {
-        validate_straight_long_loop_config(config)?;
+        validate_straight_long_loop_config(&config)?;
+        let required_context_mask = config
+            .operations
+            .iter()
+            .copied()
+            .take(config.operation_count as usize)
+            .fold(0u16, |mask, operation| {
+                let (entry_base, token_count) = match operation {
+                    NativeStraightLongOperation::HashLoad {
+                        entry_base,
+                        token_count,
+                        ..
+                    }
+                    | NativeStraightLongOperation::HashStore {
+                        entry_base,
+                        token_count,
+                        ..
+                    } => (entry_base, token_count),
+                    _ => return mask,
+                };
+                let entries = ((1u32 << token_count) - 1) << entry_base;
+                mask | entries as u16
+            });
 
         let mut assembler = Arm64Assembler::new();
         let induction = Arm64Register::from_code(3);
@@ -1844,7 +1871,7 @@ impl CompiledQuickLongStraightLoop {
             assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
         let chunk_exhausted_word = assembler.word_count();
-        emit_straight_long_induction(&mut assembler, config, induction);
+        emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED),
@@ -1852,7 +1879,7 @@ impl CompiledQuickLongStraightLoop {
         assembler.ret();
 
         let completed_word = assembler.word_count();
-        emit_straight_long_induction(&mut assembler, config, induction);
+        emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
@@ -1860,7 +1887,7 @@ impl CompiledQuickLongStraightLoop {
         assembler.ret();
 
         let increment_overflow_word = assembler.word_count();
-        emit_straight_long_induction(&mut assembler, config, induction);
+        emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW),
@@ -1876,7 +1903,7 @@ impl CompiledQuickLongStraightLoop {
                 continue;
             }
             let word = assembler.word_count();
-            emit_straight_long_induction(&mut assembler, config, induction);
+            emit_straight_long_induction(&mut assembler, &config, induction);
             assembler.move_immediate(failed_operation, i64::from(operation_index));
             assembler.store_u64(failed_operation, control, 0);
             assembler.move_immediate(
@@ -1921,6 +1948,7 @@ impl CompiledQuickLongStraightLoop {
             memory,
             code,
             config,
+            required_context_mask,
         })
     }
 
@@ -1932,14 +1960,7 @@ impl CompiledQuickLongStraightLoop {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
         }
-        if self.config.operations.iter().copied()
-            .take(self.config.operation_count as usize)
-            .any(|operation| matches!(
-                operation,
-                NativeStraightLongOperation::HashLoad { .. }
-                    | NativeStraightLongOperation::HashStore { .. }
-            ))
-        {
+        if self.required_context_mask != 0 {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
                 "straight-loop hash operation requires runtime context",
             ));
@@ -1961,31 +1982,11 @@ impl CompiledQuickLongStraightLoop {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
         }
-        for operation in self
-            .config
-            .operations
-            .iter()
-            .copied()
-            .take(self.config.operation_count as usize)
-        {
-            let (entry_base, token_count) = match operation {
-                NativeStraightLongOperation::HashLoad {
-                    entry_base,
-                    token_count,
-                    ..
-                }
-                | NativeStraightLongOperation::HashStore {
-                    entry_base,
-                    token_count,
-                    ..
-                } => (entry_base, token_count),
-                _ => continue,
-            };
-            if entry_pointers[usize::from(entry_base)
-                ..usize::from(entry_base) + usize::from(token_count)]
-                .iter()
-                .any(|pointer| pointer.is_null())
-            {
+        let mut required = self.required_context_mask;
+        while required != 0 {
+            let index = required.trailing_zeros() as usize;
+            required &= required - 1;
+            if entry_pointers[index].is_null() {
                 return Err(QuickLongAccumulateJitError::InvalidProgram(
                     "straight-loop hash context contains a null entry pointer",
                 ));
@@ -2050,7 +2051,7 @@ impl CompiledQuickLongStraightLoop {
 }
 
 fn validate_straight_long_loop_config(
-    config: NativeStraightLongLoopConfig,
+    config: &NativeStraightLongLoopConfig,
 ) -> Result<(), QuickLongAccumulateJitError> {
     if config.induction_slot >= 64 {
         return Err(QuickLongAccumulateJitError::InvalidProgram(
@@ -2536,7 +2537,7 @@ fn emit_straight_long_condition_operand(
 
 fn emit_straight_long_induction(
     assembler: &mut Arm64Assembler,
-    config: NativeStraightLongLoopConfig,
+    config: &NativeStraightLongLoopConfig,
     induction: Arm64Register,
 ) {
     assembler.store_u64(
@@ -2602,16 +2603,16 @@ impl QuickLongOpsJitCache {
 
     pub fn prepare_straight_program(
         &self,
-        config: NativeStraightLongLoopConfig,
+        config: &NativeStraightLongLoopConfig,
     ) -> Option<&CompiledQuickLongStraightLoop> {
         let Some(program) = self
             .straight_compiled
-            .get_or_init(|| CompiledQuickLongStraightLoop::compile(config).ok())
+            .get_or_init(|| CompiledQuickLongStraightLoop::compile(*config).ok())
             .as_ref()
         else {
             return None;
         };
-        (program.config() == config).then_some(program)
+        (program.config() == *config).then_some(program)
     }
 
     pub fn dispatch_prepared_straight_chunk(

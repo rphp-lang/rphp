@@ -1579,6 +1579,43 @@ the next coverage gap from the data representation already solved here: widen
 the shared native region to multiple monomorphic calls, internal typed-method
 control flow, and selected scalar builtins without weakening exact side exits.
 
+Multi-method mixed-region checkpoint (2026-08-03): the same native builder now
+lowers the compiler-proven `ObjectLongWeightedStringScore` and
+`ObjectLongModuloAnySelect` plans. These are general semantic IR shapes, not
+benchmark-name checks: the first covers checked weighted arithmetic,
+`intdiv`, finite String adjustments and scalar threshold adjustments; the
+second covers short-circuit modulo/equality predicates with two Long return
+arms. Both `ObjectLongMethodCall` and all-Long `ScalarMethodCall` adapters can
+participate, so one region may contain several independently guarded
+monomorphic calls. Ordinary `Assign`, literal assignment and `BinaryAssign`
+around those calls now lower through the shared native operations as well.
+
+The region limit grows from 12 to 48 native operations, while mutable snapshots
+remain bounded by the actual 64-slot shadow namespace rather than by operation
+capacity. Large kernels are borrowed by the execution adapter instead of being
+copied. Compiled programs also precompute a 16-bit required-context mask, so
+ordinary scalar chunks no longer scan their operation list to prove that no
+hash context is needed. Callee String literals are related to the caller's
+finite token catalog by guarded contents during lowering; generated code still
+contains only the resulting token and never a callee or heap pointer.
+
+The previously unseen 28-operation routing holdout is now one native region
+covering three String routes, two objects/methods, two dynamic hash arrays,
+internal method control flow and `intdiv`. Twenty-one pre-throttling
+native-CPU `max-perf` runs preserve
+`290394364,154183816,54660174,384960,192495,64134,108411` and give medians of
+approximately 0.00800 s for the new RPHP JIT, 0.06227 s for the preceding RPHP
+JIT, 0.02634 s for PHP tracing JIT and 0.06525 s for PHP without JIT. The new
+path is therefore about 7.8x faster than the preceding RPHP path and 3.3x
+faster than PHP tracing JIT on this independent application shape. The earlier
+mixed native benchmark remains near 0.0026-0.0027 s and the scalar-call loop
+near 0.0123-0.0126 s. A 100-million-iteration scalar trace check measures
+approximately 0.357 s for the widened build versus 0.381 s preceding it,
+confirming that the larger admission envelope does not add a per-iteration
+cost to existing generated code. The checkpoint passes 109 core, 108
+type-hint, 107 quick-loop and 63 ARM64/JIT tests; its end-to-end holdout test
+requires one native entry, multiple chunks and zero side exits.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

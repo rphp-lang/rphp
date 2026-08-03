@@ -10818,7 +10818,7 @@ struct NativeQuickLongStraightKernel {
     trace_guard_condition_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
     trace_guard_expected: [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
     trace_guard_count: u8,
-    mutable_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2],
+    mutable_slots: [u8; NATIVE_QUICK_LONG_SLOT_CAPACITY],
     mutable_slot_count: u8,
 }
 
@@ -10829,6 +10829,14 @@ struct NativeQuickLongStraightKernel {
     target_os = "macos"
 ))]
 const NATIVE_FINITE_STRING_LIMIT: usize = 4;
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_QUICK_LONG_SLOT_CAPACITY: usize = 64;
 
 #[derive(Clone, Copy)]
 #[cfg(all(
@@ -10858,7 +10866,7 @@ struct NativeQuickLongMixedKernel {
     trace_guard_count: u8,
     long_output_mask: u64,
     string_output_mask: u64,
-    mutable_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2],
+    mutable_slots: [u8; NATIVE_QUICK_LONG_SLOT_CAPACITY],
     mutable_slot_count: u8,
 }
 
@@ -13329,6 +13337,297 @@ impl NativeMixedBuildState {
             .and_then(|index| u8::try_from(index).ok())
     }
 
+    fn token_for_callee_literal(
+        &self,
+        caller: &crate::compiler::OpArray,
+        callee: &UserFunction,
+        literal: u16,
+    ) -> Option<Option<u8>> {
+        let expected = callee.op_array.literals.get(literal as usize)?.as_str()?;
+        for (token, caller_literal) in self.string_literals[..self.string_token_count]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let candidate = caller
+                .literals
+                .get(caller_literal as usize)?
+                .as_str()?;
+            if candidate == expected {
+                return Some(Some(u8::try_from(token).ok()?));
+            }
+        }
+        Some(None)
+    }
+
+    fn object_long_source(
+        user: &UserFunction,
+        source: ObjectLongSource,
+        call: &QuickObjectLongMethodCall,
+    ) -> Option<QuickLongOperand> {
+        match source {
+            ObjectLongSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+            ObjectLongSource::Slot(slot) => {
+                for index in 0..call.argument_count {
+                    if user.common.sig.param_cv_index(u32::from(index)) != u32::from(slot) {
+                        continue;
+                    }
+                    return match call.arguments[index as usize] {
+                        QuickObjectLongArgument::Long(source) => Some(source),
+                        QuickObjectLongArgument::StringSlot(_) => None,
+                    };
+                }
+                None
+            }
+        }
+    }
+
+    fn patch_branch_target(&mut self, operation: u8, false_target: u8) -> Option<()> {
+        let NativeStraightLongOperation::BranchUnless { kind, lhs, rhs, .. } =
+            self.operations[operation as usize]
+        else {
+            return None;
+        };
+        self.operations[operation as usize] = NativeStraightLongOperation::BranchUnless {
+            kind,
+            lhs,
+            rhs,
+            false_target,
+        };
+        Some(())
+    }
+
+    fn patch_jump_target(&mut self, operation: u8, target: u8) -> Option<()> {
+        if !matches!(
+            self.operations[operation as usize],
+            NativeStraightLongOperation::Jump { .. }
+        ) {
+            return None;
+        }
+        self.operations[operation as usize] = NativeStraightLongOperation::Jump { target };
+        Some(())
+    }
+
+    fn record_call(&mut self, target: *const FunctionCommon, completion: u8) -> Option<()> {
+        if self.call_count == NATIVE_QUICK_LONG_MAX_CALL_TARGETS {
+            return None;
+        }
+        self.call_targets[self.call_count] = target;
+        self.call_completion_operations[self.call_count] = completion;
+        self.call_count += 1;
+        Some(())
+    }
+
+    fn lower_object_method(
+        &mut self,
+        caller: &crate::compiler::OpArray,
+        target: *const FunctionCommon,
+        user: &UserFunction,
+        plan: &ObjectLongFunctionPlan,
+        call: &QuickObjectLongMethodCall,
+        result_slot: u16,
+    ) -> Option<()> {
+        if self.call_count == NATIVE_QUICK_LONG_MAX_CALL_TARGETS
+            || plan.public_args != call.argument_count
+        {
+            return None;
+        }
+
+        if let Some(score) = plan.weighted_string_score.as_deref() {
+            if score.string_argument >= call.argument_count {
+                return None;
+            }
+            let weighted = Self::object_long_source(user, score.weighted_input, call)?;
+            let additive = Self::object_long_source(user, score.additive_input, call)?;
+            let QuickObjectLongArgument::StringSlot(string_slot) =
+                *call.arguments.get(score.string_argument as usize)?
+            else {
+                return None;
+            };
+            let value = self.allocate_slot()?;
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: weighted,
+                    rhs: QuickLongOperand::Const(score.multiplier),
+                    result: value,
+                },
+                call.resume_ip,
+            )?;
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(value),
+                    rhs: additive,
+                    result: value,
+                },
+                call.resume_ip,
+            )?;
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::IntDivide,
+                    lhs: QuickLongOperand::Slot(value),
+                    rhs: QuickLongOperand::Const(score.divisor),
+                    result: value,
+                },
+                call.resume_ip,
+            )?;
+            let string_length = self.allocate_slot()?;
+            self.append(
+                NativeStraightLongOperation::StringLength {
+                    source: string_slot,
+                    lengths: self.string_lengths,
+                    token_count: self.string_token_count as u8,
+                    result: string_length,
+                },
+                call.resume_ip,
+            )?;
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(value),
+                    rhs: QuickLongOperand::Slot(string_length),
+                    result: value,
+                },
+                call.resume_ip,
+            )?;
+
+            let mut adjustment_tokens = 0u64;
+            for adjustment in score.string_adjustments.iter().copied() {
+                let Some(token) =
+                    self.token_for_callee_literal(caller, user, adjustment.literal)?
+                else {
+                    continue;
+                };
+                let bit = 1u64 << token;
+                if adjustment_tokens & bit != 0 {
+                    return None;
+                }
+                adjustment_tokens |= bit;
+                let branch = self.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::Equal,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(string_slot),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Const(i64::from(token)),
+                        ),
+                        false_target: 0,
+                    },
+                    call.resume_ip,
+                )?;
+                self.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(value),
+                        rhs: QuickLongOperand::Const(adjustment.addend),
+                        result: value,
+                    },
+                    call.resume_ip,
+                )?;
+                self.patch_branch_target(branch, u8::try_from(self.operation_count).ok()?)?;
+            }
+
+            for adjustment in score.conditional_adjustments.iter().copied() {
+                let lhs = Self::object_long_source(user, adjustment.lhs, call)?;
+                let rhs = Self::object_long_source(user, adjustment.rhs, call)?;
+                let branch = self.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: adjustment.kind,
+                        lhs: NativeStraightLongConditionOperand::Source(lhs),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    call.resume_ip,
+                )?;
+                self.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(value),
+                        rhs: QuickLongOperand::Const(adjustment.addend),
+                        result: value,
+                    },
+                    call.resume_ip,
+                )?;
+                self.patch_branch_target(branch, u8::try_from(self.operation_count).ok()?)?;
+            }
+
+            let completion = self.append(
+                NativeStraightLongOperation::Move {
+                    source: QuickLongOperand::Slot(value),
+                    result: result_slot,
+                },
+                call.resume_ip,
+            )?;
+            return self.record_call(target, completion);
+        }
+
+        if let Some(select) = plan.modulo_any_select.as_deref() {
+            let selected = self.allocate_slot()?;
+            let remainder = self.allocate_slot()?;
+            let mut match_jumps = Vec::with_capacity(select.terms.len());
+            for term in select.terms.iter().copied() {
+                let input = Self::object_long_source(user, term.input, call)?;
+                self.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Modulo,
+                        lhs: input,
+                        rhs: QuickLongOperand::Const(term.divisor),
+                        result: remainder,
+                    },
+                    call.resume_ip,
+                )?;
+                let branch = self.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::Equal,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(remainder),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Const(term.expected),
+                        ),
+                        false_target: 0,
+                    },
+                    call.resume_ip,
+                )?;
+                self.append(
+                    NativeStraightLongOperation::Move {
+                        source: QuickLongOperand::Const(select.when_match),
+                        result: selected,
+                    },
+                    call.resume_ip,
+                )?;
+                match_jumps.push(self.append(
+                    NativeStraightLongOperation::Jump { target: 0 },
+                    call.resume_ip,
+                )?);
+                self.patch_branch_target(branch, u8::try_from(self.operation_count).ok()?)?;
+            }
+            self.append(
+                NativeStraightLongOperation::Move {
+                    source: QuickLongOperand::Const(select.when_miss),
+                    result: selected,
+                },
+                call.resume_ip,
+            )?;
+            let completion_target = u8::try_from(self.operation_count).ok()?;
+            let completion = self.append(
+                NativeStraightLongOperation::Move {
+                    source: QuickLongOperand::Slot(selected),
+                    result: result_slot,
+                },
+                call.resume_ip,
+            )?;
+            for jump in match_jumps {
+                self.patch_jump_target(jump, completion_target)?;
+            }
+            return self.record_call(target, completion);
+        }
+
+        None
+    }
+
     fn typed_long_source(
         source: ScalarLongSource,
         arguments: &[QuickObjectLongArgument; 8],
@@ -13736,6 +14035,38 @@ unsafe fn native_quick_long_mixed_kernel(
                     resume_ip,
                 )?;
             }
+            QuickLongOp::Assign {
+                destination,
+                source,
+                next_target,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Move {
+                        source: QuickLongOperand::Slot(source),
+                        result: destination,
+                    },
+                    plan.target_ip(next_target)?.saturating_sub(1),
+                )?;
+            }
+            QuickLongOp::AssignLongLiteral {
+                destination,
+                value,
+                next_target,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Move {
+                        source: QuickLongOperand::Const(value),
+                        result: destination,
+                    },
+                    plan.target_ip(next_target)?.saturating_sub(1),
+                )?;
+            }
             QuickLongOp::AssignStringLiteral {
                 destination,
                 literal,
@@ -13768,18 +14099,60 @@ unsafe fn native_quick_long_mixed_kernel(
                     plan.target_ip(next_target)?.saturating_sub(1),
                 )?;
             }
-            QuickLongOp::ObjectLongMethodCall { call, result } => {
+            QuickLongOp::ScalarMethodCall { call, result } => {
                 if call.next_target.op_index() != Some(plan_index + 1) {
                     return None;
                 }
-                let QuickResolvedObjectOp::ComposedTypedMethod {
+                let QuickResolvedObjectOp::ObjectLongMethod {
                     target,
-                    plan: typed_plan,
+                    user,
+                    plan: object_plan,
+                    ..
                 } = *resolved_object_ops.get(plan_index)?
                 else {
                     return None;
                 };
-                builder.lower_typed_method(target, &*typed_plan, &call, result)?;
+                let mixed_call = QuickObjectLongMethodCall {
+                    guard: call.guard,
+                    arguments: call.arguments.map(QuickObjectLongArgument::Long),
+                    argument_count: call.argument_count,
+                    next_target: call.next_target,
+                    resume_ip: call.resume_ip,
+                };
+                builder.lower_object_method(
+                    op_array,
+                    target,
+                    &*user,
+                    &*object_plan,
+                    &mixed_call,
+                    result,
+                )?;
+                has_typed_method = true;
+            }
+            QuickLongOp::ObjectLongMethodCall { call, result } => {
+                if call.next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                match *resolved_object_ops.get(plan_index)? {
+                    QuickResolvedObjectOp::ComposedTypedMethod {
+                        target,
+                        plan: typed_plan,
+                    } => builder.lower_typed_method(target, &*typed_plan, &call, result)?,
+                    QuickResolvedObjectOp::ObjectLongMethod {
+                        target,
+                        user,
+                        plan: object_plan,
+                        ..
+                    } => builder.lower_object_method(
+                        op_array,
+                        target,
+                        &*user,
+                        &*object_plan,
+                        &call,
+                        result,
+                    )?,
+                    _ => return None,
+                }
                 has_typed_method = true;
             }
             QuickLongOp::FetchArrayLong {
@@ -13862,6 +14235,29 @@ unsafe fn native_quick_long_mixed_kernel(
                         lhs,
                         rhs,
                         result,
+                    },
+                    resume_ip,
+                )?;
+            }
+            QuickLongOp::BinaryAssign {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind,
+                        lhs,
+                        rhs,
+                        result,
+                        destination,
                     },
                     resume_ip,
                 )?;
@@ -13968,7 +14364,7 @@ unsafe fn native_quick_long_mixed_kernel(
     if matches!(header_rhs, QuickLongOperand::Slot(slot) if mutable_mask & (1u64 << slot) != 0) {
         return None;
     }
-    let mut mutable_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+    let mut mutable_slots = [0u8; NATIVE_QUICK_LONG_SLOT_CAPACITY];
     let mut mutable_slot_count = 0usize;
     while mutable_mask != 0 {
         if mutable_slot_count == mutable_slots.len() {
@@ -14306,7 +14702,7 @@ fn native_quick_long_straight_kernel(
         return None;
     }
 
-    let mut mutable_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+    let mut mutable_slots = [0u8; NATIVE_QUICK_LONG_SLOT_CAPACITY];
     let mut mutable_slot_count = 0usize;
     while mutable_mask != 0 {
         if mutable_slot_count == mutable_slots.len() {
@@ -14342,7 +14738,7 @@ fn native_quick_long_straight_kernel(
     target_os = "macos"
 ))]
 fn publish_native_quick_long_trace_guards(
-    kernel: NativeQuickLongStraightKernel,
+    kernel: &NativeQuickLongStraightKernel,
     slots: &mut [i64; 64],
     dirty_bool_mask: &mut u64,
     before_operation: Option<u8>,
@@ -14373,9 +14769,9 @@ unsafe fn run_native_quick_long_straight_kernel(
     plan: &QuickLongOpsLoop,
     slot_base: *mut Value,
     slots: &mut [i64; 64],
-    kernel: NativeQuickLongStraightKernel,
+    kernel: &NativeQuickLongStraightKernel,
 ) -> Result<Option<QuickLoopOutcome>, VmError> {
-    let config = kernel.config;
+    let config = &kernel.config;
     let bound = quick_long_operand(slots, config.bound);
     let cache = plan.native_jit();
     let Some(program) = cache.prepare_straight_program(config) else {
@@ -14390,7 +14786,7 @@ unsafe fn run_native_quick_long_straight_kernel(
 
     loop {
         let before_induction = slots[config.induction_slot as usize];
-        let mut before_values = [0i64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+        let mut before_values = [0i64; NATIVE_QUICK_LONG_SLOT_CAPACITY];
         for index in 0..kernel.mutable_slot_count as usize {
             before_values[index] = slots[kernel.mutable_slots[index] as usize];
         }
@@ -14562,7 +14958,7 @@ unsafe fn run_native_quick_long_straight_kernel(
     target_os = "macos"
 ))]
 fn native_mixed_string_mask_before(
-    kernel: NativeQuickLongMixedKernel,
+    kernel: &NativeQuickLongMixedKernel,
     before_operation: u8,
 ) -> u64 {
     kernel
@@ -14589,7 +14985,7 @@ fn native_mixed_string_mask_before(
     target_os = "macos"
 ))]
 fn publish_native_mixed_trace_guards(
-    kernel: NativeQuickLongMixedKernel,
+    kernel: &NativeQuickLongMixedKernel,
     slots: &mut [i64; 64],
     dirty_bool_mask: &mut u64,
     before_operation: Option<u8>,
@@ -14614,7 +15010,7 @@ fn publish_native_mixed_trace_guards(
 ))]
 unsafe fn publish_native_mixed_strings(
     op_array: &crate::compiler::OpArray,
-    kernel: NativeQuickLongMixedKernel,
+    kernel: &NativeQuickLongMixedKernel,
     slots: &[i64; 64],
     string_state: &mut QuickStringSlotState,
     mut mask: u64,
@@ -14640,7 +15036,7 @@ unsafe fn publish_native_mixed_strings(
     target_os = "macos"
 ))]
 fn record_native_mixed_calls(
-    kernel: NativeQuickLongMixedKernel,
+    kernel: &NativeQuickLongMixedKernel,
     completed_iterations: u64,
     completed_current_before: Option<u8>,
 ) {
@@ -14671,7 +15067,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
     slots: &mut [i64; 64],
     mutable_arrays: &[*mut PhpArray; 64],
     string_state: &mut QuickStringSlotState,
-    kernel: NativeQuickLongMixedKernel,
+    kernel: &NativeQuickLongMixedKernel,
 ) -> Result<Option<QuickLoopOutcome>, VmError> {
     for slot in 0..64usize {
         if plan.string_input_mask & (1u64 << slot) == 0 {
@@ -14714,7 +15110,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
     }
 
     let cache = plan.native_jit();
-    let Some(program) = cache.prepare_straight_program(kernel.config) else {
+    let Some(program) = cache.prepare_straight_program(&kernel.config) else {
         return Ok(None);
     };
     let bound = quick_long_operand(slots, kernel.config.bound);
@@ -14727,7 +15123,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
 
     loop {
         let before_induction = slots[kernel.config.induction_slot as usize];
-        let mut before_values = [0i64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+        let mut before_values = [0i64; NATIVE_QUICK_LONG_SLOT_CAPACITY];
         for index in 0..kernel.mutable_slot_count as usize {
             before_values[index] = slots[kernel.mutable_slots[index] as usize];
         }
@@ -15016,7 +15412,7 @@ unsafe fn run_quick_long_ops_loop(
             plan,
             slot_base,
             &mut slots,
-            kernel,
+            &kernel,
         )? {
             return Ok(outcome);
         }
@@ -15124,7 +15520,7 @@ unsafe fn run_quick_long_ops_loop(
             &mut slots,
             &mutable_arrays,
             &mut string_state,
-            kernel,
+            &kernel,
         )? {
             return Ok(outcome);
         }
