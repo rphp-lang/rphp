@@ -8,8 +8,8 @@
 use crate::compiler::OpArray;
 use crate::value::Value;
 use crate::vm::function::{
-    ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
-    ScalarLongProgram, ScalarLongSource,
+    ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongFunctionPlan, ScalarLongOp,
+    ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
 };
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
@@ -145,6 +145,19 @@ pub enum QuickLongTerm {
     },
 }
 
+/// A speculative edge that keeps an uncommon arbitrary PHP block outside a
+/// typed hot region. A mismatch resumes the original pure comparison before
+/// any cold-path instruction is skipped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuickLongTraceGuard {
+    pub kind: ScalarLongConditionKind,
+    pub lhs: QuickLongOperand,
+    pub rhs: QuickLongOperand,
+    pub expected: bool,
+    pub condition_tmp: Option<u16>,
+    pub resume_ip: usize,
+}
+
 /// Region for the compiler shapes produced by:
 ///
 /// ```php
@@ -174,6 +187,7 @@ pub struct QuickLongAccumulateLoop {
     pub condition_tmp: Option<u16>,
     pub term: QuickLongTerm,
     pub sum_tmp: u16,
+    pub tail_guard: Option<QuickLongTraceGuard>,
     pub increment_kind: QuickIncrementKind,
     pub increment_tmp: Option<u16>,
     pub sum_ip: usize,
@@ -1673,7 +1687,7 @@ pub fn detect_long_accumulate_loop(
             let do_fcall = op_array.instructions[do_fcall_ip];
             let sum_ip = do_fcall_ip + 1;
             let sum = *op_array.instructions.get(sum_ip)?;
-            if backedge_ip != do_fcall_ip + 4
+            if backedge_ip < do_fcall_ip + 4
                 || do_fcall.result_type != OpType::Tmp
                 || sum.opcode != OpCode::Add_CvTmp
                 || sum.op1_type != OpType::Cv
@@ -1801,7 +1815,7 @@ pub fn detect_long_accumulate_loop(
         let do_fcall = op_array.instructions[do_fcall_ip];
         let sum_ip = do_fcall_ip + 1;
         let sum = op_array.instructions[sum_ip];
-        if backedge_ip != do_fcall_ip + 4
+        if backedge_ip < do_fcall_ip + 4
             || do_fcall.opcode != OpCode::DoFcall
             || do_fcall.result_type != OpType::Tmp
             || sum.opcode != OpCode::Add_CvTmp
@@ -1855,7 +1869,7 @@ pub fn detect_long_accumulate_loop(
         let do_fcall = op_array.instructions[do_fcall_ip];
         let sum_ip = do_fcall_ip + 1;
         let sum = *op_array.instructions.get(sum_ip)?;
-        if backedge_ip != do_fcall_ip + 4
+        if backedge_ip < do_fcall_ip + 4
             || do_fcall.result_type != OpType::Tmp
             || sum.opcode != OpCode::Add_CvTmp
             || sum.op1_type != OpType::Cv
@@ -2046,7 +2060,25 @@ pub fn detect_long_accumulate_loop(
         return None;
     }
 
-    let increment_ip = assign_ip + 1;
+    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+    let direct_increment_ip = assign_ip + 1;
+    let (tail_guard, increment_ip) = if matches!(
+        op_array.instructions.get(direct_increment_ip)?.opcode,
+        OpCode::PreInc | OpCode::PostInc
+    ) {
+        (None, direct_increment_ip)
+    } else {
+        let increment_ip = backedge_ip.checked_sub(1)?;
+        (
+            Some(detect_long_tail_trace_guard(
+                op_array,
+                direct_increment_ip,
+                increment_ip,
+                total_slots,
+            )?),
+            increment_ip,
+        )
+    };
     let increment = op_array.instructions[increment_ip];
     let increment_kind = match increment.opcode {
         OpCode::PreInc => QuickIncrementKind::Pre,
@@ -2139,6 +2171,9 @@ pub fn detect_long_accumulate_loop(
     if let Some(slot) = increment_tmp {
         temporary_slots.push(slot);
     }
+    if let Some(slot) = tail_guard.and_then(|guard| guard.condition_tmp) {
+        temporary_slots.push(slot);
+    }
     let temporary_slot_count = temporary_slots.len();
     temporary_slots.sort_unstable();
     temporary_slots.dedup();
@@ -2146,7 +2181,6 @@ pub fn detect_long_accumulate_loop(
         return None;
     }
 
-    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
     if total_slots > 64
         || temporary_slots
             .iter()
@@ -2201,6 +2235,7 @@ pub fn detect_long_accumulate_loop(
         condition_tmp,
         term,
         sum_tmp,
+        tail_guard,
         increment_kind,
         increment_tmp,
         sum_ip,
@@ -2236,6 +2271,61 @@ fn quick_long_operand(
         OpType::Const => Some(QuickLongOperand::Const(long_literal(op_array, operand)?)),
         _ => None,
     }
+}
+
+fn detect_long_tail_trace_guard(
+    op_array: &OpArray,
+    guard_ip: usize,
+    increment_ip: usize,
+    total_slots: u32,
+) -> Option<QuickLongTraceGuard> {
+    // The conditional jump must skip at least one cold instruction and land
+    // directly on the loop increment. The cold range itself stays canonical
+    // and may contain arbitrary PHP behavior.
+    if guard_ip.checked_add(2)? >= increment_ip {
+        return None;
+    }
+    let comparison = *op_array.instructions.get(guard_ip)?;
+    let kind = match comparison.opcode {
+        OpCode::IsIdentical => ScalarLongConditionKind::Equal,
+        OpCode::IsNotIdentical => ScalarLongConditionKind::NotEqual,
+        _ => return None,
+    };
+    let operand = |op_type, value| match op_type {
+        OpType::Cv => {
+            (u32::from(value) < op_array.num_cvs).then_some(QuickLongOperand::Slot(value))
+        }
+        OpType::Const => Some(QuickLongOperand::Const(long_literal(op_array, value)?)),
+        _ => None,
+    };
+    let lhs = operand(comparison.op1_type, comparison.op1)?;
+    let rhs = operand(comparison.op2_type, comparison.op2)?;
+    if comparison.result_type != OpType::Tmp
+        || u32::from(comparison.result) >= total_slots
+    {
+        return None;
+    }
+    let branch = *op_array.instructions.get(guard_ip + 1)?;
+    if branch.op1_type != OpType::Tmp
+        || branch.op1 != comparison.result
+        || branch.op2_type != OpType::Unused
+        || branch.op2 as usize != increment_ip
+    {
+        return None;
+    }
+    let expected = match branch.opcode {
+        OpCode::JmpZ => false,
+        OpCode::JmpNZ => true,
+        _ => return None,
+    };
+    Some(QuickLongTraceGuard {
+        kind,
+        lhs,
+        rhs,
+        expected,
+        condition_tmp: Some(comparison.result),
+        resume_ip: guard_ip,
+    })
 }
 
 fn instruction_writes_cv(instruction: crate::vm::instruction::Instruction, cv: u16) -> bool {
@@ -4491,6 +4581,33 @@ for ($i = 0; $i < 100; $i++) {
             } if long_input_mask == 1u64 << 1
                 && matches!(guard, ScalarLongCallGuard::FunctionCache { .. })
                 && do_fcall_ip > guard.cache_ip()
+        ));
+    }
+
+    #[test]
+    fn detects_cold_strict_branch_as_tail_trace_guard() {
+        let plan = quick_plan(
+            "<?php
+function routeStandalone(int $value): int { return ($value * 2) + 1; }
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += routeStandalone($i);
+    if ($i === -1) {
+        echo 'never';
+    }
+}
+",
+        );
+        assert!(matches!(
+            plan.tail_guard,
+            Some(QuickLongTraceGuard {
+                kind: ScalarLongConditionKind::Equal,
+                lhs: QuickLongOperand::Slot(lhs),
+                rhs: QuickLongOperand::Const(-1),
+                expected: false,
+                condition_tmp: Some(_),
+                resume_ip,
+            }) if lhs == plan.induction_cv && resume_ip < plan.increment_ip
         ));
     }
 

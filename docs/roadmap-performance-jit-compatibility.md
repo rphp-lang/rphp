@@ -1411,6 +1411,47 @@ produce identical `37499997500000` output and medians of approximately
 faster than RPHP's no-JIT recursive quick path and 4.87x faster than PHP tracing
 JIT on this admitted shape.
 
+Cold-edge trace-guard checkpoint (2026-08-03): an uncommon arbitrary PHP block
+no longer has to invalidate an otherwise pure scalar caller/callee region. The
+planner recognizes a strict Long comparison whose forward conditional jump
+lands on the loop increment and skips at least one cold instruction. It records
+the original operands, expected hot result, condition TMP, and comparison
+resume IP as a `QuickLongTraceGuard`; the skipped range stays canonical and may
+contain effects such as output.
+
+The shared native straight IR now has a general `Guard` operation over all four
+existing scalar condition kinds and either expected Boolean result. A mismatch
+uses the ordinary indexed operation side-exit ABI. In a call-accumulate region,
+the call and checked sum precede the guard while increment follows it, so the
+VM publishes the successful call/term/sum prefix, leaves induction unchanged,
+and replays the original comparison and complete cold block. The Rust quick
+executor uses the same transaction boundary. Successful completion, interrupt,
+and increment-overflow paths publish the expected condition TMP; exact call
+accounting includes the current call when a later guard exits.
+
+Direct native tests prove that a guard preserves prior shadow outputs and exits
+before increment. PHP tests cover a never-taken `=== -1` edge and a dynamically
+taken `$i === $needle` edge: the latter executes its canonical echo once,
+continues the loop with the correct sum, and records exactly one native side
+exit. Together with planner coverage, the focused ARM64 suite now contains 58
+passing tests.
+
+Ten order-rotated, native-CPU runs of the former standalone holdout
+`bench_scalar_call_branch_standalone.php` produce identical
+`199999980000000` output in all six compared modes. Medians are approximately
+0.01386 s for guarded RPHP JIT, 0.15436 s for guarded RPHP without JIT,
+0.24506 s for the preceding RPHP JIT, 0.30967 s for the preceding RPHP no-JIT
+binary, 0.04975 s for PHP tracing JIT, and 0.12603 s for PHP without JIT. The
+joined native region is about 17.69x faster than its preceding JIT fallback and
+3.59x faster than PHP tracing JIT. The Rust quick path improves about 2.01x but
+remains roughly 1.22x slower than PHP without JIT, locating its remaining gap
+in typed-plan execution rather than call frames.
+
+Eight-run alternating regressions show no cost on regions without a trace
+guard. The direct scalar-call median moves from about 0.01324 s to 0.01287 s,
+and the nested function tree from 0.00779 s to 0.00747 s; both differences are
+normal favorable variance with identical output.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of

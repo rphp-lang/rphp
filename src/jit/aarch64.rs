@@ -63,7 +63,9 @@ enum Arm64Condition {
     NotEqual = 1,
     Overflow = 6,
     GreaterOrEqual = 10,
+    LessThan = 11,
     GreaterThan = 12,
+    LessOrEqual = 13,
 }
 
 /// Small binary ARM64 encoder. It emits instruction words directly and never
@@ -1295,6 +1297,14 @@ pub enum NativeStraightLongOperation {
         result: u16,
         destination: u16,
     },
+    /// Exit before an uncommon control-flow edge while leaving all prior
+    /// operation outputs committed in the native shadow state.
+    Guard {
+        kind: ScalarLongConditionKind,
+        lhs: NativeStraightLongConditionOperand,
+        rhs: NativeStraightLongConditionOperand,
+        expected: bool,
+    },
     BranchUnless {
         kind: ScalarLongConditionKind,
         lhs: NativeStraightLongConditionOperand,
@@ -1318,7 +1328,7 @@ impl NativeStraightLongOperation {
                 destination,
                 ..
             } => (1u64 << result) | (1u64 << destination),
-            Self::BranchUnless { .. } | Self::Jump { .. } => 0,
+            Self::Guard { .. } | Self::BranchUnless { .. } | Self::Jump { .. } => 0,
         }
     }
 }
@@ -1573,6 +1583,52 @@ impl CompiledQuickLongStraightLoop {
                             long_slot_offset(destination),
                         );
                     }
+                }
+                NativeStraightLongOperation::Guard {
+                    kind,
+                    lhs: lhs_operand,
+                    rhs: rhs_operand,
+                    expected,
+                } => {
+                    let condition_lhs = emit_straight_long_condition_operand(
+                        &mut assembler,
+                        lhs_operand,
+                        lhs,
+                        auxiliary,
+                        config.induction_slot,
+                        induction,
+                    );
+                    let condition_rhs = emit_straight_long_condition_operand(
+                        &mut assembler,
+                        rhs_operand,
+                        rhs,
+                        auxiliary,
+                        config.induction_slot,
+                        induction,
+                    );
+                    assembler.compare_registers(condition_lhs, condition_rhs);
+                    let mismatch = match (kind, expected) {
+                        (ScalarLongConditionKind::Equal, true)
+                        | (ScalarLongConditionKind::NotEqual, false) => {
+                            Arm64Condition::NotEqual
+                        }
+                        (ScalarLongConditionKind::Equal, false)
+                        | (ScalarLongConditionKind::NotEqual, true) => Arm64Condition::Equal,
+                        (ScalarLongConditionKind::LessThan, true) => {
+                            Arm64Condition::GreaterOrEqual
+                        }
+                        (ScalarLongConditionKind::LessThan, false) => Arm64Condition::LessThan,
+                        (ScalarLongConditionKind::LessThanOrEqual, true) => {
+                            Arm64Condition::GreaterThan
+                        }
+                        (ScalarLongConditionKind::LessThanOrEqual, false) => {
+                            Arm64Condition::LessOrEqual
+                        }
+                    };
+                    operation_side_exit_branches.push((
+                        assembler.conditional_branch_placeholder(mismatch),
+                        index as u8,
+                    ));
                 }
                 NativeStraightLongOperation::BranchUnless {
                     kind,
@@ -1843,6 +1899,10 @@ fn validate_straight_long_loop_config(
                 validate_straight_long_output(result, config.induction_slot)?;
                 validate_straight_long_output(destination, config.induction_slot)?;
                 output_mask |= (1u64 << result) | (1u64 << destination);
+            }
+            NativeStraightLongOperation::Guard { lhs, rhs, .. } => {
+                validate_straight_long_condition_operand(lhs)?;
+                validate_straight_long_condition_operand(rhs)?;
             }
             NativeStraightLongOperation::BranchUnless {
                 lhs,

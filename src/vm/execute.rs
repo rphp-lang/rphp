@@ -7996,6 +7996,7 @@ struct NativeQuickLongCallAccumulateKernel {
     target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     target_count: u8,
     sum_operation_index: u8,
+    trace_guard_operation_index: Option<u8>,
     call_resume_ip: usize,
 }
 
@@ -8105,6 +8106,16 @@ impl<'a> NativeQuickLongCallTreeBuilder<'a> {
             )),
             OpType::Tmp | OpType::Var | OpType::Unused => None,
         }
+    }
+
+    unsafe fn caller_condition_operand(
+        &mut self,
+        operand: QuickLongOperand,
+    ) -> Option<NativeStraightLongConditionOperand> {
+        Some(NativeStraightLongConditionOperand::Source(match operand {
+            QuickLongOperand::Const(value) => QuickLongOperand::Const(value),
+            QuickLongOperand::Slot(slot) => self.caller_operand(OpType::Cv, slot)?,
+        }))
     }
 
     fn append_binary(
@@ -8514,7 +8525,12 @@ unsafe fn native_quick_long_call_accumulate_kernel(
     if actual_do_fcall_ip != do_fcall_ip {
         return None;
     }
-    if builder.operation_count + 2 > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
+    let trailing_operation_count = if plan.tail_guard.is_some() {
+        3
+    } else {
+        2
+    };
+    if builder.operation_count + trailing_operation_count > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
         return None;
     }
     builder.operations[builder.operation_count] = NativeStraightLongOperation::Move {
@@ -8530,11 +8546,27 @@ unsafe fn native_quick_long_call_accumulate_kernel(
         result: NATIVE_CALL_SUM_RESULT_SLOT,
         destination: NATIVE_CALL_ACCUMULATOR_SLOT,
     };
+    let mut operation_count = builder.operation_count + 1;
+    let trace_guard_operation_index = if let Some(trace_guard) = plan.tail_guard {
+        let lhs = builder.caller_condition_operand(trace_guard.lhs)?;
+        let rhs = builder.caller_condition_operand(trace_guard.rhs)?;
+        let index = u8::try_from(operation_count).ok()?;
+        builder.operations[operation_count] = NativeStraightLongOperation::Guard {
+            kind: trace_guard.kind,
+            lhs,
+            rhs,
+            expected: trace_guard.expected,
+        };
+        operation_count += 1;
+        Some(index)
+    } else {
+        None
+    };
     let config = NativeStraightLongLoopConfig {
         induction_slot: NATIVE_CALL_INDUCTION_SLOT,
         bound: QuickLongOperand::Slot(NATIVE_CALL_BOUND_SLOT),
         operations: builder.operations,
-        operation_count: sum_operation_index + 1,
+        operation_count: operation_count as u8,
         post_result: Some(NATIVE_CALL_POST_RESULT_SLOT),
     };
     Some((
@@ -8544,6 +8576,7 @@ unsafe fn native_quick_long_call_accumulate_kernel(
             target_identities: builder.target_identities,
             target_count: builder.target_count as u8,
             sum_operation_index,
+            trace_guard_operation_index,
             call_resume_ip: initializer_ip,
         },
         builder.slots,
@@ -8567,6 +8600,7 @@ unsafe fn run_native_long_call_accumulate_loop(
     induction_ptr: *mut Value,
     accumulator_ptr: *mut Value,
     condition_ptr: Option<*mut Value>,
+    tail_condition_ptr: Option<*mut Value>,
     term_ptr: Option<*mut Value>,
     sum_ptr: *mut Value,
     increment_ptr: Option<*mut Value>,
@@ -8654,7 +8688,9 @@ unsafe fn run_native_long_call_accumulate_loop(
             NativeStraightLongLoopOutcome::Completed
             | NativeStraightLongLoopOutcome::ChunkExhausted => completed_in_chunk,
             NativeStraightLongLoopOutcome::OperationSideExit
-                if result.failed_operation == Some(kernel.sum_operation_index) =>
+                if result
+                    .failed_operation
+                    .is_some_and(|failed| failed >= kernel.sum_operation_index) =>
             {
                 completed_in_chunk.saturating_add(1)
             }
@@ -8701,6 +8737,9 @@ unsafe fn run_native_long_call_accumulate_loop(
                             },
                         );
                     }
+                    if let (Some(guard), Some(ptr)) = (plan.tail_guard, tail_condition_ptr) {
+                        Value::write_bool(ptr, guard.expected);
+                    }
                 }
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
                 stats::inc_quick_loop_completed(native_iterations);
@@ -8735,6 +8774,9 @@ unsafe fn run_native_long_call_accumulate_loop(
                             },
                         );
                     }
+                    if let (Some(guard), Some(ptr)) = (plan.tail_guard, tail_condition_ptr) {
+                        Value::write_bool(ptr, guard.expected);
+                    }
                     (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
                     handle_interrupt(eg)?;
                 }
@@ -8753,12 +8795,23 @@ unsafe fn run_native_long_call_accumulate_loop(
                 }
                 let resume_ip = if failed_operation < kernel.sum_operation_index {
                     kernel.call_resume_ip
-                } else {
-                    debug_assert_eq!(failed_operation, kernel.sum_operation_index);
+                } else if failed_operation == kernel.sum_operation_index {
                     if let Some(ptr) = term_ptr {
                         Value::write_long(ptr, slots[NATIVE_CALL_TERM_SLOT as usize]);
                     }
                     plan.sum_ip
+                } else {
+                    debug_assert_eq!(Some(failed_operation), kernel.trace_guard_operation_index);
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, slots[NATIVE_CALL_TERM_SLOT as usize]);
+                    }
+                    Value::write_long(
+                        sum_ptr,
+                        slots[NATIVE_CALL_ACCUMULATOR_SLOT as usize],
+                    );
+                    plan.tail_guard
+                        .expect("native trace-guard side exit has a resume point")
+                        .resume_ip
                 };
                 (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                 stats::inc_quick_loop_deoptimized(native_iterations);
@@ -8780,6 +8833,9 @@ unsafe fn run_native_long_call_accumulate_loop(
                     sum_ptr,
                     slots[NATIVE_CALL_ACCUMULATOR_SLOT as usize],
                 );
+                if let (Some(guard), Some(ptr)) = (plan.tail_guard, tail_condition_ptr) {
+                    Value::write_bool(ptr, guard.expected);
+                }
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
                 stats::inc_quick_loop_deoptimized(native_iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
@@ -9024,6 +9080,10 @@ unsafe fn run_quick_long_accumulate_loop(
     let condition_ptr = plan
         .condition_tmp
         .map(|slot| slot_base.add(slot as usize));
+    let tail_condition_ptr = plan
+        .tail_guard
+        .and_then(|guard| guard.condition_tmp)
+        .map(|slot| slot_base.add(slot as usize));
     let term_ptr = match plan.term {
         QuickLongTerm::Induction => None,
         QuickLongTerm::InductionPlusConst { term_tmp, .. }
@@ -9121,6 +9181,15 @@ unsafe fn run_quick_long_accumulate_loop(
         }
         _ => true,
     };
+    let tail_guard_inputs_valid = plan.tail_guard.is_none_or(|guard| {
+        [guard.lhs, guard.rhs].into_iter().all(|operand| match operand {
+            QuickLongOperand::Const(_) => true,
+            QuickLongOperand::Slot(slot) => {
+                !quick_loop_slot_has_heap(frame, slot)
+                    && (*slot_base.add(slot as usize)).value_type() == ValueType::Long
+            }
+        })
+    });
 
     if quick_loop_slot_has_heap(frame, plan.induction_cv)
         || quick_loop_slot_has_heap(frame, plan.accumulator_cv)
@@ -9159,11 +9228,20 @@ unsafe fn run_quick_long_accumulate_loop(
         || plan
             .increment_tmp
             .is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
+        || plan.tail_guard.is_some_and(|guard| {
+            guard
+                .condition_tmp
+                .is_some_and(|slot| quick_loop_slot_has_heap(frame, slot))
+        })
         || matches!(plan.bound, QuickLongBound::Cv(slot) if quick_loop_slot_has_heap(frame, slot))
         || !scalar_call_inputs_valid
+        || !tail_guard_inputs_valid
         || (*induction_ptr).value_type() != ValueType::Long
         || (*accumulator_ptr).value_type() != ValueType::Long
         || condition_ptr.is_some_and(|ptr| {
+            !matches!((*ptr).value_type(), ValueType::True | ValueType::False)
+        })
+        || tail_condition_ptr.is_some_and(|ptr| {
             !matches!((*ptr).value_type(), ValueType::True | ValueType::False)
         })
         || term_ptr.is_some_and(|ptr| (*ptr).value_type() != ValueType::Long)
@@ -9424,6 +9502,7 @@ unsafe fn run_quick_long_accumulate_loop(
             induction_ptr,
             accumulator_ptr,
             condition_ptr,
+            tail_condition_ptr,
             term_ptr,
             sum_ptr,
             increment_ptr,
@@ -9471,6 +9550,9 @@ unsafe fn run_quick_long_accumulate_loop(
                 Value::write_long(sum_ptr, accumulator);
                 if let Some(ptr) = increment_ptr {
                     Value::write_long(ptr, last_increment_result);
+                }
+                if let (Some(guard), Some(ptr)) = (plan.tail_guard, tail_condition_ptr) {
+                    Value::write_bool(ptr, guard.expected);
                 }
             }
             (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
@@ -9760,6 +9842,42 @@ unsafe fn run_quick_long_accumulate_loop(
             }
         };
 
+        if let Some(guard) = plan.tail_guard {
+            let operand = |operand| match operand {
+                QuickLongOperand::Const(value) => value,
+                QuickLongOperand::Slot(slot) if slot == plan.induction_cv => induction,
+                QuickLongOperand::Slot(slot) if slot == plan.accumulator_cv => next_accumulator,
+                QuickLongOperand::Slot(slot) => (*slot_base.add(slot as usize)).raw_long(),
+            };
+            let matches = apply_scalar_long_condition(
+                guard.kind,
+                operand(guard.lhs),
+                operand(guard.rhs),
+            ) == guard.expected;
+            if !matches {
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, next_accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, term);
+                }
+                if let Some(ptr) = term_destination_ptr {
+                    Value::write_long(ptr, term);
+                }
+                Value::write_long(sum_ptr, next_accumulator);
+                (*frame).opline = op_array.instructions.as_ptr().add(guard.resume_ip);
+                flush_quick_scalar_calls(
+                    &scalar_call_targets,
+                    scalar_call_target_count,
+                    &mut scalar_call_success_count,
+                );
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(QuickLoopOutcome::Deoptimized);
+            }
+        }
+
         let next_induction = match induction.checked_add(1) {
             Some(value) => value,
             None => {
@@ -9775,6 +9893,9 @@ unsafe fn run_quick_long_accumulate_loop(
                     Value::write_long(ptr, term);
                 }
                 Value::write_long(sum_ptr, next_accumulator);
+                if let (Some(guard), Some(ptr)) = (plan.tail_guard, tail_condition_ptr) {
+                    Value::write_bool(ptr, guard.expected);
+                }
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
                 flush_quick_scalar_calls(
                     &scalar_call_targets,
@@ -9813,6 +9934,9 @@ unsafe fn run_quick_long_accumulate_loop(
             Value::write_long(sum_ptr, accumulator);
             if let Some(ptr) = increment_ptr {
                 Value::write_long(ptr, last_increment_result);
+            }
+            if let (Some(guard), Some(ptr)) = (plan.tail_guard, tail_condition_ptr) {
+                Value::write_bool(ptr, guard.expected);
             }
             (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
             flush_quick_scalar_calls(

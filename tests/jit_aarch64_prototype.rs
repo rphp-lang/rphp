@@ -642,7 +642,7 @@ fn real_php_conditional_calls_enter_the_standalone_native_plan() {
 }
 
 #[test]
-fn unsupported_loop_body_keeps_conditional_calls_on_the_standalone_jit() {
+fn cold_strict_branch_is_guarded_inside_the_native_call_region() {
     let source = "<?php function routeStandalone(int $value): int { if (($value & 1) == 0) { return ($value * 3) + 1; } return ($value * 5) - 2; } $total = 0; for ($i = 0; $i < 100; $i++) { $total += routeStandalone($i); if ($i === -1) { echo 'never'; } } echo $total;";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
@@ -662,19 +662,55 @@ fn unsupported_loop_body_keeps_conditional_calls_on_the_standalone_jit() {
         String::from_utf8(output.lock().unwrap().clone()).unwrap(),
         "19800"
     );
-    assert!(main.op_array.block_plans.iter().all(|plan| !matches!(
-        plan,
-        BlockPlan::QuickLongAccumulate(_) | BlockPlan::QuickLongOps(_)
-    )));
-
-    let function = functions
+    let plan = main
+        .op_array
+        .block_plans
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("routeStandalone"))
-        .map(|(_, function)| function)
-        .expect("compiled routeStandalone function");
-    let plan = function.scalar_long_plan.as_deref().expect("scalar plan");
-    assert!(plan.native_jit().is_compiled());
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("cold strict branch should retain the scalar-call accumulate region");
+    assert!(plan.tail_guard.is_some());
+    assert!(plan.native_jit().is_call_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn taken_trace_guard_resumes_the_canonical_cold_block_before_increment() {
+    let source = "<?php function routeGuarded(int $value): int { return ($value * 2) + 1; } $needle = 73; $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += routeGuarded($i); if ($i === $needle) { echo 'hit:' . $i . '|'; } } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "hit:73|100:10000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("dynamic strict branch should use a guarded call region");
+    assert!(plan.native_jit().is_call_compiled());
     assert!(plan.native_jit().native_entries() >= 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
 #[test]
@@ -2070,6 +2106,46 @@ fn straight_long_loop_executes_structured_scalar_conditions() {
         }),
         Err(QuickLongAccumulateJitError::InvalidProgram(_))
     ));
+}
+
+#[test]
+fn straight_long_guard_side_exits_after_prior_outputs_and_before_increment() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(3),
+        rhs: QuickLongOperand::Slot(0),
+        result: 2,
+        destination: 3,
+    };
+    operations[1] = NativeStraightLongOperation::Guard {
+        kind: ScalarLongConditionKind::Equal,
+        lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+        rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+        expected: false,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 2,
+        post_result: Some(4),
+    })
+    .expect("trace guard should lower through the general straight IR");
+    let mut slots = [0_i64; 64];
+    slots[1] = 10;
+
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(1));
+    assert_eq!(slots[0], 2, "guard failure must precede increment");
+    assert_eq!(slots[2], 3, "prior result remains in shadow state");
+    assert_eq!(slots[3], 3, "prior assignment remains in shadow state");
+    assert_eq!(slots[4], 1, "last completed post-increment remains published");
 }
 
 #[test]

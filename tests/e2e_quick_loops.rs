@@ -285,6 +285,29 @@ echo $i;
 }
 
 #[test]
+fn quick_scalar_call_trace_guard_replays_taken_cold_edge() {
+    assert_eq!(
+        run_php(
+            "<?php
+function identity(int $value): int {
+    return $value;
+}
+$needle = 73;
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += identity($i);
+    if ($i === $needle) {
+        echo 'hit:' . $i . '|';
+    }
+}
+echo $sum . '|' . $i;
+"
+        ),
+        "hit:73|4950|100"
+    );
+}
+
+#[test]
 fn quick_scalar_call_evaluates_checked_argument_expression() {
     assert_eq!(
         run_php(
