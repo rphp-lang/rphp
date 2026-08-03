@@ -13,8 +13,9 @@ use rphp::jit::{
     CompiledQuickLongConditionalAccumulateLoop, CompiledScalarLongProgram,
     CompiledQuickLongStraightLoop, NativeConditionalLongLoopCondition,
     NativeConditionalLongLoopConfig, NativeLongAccumulateState,
-    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
-    NativeStraightLongOperation, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
+    NativeStraightLongLoopOutcome, NativeStraightLongOperation,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
     SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch, ScalarLongJitError,
     ScalarLongJitOutcome,
@@ -23,8 +24,8 @@ use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::execute;
 use rphp::vm::function::{
-    FunctionCommon, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram,
-    ScalarLongSource,
+    FunctionCommon, ScalarLongConditionKind, ScalarLongFunctionPlan, ScalarLongOp,
+    ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
 };
 use rphp::vm::planner::BlockPlan;
 use rphp::vm::quick::QuickLongOperand;
@@ -612,6 +613,198 @@ fn nested_scalar_methods_lower_checked_caller_argument_expressions() {
     assert!(plan.native_jit().is_method_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn conditional_scalar_method_enters_native_accumulate_region() {
+    let source = "<?php class ConditionalKernel { public function route(int $value): int { if (($value & 1) == 0) { return ($value * 3) + 1; } return ($value * 5) - 2; } } $kernel = new ConditionalKernel(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $kernel->route($i); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:19999800000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a conditional scalar-method loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn nested_conditional_scalar_method_flattens_with_outer_method() {
+    let source = "<?php class ConditionalTree { public function add(int $left, int $right): int { return $left + $right; } public function route(int $value): int { if (($value & 1) == 0) { return $value * 2; } return $value + 3; } } $tree = new ConditionalTree(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $tree->add($i, $tree->route($i)); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:12500000000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a nested conditional scalar loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn conditional_scalar_method_skips_overflow_in_inactive_arm() {
+    let source = "<?php class InactiveOverflowKernel { public function choose(int $value): int { if ($value < 100) { return $value + 1; } return ($value * 100000000000000000) % 7; } } $kernel = new InactiveOverflowKernel(); $sum = 0; for ($i = 0; $i < 80; $i++) { $sum += $kernel->choose($i); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "80:3240"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the inactive-overflow scalar loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn conditional_scalar_method_selected_overflow_replays_canonical_call() {
+    let source = "<?php class SelectedOverflowKernel { public function choose(int $value): int { if ($value < 90) { return $value + 1; } return ($value * 100000000000000000) % 7; } } function runSelectedOverflow(): int { $kernel = new SelectedOverflowKernel(); $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += $kernel->choose($i); } return $sum; } runSelectedOverflow();";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    drop(globals);
+    assert!(matches!(
+        error,
+        execute::VmError::Fatal(message)
+            if message == "Unsupported operand types for %"
+    ));
+    assert!(output.lock().unwrap().is_empty());
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runSelectedOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled runSelectedOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runSelectedOverflow should use a conditional scalar loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn conditional_scalar_method_rejects_polymorphic_target() {
+    let source = "<?php class FirstConditional { public function route(int $value): int { if (($value & 1) == 0) { return $value + 1; } return $value + 2; } } class SecondConditional { public function route(int $value): int { if (($value & 1) == 0) { return $value + 3; } return $value + 4; } } function runConditional($kernel): int { $sum = 0; for ($i = 0; $i < 1000; $i++) { $sum += $kernel->route($i); } return $sum; } echo runConditional(new FirstConditional()) . ':' . runConditional(new SecondConditional());";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "501000:503000"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runConditional"))
+        .map(|(_, function)| function)
+        .expect("compiled runConditional function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runConditional should use a conditional scalar-method loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
 }
 
 #[test]
@@ -1322,6 +1515,116 @@ fn straight_long_loop_lowers_division_modulo_xor_and_move() {
     assert_eq!(result.failed_operation, Some(0));
     assert_eq!(slots[0], 0);
     assert_eq!(slots[2], 0);
+}
+
+#[test]
+fn straight_long_loop_executes_structured_scalar_conditions() {
+    let cases = [
+        (ScalarLongConditionKind::Equal, 1, 77),
+        (ScalarLongConditionKind::NotEqual, 1, 55),
+        (ScalarLongConditionKind::LessThan, 2, 66),
+        (ScalarLongConditionKind::LessThanOrEqual, 2, 55),
+    ];
+    for (kind, rhs, expected) in cases {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(rhs)),
+            false_target: 3,
+        };
+        operations[1] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Const(11),
+            result: 2,
+        };
+        operations[2] = NativeStraightLongOperation::Jump { target: 4 };
+        operations[3] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Const(22),
+            result: 2,
+        };
+        operations[4] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Slot(2),
+            result: 4,
+            destination: 3,
+        };
+        let program = CompiledQuickLongStraightLoop::compile(
+            NativeStraightLongLoopConfig {
+                induction_slot: 0,
+                bound: QuickLongOperand::Slot(1),
+                operations,
+                operation_count: 5,
+                post_result: None,
+            },
+        )
+        .expect("structured scalar condition should lower");
+        let mut slots = [0_i64; 64];
+        slots[1] = 4;
+        assert_eq!(
+            program.call(&mut slots, 32).unwrap().outcome,
+            NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[3], expected, "condition {kind:?}");
+    }
+
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::BranchUnless {
+        kind: ScalarLongConditionKind::Equal,
+        lhs: NativeStraightLongConditionOperand::BitwiseAnd {
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(1),
+        },
+        rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+        false_target: 3,
+    };
+    operations[1] = NativeStraightLongOperation::Move {
+        source: QuickLongOperand::Const(11),
+        result: 2,
+    };
+    operations[2] = NativeStraightLongOperation::Jump { target: 4 };
+    operations[3] = NativeStraightLongOperation::Move {
+        source: QuickLongOperand::Const(22),
+        result: 2,
+    };
+    operations[4] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(3),
+        rhs: QuickLongOperand::Slot(2),
+        result: 4,
+        destination: 3,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 5,
+        post_result: None,
+    })
+    .expect("masked scalar condition should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 4;
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap().outcome,
+        NativeStraightLongLoopOutcome::Completed
+    );
+    assert_eq!(slots[3], 66);
+
+    operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::Jump { target: 0 };
+    assert!(matches!(
+        CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Slot(1),
+            operations,
+            operation_count: 1,
+            post_result: None,
+        }),
+        Err(QuickLongAccumulateJitError::InvalidProgram(_))
+    ));
 }
 
 #[test]

@@ -14,8 +14,9 @@ use crate::vm::stats;
 ))]
 use crate::jit::{
     NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
-    NativeLongAccumulateState, NativeStraightLongLoopConfig,
-    NativeStraightLongLoopOutcome, NativeStraightLongOperation,
+    NativeLongAccumulateState, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
+    NativeStraightLongOperation,
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     QuickLongAccumulateJitOutcome,
     ScalarLongJitDispatch,
@@ -8112,18 +8113,27 @@ impl<'a> NativeQuickLongMethodTreeBuilder<'a> {
         lhs: QuickLongOperand,
         rhs: QuickLongOperand,
     ) -> Option<QuickLongOperand> {
-        if self.operation_count + 2 >= NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
-            return None;
-        }
         let result = self.allocate_dynamic_slot()?;
-        self.operations[self.operation_count] = NativeStraightLongOperation::Binary {
+        self.append_operation(NativeStraightLongOperation::Binary {
             kind,
             lhs,
             rhs,
             result,
-        };
-        self.operation_count += 1;
+        })?;
         Some(QuickLongOperand::Slot(result))
+    }
+
+    fn append_operation(
+        &mut self,
+        operation: NativeStraightLongOperation,
+    ) -> Option<usize> {
+        if self.operation_count + 2 >= NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
+            return None;
+        }
+        let index = self.operation_count;
+        self.operations[index] = operation;
+        self.operation_count += 1;
+        Some(index)
     }
 
     fn scalar_source(
@@ -8145,6 +8155,33 @@ impl<'a> NativeQuickLongMethodTreeBuilder<'a> {
         }
     }
 
+    fn lower_plan_operation(
+        &mut self,
+        plan: &ScalarLongFunctionPlan,
+        arguments: &[QuickLongOperand; 8],
+        argument_count: u8,
+        temporaries: &mut [QuickLongOperand; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+        index: usize,
+    ) -> Option<()> {
+        let operation = *plan.program.operations.get(index)?;
+        let lhs = Self::scalar_source(
+            operation.lhs,
+            arguments,
+            argument_count,
+            temporaries,
+            index,
+        )?;
+        let rhs = Self::scalar_source(
+            operation.rhs,
+            arguments,
+            argument_count,
+            temporaries,
+            index,
+        )?;
+        temporaries[index] = self.append_binary(operation.kind, lhs, rhs)?;
+        Some(())
+    }
+
     fn lower_plan(
         &mut self,
         plan: &ScalarLongFunctionPlan,
@@ -8152,8 +8189,8 @@ impl<'a> NativeQuickLongMethodTreeBuilder<'a> {
         argument_count: u8,
     ) -> Option<QuickLongOperand> {
         if plan.public_args != argument_count
-            || plan.select.is_some()
             || plan.program.output_count != 1
+            || plan.program.operations.len() > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
         {
             return None;
         }
@@ -8161,32 +8198,151 @@ impl<'a> NativeQuickLongMethodTreeBuilder<'a> {
             QuickLongOperand::Const(0);
             NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
         ];
-        let mut temporary_count = 0usize;
-        for operation in plan.program.operations.iter().copied() {
-            let lhs = Self::scalar_source(
-                operation.lhs,
+        let Some(select) = plan.select else {
+            for index in 0..plan.program.operations.len() {
+                self.lower_plan_operation(
+                    plan,
+                    arguments,
+                    argument_count,
+                    &mut temporaries,
+                    index,
+                )?;
+            }
+            return Self::scalar_source(
+                plan.program.outputs[0],
                 arguments,
                 argument_count,
                 &temporaries,
-                temporary_count,
-            )?;
-            let rhs = Self::scalar_source(
-                operation.rhs,
-                arguments,
-                argument_count,
-                &temporaries,
-                temporary_count,
-            )?;
-            temporaries[temporary_count] = self.append_binary(operation.kind, lhs, rhs)?;
-            temporary_count += 1;
+                plan.program.operations.len(),
+            );
+        };
+
+        let shared_end = select.shared_operation_count as usize;
+        let true_end = shared_end.checked_add(select.when_true_operation_count as usize)?;
+        if true_end > plan.program.operations.len() {
+            return None;
         }
-        Self::scalar_source(
-            plan.program.outputs[0],
+        for index in 0..shared_end {
+            self.lower_plan_operation(
+                plan,
+                arguments,
+                argument_count,
+                &mut temporaries,
+                index,
+            )?;
+        }
+        let lower_condition_operand = |operand| match operand {
+            ScalarLongConditionOperand::Source(source) => {
+                Some(NativeStraightLongConditionOperand::Source(Self::scalar_source(
+                    source,
+                    arguments,
+                    argument_count,
+                    &temporaries,
+                    shared_end,
+                )?))
+            }
+            ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+                Some(NativeStraightLongConditionOperand::BitwiseAnd {
+                    lhs: Self::scalar_source(
+                        lhs,
+                        arguments,
+                        argument_count,
+                        &temporaries,
+                        shared_end,
+                    )?,
+                    rhs: Self::scalar_source(
+                        rhs,
+                        arguments,
+                        argument_count,
+                        &temporaries,
+                        shared_end,
+                    )?,
+                })
+            }
+        };
+        let condition_lhs = lower_condition_operand(select.lhs)?;
+        let condition_rhs = lower_condition_operand(select.rhs)?;
+        let branch_index = self.append_operation(NativeStraightLongOperation::BranchUnless {
+            kind: select.kind,
+            lhs: condition_lhs,
+            rhs: condition_rhs,
+            false_target: 0,
+        })?;
+
+        for index in shared_end..true_end {
+            self.lower_plan_operation(
+                plan,
+                arguments,
+                argument_count,
+                &mut temporaries,
+                index,
+            )?;
+        }
+        let select_result = self.allocate_dynamic_slot()?;
+        let when_true = Self::scalar_source(
+            select.when_true,
             arguments,
             argument_count,
             &temporaries,
-            temporary_count,
-        )
+            true_end,
+        )?;
+        self.append_operation(NativeStraightLongOperation::Move {
+            source: when_true,
+            result: select_result,
+        })?;
+        let jump_index = self.append_operation(NativeStraightLongOperation::Jump { target: 0 })?;
+
+        let false_target = u8::try_from(self.operation_count).ok()?;
+        self.operations[branch_index] = NativeStraightLongOperation::BranchUnless {
+            kind: select.kind,
+            lhs: condition_lhs,
+            rhs: condition_rhs,
+            false_target,
+        };
+        for index in true_end..plan.program.operations.len() {
+            let operation = plan.program.operations[index];
+            let false_source_is_available = |source: ScalarLongSource| match source {
+                ScalarLongSource::Temporary(temporary) => {
+                    let temporary = temporary as usize;
+                    temporary < shared_end || (temporary >= true_end && temporary < index)
+                }
+                ScalarLongSource::Input(_) | ScalarLongSource::Constant(_) => true,
+            };
+            if !false_source_is_available(operation.lhs)
+                || !false_source_is_available(operation.rhs)
+            {
+                return None;
+            }
+            self.lower_plan_operation(
+                plan,
+                arguments,
+                argument_count,
+                &mut temporaries,
+                index,
+            )?;
+        }
+        if let ScalarLongSource::Temporary(temporary) = select.when_false {
+            let temporary = temporary as usize;
+            if temporary >= shared_end && temporary < true_end {
+                return None;
+            }
+        }
+        let when_false = Self::scalar_source(
+            select.when_false,
+            arguments,
+            argument_count,
+            &temporaries,
+            plan.program.operations.len(),
+        )?;
+        self.append_operation(NativeStraightLongOperation::Move {
+            source: when_false,
+            result: select_result,
+        })?;
+        let join_target = u8::try_from(self.operation_count).ok()?;
+        self.operations[jump_index] = NativeStraightLongOperation::Jump {
+            target: join_target,
+        };
+        Some(QuickLongOperand::Slot(select_result))
     }
 
     unsafe fn lower_call(
@@ -8425,6 +8581,13 @@ unsafe fn run_native_long_method_accumulate_loop(
         return Ok(None);
     };
     let cache = plan.native_jit();
+    let Some(program) = cache.prepare_method_program(
+        kernel.target_identities,
+        kernel.target_count,
+        kernel.config,
+    ) else {
+        return Ok(None);
+    };
     let mut native_iterations = 0u64;
     let mut entered_native = false;
 
@@ -8433,15 +8596,11 @@ unsafe fn run_native_long_method_accumulate_loop(
         let before_accumulator = slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize];
         let before_term = slots[NATIVE_METHOD_TERM_SLOT as usize];
         let before_post = slots[NATIVE_METHOD_POST_RESULT_SLOT as usize];
-        let Some(native_result) = cache.dispatch_method_chunk(
-            kernel.target_identities,
-            kernel.target_count,
-            kernel.config,
+        let native_result = cache.dispatch_prepared_method_chunk(
+            program,
             &mut slots,
             NATIVE_LONG_ACCUMULATE_CHUNK,
-        ) else {
-            return Ok(None);
-        };
+        );
         if !entered_native {
             cache.record_region_entry();
             entered_native = true;
@@ -13074,6 +13233,9 @@ unsafe fn run_native_quick_long_straight_kernel(
     let config = kernel.config;
     let bound = quick_long_operand(slots, config.bound);
     let cache = plan.native_jit();
+    let Some(program) = cache.prepare_straight_program(config) else {
+        return Ok(None);
+    };
     let body_output_mask = config.body_output_mask();
     let post_result_mask = config.post_result.map_or(0, |slot| 1u64 << slot);
     let mut iterations = 0u64;
@@ -13088,8 +13250,8 @@ unsafe fn run_native_quick_long_straight_kernel(
             before_values[index] = slots[kernel.mutable_slots[index] as usize];
         }
 
-        let native_result = cache.dispatch_straight_chunk(
-            config,
+        let native_result = cache.dispatch_prepared_straight_chunk(
+            program,
             slots,
             NATIVE_LONG_ACCUMULATE_CHUNK,
         );
@@ -13101,7 +13263,6 @@ unsafe fn run_native_quick_long_straight_kernel(
                 }
                 result
             }
-            Err(_) if !cache.is_straight_compiled() => return Ok(None),
             Err(_) => {
                 for index in 0..kernel.mutable_slot_count as usize {
                     slots[kernel.mutable_slots[index] as usize] = before_values[index];

@@ -1293,6 +1293,45 @@ benchmark records approximately 0.01784 s for the nested-capable build and
 0.01991 s for its direct-only predecessor. The generalized target-list guard
 and dynamic slot allocator therefore do not regress the original direct shape.
 
+Conditional scalar-call checkpoint (2026-08-03): `ScalarLongFunctionPlan`
+selects now lower into the same native method-call tree. The straight native IR
+has forward-only `BranchUnless` and `Jump` operations, signed `==`, `!=`, `<`,
+and `<=` predicates, and the existing predicate-only bitwise-AND form. True and
+false arithmetic remain separate control-flow ranges and write one join slot,
+so an overflow or invalid division in the inactive arm is never evaluated.
+
+Validation rejects backward or out-of-range native targets and verifies that a
+false edge cannot read a true-edge temporary. A failure in the selected shared
+or arm operation uses the existing root-call side exit; exact receiver and
+method identities remain guarded before native entry. Tests cover all four
+predicate encodings, masked parity, nested `outer(conditionalInner(...))`, an
+inactive overflowing arm, selected-arm canonical replay, and a polymorphic
+conditional receiver. The focused ARM64 suite now contains 46 tests, and both
+full release matrices pass.
+
+The larger control-flow operation representation exposed a separate dispatch
+cost: method configuration and the exact target list were being copied and
+compared at every 32-iteration chunk. Region preparation now performs those
+guards once per activation and hands the chunk loop a stable compiled-program
+reference. The same prepare/call split is used by the general straight-loop
+cache. This is safe because receiver CVs are already invariant and method
+identity is immutable during one pure scalar region activation.
+
+Ten order-rotated `max-perf`, native-CPU runs of the new
+`bench_scalar_method_branch.php` produce identical `199999980000000` output.
+Medians are approximately 0.01443 s for the conditional RPHP JIT, 0.15425 s for
+the preceding JIT that rejected the select, 0.13882 s for RPHP without JIT,
+0.05727 s for PHP 8.4.12 tracing JIT, and 0.13100 s for PHP without JIT. The new
+region is therefore about 10.69x faster than the preceding fallback, 9.62x
+faster than RPHP without JIT, and 3.97x faster than PHP tracing JIT on this
+masked two-arm method.
+
+Ten-run alternating regression checks also show the prepared dispatch
+improving existing admitted methods: the direct-method median moves from about
+0.01904 s to 0.01363 s, and the nested-method median from about 0.00950 s to
+0.00696 s. The unrelated general `bench_binary_assign_loop.php` region remains
+effectively flat at 0.01224 s versus 0.01219 s, within run variance.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of
@@ -1302,8 +1341,8 @@ percent overhead on this unadmitted path, while PHP's mature tracing JIT is
 about 2.40x faster than RPHP. This is now the clearest coverage gap: the next
 widening decision should be driven by mixed typed regions and calls. Direct and
 nested scalar-method composition plus non-materialized arithmetic are now
-covered; internal branches, general object effects, strings, and arrays remain
-outside native code.
+covered, including pure scalar branches. Mixed object effects, strings, arrays,
+and their internal control flow remain outside native code.
 
 ### Nice to have: persistent compiled artifacts
 
