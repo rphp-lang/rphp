@@ -960,6 +960,21 @@ Benchmark four modes, including cold and warm behavior:
 3. PHP with JIT;
 4. RPHP with JIT.
 
+PHP JIT measurements must load the normal CLI configuration and explicitly
+enable tracing JIT:
+
+```sh
+php -dopcache.enable_cli=1 -dopcache.jit_buffer_size=100M \
+    -dopcache.jit=tracing benchmark.php
+```
+
+The no-JIT PHP control is run explicitly with
+`php -dopcache.enable_cli=0 -dopcache.jit_buffer_size=0 -dopcache.jit=off`.
+Do not use `php -n` for the PHP JIT lane: it is the isolated no-configuration
+baseline used by the older no-JIT benchmark scripts, not the production-like
+tracing-JIT invocation. Every JIT batch must first verify
+`opcache_get_status(false)['jit']` reports both `enabled` and `on`.
+
 Also track compilation latency, code-cache memory, runtime memory, and
 deoptimization frequency.
 
@@ -1129,17 +1144,22 @@ instruction. Direct tests exercise both guards and cached reuse; real PHP tests
 cover a slot equality operand, native add overflow, normal completion, and the
 canonical `MIN % -1` prologue. The focused ARM64 suite now contains 25 tests.
 
-Seven interleaved `max-perf`, native-CPU runs of
-`bench_modulo_branch_loop.php` produce identical `24999995000000` output. The
-median is approximately 0.00646 s for RPHP with the prototype JIT, 0.02268 s
-for RPHP without JIT, 0.03567 s for PHP 8.4.12 with tracing JIT, and 0.03577 s
-for PHP without JIT. On this admitted region, native RPHP is therefore about
-3.51x faster than its Rust quick executor and 5.52x faster than PHP's tracing
-JIT. The first process run remains a visible cold outlier, so compilation and
-cold-start latency must continue to be tracked separately from warm medians.
-The next structural operation remains general straight-line checked
-`BinaryAssign` bodies; expanding coverage is more valuable than further tuning
-this modulo loop.
+The original seven-run `max-perf`, native-CPU RPHP measurements of
+`bench_modulo_branch_loop.php` produced a 0.00646 s JIT median and 0.02268 s
+without JIT. The corrected same-batch PHP invocation records approximately
+0.01171 s with tracing JIT and 0.03596 s without JIT, rather than the invalid
+0.03567 s value previously labelled as PHP JIT.
+
+An independent eight-run, order-rotated rerun of all four modes produces
+identical `24999995000000` output and medians of approximately 0.00686 s RPHP
+JIT, 0.01136 s PHP tracing JIT, 0.02203 s RPHP without JIT, and 0.03520 s PHP
+without JIT. On this admitted region, native RPHP is therefore about 3.21x
+faster than its Rust quick executor and 1.66x faster than PHP's tracing JIT in
+the same batch. The first process run remains a visible cold outlier, so
+compilation and cold-start latency must continue to be tracked separately from
+warm medians. The next structural operation remains general straight-line
+checked `BinaryAssign` bodies; expanding coverage is more valuable than further
+tuning this modulo loop.
 
 Straight-body widening checkpoint (2026-08-03): a second general
 `QuickLongOpsLoop` native shape now accepts a linear body of up to eight
@@ -1163,20 +1183,24 @@ fallback are covered. The focused ARM64 suite now contains 29 tests.
 
 Eight order-rotated `max-perf`, native-CPU runs of the new
 `bench_binary_assign_loop.php` produce identical `419,729999927,1` output. The
-medians are approximately 0.01284 s for RPHP with the prototype JIT, 0.10188 s
-for RPHP without JIT, 0.07497 s for PHP 8.4.12 with tracing JIT, and 0.07454 s
-for PHP without JIT. The native region is therefore about 7.93x faster than
-RPHP's general Rust executor and 5.84x faster than PHP's tracing JIT on this
-four-operation body.
+corrected medians are approximately 0.01273 s for RPHP with the prototype JIT,
+0.10016 s for RPHP without JIT, 0.03261 s for PHP 8.4.12 with tracing JIT, and
+0.07348 s for PHP without JIT. The native region is therefore about 7.87x
+faster than RPHP's general Rust executor and 2.56x faster than PHP's tracing JIT
+on this four-operation body. PHP's own tracing JIT improves its no-JIT result by
+about 2.25x, confirming that the former near-identical PHP figures came from an
+incorrect JIT invocation.
 
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
-branches. Five runs retain identical output with medians of approximately
-0.06341 s RPHP JIT, 0.06224 s RPHP without JIT, and 0.06544 s PHP tracing JIT;
-the unsupported corpus path is therefore unchanged within normal feature/code
-layout variance. The next widening decision should come from admitted-region
-coverage: likely non-materialized `Binary`/`Assign` chains before attempting
-object or array effects in native code.
+branches. Eight order-rotated runs retain identical output with medians of
+approximately 0.06182 s RPHP JIT, 0.02575 s PHP tracing JIT, 0.06029 s RPHP
+without JIT, and 0.06432 s PHP without JIT. The RPHP prototype adds about 2.5
+percent overhead on this unadmitted path, while PHP's mature tracing JIT is
+about 2.40x faster than RPHP. This is now the clearest coverage gap: the next
+widening decision should be driven by mixed typed regions and calls, likely
+non-materialized `Binary`/`Assign` chains and scalar method composition before
+attempting general object or array effects in native code.
 
 ### Nice to have: persistent compiled artifacts
 
