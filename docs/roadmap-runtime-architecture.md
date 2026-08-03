@@ -50,8 +50,10 @@ than it clarifies.
 
 1. **Native mixed lowering.** Split operation/catalog/call bookkeeping,
    virtual object-array lowering, scalar/property lowering, and composed typed
-   lowering. Keep all pieces in the execute module initially so visibility and
-   code generation do not change. This first physical split is complete.
+   lowering, followed by native admission/kernel construction and runtime
+   binding/chunk/side-exit execution. Keep all pieces in the execute module
+   initially so visibility and code generation do not change. This first
+   vertical physical split is now complete.
 2. **Quick runtime.** Separate activation state, String state, array contexts,
    object/method resolution, native admission, native execution and canonical
    deoptimization. The quick-loop dispatcher should orchestrate these pieces,
@@ -82,6 +84,16 @@ the same byte size. In 101 order-randomized A/B runs, four corpus workloads
 move between -0.16 and +0.20 percent and the independent routing holdout moves
 -0.48 percent, with identical output. This is treated as measurement noise and
 establishes the process for the remaining structural slices.
+
+Second checkpoint (2026-08-03): native mixed admission/kernel construction
+(676 lines) and runtime binding, chunk execution and exact side exits (443)
+are separated as well. `execute.rs` falls again to 18,852 lines and the
+native-CPU `max-perf` binary remains byte-for-byte the same size. In a new 101
+order-randomized A/B against the preceding refactor binary, all outputs remain
+identical; the four corpus deltas range from -0.63 to +0.07 percent and the
+independent routing holdout is +0.81 percent. The whole native-mixed vertical
+slice is therefore physically separated with no statistically actionable
+performance change.
 
 ## Post-JIT coroutine branch
 
