@@ -28,7 +28,7 @@ use rphp::vm::function::{
     ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSelect, ScalarLongSource,
 };
 use rphp::vm::planner::BlockPlan;
-use rphp::vm::quick::QuickLongOperand;
+use rphp::vm::quick::{QuickLongOp, QuickLongOperand};
 
 fn scalar_plan(
     public_args: u8,
@@ -2439,6 +2439,40 @@ fn real_php_straight_binary_body_enters_general_native_ir_region() {
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn general_native_trace_guard_resumes_taken_cold_edge_transactionally() {
+    let source = "<?php $needle = 74; $sum = 0; $count = 0; for ($i = 0; $i < 100; $i++) { $sum = $sum + $i; $count = $count + 1; if ($count === $needle) { echo 'hit:' . $i . ':' . $count . '|'; } } echo $sum . ':' . $count . ':' . $i;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "hit:73:74|4950:100:100"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("strict cold edge should retain the general Long loop IR");
+    assert!(plan
+        .ops
+        .iter()
+        .any(|operation| matches!(operation, QuickLongOp::TraceGuard { .. })));
+    assert!(plan.native_jit().is_straight_compiled());
+    assert!(plan.native_jit().native_entries() >= 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
 #[test]

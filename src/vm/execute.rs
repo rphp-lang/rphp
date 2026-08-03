@@ -10732,6 +10732,10 @@ struct NativeQuickLongStraightKernel {
     exit_target: QuickLongTarget,
     post_resume_ip: usize,
     operation_resume_ips: [usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_operation_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_condition_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_expected: [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_count: u8,
     mutable_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2],
     mutable_slot_count: u8,
 }
@@ -13135,17 +13139,22 @@ fn native_quick_long_straight_kernel(
     let mut operations =
         [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut operation_resume_ips = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_operation_indices = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_condition_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_expected = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_count = 0usize;
     let mut operation_count = 0usize;
     let mut has_materialized_arithmetic = false;
     let mut append_operation =
-        |operation: NativeStraightLongOperation, resume_ip: usize| -> Option<()> {
+        |operation: NativeStraightLongOperation, resume_ip: usize| -> Option<u8> {
             if operation_count == NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
                 return None;
             }
+            let index = operation_count as u8;
             operations[operation_count] = operation;
             operation_resume_ips[operation_count] = resume_ip;
             operation_count += 1;
-            Some(())
+            Some(index)
         };
     for (body_index, operation) in plan.ops[1..body_end].iter().copied().enumerate() {
         let plan_index = body_index + 1;
@@ -13297,6 +13306,31 @@ fn native_quick_long_straight_kernel(
                 has_materialized_arithmetic = true;
                 next_target
             }
+            QuickLongOp::TraceGuard {
+                kind,
+                lhs,
+                rhs,
+                expected,
+                condition_tmp: Some(condition_tmp),
+                next_target,
+                resume_ip,
+            } => {
+                let operation_index = append_operation(
+                    NativeStraightLongOperation::Guard {
+                        kind,
+                        lhs: NativeStraightLongConditionOperand::Source(lhs),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        expected,
+                    },
+                    resume_ip,
+                )?;
+                trace_guard_operation_indices[trace_guard_count] = operation_index;
+                trace_guard_condition_slots[trace_guard_count] =
+                    u8::try_from(condition_tmp).ok()?;
+                trace_guard_expected[trace_guard_count] = expected;
+                trace_guard_count += 1;
+                next_target
+            }
             _ => return None,
         };
         if next_target.op_index() != Some(plan_index + 1) {
@@ -13342,9 +13376,38 @@ fn native_quick_long_straight_kernel(
         exit_target,
         post_resume_ip,
         operation_resume_ips,
+        trace_guard_operation_indices,
+        trace_guard_condition_slots,
+        trace_guard_expected,
+        trace_guard_count: trace_guard_count as u8,
         mutable_slots,
         mutable_slot_count: mutable_slot_count as u8,
     })
+}
+
+#[inline(always)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn publish_native_quick_long_trace_guards(
+    kernel: NativeQuickLongStraightKernel,
+    slots: &mut [i64; 64],
+    dirty_bool_mask: &mut u64,
+    before_operation: Option<u8>,
+) {
+    for index in 0..kernel.trace_guard_count as usize {
+        if before_operation.is_some_and(|limit| {
+            kernel.trace_guard_operation_indices[index] >= limit
+        }) {
+            continue;
+        }
+        let slot = kernel.trace_guard_condition_slots[index] as usize;
+        slots[slot] = i64::from(kernel.trace_guard_expected[index]);
+        *dirty_bool_mask |= 1u64 << slot;
+    }
 }
 
 #[inline(never)]
@@ -13400,6 +13463,14 @@ unsafe fn run_native_quick_long_straight_kernel(
                 for index in 0..kernel.mutable_slot_count as usize {
                     slots[kernel.mutable_slots[index] as usize] = before_values[index];
                 }
+                if iterations != 0 {
+                    publish_native_quick_long_trace_guards(
+                        kernel,
+                        slots,
+                        &mut dirty_bool_mask,
+                        None,
+                    );
+                }
                 if let Some(slot) = kernel.header_condition_tmp {
                     slots[slot as usize] = 1;
                     dirty_bool_mask |= 1u64 << slot;
@@ -13439,6 +13510,14 @@ unsafe fn run_native_quick_long_straight_kernel(
 
         match result.outcome {
             NativeStraightLongLoopOutcome::Completed => {
+                if iterations != 0 {
+                    publish_native_quick_long_trace_guards(
+                        kernel,
+                        slots,
+                        &mut dirty_bool_mask,
+                        None,
+                    );
+                }
                 commit_quick_long_ops_slots(
                     slot_base,
                     slots,
@@ -13453,6 +13532,12 @@ unsafe fn run_native_quick_long_straight_kernel(
             NativeStraightLongLoopOutcome::ChunkExhausted => {
                 debug_assert_eq!(completed_in_chunk, NATIVE_LONG_ACCUMULATE_CHUNK);
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
+                    publish_native_quick_long_trace_guards(
+                        kernel,
+                        slots,
+                        &mut dirty_bool_mask,
+                        None,
+                    );
                     commit_quick_long_ops_slots(
                         slot_base,
                         slots,
@@ -13469,6 +13554,21 @@ unsafe fn run_native_quick_long_straight_kernel(
                     .failed_operation
                     .expect("operation side exit carries its operation index");
                 dirty_long_mask |= config.output_mask_before(failed_operation);
+                if iterations != 0 {
+                    publish_native_quick_long_trace_guards(
+                        kernel,
+                        slots,
+                        &mut dirty_bool_mask,
+                        None,
+                    );
+                } else {
+                    publish_native_quick_long_trace_guards(
+                        kernel,
+                        slots,
+                        &mut dirty_bool_mask,
+                        Some(failed_operation),
+                    );
+                }
                 commit_quick_long_ops_slots(
                     slot_base,
                     slots,
@@ -13483,6 +13583,12 @@ unsafe fn run_native_quick_long_straight_kernel(
             }
             NativeStraightLongLoopOutcome::IncrementOverflow => {
                 dirty_long_mask |= body_output_mask;
+                publish_native_quick_long_trace_guards(
+                    kernel,
+                    slots,
+                    &mut dirty_bool_mask,
+                    None,
+                );
                 commit_quick_long_ops_slots(
                     slot_base,
                     slots,
@@ -13751,6 +13857,39 @@ unsafe fn run_quick_long_ops_loop(
                     dirty_bool_mask |= 1u64 << slot;
                 }
                 if condition { next_target } else { false_target }
+            }
+            QuickLongOp::TraceGuard {
+                kind,
+                lhs,
+                rhs,
+                expected,
+                condition_tmp,
+                next_target,
+                resume_ip,
+            } => {
+                let condition = apply_scalar_long_condition(
+                    kind,
+                    quick_long_operand(&slots, lhs),
+                    quick_long_operand(&slots, rhs),
+                );
+                if condition != expected {
+                    string_state.commit();
+                    return Ok(deopt_quick_long_kernel(
+                        frame,
+                        op_array,
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        resume_ip,
+                        iterations,
+                    ));
+                }
+                if let Some(slot) = condition_tmp {
+                    slots[slot as usize] = i64::from(condition);
+                    dirty_bool_mask |= 1u64 << slot;
+                }
+                next_target
             }
             QuickLongOp::ModConst {
                 value,

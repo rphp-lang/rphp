@@ -1452,6 +1452,58 @@ guard. The direct scalar-call median moves from about 0.01324 s to 0.01287 s,
 and the nested function tree from 0.00779 s to 0.00747 s; both differences are
 normal favorable variance with identical output.
 
+General typed trace-guard checkpoint (2026-08-03): `QuickLongOps` now carries
+the same exact cold-edge contract instead of requiring every instruction in a
+closed mixed loop to have a typed implementation. A new `TraceGuard` accepts a
+strict Long comparison over guarded CV/TMP/literal operands, selects the
+forward conditional edge as the speculative hot edge, and leaves every
+skipped instruction in canonical bytecode. Other typed control-flow targets
+must still resolve to admitted operations, so no reachable fast edge can enter
+the skipped range accidentally.
+
+The general Rust executor commits dirty Long and Boolean slots, redirected
+string state, direct unique-array updates, object effects, and exact call
+accounting before resuming the original comparison. This was tested with one
+region containing a monomorphic method with a borrowed String argument,
+dynamic string-key hash replacement, an internal routing branch, and a taken
+cold `echo`. The update preceding the guard is visible exactly once and the
+loop safely re-enters its typed region afterward.
+
+Straight scalar `QuickLongOps` lowers the same operation to the shared native
+`Guard` ABI. Per-operation metadata records the original resume IP plus the
+condition TMP and expected value. On a side exit, only guards completed before
+the failed operation are materialized for the current iteration; successful
+completion, interrupt, or increment overflow publishes all completed guard
+conditions. Publication occurs only when control returns to the VM, avoiding
+per-chunk overhead on existing guard-free native loops. A taken-edge test uses
+two loop-carried variables and compares the just-updated second value, proving
+that prior native outputs are committed before canonical replay.
+
+Eight order-rotated `max-perf`, native-CPU runs of the new
+`bench_general_trace_guard_loop.php` produce identical
+`49999995000000:10000000` output. Medians are approximately 0.01066 s for RPHP
+JIT, 0.07446 s for RPHP without JIT, 0.29012 s for the preceding RPHP JIT,
+0.26121 s for the preceding RPHP no-JIT binary, 0.03070 s for PHP tracing JIT,
+and 0.05926 s for PHP without JIT. The general native region is about 27.22x
+faster than its preceding fallback and 2.88x faster than PHP tracing JIT. The
+Rust typed executor improves about 3.51x, although it remains approximately
+1.26x slower than PHP without JIT on this all-scalar shape.
+
+The independent `bench_mixed_trace_guard_loop.php` exercises the mixed path.
+Its eight-run medians are about 0.02920 s RPHP JIT, 0.02764 s RPHP without JIT,
+0.10269 s preceding RPHP JIT, 0.10366 s preceding RPHP no-JIT, 0.00966 s PHP
+tracing JIT, and 0.02868 s PHP without JIT, all with identical
+`250002000000:250002000000` output. General admission therefore improves the
+no-JIT mixed path about 3.75x and places it slightly ahead of PHP without JIT.
+The RPHP JIT build still executes this object/string/hash vocabulary in Rust
+and remains roughly 3.02x behind PHP tracing JIT, making native mixed-operation
+lowering the next concrete coverage gap.
+
+Twelve alternating regressions keep the existing guard-free binary loop flat
+at about 0.01393 s versus 0.01389 s. The specialized scalar-call trace region
+also remains flat at 0.01394 s versus 0.01391 s. Planner, mixed no-JIT, native
+updated-value side-exit, and direct native guard tests cover both executors.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of

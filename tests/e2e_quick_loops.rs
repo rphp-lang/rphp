@@ -1709,6 +1709,39 @@ echo $i;
 }
 
 #[test]
+fn quick_mixed_region_trace_guard_commits_state_before_taken_cold_edge() {
+    assert_eq!(
+        run_php(
+            "<?php
+class MixedGuardModel {
+    public function score(int $value, string $key): int {
+        return $value + strlen($key);
+    }
+}
+$model = new MixedGuardModel();
+$values = ['left' => 0, 'right' => 0];
+$key = 'left';
+$needle = 73;
+for ($i = 0; $i < 100; $i++) {
+    if (($i % 2) == 0) {
+        $key = 'right';
+    } else {
+        $key = 'left';
+    }
+    $score = $model->score($i, $key);
+    $values[$key] = $values[$key] + $score;
+    if ($i === $needle) {
+        echo 'hit:' . $i . '|';
+    }
+}
+echo $values['left'] . ':' . $values['right'] . ':' . $i;
+"
+        ),
+        "hit:73|2700:2700:100"
+    );
+}
+
+#[test]
 fn quick_hash_array_tracks_string_key_selected_from_cvs() {
     assert_eq!(
         run_php(

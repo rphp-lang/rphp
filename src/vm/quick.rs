@@ -387,6 +387,18 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Speculatively take one structurally selected hot edge while leaving the
+    /// skipped arbitrary PHP range in canonical bytecode. A mismatch resumes
+    /// the original comparison before any cold instruction is skipped.
+    TraceGuard {
+        kind: ScalarLongConditionKind,
+        lhs: QuickLongOperand,
+        rhs: QuickLongOperand,
+        expected: bool,
+        condition_tmp: Option<u16>,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     ModConst {
         value: u16,
         divisor: i64,
@@ -606,6 +618,7 @@ impl QuickLongOp {
                 resolve(next_target)
             }
             Self::ModConst { next_target, .. }
+            | Self::TraceGuard { next_target, .. }
             | Self::FetchArrayLong { next_target, .. }
             | Self::StoreArrayLong { next_target, .. }
             | Self::ArrayPushLong { next_target, .. }
@@ -2457,6 +2470,18 @@ fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
                 straight_region_read(&mut inputs, defined, value)?;
                 straight_region_write(&mut defined, result)?;
             }
+            QuickLongOp::TraceGuard {
+                lhs,
+                rhs,
+                condition_tmp,
+                ..
+            } => {
+                straight_region_read_operand(&mut inputs, defined, lhs)?;
+                straight_region_read_operand(&mut inputs, defined, rhs)?;
+                if let Some(condition_tmp) = condition_tmp {
+                    straight_region_write(&mut defined, condition_tmp)?;
+                }
+            }
             QuickLongOp::Binary {
                 lhs, rhs, result, ..
             } => {
@@ -3229,6 +3254,65 @@ fn detect_long_ops_region_inner(
                 ip += 2;
                 op
             }
+            OpCode::IsIdentical | OpCode::IsNotIdentical => {
+                if !closed_loop {
+                    return None;
+                }
+                let lhs = quick_long_operand(
+                    op_array,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?;
+                let rhs = quick_long_operand(
+                    op_array,
+                    instruction.op2_type,
+                    instruction.op2,
+                )?;
+                let branch = *op_array.instructions.get(ip + 1)?;
+                if instruction.result_type != OpType::Tmp
+                    || branch.op1_type != OpType::Tmp
+                    || branch.op1 != instruction.result
+                    || branch.op2_type != OpType::Unused
+                {
+                    return None;
+                }
+                let expected = match branch.opcode {
+                    OpCode::JmpZ => false,
+                    OpCode::JmpNZ => true,
+                    _ => return None,
+                };
+                let target_ip = branch.op2 as usize;
+                // The selected edge must skip at least one cold instruction
+                // and rejoin this closed loop before its baseline backedge.
+                if target_ip <= ip + 2 || target_ip >= backedge_ip {
+                    return None;
+                }
+                for operand in [lhs, rhs] {
+                    if let QuickLongOperand::Slot(slot) = operand {
+                        add_mask_slot(&mut long_input_mask, slot, total_slots)?;
+                    }
+                }
+                add_mask_slot(
+                    &mut bool_output_mask,
+                    instruction.result,
+                    total_slots,
+                )?;
+                let resume_ip = ip;
+                ip = target_ip;
+                QuickLongOp::TraceGuard {
+                    kind: match instruction.opcode {
+                        OpCode::IsIdentical => ScalarLongConditionKind::Equal,
+                        OpCode::IsNotIdentical => ScalarLongConditionKind::NotEqual,
+                        _ => unreachable!(),
+                    },
+                    lhs,
+                    rhs,
+                    expected,
+                    condition_tmp: Some(instruction.result),
+                    next_target: QuickLongTarget::unresolved(target_ip)?,
+                    resume_ip,
+                }
+            }
             OpCode::Add
                 if long_slot(instruction.op1_type, instruction.op1).is_none()
                     || long_slot(instruction.op2_type, instruction.op2).is_none() =>
@@ -3884,6 +3968,7 @@ fn detect_long_ops_region_inner(
             QuickLongOp::BranchUnlessLt { resume_ip, .. }
             | QuickLongOp::BranchUnlessEq { resume_ip, .. }
             | QuickLongOp::BranchUnlessLe { resume_ip, .. }
+            | QuickLongOp::TraceGuard { resume_ip, .. }
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
             | QuickLongOp::StoreArrayLong { resume_ip, .. }
@@ -3961,6 +4046,7 @@ fn detect_long_ops_region_inner(
             QuickLongOp::BranchUnlessLt { .. }
                 | QuickLongOp::BranchUnlessEq { .. }
                 | QuickLongOp::BranchUnlessLe { .. }
+                | QuickLongOp::TraceGuard { .. }
         )
     });
     if closed_loop {
@@ -5297,12 +5383,14 @@ $mixer = new Mixer();
 $values = ['left' => 0, 'right' => 0];
 $key = 'left';
 $accepted = 0;
+$needle = -1;
 for ($i = 0; $i < 100; $i++) {
     if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; }
     $score = $mixer->score($i, $key);
     $values[$key] = $values[$key] + $score;
     $isAccepted = $mixer->accepted($score, $i);
     $accepted = $accepted + $isAccepted;
+    if ($i === $needle) { echo 'never'; }
 }
 ",
         );
@@ -5324,7 +5412,53 @@ for ($i = 0; $i < 100; $i++) {
             .ops
             .iter()
             .any(|operation| matches!(operation, QuickLongOp::Assign { .. })));
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::TraceGuard {
+                kind: ScalarLongConditionKind::Equal,
+                expected: false,
+                ..
+            }
+        )));
         assert!(plan.array_update_fusions.iter().any(Option::is_some));
+    }
+
+    #[test]
+    fn detects_strict_cold_edge_inside_general_long_ops_loop() {
+        let plan = long_ops_plan(
+            "<?php
+$needle = -1;
+$sum = 0;
+$count = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum = $sum + $i;
+    $count = $count + 1;
+    if ($i === $needle) {
+        echo 'never';
+    }
+}
+",
+        );
+        let guard_index = plan
+            .ops
+            .iter()
+            .position(|operation| matches!(operation, QuickLongOp::TraceGuard { .. }))
+            .expect("strict cold edge should remain inside the general typed loop");
+        assert!(matches!(
+            plan.ops[guard_index],
+            QuickLongOp::TraceGuard {
+                kind: ScalarLongConditionKind::Equal,
+                expected: false,
+                next_target,
+                resume_ip,
+                ..
+            } if next_target.op_index() == Some(guard_index + 1)
+                && resume_ip < plan.backedge_ip
+        ));
+        assert!(matches!(
+            plan.ops.last(),
+            Some(QuickLongOp::PostIncLoopLt { .. })
+        ));
     }
 
     #[test]
