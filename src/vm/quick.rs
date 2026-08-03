@@ -648,6 +648,12 @@ pub struct QuickLongOpsLoop {
     pub string_cache_capacity: u8,
     pub involved_mask: u64,
     pub straight_array_kernel: Option<QuickStraightArrayRegionKernel>,
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    native_jit: crate::jit::QuickLongOpsJitCache,
 }
 
 impl QuickLongOpsLoop {
@@ -657,6 +663,16 @@ impl QuickLongOpsLoop {
             Some(index) => self.op_ips.get(index).copied().map(|ip| ip as usize),
             None => target.exit_ip(),
         }
+    }
+
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    #[inline(always)]
+    pub fn native_jit(&self) -> &crate::jit::QuickLongOpsJitCache {
+        &self.native_jit
     }
 }
 
@@ -3906,6 +3922,12 @@ fn detect_long_ops_region_inner(
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
         straight_array_kernel: None,
+        #[cfg(all(
+            feature = "jit-prototype",
+            target_arch = "aarch64",
+            target_os = "macos"
+        ))]
+        native_jit: crate::jit::QuickLongOpsJitCache::new(),
     };
     plan.straight_array_kernel = detect_straight_array_region_kernel(&plan);
     Some(plan)

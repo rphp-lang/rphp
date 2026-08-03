@@ -18,8 +18,10 @@ mod aarch64;
     target_os = "macos"
 ))]
 pub use aarch64::{
-    Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledQuickLongAccumulateLoop,
-    CompiledScalarLongProgram, NativeLongAccumulateState, QuickLongAccumulateJitCache,
-    QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome, SCALAR_LONG_JIT_HOT_THRESHOLD,
-    ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
+    Arm64Assembler, Arm64Register, CompiledAddMultiply,
+    CompiledQuickLongAccumulateLoop, CompiledQuickLongConditionalAccumulateLoop,
+    CompiledScalarLongProgram, NativeConditionalLongLoopConfig, NativeLongAccumulateState,
+    QuickLongAccumulateJitCache, QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
+    QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache,
+    ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
 };

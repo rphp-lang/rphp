@@ -1,5 +1,5 @@
 use crate::vm::function::{ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongSource};
-use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongTerm};
+use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
 use std::cell::{Cell, OnceCell};
 use std::ffi::{c_int, c_void};
 use std::fmt;
@@ -438,6 +438,7 @@ pub enum QuickLongAccumulateJitOutcome {
 
 #[derive(Debug)]
 pub enum QuickLongAccumulateJitError {
+    InvalidProgram(&'static str),
     ZeroIterationBudget,
     BranchOutOfRange,
     Memory(io::Error),
@@ -447,6 +448,9 @@ pub enum QuickLongAccumulateJitError {
 impl fmt::Display for QuickLongAccumulateJitError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Self::InvalidProgram(reason) => {
+                write!(formatter, "invalid native Long loop: {reason}")
+            }
             Self::ZeroIterationBudget => {
                 formatter.write_str("native loop iteration budget must be non-zero")
             }
@@ -756,6 +760,341 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
             .debug_struct("QuickLongAccumulateJitCache")
+            .field("compiled", &self.is_compiled())
+            .field("native_entries", &self.native_entries())
+            .field("native_chunks", &self.native_chunks())
+            .field("side_exits", &self.side_exits())
+            .finish()
+    }
+}
+
+/// Compile-time description of the first general `QuickLongOpsLoop` subset.
+/// Slot operands are loop-invariant; only the induction and accumulator slots
+/// are mutated by native code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeConditionalLongLoopConfig {
+    pub induction_slot: u16,
+    pub bound: QuickLongOperand,
+    pub cutoff: QuickLongOperand,
+    pub accumulator_slot: u16,
+}
+
+/// Whole-region ARM64 lowering for a conditional accumulator expressed by the
+/// general typed loop IR rather than `QuickLongAccumulateLoop`:
+///
+/// ```text
+/// while induction < bound {
+///     if induction < cutoff {
+///         accumulator = checked_add(accumulator, induction)
+///     }
+///     induction = checked_add(induction, 1)
+/// }
+/// ```
+pub struct CompiledQuickLongConditionalAccumulateLoop {
+    memory: ExecutableMemory,
+    code: Box<[u8]>,
+    config: NativeConditionalLongLoopConfig,
+}
+
+impl CompiledQuickLongConditionalAccumulateLoop {
+    pub fn compile(
+        config: NativeConditionalLongLoopConfig,
+    ) -> Result<Self, QuickLongAccumulateJitError> {
+        validate_conditional_long_loop_config(config)?;
+
+        let mut assembler = Arm64Assembler::new();
+        let induction = Arm64Register::from_code(2);
+        let bound = Arm64Register::from_code(3);
+        let cutoff = Arm64Register::from_code(4);
+        let accumulator = Arm64Register::from_code(5);
+        let one = Arm64Register::from_code(6);
+        let checked_result = Arm64Register::from_code(7);
+
+        assembler.load_u64(
+            induction,
+            Arm64Register::X0,
+            long_slot_offset(config.induction_slot),
+        );
+        emit_native_long_operand(&mut assembler, config.bound, bound);
+        emit_native_long_operand(&mut assembler, config.cutoff, cutoff);
+        assembler.load_u64(
+            accumulator,
+            Arm64Register::X0,
+            long_slot_offset(config.accumulator_slot),
+        );
+        assembler.move_immediate(one, 1);
+
+        let loop_word = assembler.word_count();
+        assembler.compare_registers(induction, bound);
+        let completed_branch = assembler
+            .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+
+        assembler.compare_registers(induction, cutoff);
+        let skip_add_branch = assembler
+            .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+        assembler.add_register_checked(checked_result, accumulator, induction);
+        let sum_overflow_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+        assembler.move_register(accumulator, checked_result);
+
+        let increment_word = assembler.word_count();
+        assembler.add_register_checked(checked_result, induction, one);
+        let increment_overflow_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+        assembler.move_register(induction, checked_result);
+        assembler.subtract_register_checked(
+            Arm64Register::X1,
+            Arm64Register::X1,
+            one,
+        );
+        let loop_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED),
+        );
+        assembler.ret();
+
+        let completed_word = assembler.word_count();
+        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
+        );
+        assembler.ret();
+
+        let sum_overflow_word = assembler.word_count();
+        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW),
+        );
+        assembler.ret();
+
+        let increment_overflow_word = assembler.word_count();
+        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW),
+        );
+        assembler.ret();
+
+        for (branch, target) in [
+            (skip_add_branch, increment_word),
+            (completed_branch, completed_word),
+            (sum_overflow_branch, sum_overflow_word),
+            (increment_overflow_branch, increment_overflow_word),
+            (loop_branch, loop_word),
+        ] {
+            if !assembler.patch_conditional_branch(branch, target) {
+                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+        }
+
+        let code = assembler.finish().into_boxed_slice();
+        let memory = ExecutableMemory::from_code(&code)?;
+        Ok(Self {
+            memory,
+            code,
+            config,
+        })
+    }
+
+    pub fn call(
+        &self,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+        if iteration_budget == 0 {
+            return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
+        }
+        type NativeFunction = unsafe extern "C" fn(*mut i64, u64) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
+        let status = unsafe { function(slots.as_mut_ptr(), iteration_budget) };
+        match status {
+            NATIVE_LONG_ACCUMULATE_COMPLETED => {
+                Ok(QuickLongAccumulateJitOutcome::Completed)
+            }
+            NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
+                Ok(QuickLongAccumulateJitOutcome::ChunkExhausted)
+            }
+            NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => {
+                Ok(QuickLongAccumulateJitOutcome::SumOverflow)
+            }
+            NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW => {
+                Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
+            }
+            status => Err(QuickLongAccumulateJitError::InvalidNativeStatus(status)),
+        }
+    }
+
+    pub fn config(&self) -> NativeConditionalLongLoopConfig {
+        self.config
+    }
+
+    pub fn code(&self) -> &[u8] {
+        &self.code
+    }
+}
+
+fn validate_conditional_long_loop_config(
+    config: NativeConditionalLongLoopConfig,
+) -> Result<(), QuickLongAccumulateJitError> {
+    if config.induction_slot >= 64 || config.accumulator_slot >= 64 {
+        return Err(QuickLongAccumulateJitError::InvalidProgram(
+            "mutable slot is outside the native slot ABI",
+        ));
+    }
+    if config.induction_slot == config.accumulator_slot {
+        return Err(QuickLongAccumulateJitError::InvalidProgram(
+            "induction and accumulator slots must be distinct",
+        ));
+    }
+    for operand in [config.bound, config.cutoff] {
+        if let QuickLongOperand::Slot(slot) = operand {
+            if slot >= 64 {
+                return Err(QuickLongAccumulateJitError::InvalidProgram(
+                    "invariant operand slot is outside the native slot ABI",
+                ));
+            }
+            if slot == config.induction_slot || slot == config.accumulator_slot {
+                return Err(QuickLongAccumulateJitError::InvalidProgram(
+                    "an invariant operand aliases mutable loop state",
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+#[inline]
+fn long_slot_offset(slot: u16) -> u16 {
+    debug_assert!(slot < 64);
+    slot * 8
+}
+
+fn emit_native_long_operand(
+    assembler: &mut Arm64Assembler,
+    operand: QuickLongOperand,
+    destination: Arm64Register,
+) {
+    match operand {
+        QuickLongOperand::Slot(slot) => assembler.load_u64(
+            destination,
+            Arm64Register::X0,
+            long_slot_offset(slot),
+        ),
+        QuickLongOperand::Const(value) => assembler.move_immediate(destination, value),
+    }
+}
+
+fn emit_conditional_long_loop_slots(
+    assembler: &mut Arm64Assembler,
+    config: NativeConditionalLongLoopConfig,
+    induction: Arm64Register,
+    accumulator: Arm64Register,
+) {
+    assembler.store_u64(
+        induction,
+        Arm64Register::X0,
+        long_slot_offset(config.induction_slot),
+    );
+    assembler.store_u64(
+        accumulator,
+        Arm64Register::X0,
+        long_slot_offset(config.accumulator_slot),
+    );
+}
+
+pub struct QuickLongOpsJitCache {
+    compiled: OnceCell<Option<CompiledQuickLongConditionalAccumulateLoop>>,
+    native_entries: Cell<u64>,
+    native_chunks: Cell<u64>,
+    side_exits: Cell<u64>,
+}
+
+impl QuickLongOpsJitCache {
+    pub const fn new() -> Self {
+        Self {
+            compiled: OnceCell::new(),
+            native_entries: Cell::new(0),
+            native_chunks: Cell::new(0),
+            side_exits: Cell::new(0),
+        }
+    }
+
+    pub fn dispatch_chunk(
+        &self,
+        config: NativeConditionalLongLoopConfig,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+        let Some(program) = self
+            .compiled
+            .get_or_init(|| {
+                CompiledQuickLongConditionalAccumulateLoop::compile(config).ok()
+            })
+            .as_ref()
+        else {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "conditional loop could not be compiled",
+            ));
+        };
+        debug_assert_eq!(program.config(), config);
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(1));
+        let outcome = program.call(slots, iteration_budget);
+        if matches!(
+            outcome,
+            Ok(QuickLongAccumulateJitOutcome::SumOverflow)
+                | Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
+                | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        outcome
+    }
+
+    pub fn record_region_entry(&self) {
+        self.native_entries
+            .set(self.native_entries.get().saturating_add(1));
+    }
+
+    pub fn is_compiled(&self) -> bool {
+        matches!(self.compiled.get(), Some(Some(_)))
+    }
+
+    pub fn native_entries(&self) -> u64 {
+        self.native_entries.get()
+    }
+
+    pub fn native_chunks(&self) -> u64 {
+        self.native_chunks.get()
+    }
+
+    pub fn side_exits(&self) -> u64 {
+        self.side_exits.get()
+    }
+}
+
+impl Default for QuickLongOpsJitCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for QuickLongOpsJitCache {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for QuickLongOpsJitCache {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QuickLongOpsJitCache")
             .field("compiled", &self.is_compiled())
             .field("native_entries", &self.native_entries())
             .field("native_chunks", &self.native_chunks())

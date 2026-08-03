@@ -1079,6 +1079,37 @@ Native execution is therefore about 2.83x faster than RPHP's no-JIT region and
 is to move this chunk/status ABI from these two handwritten recurrence shapes
 into the more general typed loop IR.
 
+General typed-loop IR checkpoint (2026-08-03): the first
+`QuickLongOpsLoop` subset now lowers through the same native-region model. It
+accepts a validated `<` loop header, an inner `<` condition, one checked
+conditional accumulator add, and the fused checked post-increment/backedge.
+Unlike the recurrence-specific three-Long ABI, this lowering addresses the
+existing 64-slot unboxed Long state directly. Bound and cutoff operands are
+loaded or materialized once before the native backedge, while induction and
+accumulator stay in registers for each 32-iteration chunk.
+
+The native block writes only induction and accumulator state. The VM maps its
+status back through the original `QuickLongOpsLoop` metadata, reconstructs only
+the TMP/CV outputs that were actually defined, maintains the Long/Bool dirty
+masks, and resumes `add_resume_ip` or `post_resume_ip` on checked overflow. An
+exact chunk-boundary completion is normalized to the exit before interrupt
+handling. A never-taken inner add therefore does not fabricate its result TMP,
+and an invalid or failed native chunk can be discarded at its last published
+boundary.
+
+Direct tests cover slot operands, chunks, skipped additions, completion,
+transactional add overflow, and invalid aliasing. Real PHP tests prove native
+entry, canonical overflow replay, a never-taken body, and exact chunk-boundary
+completion. The focused ARM64 suite now contains 21 tests.
+
+Seven interleaved runs of `bench_branch_loop.php` record medians of 0.02250 s
+for the existing Rust quick-IR kernel, 0.00702 s for the native IR region, and
+0.02842 s for local PHP 8.4.12 without JIT, all producing
+`12499997500000`. This first general IR lowering is about 3.21x faster than
+RPHP without JIT and 4.05x faster than PHP. The next useful IR operation is
+the modulo/equality condition already represented by the same conditional
+kernel, followed by general straight-line checked `BinaryAssign` bodies.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

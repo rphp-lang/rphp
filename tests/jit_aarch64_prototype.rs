@@ -10,7 +10,8 @@ use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
 use rphp::jit::{
     Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledQuickLongAccumulateLoop,
-    CompiledScalarLongProgram, NativeLongAccumulateState, QuickLongAccumulateJitError,
+    CompiledQuickLongConditionalAccumulateLoop, CompiledScalarLongProgram,
+    NativeConditionalLongLoopConfig, NativeLongAccumulateState, QuickLongAccumulateJitError,
     QuickLongAccumulateJitOutcome, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch,
     ScalarLongJitError, ScalarLongJitOutcome,
 };
@@ -22,6 +23,7 @@ use rphp::vm::function::{
     ScalarLongSource,
 };
 use rphp::vm::planner::BlockPlan;
+use rphp::vm::quick::QuickLongOperand;
 
 fn scalar_plan(
     public_args: u8,
@@ -613,5 +615,164 @@ fn native_constant_term_overflow_resumes_canonical_term_instruction() {
         .expect("plusTwo should have a constant-term accumulate plan");
     assert!(plan.native_jit().is_compiled());
     assert!(plan.native_jit().native_entries() >= 2);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn general_conditional_loop_ir_runs_as_a_native_chunked_region() {
+    let config = NativeConditionalLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        cutoff: QuickLongOperand::Slot(2),
+        accumulator_slot: 3,
+    };
+    let program = CompiledQuickLongConditionalAccumulateLoop::compile(config)
+        .expect("conditional Long loop should lower");
+    let mut slots = [0_i64; 64];
+    slots[0] = 0;
+    slots[1] = 100;
+    slots[2] = 50;
+    slots[3] = 0;
+
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::ChunkExhausted
+    );
+    assert_eq!(slots[0], 32);
+    assert_eq!(slots[3], 496);
+    assert_eq!(
+        program.call(&mut slots, 64).unwrap(),
+        QuickLongAccumulateJitOutcome::ChunkExhausted
+    );
+    assert_eq!(slots[0], 96);
+    assert_eq!(slots[3], 1_225);
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::Completed
+    );
+    assert_eq!(slots[0], 100);
+    assert_eq!(slots[3], 1_225);
+    assert_eq!(program.config(), config);
+    assert!(!program.code().is_empty());
+
+    slots[0] = 1;
+    slots[1] = 2;
+    slots[2] = 2;
+    slots[3] = i64::MAX;
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::SumOverflow
+    );
+    assert_eq!(slots[0], 1);
+    assert_eq!(slots[3], i64::MAX);
+
+    let aliased = NativeConditionalLongLoopConfig {
+        accumulator_slot: 0,
+        ..config
+    };
+    assert!(matches!(
+        CompiledQuickLongConditionalAccumulateLoop::compile(aliased),
+        Err(QuickLongAccumulateJitError::InvalidProgram(_))
+    ));
+}
+
+#[test]
+fn real_php_branch_loop_enters_general_native_ir_region() {
+    let source = "<?php $sum = 0; $bound = 100000; $cutoff = 50000; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum += $i; } } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:1249975000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the general Long loop IR");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn general_native_ir_handles_never_taken_add_and_exact_chunk_completion() {
+    let source = "<?php $sum = 7; $bound = 65; $cutoff = 0; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum += $i; } } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "65:7"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the general Long loop IR");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn general_native_ir_sum_overflow_resumes_canonical_add() {
+    let source = "<?php function conditionalOverflow(int $bound, int $cutoff): int { $sum = PHP_INT_MAX - 1000; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum += $i; } } return $sum; } try { conditionalOverflow(60, 60); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("conditionalOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled conditionalOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("conditionalOverflow should use general Long loop IR");
+    assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
