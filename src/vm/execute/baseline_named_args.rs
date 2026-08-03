@@ -1,0 +1,137 @@
+// Kept in the execute module through include! so this structural split does not change visibility or code generation.
+
+#[inline(never)]
+fn op_send_named<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    // Named argument: op1=value, op2=CONST name string
+    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    let name = name_val.as_str().unwrap_or("");
+    let call = unsafe { (*frame).call };
+    debug_assert!(!call.is_null());
+    let func_common = unsafe { &*(*call).func };
+
+    // Find the parameter position by name
+    let mut resolved_idx: Option<u32> = None;
+    for (idx, pname) in func_common.sig.param_names.iter().enumerate() {
+        if pname == name {
+            resolved_idx = Some(idx as u32);
+            break;
+        }
+    }
+
+    // Determine if the resolved index targets the variadic parameter itself.
+    let public_max = func_common.sig.public_arity();
+    let is_variadic_target = func_common.sig.is_variadic && match resolved_idx {
+        Some(idx) => idx >= public_max,
+        None => true,
+    };
+
+    if is_variadic_target {
+        if !func_common.sig.is_variadic
+            || func_common.fn_type == crate::vm::function::FunctionType::Internal
+        {
+            let err = make_error_value("Error", &format!(
+                "Unknown named parameter ${}", name
+            ));
+            match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+            }
+        }
+
+        // Duplicate check: scan the pending buffer for this name
+        let call_key = call as usize;
+        if let Some(existing) = eg.pending_named_variadic.get(&call_key) {
+            if existing.iter().any(|(n, _)| n == name) {
+                let err = make_error_value("Error", &format!(
+                    "Named parameter ${} overwrites previous argument", name
+                ));
+                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                    ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                    ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                }
+            }
+        }
+
+        let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+        let cloned = val.clone();
+        eg.pending_named_variadic
+            .entry(call_key)
+            .or_insert_with(Vec::new)
+            .push((name.to_string(), cloned));
+        // This named arg doesn't occupy a CV slot, so decrement
+        // num_args so DoFcall's positional variadic count is correct.
+        unsafe {
+            if (*call).num_args > 0 {
+                (*call).num_args -= 1;
+            }
+        }
+    } else {
+        // Mark frame as having named args — FastScalar uses this to skip holes check.
+        unsafe { (*call).named_args_used = true; }
+        match resolved_idx {
+            Some(idx) => {
+                let cv_idx = func_common.sig.param_cv_index(idx);
+
+                // Check for duplicate: if CV slot already has a non-undef value,
+                // the parameter was already passed (positionally or by a prior named arg).
+                let existing = unsafe { &*(*call).cv(cv_idx) };
+                if !existing.is_undef() {
+                    let err = make_error_value("Error", &format!(
+                        "Named parameter ${} overwrites previous argument", name
+                    ));
+                    match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                        ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                        ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                    }
+                }
+
+                let is_ref = func_common.sig.is_param_by_ref(idx);
+
+                if is_ref && opline.op1_type == OpType::Cv {
+                    // By-reference: same logic as SendRef
+                    let caller_cv_ptr = unsafe {
+                        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                        let raw_ptr = base.add(opline.op1 as usize);
+                        if (*raw_ptr).is_reference() {
+                            (*raw_ptr).as_ref_ptr()
+                        } else {
+                            raw_ptr
+                        }
+                    };
+                    let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
+                } else {
+                    // By-value: same logic as SendVal
+                    let val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+                    let cloned = val.clone();
+                    let arg_slot = unsafe { (*call).cv_mut(cv_idx) };
+                    unsafe { frame_slot_init(call, arg_slot as *mut Value, cloned) };
+                }
+
+                // Update num_args to cover this position
+                let public_pos = idx + 1; // 1-based count
+                unsafe {
+                    if (*call).num_args < public_pos {
+                        (*call).num_args = public_pos;
+                    }
+                }
+            }
+            None => {
+                let err = make_error_value("Error", &format!(
+                    "Unknown named parameter ${}", name
+                ));
+                match unsafe { cleanup_call_and_throw(eg, frame, call, err) } {
+                    ThrowResult::Handled(nf, no) => { return Ok(ColdResult::NewFrame(nf, no)); }
+                    ThrowResult::Unhandled(t) => { return Ok(ColdResult::Unhandled(t)); }
+                }
+            }
+        }
+    }
+    Ok(ColdResult::Done)
+}
+
