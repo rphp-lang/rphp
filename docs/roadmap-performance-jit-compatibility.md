@@ -1647,8 +1647,9 @@ A separate 21-run four-mode batch, after verifying PHP reports tracing JIT as
 `enabled:on`, records RPHP JIT/PHP tracing-JIT medians of 0.00535/0.05960 s,
 0.00533/0.05788 s, 0.00275/0.01066 s and 0.00387/0.01255 s for untyped order,
 typed order, untyped ledger and typed ledger respectively. RPHP without JIT
-also remains slightly ahead of PHP without JIT in all four workloads in that
-batch. The checkpoint passes 109 core, 108 type-hint, 107 quick-loop and 67
+remains slightly ahead of PHP without JIT in untyped order and both ledger
+workloads; typed order is approximately 3.9 percent slower. The checkpoint
+passes 109 core, 108 type-hint, 107 quick-loop and 67
 ARM64/JIT tests, including both complete corpus variants, rebinding one cached
 program to distinct activation objects, and a deliberate mid-method property
 overflow with exactly one native side exit.
