@@ -4,4 +4,5 @@
 .idea
 docs/*
 !docs/roadmap-performance-jit-compatibility.md
+!docs/roadmap-runtime-architecture.md
 inbox/

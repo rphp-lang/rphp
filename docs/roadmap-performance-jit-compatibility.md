@@ -15,6 +15,12 @@ The project does not need to preserve the Zend C ABI. That freedom should be
 used deliberately for compact values, a purpose-built call ABI, frame elision,
 inline caches, typed execution plans, and precise deoptimization.
 
+Source-architecture limits and the bounded post-JIT coroutine branch are
+specified separately in
+[the runtime architecture roadmap](roadmap-runtime-architecture.md). They are
+performance constraints, not cleanup work that may silently add abstraction
+cost to the executor.
+
 ## Non-negotiable correctness contract
 
 1. Baseline bytecode is the semantic source of truth.
@@ -1674,6 +1680,28 @@ This is not a prerequisite for the minimal JIT. Its purpose is to remove warmup
 and compilation latency for long-lived production deployments. A later build
 mode may package the same artifact with the RPHP runtime as a standalone
 executable, without requiring an external compiler backend or package.
+
+## Phase 4.5: bounded coroutine architecture branch
+
+After the minimal typed-region JIT is stable, pause feature expansion briefly
+to prove a pay-for-use coroutine substrate before compatibility work makes
+frame ownership harder to change. The target is Go-like cheap logical tasks
+and context hand-off: dormant execution owns lazy VM stack segments, while a
+switch exchanges active context pointers in O(1) and never copies a frame
+chain or OS stack.
+
+Programs that do not create coroutines must retain the current frame ABI, add
+no allocation and regress by no more than one percent. Compile-time
+`may_suspend` propagation keeps ordinary calls and native regions free of a
+coroutine poll. Known suspension points end a JIT region through an exact side
+exit until explicit spill maps are proven. The first scheduler is cooperative
+and single-threaded; readiness I/O, channels and optional M:N work stealing are
+separate later milestones.
+
+This phase is deliberately short and gated by measurements. The detailed
+context model, milestones, correctness requirements and the initial 150 ns
+internal hand-off target are maintained in
+[the runtime architecture roadmap](roadmap-runtime-architecture.md).
 
 ## Phase 5: compatibility breadth and production use
 

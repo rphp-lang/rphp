@@ -1,0 +1,172 @@
+# RPHP runtime architecture and coroutine roadmap
+
+This roadmap protects two properties at the same time: the runtime must remain
+easy to reason about as its supported PHP surface grows, and source-level
+cleanup must not reintroduce abstraction costs into already-proven hot paths.
+Refactoring and coroutine work therefore use the same rule as performance
+work: preserve canonical PHP execution, measure before and after, and keep the
+fast path allocation-free unless the feature itself requires an allocation.
+
+## Structural refactoring track
+
+At the start of this track `src/vm/execute.rs` had 21,595 lines, including an
+approximately 1,630-line `NativeMixedBuildState` implementation. Other large
+boundaries are the roughly 3,300-line `execute_ex` dispatch function, the
+roughly 3,100-line `Compiler` implementation, the 5,500-line quick-IR module,
+and the approximately 1,100-line ARM64 straight-region compiler. These sizes
+make review and ownership harder even when runtime behavior is correct.
+
+The target is not small files at any cost. The target is one responsibility
+per source unit, explicit data flow, and no new dynamic dispatch, allocation,
+reference counting, or unpredictable branch in a hot loop merely to improve
+source layout.
+
+### Refactoring rules
+
+- Start with codegen-neutral physical splits. `include!` may keep code in the
+  original Rust module while responsibilities are separated and private
+  interfaces are still changing.
+- Move to real modules only after the shared inputs and outputs are narrow and
+  stable. Visibility should be reduced deliberately rather than widening most
+  runtime internals to `pub(crate)` for convenience.
+- Prefer plain data and free functions over a new trait hierarchy. Trait-object
+  dispatch is not allowed in an opcode, quick-loop, or generated-code hot path.
+- Do not move canonical fallback semantics into a JIT-specific module. Native
+  lowering may consume proven IR, but the baseline bytecode executor remains
+  authoritative.
+- Every structural commit must pass default, no-default-feature, quick-loop,
+  type-hint, corpus and ARM64/JIT tests applicable to the moved code.
+- Performance-sensitive splits require an A/B release build. Existing corpus
+  and holdout medians should remain within normal run variance; unexpected
+  movement is investigated before the refactor is accepted.
+
+Source units should normally remain below about 2,000 lines and one manually
+maintained implementation or function below about 500 lines. Larger units are
+allowed only for a measured hot dispatch body or generated/mechanical tables,
+and should carry a short explanation of why another boundary would cost more
+than it clarifies.
+
+### Refactoring sequence
+
+1. **Native mixed lowering.** Split operation/catalog/call bookkeeping,
+   virtual object-array lowering, scalar/property lowering, and composed typed
+   lowering. Keep all pieces in the execute module initially so visibility and
+   code generation do not change. This first physical split is complete.
+2. **Quick runtime.** Separate activation state, String state, array contexts,
+   object/method resolution, native admission, native execution and canonical
+   deoptimization. The quick-loop dispatcher should orchestrate these pieces,
+   not own every implementation.
+3. **Baseline opcode dispatch.** Group cold opcode helpers by calls/objects,
+   arrays/iteration, exceptions, generators and scalar operations. Keep the
+   central dispatch loop inlinable; source extraction must not turn every
+   opcode into an unconditional Rust function call.
+4. **Quick IR and planning.** Separate stable IR/data definitions from pattern
+   recognition and from runtime execution. Compiler proofs must not depend on
+   executor state, and native lowering must not inspect PHP source names.
+5. **Compiler.** Split declaration/type facts, class/method compilation,
+   function bodies, expressions, control flow and call lowering around a small
+   shared compilation context.
+6. **Native backend.** Separate ARM64 encoding, executable-memory ownership,
+   IR validation/liveness, straight-region emission and compiled-code caches.
+   This also establishes the boundary needed by a future x86-64 backend.
+
+After each sequence item, update this document with resulting module sizes and
+any boundary that intentionally stayed large for performance reasons.
+
+First checkpoint (2026-08-03): `NativeMixedBuildState` is physically split
+into core/object (441 lines), virtual object-array (681), scalar/property (360)
+and composed typed (175) lowering units. They remain in the original execute
+module through conditional `include!`, reducing `execute.rs` to 19,965 lines
+without widening private APIs. The native-CPU `max-perf` binary retains exactly
+the same byte size. In 101 order-randomized A/B runs, four corpus workloads
+move between -0.16 and +0.20 percent and the independent routing holdout moves
+-0.48 percent, with identical output. This is treated as measurement noise and
+establishes the process for the remaining structural slices.
+
+## Post-JIT coroutine branch
+
+After the minimal typed-region JIT is stable and before broad compatibility
+work, take a short, bounded architecture branch for cheap coroutines. The goal
+is Go-like inexpensive logical tasks and context hand-off, not immediate Go API
+or scheduler compatibility.
+
+The defining requirement is pay-for-use behavior:
+
+- a program that creates no coroutine performs no coroutine allocation and
+  gains no scheduler check on ordinary calls or every opcode;
+- a function that cannot suspend retains the existing frame ABI and remains
+  eligible for the same no-JIT and JIT optimizations;
+- suspend/resume is constant-time with respect to call depth and live-slot
+  count: contexts are detached by pointer/state exchange, never by copying an
+  ExecuteData chain or an OS stack;
+- stack/storage segments are allocated lazily and pooled after completion.
+
+### Runtime model
+
+`CoroutineContext` should own a VM stack segment chain, top `ExecuteData`,
+current opline, exception/unwind state, result/status and scheduler linkage.
+The active executor keeps one pointer to the current context. Detach/attach
+swaps that pointer and the active stack bounds; it does not walk frames or
+touch dormant values.
+
+The compiler propagates a `may_suspend` fact transitively through known calls.
+Ordinary functions stay unchanged. Only suspension-capable boundaries need a
+resumable activation and suspension metadata. Unknown/dynamic calls use a cold
+guarded path rather than imposing a branch on every proven non-suspending call.
+
+The first scheduler is cooperative and single-threaded. It proves frame
+lifetime, reference-count ownership, exceptions, cancellation and exact resume
+positions without requiring every RPHP value to become `Send`. Readiness-based
+timers and non-blocking I/O come next. M:N work stealing is a later optional
+step after object/value thread-safety has an explicit design; it must not be
+smuggled into the first context-switch primitive.
+
+Generators and coroutines should share stack/context storage where useful, but
+their PHP-visible semantics remain separate. A generator yields a sequence to
+its caller; a coroutine suspends a schedulable execution context.
+
+### JIT contract
+
+The initial JIT admits no implicit suspension inside a native region. A known
+suspension operation ends the region at an exact side exit, publishes live
+values, and resumes through canonical VM state. Later, explicit JIT safepoints
+may use compact spill maps, but non-suspending regions retain their current
+machine code and contain no coroutine poll.
+
+Cancellation or preemption polling may occur at already-existing interrupt
+checks and selected loop backedges. It must not become a new per-opcode test.
+Native calls, property shadows and virtual objects must be fully published
+before a context becomes externally resumable.
+
+### Milestones
+
+1. Add an internal context object and deterministic two-context
+   suspend/resume test with no public API.
+2. Move suspended frames to lazy pooled VM stack segments and prove cleanup,
+   exception and `finally` behavior under repeated resume/drop.
+3. Add a minimal PHP-facing spawn/suspend/resume/join API and structured parent
+   ownership. API naming is decided only after the runtime primitive is
+   measured.
+4. Add bounded channels and a readiness scheduler for timers and non-blocking
+   I/O. Blocking system calls must not silently stall all logical tasks.
+5. Evaluate optional multi-threaded scheduling and work stealing separately;
+   reject it if thread-safety costs leak into single-threaded PHP execution.
+
+### Performance gates
+
+- Existing non-coroutine benchmark medians may regress by at most one percent,
+  with zero additional heap allocations on ordinary calls.
+- The internal hand-off must be O(1), perform no syscall and copy no frame or
+  value array. A one-million-iteration two-context ping-pong benchmark is kept
+  as a permanent regression test.
+- The first release target is at most 150 ns per internal suspend/resume
+  hand-off on the current Apple ARM64 reference machine in a native-CPU
+  `max-perf` build, measured separately from PHP callback work.
+- Coroutine creation may allocate one initial context, but steady-state pooled
+  creation and every subsequent switch should allocate nothing.
+- Suspension depth and number of dormant local variables must not change
+  switch time materially; dedicated depth/slot-scaling benchmarks enforce it.
+
+If these gates cannot be met without adding overhead to normal PHP, keep the
+primitive opt-in and continue compatibility work rather than weakening the
+pay-for-use contract.
