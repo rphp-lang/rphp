@@ -107,6 +107,20 @@ reported +1.20 percent, so the checkpoint was not accepted on that batch; a
 dedicated 301-pair randomized rerun measured +0.02 percent with overlapping
 quartiles and identical output. No actionable performance change remains.
 
+Fourth checkpoint (2026-08-04): the quick-kernel layer is physically divided
+into its data model (213 lines), cached and straight array access (131), pure
+kernel pattern recognition (553), shared scalar/method/deoptimization helpers
+(212), array-loop execution (753), and conditional/branch execution including
+the ARM64 conditional path (666). The six units remain private items in the
+execute module through `include!`; `execute.rs` falls to 15,222 lines. A
+mechanical reconstruction check confirms that all 81,932 moved source bytes
+are identical to the preceding revision. The native-CPU `max-perf` binary has
+the same file and Mach-O segment sizes. In 101 order-randomized A/B pairs, all
+five outputs are identical and the four corpus workloads plus independent
+routing holdout range from -0.47 to +0.51 percent. Core, default, no-default,
+quick-loop, type-hint, corpus and ARM64/JIT matrices all pass, so the movement
+is treated as normal process noise rather than an actionable regression.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
