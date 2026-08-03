@@ -11,9 +11,10 @@ use rphp::compiler::make_user_function;
 use rphp::jit::{
     Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledQuickLongAccumulateLoop,
     CompiledQuickLongConditionalAccumulateLoop, CompiledScalarLongProgram,
-    NativeConditionalLongLoopConfig, NativeLongAccumulateState, QuickLongAccumulateJitError,
-    QuickLongAccumulateJitOutcome, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch,
-    ScalarLongJitError, ScalarLongJitOutcome,
+    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
+    NativeLongAccumulateState, QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
+    SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch, ScalarLongJitError,
+    ScalarLongJitOutcome,
 };
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -623,7 +624,9 @@ fn general_conditional_loop_ir_runs_as_a_native_chunked_region() {
     let config = NativeConditionalLongLoopConfig {
         induction_slot: 0,
         bound: QuickLongOperand::Slot(1),
-        cutoff: QuickLongOperand::Slot(2),
+        condition: NativeConditionalLongLoopCondition::LessThan {
+            rhs: QuickLongOperand::Slot(2),
+        },
         accumulator_slot: 3,
     };
     let program = CompiledQuickLongConditionalAccumulateLoop::compile(config)
@@ -635,19 +638,19 @@ fn general_conditional_loop_ir_runs_as_a_native_chunked_region() {
     slots[3] = 0;
 
     assert_eq!(
-        program.call(&mut slots, 32).unwrap(),
+        program.call(&mut slots, 32).unwrap().outcome,
         QuickLongAccumulateJitOutcome::ChunkExhausted
     );
     assert_eq!(slots[0], 32);
     assert_eq!(slots[3], 496);
     assert_eq!(
-        program.call(&mut slots, 64).unwrap(),
+        program.call(&mut slots, 64).unwrap().outcome,
         QuickLongAccumulateJitOutcome::ChunkExhausted
     );
     assert_eq!(slots[0], 96);
     assert_eq!(slots[3], 1_225);
     assert_eq!(
-        program.call(&mut slots, 32).unwrap(),
+        program.call(&mut slots, 32).unwrap().outcome,
         QuickLongAccumulateJitOutcome::Completed
     );
     assert_eq!(slots[0], 100);
@@ -660,7 +663,7 @@ fn general_conditional_loop_ir_runs_as_a_native_chunked_region() {
     slots[2] = 2;
     slots[3] = i64::MAX;
     assert_eq!(
-        program.call(&mut slots, 32).unwrap(),
+        program.call(&mut slots, 32).unwrap().outcome,
         QuickLongAccumulateJitOutcome::SumOverflow
     );
     assert_eq!(slots[0], 1);
@@ -674,6 +677,97 @@ fn general_conditional_loop_ir_runs_as_a_native_chunked_region() {
         CompiledQuickLongConditionalAccumulateLoop::compile(aliased),
         Err(QuickLongAccumulateJitError::InvalidProgram(_))
     ));
+}
+
+#[test]
+fn general_conditional_loop_ir_lowers_modulo_equality_and_precise_guards() {
+    let modulo_even = NativeConditionalLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        condition: NativeConditionalLongLoopCondition::ModuloEqual {
+            divisor: 2,
+            rhs: QuickLongOperand::Const(0),
+        },
+        accumulator_slot: 2,
+    };
+    let program = CompiledQuickLongConditionalAccumulateLoop::compile(modulo_even)
+        .expect("modulo equality loop should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 10;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(result.outcome, QuickLongAccumulateJitOutcome::Completed);
+    assert!(result.addition_executed);
+    assert_eq!(slots[0], 10);
+    assert_eq!(slots[2], 20);
+
+    let never_matches = NativeConditionalLongLoopConfig {
+        condition: NativeConditionalLongLoopCondition::ModuloEqual {
+            divisor: 2,
+            rhs: QuickLongOperand::Const(2),
+        },
+        ..modulo_even
+    };
+    let program = CompiledQuickLongConditionalAccumulateLoop::compile(never_matches)
+        .expect("never-matching modulo loop should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 10;
+    slots[2] = 7;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(result.outcome, QuickLongAccumulateJitOutcome::Completed);
+    assert!(!result.addition_executed);
+    assert_eq!(slots[0], 10);
+    assert_eq!(slots[2], 7);
+
+    let zero_divisor = NativeConditionalLongLoopConfig {
+        condition: NativeConditionalLongLoopCondition::ModuloEqual {
+            divisor: 0,
+            rhs: QuickLongOperand::Const(0),
+        },
+        ..modulo_even
+    };
+    let program = CompiledQuickLongConditionalAccumulateLoop::compile(zero_divisor)
+        .expect("zero divisor should compile to a guarded side exit");
+    let mut slots = [0_i64; 64];
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(result.outcome, QuickLongAccumulateJitOutcome::Completed);
+    assert!(!result.addition_executed);
+
+    slots[1] = 1;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        QuickLongAccumulateJitOutcome::ConditionSideExit
+    );
+    assert!(!result.addition_executed);
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[2], 0);
+
+    let min_over_minus_one = NativeConditionalLongLoopConfig {
+        condition: NativeConditionalLongLoopCondition::ModuloEqual {
+            divisor: -1,
+            rhs: QuickLongOperand::Const(0),
+        },
+        ..modulo_even
+    };
+    let program = CompiledQuickLongConditionalAccumulateLoop::compile(min_over_minus_one)
+        .expect("MIN modulo -1 should compile to a guarded side exit");
+    let mut slots = [0_i64; 64];
+    slots[1] = 100;
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap().outcome,
+        QuickLongAccumulateJitOutcome::ChunkExhausted
+    );
+    slots[0] = i64::MIN;
+    slots[1] = i64::MIN + 1;
+    slots[2] = 0;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        QuickLongAccumulateJitOutcome::ConditionSideExit
+    );
+    assert!(!result.addition_executed);
+    assert_eq!(slots[0], i64::MIN);
+    assert_eq!(slots[2], 0);
 }
 
 #[test]
@@ -704,6 +798,81 @@ fn real_php_branch_loop_enters_general_native_ir_region() {
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_modulo_branch_loop_enters_general_native_ir_region() {
+    let source = "<?php $sum = 0; $bound = 100000; $expected = 0; for ($i = 0; $i < $bound; $i++) { if (($i % 3) == $expected) { $sum += $i; } } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:1666683333"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the modulo Long loop IR");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_modulo_min_over_minus_one_preserves_canonical_semantics() {
+    let source = "<?php function moduloLoop(int $start, int $bound): int { $sum = 0; for ($i = $start; $i < $bound; $i++) { if (($i % -1) == 0) { $sum += $i; } } return $sum; } moduloLoop(0, 100); echo moduloLoop(PHP_INT_MIN, PHP_INT_MIN + 1);";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        i64::MIN.to_string()
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("moduloLoop"))
+        .map(|(_, function)| function)
+        .expect("compiled moduloLoop function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("moduloLoop should use general Long loop IR");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 2);
+    // The VM executes the first iteration canonically before entering the hot
+    // backedge region, so MIN % -1 is already resolved when native code sees
+    // MIN + 1. The direct ABI test above covers the native guard itself.
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -773,6 +942,46 @@ fn general_native_ir_sum_overflow_resumes_canonical_add() {
             _ => None,
         })
         .expect("conditionalOverflow should use general Long loop IR");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn general_native_modulo_ir_sum_overflow_resumes_canonical_add() {
+    let source = "<?php function moduloOverflow(int $bound): int { $sum = PHP_INT_MAX - 2000; for ($i = 0; $i < $bound; $i++) { if (($i % 2) == 0) { $sum += $i; } } return $sum; } try { moduloOverflow(100); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("moduloOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled moduloOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("moduloOverflow should use general Long loop IR");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().side_exits(), 1);
 }

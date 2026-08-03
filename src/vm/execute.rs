@@ -13,8 +13,8 @@ use crate::vm::stats;
     target_os = "macos"
 ))]
 use crate::jit::{
-    NativeConditionalLongLoopConfig, NativeLongAccumulateState,
-    QuickLongAccumulateJitOutcome, ScalarLongJitDispatch,
+    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
+    NativeLongAccumulateState, QuickLongAccumulateJitOutcome, ScalarLongJitDispatch,
 };
 use super::opcode::OpCode;
 use super::instruction::{
@@ -8118,6 +8118,9 @@ unsafe fn run_native_long_accumulate_loop(
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }
+            QuickLongAccumulateJitOutcome::ConditionSideExit => {
+                unreachable!("the accumulate-only native program has no condition side exit")
+            }
         }
     }
 }
@@ -11593,16 +11596,8 @@ fn native_conditional_long_loop_config(
     kernel: QuickLongConditionalKernel,
     body: QuickLongConditionalBody,
 ) -> Option<NativeConditionalLongLoopConfig> {
-    let QuickLongConditionalBody::LessThan {
-        lhs: condition_lhs,
-        rhs: cutoff,
-        ..
-    } = body
-    else {
-        return None;
-    };
     let induction = kernel.post_value;
-    if kernel.header_lhs != induction || condition_lhs != induction {
+    if kernel.header_lhs != induction {
         return None;
     }
     let accumulator = kernel.destination;
@@ -11618,18 +11613,104 @@ fn native_conditional_long_loop_config(
     {
         return None;
     }
-    for operand in [kernel.header_rhs, cutoff] {
-        if matches!(operand, QuickLongOperand::Slot(slot) if slot == induction || slot == accumulator)
+
+    let condition = match body {
+        QuickLongConditionalBody::LessThan { lhs, rhs, .. } if lhs == induction => {
+            NativeConditionalLongLoopCondition::LessThan { rhs }
+        }
+        QuickLongConditionalBody::ModuloEqual {
+            value,
+            divisor,
+            result,
+            lhs,
+            rhs,
+            ..
+        } if value == induction
+            && lhs == result
+            && result != induction
+            && result != accumulator
+            && result != kernel.add_result
+            && kernel.post_result != Some(result) =>
         {
+            NativeConditionalLongLoopCondition::ModuloEqual { divisor, rhs }
+        }
+        _ => return None,
+    };
+    let modulo_result = match body {
+        QuickLongConditionalBody::ModuloEqual { result, .. } => Some(result),
+        QuickLongConditionalBody::LessThan { .. } => None,
+    };
+    let condition_rhs = match condition {
+        NativeConditionalLongLoopCondition::LessThan { rhs }
+        | NativeConditionalLongLoopCondition::ModuloEqual { rhs, .. } => rhs,
+    };
+    let mut mutable_long_mask =
+        (1u64 << induction) | (1u64 << accumulator) | (1u64 << kernel.add_result);
+    if let Some(slot) = kernel.post_result {
+        mutable_long_mask |= 1u64 << slot;
+    }
+    if let Some(slot) = modulo_result {
+        mutable_long_mask |= 1u64 << slot;
+    }
+    for operand in [kernel.header_rhs, condition_rhs] {
+        if matches!(operand, QuickLongOperand::Slot(slot) if mutable_long_mask & (1u64 << slot) != 0) {
             return None;
         }
     }
     Some(NativeConditionalLongLoopConfig {
         induction_slot: induction,
         bound: kernel.header_rhs,
-        cutoff,
+        condition,
         accumulator_slot: accumulator,
     })
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn publish_native_conditional_body_state(
+    slots: &mut [i64; 64],
+    body: QuickLongConditionalBody,
+    induction: i64,
+    dirty_long_mask: &mut u64,
+    dirty_bool_mask: &mut u64,
+) -> bool {
+    match body {
+        QuickLongConditionalBody::LessThan {
+            rhs,
+            condition_tmp,
+            ..
+        } => {
+            let condition = induction < quick_long_operand(slots, rhs);
+            if let Some(slot) = condition_tmp {
+                slots[slot as usize] = i64::from(condition);
+                *dirty_bool_mask |= 1u64 << slot;
+            }
+            true
+        }
+        QuickLongConditionalBody::ModuloEqual {
+            divisor,
+            result,
+            rhs,
+            condition_tmp,
+            ..
+        } => {
+            let Some(remainder) = induction.checked_rem(divisor) else {
+                return false;
+            };
+            slots[result as usize] = remainder;
+            *dirty_long_mask |= 1u64 << result;
+            let condition = remainder == quick_long_operand(slots, rhs);
+            if let Some(slot) = condition_tmp {
+                slots[slot as usize] = i64::from(condition);
+                *dirty_bool_mask |= 1u64 << slot;
+            }
+            true
+        }
+    }
 }
 
 #[inline(never)]
@@ -11652,15 +11733,7 @@ unsafe fn run_native_quick_long_conditional_kernel(
     let Some(config) = native_conditional_long_loop_config(kernel, body) else {
         return Ok(None);
     };
-    let QuickLongConditionalBody::LessThan {
-        condition_tmp: body_condition_tmp,
-        ..
-    } = body
-    else {
-        unreachable!("native config admits only a less-than body")
-    };
     let bound = quick_long_operand(slots, config.bound);
-    let cutoff = quick_long_operand(slots, config.cutoff);
     let cache = plan.native_jit();
     let mut iterations = 0u64;
     let mut dirty_long_mask = 0u64;
@@ -11676,13 +11749,13 @@ unsafe fn run_native_quick_long_conditional_kernel(
             slots,
             NATIVE_LONG_ACCUMULATE_CHUNK,
         );
-        let mut outcome = match native_result {
-            Ok(outcome) => {
+        let (mut outcome, chunk_addition_executed) = match native_result {
+            Ok(result) => {
                 if !entered_native {
                     cache.record_region_entry();
                     entered_native = true;
                 }
-                outcome
+                (result.outcome, result.addition_executed)
             }
             Err(_) if !cache.is_compiled() => return Ok(None),
             Err(_) => {
@@ -11703,11 +11776,14 @@ unsafe fn run_native_quick_long_conditional_kernel(
                         slots[slot as usize] = before_induction - 1;
                         dirty_long_mask |= 1u64 << slot;
                     }
-                    if let Some(slot) = body_condition_tmp {
-                        slots[slot as usize] =
-                            i64::from(before_induction - 1 < cutoff);
-                        dirty_bool_mask |= 1u64 << slot;
-                    }
+                    let published = publish_native_conditional_body_state(
+                        slots,
+                        body,
+                        before_induction - 1,
+                        &mut dirty_long_mask,
+                        &mut dirty_bool_mask,
+                    );
+                    debug_assert!(published);
                 }
                 commit_quick_long_ops_slots(
                     slot_base,
@@ -11732,13 +11808,8 @@ unsafe fn run_native_quick_long_conditional_kernel(
                 slots[slot as usize] = induction - 1;
                 dirty_long_mask |= 1u64 << slot;
             }
-            if before_induction < cutoff {
-                addition_completed = true;
-            }
         }
-        if outcome == QuickLongAccumulateJitOutcome::IncrementOverflow
-            && induction < cutoff
-        {
+        if chunk_addition_executed {
             addition_completed = true;
         }
         if addition_completed {
@@ -11757,22 +11828,29 @@ unsafe fn run_native_quick_long_conditional_kernel(
             dirty_bool_mask |= 1u64 << slot;
         }
 
-        let body_evaluated = iterations != 0
-            || matches!(
-                outcome,
-                QuickLongAccumulateJitOutcome::SumOverflow
-                    | QuickLongAccumulateJitOutcome::IncrementOverflow
+        let body_induction = match outcome {
+            QuickLongAccumulateJitOutcome::SumOverflow
+            | QuickLongAccumulateJitOutcome::IncrementOverflow => Some(induction),
+            QuickLongAccumulateJitOutcome::ConditionSideExit if iterations != 0 => {
+                Some(induction - 1)
+            }
+            QuickLongAccumulateJitOutcome::Completed
+            | QuickLongAccumulateJitOutcome::ChunkExhausted
+                if iterations != 0 =>
+            {
+                Some(induction - 1)
+            }
+            _ => None,
+        };
+        if let Some(body_induction) = body_induction {
+            let published = publish_native_conditional_body_state(
+                slots,
+                body,
+                body_induction,
+                &mut dirty_long_mask,
+                &mut dirty_bool_mask,
             );
-        if body_evaluated
-            && let Some(slot) = body_condition_tmp
-        {
-            let body_induction = match outcome {
-                QuickLongAccumulateJitOutcome::SumOverflow
-                | QuickLongAccumulateJitOutcome::IncrementOverflow => induction,
-                _ => induction - 1,
-            };
-            slots[slot as usize] = i64::from(body_induction < cutoff);
-            dirty_bool_mask |= 1u64 << slot;
+            debug_assert!(published);
         }
 
         match outcome {
@@ -11827,6 +11905,23 @@ unsafe fn run_native_quick_long_conditional_kernel(
                     .instructions
                     .as_ptr()
                     .add(kernel.post_resume_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+            QuickLongAccumulateJitOutcome::ConditionSideExit => {
+                let resume_ip = match body {
+                    QuickLongConditionalBody::ModuloEqual { resume_ip, .. } => resume_ip,
+                    QuickLongConditionalBody::LessThan { .. } => {
+                        unreachable!("less-than lowering has no condition side exit")
+                    }
+                };
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }

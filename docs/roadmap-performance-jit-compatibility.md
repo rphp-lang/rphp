@@ -1110,6 +1110,37 @@ RPHP without JIT and 4.05x faster than PHP. The next useful IR operation is
 the modulo/equality condition already represented by the same conditional
 kernel, followed by general straight-line checked `BinaryAssign` bodies.
 
+Modulo/equality widening checkpoint (2026-08-03): the general native region
+now also accepts `(induction % constant) == invariant`, including a slot-based
+invariant. The ARM64 block materializes the divisor and comparison operand once,
+computes each remainder with `SDIV` plus `MSUB`, and branches directly around
+the checked accumulator update. This is the same existing `ModConst` and
+`ConditionalAddAssign(Eq)` typed IR; no benchmark-specific source pattern was
+introduced.
+
+The native ABI now returns a per-chunk `addition_executed` bit alongside its
+status. That lets the VM publish the conditional add TMP only when native code
+actually defined it, including alternating modulo branches and never-taken
+bodies. On completion, interrupt, add overflow, or increment overflow, the VM
+reconstructs the exact last remainder and equality TMP from the original IR
+metadata. A separate condition side exit preserves the pre-operation state for
+a zero divisor and `PHP_INT_MIN % -1`, then resumes the canonical modulo
+instruction. Direct tests exercise both guards and cached reuse; real PHP tests
+cover a slot equality operand, native add overflow, normal completion, and the
+canonical `MIN % -1` prologue. The focused ARM64 suite now contains 25 tests.
+
+Seven interleaved `max-perf`, native-CPU runs of
+`bench_modulo_branch_loop.php` produce identical `24999995000000` output. The
+median is approximately 0.00646 s for RPHP with the prototype JIT, 0.02268 s
+for RPHP without JIT, 0.03567 s for PHP 8.4.12 with tracing JIT, and 0.03577 s
+for PHP without JIT. On this admitted region, native RPHP is therefore about
+3.51x faster than its Rust quick executor and 5.52x faster than PHP's tracing
+JIT. The first process run remains a visible cold outlier, so compilation and
+cold-start latency must continue to be tracked separately from warm medians.
+The next structural operation remains general straight-line checked
+`BinaryAssign` bodies; expanding coverage is more valuable than further tuning
+this modulo loop.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -412,6 +412,7 @@ const NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED: u32 = 1;
 const NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW: u32 = 2;
 const NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW: u32 = 3;
 const NATIVE_LONG_ACCUMULATE_TERM_OVERFLOW: u32 = 4;
+const NATIVE_LONG_ACCUMULATE_CONDITION_SIDE_EXIT: u32 = 5;
 
 /// Mutable state shared with the native accumulate-loop ABI.
 ///
@@ -431,9 +432,16 @@ pub struct NativeLongAccumulateState {
 pub enum QuickLongAccumulateJitOutcome {
     Completed,
     ChunkExhausted,
+    ConditionSideExit,
     TermOverflow,
     SumOverflow,
     IncrementOverflow,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NativeConditionalLongLoopResult {
+    pub outcome: QuickLongAccumulateJitOutcome,
+    pub addition_executed: bool,
 }
 
 #[derive(Debug)]
@@ -772,11 +780,28 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
 /// Slot operands are loop-invariant; only the induction and accumulator slots
 /// are mutated by native code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NativeConditionalLongLoopCondition {
+    LessThan {
+        rhs: QuickLongOperand,
+    },
+    ModuloEqual {
+        divisor: i64,
+        rhs: QuickLongOperand,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NativeConditionalLongLoopConfig {
     pub induction_slot: u16,
     pub bound: QuickLongOperand,
-    pub cutoff: QuickLongOperand,
+    pub condition: NativeConditionalLongLoopCondition,
     pub accumulator_slot: u16,
+}
+
+#[derive(Debug, Default)]
+#[repr(C)]
+struct NativeConditionalLongLoopControl {
+    addition_executed: u64,
 }
 
 /// Whole-region ARM64 lowering for a conditional accumulator expressed by the
@@ -784,12 +809,17 @@ pub struct NativeConditionalLongLoopConfig {
 ///
 /// ```text
 /// while induction < bound {
-///     if induction < cutoff {
+///     if condition(induction) {
 ///         accumulator = checked_add(accumulator, induction)
 ///     }
 ///     induction = checked_add(induction, 1)
 /// }
 /// ```
+///
+/// `condition` is either `induction < invariant` or
+/// `(induction % constant) == invariant`. The latter guards the two values for
+/// which AArch64 `SDIV` does not have PHP's observable behaviour and leaves
+/// through a precise condition side exit.
 pub struct CompiledQuickLongConditionalAccumulateLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -805,37 +835,86 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         let mut assembler = Arm64Assembler::new();
         let induction = Arm64Register::from_code(2);
         let bound = Arm64Register::from_code(3);
-        let cutoff = Arm64Register::from_code(4);
+        let condition_operand = Arm64Register::from_code(4);
         let accumulator = Arm64Register::from_code(5);
         let one = Arm64Register::from_code(6);
         let checked_result = Arm64Register::from_code(7);
+        let condition_rhs = Arm64Register::from_code(8);
+        let quotient = Arm64Register::from_code(9);
+        let remainder = Arm64Register::from_code(10);
+        let addition_executed = Arm64Register::from_code(11);
+        let control = Arm64Register::from_code(12);
+        let guard = Arm64Register::from_code(13);
 
+        // x2 carries the control pointer at the ABI boundary, but becomes the
+        // induction register inside the leaf function.
+        assembler.move_register(control, Arm64Register::X2);
         assembler.load_u64(
             induction,
             Arm64Register::X0,
             long_slot_offset(config.induction_slot),
         );
         emit_native_long_operand(&mut assembler, config.bound, bound);
-        emit_native_long_operand(&mut assembler, config.cutoff, cutoff);
+        match config.condition {
+            NativeConditionalLongLoopCondition::LessThan { rhs } => {
+                emit_native_long_operand(&mut assembler, rhs, condition_operand);
+            }
+            NativeConditionalLongLoopCondition::ModuloEqual { divisor, rhs } => {
+                assembler.move_immediate(condition_operand, divisor);
+                emit_native_long_operand(&mut assembler, rhs, condition_rhs);
+            }
+        }
         assembler.load_u64(
             accumulator,
             Arm64Register::X0,
             long_slot_offset(config.accumulator_slot),
         );
         assembler.move_immediate(one, 1);
+        assembler.move_immediate(addition_executed, 0);
 
         let loop_word = assembler.word_count();
         assembler.compare_registers(induction, bound);
         let completed_branch = assembler
             .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
 
-        assembler.compare_registers(induction, cutoff);
-        let skip_add_branch = assembler
-            .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+        let mut condition_side_exit_branches = Vec::new();
+        let skip_add_branch = match config.condition {
+            NativeConditionalLongLoopCondition::LessThan { .. } => {
+                assembler.compare_registers(induction, condition_operand);
+                Some(assembler.conditional_branch_placeholder(Arm64Condition::GreaterOrEqual))
+            }
+            NativeConditionalLongLoopCondition::ModuloEqual { divisor: 0, .. } => {
+                // The header must win for an empty loop. Once the body is
+                // reached, replay the canonical Mod instruction so PHP emits
+                // its normal division-by-zero error.
+                assembler.compare_registers(induction, induction);
+                condition_side_exit_branches
+                    .push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
+                None
+            }
+            NativeConditionalLongLoopCondition::ModuloEqual { divisor, .. } => {
+                if divisor == -1 {
+                    assembler.move_immediate(guard, i64::MIN);
+                    assembler.compare_registers(induction, guard);
+                    condition_side_exit_branches
+                        .push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
+                }
+                assembler.signed_divide(quotient, induction, condition_operand);
+                assembler.multiply_subtract(
+                    remainder,
+                    quotient,
+                    condition_operand,
+                    induction,
+                );
+                assembler.compare_registers(remainder, condition_rhs);
+                Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
+            }
+        };
         assembler.add_register_checked(checked_result, accumulator, induction);
         let sum_overflow_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
         assembler.move_register(accumulator, checked_result);
+        assembler.move_immediate(addition_executed, 1);
 
         let increment_word = assembler.word_count();
         assembler.add_register_checked(checked_result, induction, one);
@@ -850,7 +929,14 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         let loop_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
-        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        emit_conditional_long_loop_state(
+            &mut assembler,
+            config,
+            induction,
+            accumulator,
+            control,
+            addition_executed,
+        );
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED),
@@ -858,7 +944,14 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         assembler.ret();
 
         let completed_word = assembler.word_count();
-        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        emit_conditional_long_loop_state(
+            &mut assembler,
+            config,
+            induction,
+            accumulator,
+            control,
+            addition_executed,
+        );
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
@@ -866,7 +959,14 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         assembler.ret();
 
         let sum_overflow_word = assembler.word_count();
-        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        emit_conditional_long_loop_state(
+            &mut assembler,
+            config,
+            induction,
+            accumulator,
+            control,
+            addition_executed,
+        );
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW),
@@ -874,15 +974,41 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         assembler.ret();
 
         let increment_overflow_word = assembler.word_count();
-        emit_conditional_long_loop_slots(&mut assembler, config, induction, accumulator);
+        emit_conditional_long_loop_state(
+            &mut assembler,
+            config,
+            induction,
+            accumulator,
+            control,
+            addition_executed,
+        );
         assembler.move_immediate(
             Arm64Register::X0,
             i64::from(NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW),
         );
         assembler.ret();
 
+        let condition_side_exit_word = if condition_side_exit_branches.is_empty() {
+            None
+        } else {
+            let word = assembler.word_count();
+            emit_conditional_long_loop_state(
+                &mut assembler,
+                config,
+                induction,
+                accumulator,
+                control,
+                addition_executed,
+            );
+            assembler.move_immediate(
+                Arm64Register::X0,
+                i64::from(NATIVE_LONG_ACCUMULATE_CONDITION_SIDE_EXIT),
+            );
+            assembler.ret();
+            Some(word)
+        };
+
         for (branch, target) in [
-            (skip_add_branch, increment_word),
             (completed_branch, completed_word),
             (sum_overflow_branch, sum_overflow_word),
             (increment_overflow_branch, increment_overflow_word),
@@ -890,6 +1016,18 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         ] {
             if !assembler.patch_conditional_branch(branch, target) {
                 return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+        }
+        if let Some(branch) = skip_add_branch
+            && !assembler.patch_conditional_branch(branch, increment_word)
+        {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+        if let Some(target) = condition_side_exit_word {
+            for branch in condition_side_exit_branches {
+                if !assembler.patch_conditional_branch(branch, target) {
+                    return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+                }
             }
         }
 
@@ -906,28 +1044,36 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         &self,
         slots: &mut [i64; 64],
         iteration_budget: u64,
-    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+    ) -> Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError> {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
         }
-        type NativeFunction = unsafe extern "C" fn(*mut i64, u64) -> u32;
+        type NativeFunction = unsafe extern "C" fn(
+            *mut i64,
+            u64,
+            *mut NativeConditionalLongLoopControl,
+        ) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
-        let status = unsafe { function(slots.as_mut_ptr(), iteration_budget) };
-        match status {
-            NATIVE_LONG_ACCUMULATE_COMPLETED => {
-                Ok(QuickLongAccumulateJitOutcome::Completed)
-            }
+        let mut control = NativeConditionalLongLoopControl::default();
+        let status = unsafe { function(slots.as_mut_ptr(), iteration_budget, &mut control) };
+        let outcome = match status {
+            NATIVE_LONG_ACCUMULATE_COMPLETED => QuickLongAccumulateJitOutcome::Completed,
             NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
-                Ok(QuickLongAccumulateJitOutcome::ChunkExhausted)
+                QuickLongAccumulateJitOutcome::ChunkExhausted
             }
-            NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => {
-                Ok(QuickLongAccumulateJitOutcome::SumOverflow)
+            NATIVE_LONG_ACCUMULATE_CONDITION_SIDE_EXIT => {
+                QuickLongAccumulateJitOutcome::ConditionSideExit
             }
+            NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => QuickLongAccumulateJitOutcome::SumOverflow,
             NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW => {
-                Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
+                QuickLongAccumulateJitOutcome::IncrementOverflow
             }
-            status => Err(QuickLongAccumulateJitError::InvalidNativeStatus(status)),
-        }
+            status => return Err(QuickLongAccumulateJitError::InvalidNativeStatus(status)),
+        };
+        Ok(NativeConditionalLongLoopResult {
+            outcome,
+            addition_executed: control.addition_executed != 0,
+        })
     }
 
     pub fn config(&self) -> NativeConditionalLongLoopConfig {
@@ -952,7 +1098,11 @@ fn validate_conditional_long_loop_config(
             "induction and accumulator slots must be distinct",
         ));
     }
-    for operand in [config.bound, config.cutoff] {
+    let condition_rhs = match config.condition {
+        NativeConditionalLongLoopCondition::LessThan { rhs }
+        | NativeConditionalLongLoopCondition::ModuloEqual { rhs, .. } => rhs,
+    };
+    for operand in [config.bound, condition_rhs] {
         if let QuickLongOperand::Slot(slot) = operand {
             if slot >= 64 {
                 return Err(QuickLongAccumulateJitError::InvalidProgram(
@@ -990,11 +1140,13 @@ fn emit_native_long_operand(
     }
 }
 
-fn emit_conditional_long_loop_slots(
+fn emit_conditional_long_loop_state(
     assembler: &mut Arm64Assembler,
     config: NativeConditionalLongLoopConfig,
     induction: Arm64Register,
     accumulator: Arm64Register,
+    control: Arm64Register,
+    addition_executed: Arm64Register,
 ) {
     assembler.store_u64(
         induction,
@@ -1006,6 +1158,7 @@ fn emit_conditional_long_loop_slots(
         Arm64Register::X0,
         long_slot_offset(config.accumulator_slot),
     );
+    assembler.store_u64(addition_executed, control, 0);
 }
 
 pub struct QuickLongOpsJitCache {
@@ -1030,7 +1183,7 @@ impl QuickLongOpsJitCache {
         config: NativeConditionalLongLoopConfig,
         slots: &mut [i64; 64],
         iteration_budget: u64,
-    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+    ) -> Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError> {
         let Some(program) = self
             .compiled
             .get_or_init(|| {
@@ -1046,12 +1199,15 @@ impl QuickLongOpsJitCache {
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call(slots, iteration_budget);
-        if matches!(
-            outcome,
-            Ok(QuickLongAccumulateJitOutcome::SumOverflow)
-                | Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
-                | Err(_)
-        ) {
+        if match &outcome {
+            Ok(result) => matches!(
+                result.outcome,
+                QuickLongAccumulateJitOutcome::ConditionSideExit
+                    | QuickLongAccumulateJitOutcome::SumOverflow
+                    | QuickLongAccumulateJitOutcome::IncrementOverflow
+            ),
+            Err(_) => true,
+        } {
             self.side_exits.set(self.side_exits.get().saturating_add(1));
         }
         outcome
