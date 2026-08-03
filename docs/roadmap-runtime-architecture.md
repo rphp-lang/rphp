@@ -172,6 +172,25 @@ output and range from -1.00 to +0.46 percent, with routing at +0.07 percent.
 The negative edge is treated as layout or measurement noise rather than an
 optimization claim. All applicable feature matrices pass.
 
+Ninth checkpoint (2026-08-04): nine semantically cold opcode bodies move behind
+explicit `#[inline(never)]` helpers: `CallUserFuncArray`, static-property fetch,
+`instanceof`, constant fetch/definition, default/global/static binding, closure
+creation and closure capture. Hot arithmetic, branches, arrays, `InitFcall`,
+`DoFcall`, method dispatch and `Return` remain directly in `execute_ex`.
+`baseline_dispatch.rs` falls from 3,292 to 3,115 lines and the cold helper unit
+is 249 lines; `execute.rs` is 5,975 lines. The release file grows by 992 bytes
+while its Mach-O segment sizes remain unchanged. In the first 101 randomized
+corpus/holdout pairs, four results range from -0.49 to +0.70 percent and typed
+order reports +1.72 percent. A required independent 301-pair typed-order check
+instead measures -0.10 percent by aggregate median and -0.86 percent by paired
+median with overlapping quartiles, so the regression is not reproduced. Five
+opcode-focused 101-pair holdouts all improve on this build, from -1.57 percent
+for static binding to -16.55 percent for default-parameter binding. These
+holdouts support the compact-dispatch design but are not treated as universal
+speedup claims. An additional 228 focused callable, closure, constant,
+`instanceof`, interface and global/static tests pass alongside every standard
+feature matrix.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
