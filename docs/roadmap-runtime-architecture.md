@@ -134,6 +134,20 @@ from -0.19 to +0.22 percent with identical output. All applicable feature
 matrices pass; the dispatcher extraction is therefore codegen-neutral within
 measurement resolution.
 
+Sixth checkpoint (2026-08-04): the remaining quick-loop support block is split
+into induction execution (111 lines), scalar/composed call preparation (286),
+ARM64 native call and accumulate lowering/execution (1,136), and the canonical
+accumulate runtime (896). The 20-line slot-commit helper intentionally remains
+next to the include list because it is shared by several later quick-kernel
+units. `execute.rs` falls to 11,674 lines, and all 94,078 moved source bytes
+reconstruct exactly. The native-CPU `max-perf` binary and Mach-O segment sizes
+remain unchanged. The four corpus workloads move between -0.01 and +0.43
+percent in 101 randomized A/B pairs. Routing initially reports +1.41 percent,
+so it is checked independently rather than accepted: 301 randomized pairs
+reduce the median delta to +0.07 percent and paired median to +0.35 percent,
+with overlapping quartiles and identical output. Default, all-feature,
+no-default, corpus, quick-loop, type-hint and ARM64/JIT matrices all pass.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
