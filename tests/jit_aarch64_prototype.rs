@@ -436,6 +436,41 @@ fn native_accumulate_loop_preserves_chunk_and_overflow_boundaries() {
         Err(QuickLongAccumulateJitError::ZeroIterationBudget)
     ));
     assert!(!program.code().is_empty());
+
+    let plus_one = CompiledQuickLongAccumulateLoop::compile_with_addend(1)
+        .expect("constant term should lower to ARM64");
+    let mut plus_one_state = NativeLongAccumulateState {
+        induction: 0,
+        bound: 10,
+        accumulator: 0,
+    };
+    assert_eq!(
+        plus_one.call(&mut plus_one_state, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::Completed
+    );
+    assert_eq!(plus_one_state.induction, 10);
+    assert_eq!(plus_one_state.accumulator, 55);
+
+    let plus_two = CompiledQuickLongAccumulateLoop::compile_with_addend(2)
+        .expect("overflowing constant term should still lower transactionally");
+    let mut term_overflow = NativeLongAccumulateState {
+        induction: i64::MAX - 1,
+        bound: i64::MAX,
+        accumulator: 17,
+    };
+    assert_eq!(
+        plus_two.call(&mut term_overflow, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::TermOverflow
+    );
+    assert_eq!(
+        term_overflow,
+        NativeLongAccumulateState {
+            induction: i64::MAX - 1,
+            bound: i64::MAX,
+            accumulator: 17,
+        },
+        "term overflow must preserve the exact term instruction resume state"
+    );
 }
 
 #[test]
@@ -463,6 +498,37 @@ fn real_php_accumulate_loop_enters_native_region() {
             _ => None,
         })
         .expect("compiler should select an accumulate quick loop");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_constant_term_loop_enters_specialized_native_region() {
+    let source = "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i + 1; } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:5000050000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a constant-term accumulate loop");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
@@ -506,5 +572,46 @@ fn native_loop_sum_overflow_resumes_canonical_php_instruction() {
         })
         .expect("overflow function should have an accumulate plan");
     assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn native_constant_term_overflow_resumes_canonical_term_instruction() {
+    let source = "<?php function plusTwo(int $start, int $bound): int { $sum = 0; for ($i = $start; $i < $bound; $i++) { $sum += $i + 2; } return $sum; } plusTwo(0, 100); try { plusTwo(PHP_INT_MAX - 2, PHP_INT_MAX); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let plus_two = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("plusTwo"))
+        .map(|(_, function)| function)
+        .expect("compiled plusTwo function");
+    let plan = plus_two
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("plusTwo should have a constant-term accumulate plan");
+    assert!(plan.native_jit().is_compiled());
+    assert!(plan.native_jit().native_entries() >= 2);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }

@@ -7942,6 +7942,7 @@ unsafe fn run_native_long_accumulate_loop(
     induction_ptr: *mut Value,
     accumulator_ptr: *mut Value,
     condition_ptr: Option<*mut Value>,
+    term_ptr: Option<*mut Value>,
     sum_ptr: *mut Value,
     increment_ptr: Option<*mut Value>,
     induction: i64,
@@ -7988,7 +7989,12 @@ unsafe fn run_native_long_accumulate_loop(
                     Value::write_bool(ptr, true);
                 }
                 if iterations > completed_in_chunk {
-                    let last_term = state.induction - 1;
+                    let last_induction = state.induction - 1;
+                    let last_term = native_long_accumulate_term(plan, last_induction)
+                        .unwrap_unchecked();
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_term);
+                    }
                     Value::write_long(sum_ptr, state.accumulator);
                     if let Some(ptr) = increment_ptr {
                         let last_increment_result = match plan.increment_kind {
@@ -8014,7 +8020,12 @@ unsafe fn run_native_long_accumulate_loop(
                     Value::write_bool(ptr, false);
                 }
                 if iterations != 0 {
-                    let last_term = state.induction - 1;
+                    let last_induction = state.induction - 1;
+                    let last_term = native_long_accumulate_term(plan, last_induction)
+                        .unwrap_unchecked();
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_term);
+                    }
                     Value::write_long(sum_ptr, state.accumulator);
                     if let Some(ptr) = increment_ptr {
                         let last_increment_result = match plan.increment_kind {
@@ -8036,7 +8047,12 @@ unsafe fn run_native_long_accumulate_loop(
                     if let Some(ptr) = condition_ptr {
                         Value::write_bool(ptr, true);
                     }
-                    let last_term = state.induction - 1;
+                    let last_induction = state.induction - 1;
+                    let last_term = native_long_accumulate_term(plan, last_induction)
+                        .unwrap_unchecked();
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_term);
+                    }
                     Value::write_long(sum_ptr, state.accumulator);
                     if let Some(ptr) = increment_ptr {
                         let last_increment_result = match plan.increment_kind {
@@ -8049,11 +8065,30 @@ unsafe fn run_native_long_accumulate_loop(
                     handle_interrupt(eg)?;
                 }
             }
+            QuickLongAccumulateJitOutcome::TermOverflow => {
+                let term_ip = match plan.term {
+                    QuickLongTerm::InductionPlusConst { term_ip, .. } => term_ip,
+                    _ => unreachable!("term overflow requires a checked native term"),
+                };
+                Value::write_long(induction_ptr, state.induction);
+                Value::write_long(accumulator_ptr, state.accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(term_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
             QuickLongAccumulateJitOutcome::SumOverflow => {
                 Value::write_long(induction_ptr, state.induction);
                 Value::write_long(accumulator_ptr, state.accumulator);
                 if let Some(ptr) = condition_ptr {
                     Value::write_bool(ptr, true);
+                }
+                if let Some(ptr) = term_ptr {
+                    let term = native_long_accumulate_term(plan, state.induction)
+                        .unwrap_unchecked();
+                    Value::write_long(ptr, term);
                 }
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
@@ -8065,12 +8100,35 @@ unsafe fn run_native_long_accumulate_loop(
                 if let Some(ptr) = condition_ptr {
                     Value::write_bool(ptr, true);
                 }
+                if let Some(ptr) = term_ptr {
+                    let term = native_long_accumulate_term(plan, state.induction)
+                        .unwrap_unchecked();
+                    Value::write_long(ptr, term);
+                }
                 Value::write_long(sum_ptr, state.accumulator);
                 (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }
         }
+    }
+}
+
+#[inline(always)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn native_long_accumulate_term(
+    plan: &QuickLongAccumulateLoop,
+    induction: i64,
+) -> Option<i64> {
+    match plan.term {
+        QuickLongTerm::Induction => Some(induction),
+        QuickLongTerm::InductionPlusConst { addend, .. } => induction.checked_add(addend),
+        _ => None,
     }
 }
 
@@ -8270,6 +8328,7 @@ unsafe fn run_quick_long_accumulate_loop(
         induction_ptr,
         accumulator_ptr,
         condition_ptr,
+        term_ptr,
         sum_ptr,
         increment_ptr,
         induction,

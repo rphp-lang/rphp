@@ -411,6 +411,7 @@ const NATIVE_LONG_ACCUMULATE_COMPLETED: u32 = 0;
 const NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED: u32 = 1;
 const NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW: u32 = 2;
 const NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW: u32 = 3;
+const NATIVE_LONG_ACCUMULATE_TERM_OVERFLOW: u32 = 4;
 
 /// Mutable state shared with the native accumulate-loop ABI.
 ///
@@ -430,6 +431,7 @@ pub struct NativeLongAccumulateState {
 pub enum QuickLongAccumulateJitOutcome {
     Completed,
     ChunkExhausted,
+    TermOverflow,
     SumOverflow,
     IncrementOverflow,
 }
@@ -494,25 +496,47 @@ pub struct CompiledQuickLongAccumulateLoop {
 
 impl CompiledQuickLongAccumulateLoop {
     pub fn compile() -> Result<Self, QuickLongAccumulateJitError> {
+        Self::compile_term(None)
+    }
+
+    pub fn compile_with_addend(addend: i64) -> Result<Self, QuickLongAccumulateJitError> {
+        Self::compile_term((addend != 0).then_some(addend))
+    }
+
+    fn compile_term(addend: Option<i64>) -> Result<Self, QuickLongAccumulateJitError> {
         let mut assembler = Arm64Assembler::new();
         let induction = Arm64Register::from_code(2);
         let bound = Arm64Register::from_code(3);
         let accumulator = Arm64Register::from_code(4);
         let one = Arm64Register::from_code(5);
-        let checked_result = Arm64Register::from_code(6);
+        let addend_register = Arm64Register::from_code(6);
+        let computed_term = Arm64Register::from_code(7);
+        let checked_result = Arm64Register::from_code(8);
 
         assembler.load_u64(induction, Arm64Register::X0, 0);
         assembler.load_u64(bound, Arm64Register::X0, 8);
         assembler.load_u64(accumulator, Arm64Register::X0, 16);
         assembler.move_immediate(one, 1);
+        if let Some(addend) = addend {
+            assembler.move_immediate(addend_register, addend);
+        }
 
         let loop_word = assembler.word_count();
         assembler.compare_registers(induction, bound);
         let completed_branch = assembler
             .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
 
+        let (term, term_overflow_branch) = if addend.is_some() {
+            assembler.add_register_checked(computed_term, induction, addend_register);
+            let overflow =
+                assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+            (computed_term, Some(overflow))
+        } else {
+            (induction, None)
+        };
+
         // Keep the old accumulator live until the overflow branch has passed.
-        assembler.add_register_checked(checked_result, accumulator, induction);
+        assembler.add_register_checked(checked_result, accumulator, term);
         let sum_overflow_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
         assembler.move_register(accumulator, checked_result);
@@ -564,6 +588,17 @@ impl CompiledQuickLongAccumulateLoop {
         );
         assembler.ret();
 
+        let term_overflow_word = term_overflow_branch.map(|_| {
+            let word = assembler.word_count();
+            emit_long_accumulate_state(&mut assembler, induction, accumulator);
+            assembler.move_immediate(
+                Arm64Register::X0,
+                i64::from(NATIVE_LONG_ACCUMULATE_TERM_OVERFLOW),
+            );
+            assembler.ret();
+            word
+        });
+
         for (branch, target) in [
             (completed_branch, completed_word),
             (sum_overflow_branch, sum_overflow_word),
@@ -573,6 +608,11 @@ impl CompiledQuickLongAccumulateLoop {
             if !assembler.patch_conditional_branch(branch, target) {
                 return Err(QuickLongAccumulateJitError::BranchOutOfRange);
             }
+        }
+        if let Some((branch, target)) = term_overflow_branch.zip(term_overflow_word)
+            && !assembler.patch_conditional_branch(branch, target)
+        {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
         }
         debug_assert!(chunk_exhausted_word < completed_word);
 
@@ -599,6 +639,9 @@ impl CompiledQuickLongAccumulateLoop {
             }
             NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
                 Ok(QuickLongAccumulateJitOutcome::ChunkExhausted)
+            }
+            NATIVE_LONG_ACCUMULATE_TERM_OVERFLOW => {
+                Ok(QuickLongAccumulateJitOutcome::TermOverflow)
             }
             NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => {
                 Ok(QuickLongAccumulateJitOutcome::SumOverflow)
@@ -650,19 +693,23 @@ impl QuickLongAccumulateJitCache {
         state: &mut NativeLongAccumulateState,
         iteration_budget: u64,
     ) -> Option<Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError>> {
-        if !matches!(plan.term, QuickLongTerm::Induction) {
-            return None;
-        }
         let program = self
             .compiled
-            .get_or_init(|| CompiledQuickLongAccumulateLoop::compile().ok())
+            .get_or_init(|| match plan.term {
+                QuickLongTerm::Induction => CompiledQuickLongAccumulateLoop::compile().ok(),
+                QuickLongTerm::InductionPlusConst { addend, .. } => {
+                    CompiledQuickLongAccumulateLoop::compile_with_addend(addend).ok()
+                }
+                _ => None,
+            })
             .as_ref()?;
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call(state, iteration_budget);
         if matches!(
             outcome,
-            Ok(QuickLongAccumulateJitOutcome::SumOverflow)
+            Ok(QuickLongAccumulateJitOutcome::TermOverflow)
+                | Ok(QuickLongAccumulateJitOutcome::SumOverflow)
                 | Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
                 | Err(_)
         ) {

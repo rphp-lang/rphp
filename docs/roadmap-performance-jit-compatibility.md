@@ -1054,9 +1054,30 @@ The first isolated region benchmark uses the existing 10-million-iteration
 and the native region a 0.00571 s median: approximately 3.55x faster, or a 71.9
 percent time reduction. Local PHP 8.4.12 CLI with OPcache/JIT disabled records
 a 0.02518 s median on the same script, so this narrow RPHP native region is
-about 4.41x faster than PHP without JIT. The next widening step should lower
-`InductionPlusConst` without weakening these resume contracts, then move the
-same chunk/status ABI to more general typed loop IR.
+about 4.41x faster than PHP without JIT.
+
+Constant-term widening checkpoint (2026-08-03):
+`QuickLongTerm::InductionPlusConst` now uses the same whole-region lowering.
+The invariant addend is materialized once before the native backedge rather
+than passed through the state ABI or reconstructed per iteration. The original
+induction-only machine loop remains unchanged. The widened block performs a
+separate checked term addition and returns `TermOverflow` before either the
+term TMP or accumulator is published; the VM resumes exactly at the plan's
+`term_ip`. Sum and increment exits retain their previous transaction boundary.
+
+A two-call PHP test first warms `plusTwo(0, 100)` and then enters native code at
+`PHP_INT_MAX - 1`, forces term overflow, replays the original term instruction,
+and observes the canonical typed-return `TypeError`. Together with direct ABI
+coverage and an ordinary 100,000-iteration PHP loop, the focused ARM64 suite
+now contains 17 tests.
+
+On the existing 50-million-iteration `bench_scalar_loop.php` workload, seven
+interleaved runs produce a 0.09967 s median for the Rust quick region, 0.03520 s
+for the widened native region, and 0.17060 s for local PHP 8.4.12 without JIT.
+Native execution is therefore about 2.83x faster than RPHP's no-JIT region and
+4.85x faster than PHP, with identical `1250000025000000` output. The next step
+is to move this chunk/status ABI from these two handwritten recurrence shapes
+into the more general typed loop IR.
 
 ### Nice to have: persistent compiled artifacts
 
