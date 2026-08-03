@@ -26,7 +26,8 @@ pub use aarch64::{
     NativeLongAccumulateState, QuickLongAccumulateJitCache, QuickLongAccumulateJitError,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
     NativeStraightLongLoopResult, NativeStraightLongOperation,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, QuickLongAccumulateJitOutcome,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    QuickLongAccumulateJitOutcome,
     QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache,
     ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
 };

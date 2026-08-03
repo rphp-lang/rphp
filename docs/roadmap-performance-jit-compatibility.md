@@ -1255,14 +1255,43 @@ faster than the previous RPHP JIT fallback, 5.81x faster than RPHP without JIT,
 and 2.43x faster than PHP tracing JIT on this admitted direct-method shape. The
 first native measurement is a modest 0.02354 s cold outlier.
 
-The existing nested `bench_scalar_method.php` is a useful boundary test: its
-`add(mul(...))` call tree is intentionally rejected by this first slice. Ten
-order-rotated runs retain identical `37499992500000` output with medians of
-approximately 0.11107 s current RPHP JIT, 0.11209 s preceding RPHP JIT,
-0.10161 s RPHP without JIT, 0.04634 s PHP tracing JIT, and 0.09324 s PHP without
-JIT. This confirms both safe fallback and the next concrete optimization:
-recursively flatten guarded nested scalar-call trees into one native scalar
-program without materializing intermediate PHP call frames.
+Nested scalar-call flattening checkpoint (2026-08-03): the same region builder
+now recursively consumes compiler-proven Init/Send/DoFcall trees and emits one
+linear native scalar program. Each call's direct CV/Long-constant arguments,
+single checked caller-side arithmetic argument, straight scalar body, and
+output feed the next call without constructing an intermediate PHP call frame.
+Invariant caller CVs are assigned stable runtime slots and shared across the
+tree; native temporaries use separate dynamically allocated slots.
+
+The compiled cache stores the exact ordered identity list for all inner and
+outer targets, not a hash or only the root method. A changed inner receiver
+class therefore cannot reuse code compiled for a structurally identical outer
+call. Any arithmetic failure inside the tree resumes the root initializer and
+replays the pure call tree canonically; failure after the final tree result
+resumes only the caller sum. Successful profiling counts are recorded for every
+target, including repeated targets, in the same post-order as the established
+Rust recursive evaluator.
+
+New regressions cover `add(mul(...))`, checked caller-side arithmetic feeding a
+nested tree, a changed inner target under a stable outer target, and overflow
+inside the nested method followed by canonical root replay. Together with the
+direct-method cases, the focused ARM64 suite now contains 40 tests. Both full
+default and `jit-prototype` release matrices pass.
+
+Ten order-rotated `max-perf`, native-CPU runs of the existing
+`bench_scalar_method.php` retain identical `37499992500000` output. Medians are
+approximately 0.00951 s for the nested RPHP JIT, 0.11157 s for the preceding
+direct-method JIT that rejected the tree, 0.10195 s for RPHP without JIT,
+0.04641 s for PHP 8.4.12 tracing JIT, and 0.09360 s for PHP without JIT. The
+flattened tree is therefore about 11.73x faster than the preceding fallback,
+10.72x faster than RPHP without JIT, and 4.88x faster than PHP tracing JIT on
+this admitted two-method shape. The first native run is a 0.01485 s cold
+outlier.
+
+A separate ten-run alternating A/B of the already-admitted direct-method
+benchmark records approximately 0.01784 s for the nested-capable build and
+0.01991 s for its direct-only predecessor. The generalized target-list guard
+and dynamic slot allocator therefore do not regress the original direct shape.
 
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
@@ -1271,10 +1300,10 @@ approximately 0.06182 s RPHP JIT, 0.02575 s PHP tracing JIT, 0.06029 s RPHP
 without JIT, and 0.06432 s PHP without JIT. The RPHP prototype adds about 2.5
 percent overhead on this unadmitted path, while PHP's mature tracing JIT is
 about 2.40x faster than RPHP. This is now the clearest coverage gap: the next
-widening decision after nested scalar-call flattening should be driven by mixed
-typed regions and calls. Direct scalar-method composition and
-non-materialized arithmetic are now covered; internal branches, general object
-effects, strings, and arrays remain outside native code.
+widening decision should be driven by mixed typed regions and calls. Direct and
+nested scalar-method composition plus non-materialized arithmetic are now
+covered; internal branches, general object effects, strings, and arrays remain
+outside native code.
 
 ### Nice to have: persistent compiled artifacts
 

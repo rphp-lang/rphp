@@ -546,6 +546,165 @@ fn real_php_guarded_scalar_method_enters_native_accumulate_region() {
 }
 
 #[test]
+fn real_php_nested_scalar_methods_enter_one_native_accumulate_region() {
+    let source = "<?php class MathTree { public function add($left, $right) { return $left + $right; } public function mul($left, $right) { return $left * $right; } } $math = new MathTree(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $math->add($i, $math->mul($i, 2)); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:14999850000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a nested scalar-method accumulate loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn nested_scalar_methods_lower_checked_caller_argument_expressions() {
+    let source = "<?php class ExpressionTree { public function add($left, $right) { return $left + $right; } public function mul($left, $right) { return $left * $right; } } $math = new ExpressionTree(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $math->add($i + 1, $math->mul($i, 2)); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:14999950000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a scalar argument-expression loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn nested_scalar_method_guard_rejects_changed_inner_target() {
+    let source = "<?php class OuterMath { public function add($left, $right) { return $left + $right; } } class DoubleMath { public function mul($left, $right) { return $left * $right; } } class TripleMath { public function mul($left, $right) { return $left * ($right + 1); } } function runTree($outer, $inner): int { $sum = 0; for ($i = 0; $i < 1000; $i++) { $sum += $outer->add($i, $inner->mul($i, 2)); } return $sum; } $outer = new OuterMath(); echo runTree($outer, new DoubleMath()) . ':' . runTree($outer, new TripleMath());";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "1498500:1998000"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runTree"))
+        .map(|(_, function)| function)
+        .expect("compiled runTree function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runTree should use a nested scalar-method accumulate loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+}
+
+#[test]
+fn nested_scalar_method_overflow_replays_the_root_call_tree() {
+    let source = "<?php class OuterOverflow { public function add($left, $right) { return $left + $right; } } class InnerOverflow { public function transform($value) { return ($value * 100000000000000000) % 7; } } function runNestedOverflow(): int { $outer = new OuterOverflow(); $inner = new InnerOverflow(); $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += $outer->add($i, $inner->transform($i)); } return $sum; } runNestedOverflow();";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    drop(globals);
+    assert!(matches!(
+        error,
+        execute::VmError::Fatal(message)
+            if message == "Unsupported operand types for %"
+    ));
+    assert!(output.lock().unwrap().is_empty());
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runNestedOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled runNestedOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runNestedOverflow should use a nested scalar-method loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
 fn native_scalar_method_guard_rejects_polymorphic_target() {
     let source = "<?php class FirstKernel { public function transform(int $value): int { return $value + 1; } } class SecondKernel { public function transform(int $value): int { return $value + 2; } } function runKernel($kernel): int { $sum = 0; for ($i = 0; $i < 1000; $i++) { $sum += $kernel->transform($i); } return $sum; } echo runKernel(new FirstKernel()) . ':' . runKernel(new SecondKernel());";
     let tokens = Lexer::new(source).tokenize().unwrap();

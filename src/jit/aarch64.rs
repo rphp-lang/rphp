@@ -683,8 +683,11 @@ fn emit_long_accumulate_state(
 /// Lazy native cache attached to one already-hot quick-loop plan. Cloning a
 /// compiler plan intentionally starts with an empty cache; executable mappings
 /// and profile counters are runtime state rather than compiler metadata.
+pub const NATIVE_QUICK_LONG_MAX_CALL_TARGETS: usize = 8;
+
 struct CachedQuickLongMethodLoop {
-    target_identity: usize,
+    target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+    target_count: u8,
     program: CompiledQuickLongStraightLoop,
 }
 
@@ -740,7 +743,8 @@ impl QuickLongAccumulateJitCache {
 
     pub fn dispatch_method_chunk(
         &self,
-        target_identity: usize,
+        target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+        target_count: u8,
         config: NativeStraightLongLoopConfig,
         slots: &mut [i64; 64],
         iteration_budget: u64,
@@ -751,12 +755,16 @@ impl QuickLongAccumulateJitCache {
                 CompiledQuickLongStraightLoop::compile(config)
                     .ok()
                     .map(|program| CachedQuickLongMethodLoop {
-                        target_identity,
+                        target_identities,
+                        target_count,
                         program,
                     })
             })
             .as_ref()?;
-        if cached.target_identity != target_identity || cached.program.config() != config {
+        if cached.target_count != target_count
+            || cached.target_identities != target_identities
+            || cached.program.config() != config
+        {
             return None;
         }
         self.native_chunks
