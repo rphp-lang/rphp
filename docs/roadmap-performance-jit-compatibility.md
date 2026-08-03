@@ -1660,6 +1660,33 @@ ARM64/JIT tests, including both complete corpus variants, rebinding one cached
 program to distinct activation objects, and a deliberate mid-method property
 overflow with exactly one native side exit.
 
+Power-of-two modulo lowering checkpoint (2026-08-04): all three ARM64 integer
+remainder emitters now recognize a positive or negative constant whose
+magnitude is a power of two. Scalar functions, general straight regions and
+the conditional loop region avoid `SDIV`. The shared signed lowering applies a
+sign bias around the bit mask, preserving truncating PHP results such as
+`-3 % 2 == -1`, and handles `PHP_INT_MIN % -1 == 0` and a divisor of
+`PHP_INT_MIN` without a native side exit. A zero-remainder conditional such as
+`($i % 2) == 0` lowers further to one hoisted mask and an ARM64 `TST` in the
+loop body. Non-power-of-two and dynamic divisors retain the guarded
+`SDIV`/`MSUB` path.
+
+The focused suite now contains 69 ARM64/JIT tests. New differential cases span
+both divisor signs, values from `PHP_INT_MIN` through `PHP_INT_MAX`, direct and
+assigned straight operations, negative-induction conditional loops, and a
+machine-code assertion that the optimized regions contain no `SDIV`.
+
+End-to-end measurement is intentionally recorded as neutral rather than
+claimed as a benchmark win. In 101 randomized before/after process pairs, the
+10-million-iteration modulo benchmark moves from a 7.216 ms median to 7.219 ms
+(+0.04 percent); a 31-pair 100-million-iteration amplification moves from
+71.923 ms to 71.744 ms (-0.25 percent). Output is identical in every run. The
+native function still returns to Rust every 32 iterations for interrupt and
+state publication checks, so the next performance experiment is to measure
+and safely amortize that chunk boundary. Constant-remainder lowering remains
+valuable general code quality and removes a division bottleneck once larger
+regions keep execution native for longer.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

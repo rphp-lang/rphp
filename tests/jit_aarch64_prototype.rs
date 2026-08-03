@@ -46,6 +46,13 @@ fn scalar_plan(
     )
 }
 
+fn contains_signed_divide(code: &[u8]) -> bool {
+    code.chunks_exact(4).any(|bytes| {
+        let word = u32::from_le_bytes(bytes.try_into().unwrap());
+        word & 0xffe0_fc00 == 0x9ac0_0c00
+    })
+}
+
 fn conditional_scalar_plan(
     public_args: u8,
     operations: Vec<ScalarLongOp>,
@@ -372,6 +379,51 @@ fn division_and_modulo_match_checked_scalar_semantics() {
             function.call(&[i64::MIN, -1]).unwrap(),
             ScalarLongJitOutcome::SideExit
         );
+    }
+}
+
+#[test]
+fn constant_power_of_two_modulo_uses_signed_divide_free_lowering() {
+    let values = [
+        i64::MIN,
+        i64::MIN + 1,
+        -17,
+        -8,
+        -3,
+        -1,
+        0,
+        1,
+        3,
+        8,
+        17,
+        i64::MAX,
+    ];
+
+    for divisor in [1, -1, 2, -2, 8, -8, i64::MIN] {
+        let plan = scalar_plan(
+            1,
+            vec![ScalarLongOp {
+                kind: ScalarLongOpKind::Modulo,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(divisor),
+            }],
+            ScalarLongSource::Temporary(0),
+        );
+        let function = CompiledScalarLongProgram::compile(&plan)
+            .expect("constant power-of-two modulo should lower");
+        assert!(
+            !contains_signed_divide(function.code()),
+            "constant modulo by {divisor} must not contain SDIV"
+        );
+
+        for value in values {
+            let expected = value.checked_rem(divisor).unwrap_or(0);
+            assert_eq!(
+                function.call(&[value]).unwrap(),
+                ScalarLongJitOutcome::Value(expected),
+                "incorrect {value} % {divisor}"
+            );
+        }
     }
 }
 
@@ -2009,6 +2061,10 @@ fn general_conditional_loop_ir_lowers_modulo_equality_and_precise_guards() {
     };
     let program = CompiledQuickLongConditionalAccumulateLoop::compile(modulo_even)
         .expect("modulo equality loop should lower");
+    assert!(
+        !contains_signed_divide(program.code()),
+        "power-of-two zero-remainder predicate must not contain SDIV"
+    );
     let mut slots = [0_i64; 64];
     slots[1] = 10;
     let result = program.call(&mut slots, 32).unwrap();
@@ -2034,6 +2090,24 @@ fn general_conditional_loop_ir_lowers_modulo_equality_and_precise_guards() {
     assert!(!result.addition_executed);
     assert_eq!(slots[0], 10);
     assert_eq!(slots[2], 7);
+
+    let negative_remainder = NativeConditionalLongLoopConfig {
+        condition: NativeConditionalLongLoopCondition::ModuloEqual {
+            divisor: 2,
+            rhs: QuickLongOperand::Const(-1),
+        },
+        ..modulo_even
+    };
+    let program = CompiledQuickLongConditionalAccumulateLoop::compile(negative_remainder)
+        .expect("negative signed remainder should lower without division");
+    assert!(!contains_signed_divide(program.code()));
+    let mut slots = [0_i64; 64];
+    slots[0] = -5;
+    slots[1] = 0;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(result.outcome, QuickLongAccumulateJitOutcome::Completed);
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[2], -9);
 
     let zero_divisor = NativeConditionalLongLoopConfig {
         condition: NativeConditionalLongLoopCondition::ModuloEqual {
@@ -2078,13 +2152,10 @@ fn general_conditional_loop_ir_lowers_modulo_equality_and_precise_guards() {
     slots[1] = i64::MIN + 1;
     slots[2] = 0;
     let result = program.call(&mut slots, 32).unwrap();
-    assert_eq!(
-        result.outcome,
-        QuickLongAccumulateJitOutcome::ConditionSideExit
-    );
-    assert!(!result.addition_executed);
-    assert_eq!(slots[0], i64::MIN);
-    assert_eq!(slots[2], 0);
+    assert_eq!(result.outcome, QuickLongAccumulateJitOutcome::Completed);
+    assert!(result.addition_executed);
+    assert_eq!(slots[0], i64::MIN + 1);
+    assert_eq!(slots[2], i64::MIN);
 }
 
 #[test]
@@ -2308,6 +2379,44 @@ fn straight_long_loop_lowers_division_modulo_xor_and_move() {
     assert_eq!(result.failed_operation, Some(0));
     assert_eq!(slots[0], 0);
     assert_eq!(slots[2], 0);
+}
+
+#[test]
+fn straight_binary_constant_power_of_two_modulo_avoids_signed_divide() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Modulo,
+        lhs: QuickLongOperand::Const(-17),
+        rhs: QuickLongOperand::Const(8),
+        result: 2,
+    };
+    operations[1] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Modulo,
+        lhs: QuickLongOperand::Const(i64::MIN),
+        rhs: QuickLongOperand::Const(-1),
+        result: 3,
+        destination: 4,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 2,
+        post_result: None,
+    })
+    .expect("constant power-of-two operations should lower");
+    assert!(!contains_signed_divide(program.code()));
+
+    let mut slots = [0_i64; 64];
+    slots[1] = 1;
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap().outcome,
+        NativeStraightLongLoopOutcome::Completed
+    );
+    assert_eq!(slots[2], -1);
+    assert_eq!(slots[3], 0);
+    assert_eq!(slots[4], 0);
 }
 
 #[test]
@@ -2621,17 +2730,16 @@ fn straight_long_loop_reports_exact_failed_operation_transactionally() {
         ..guarded_config
     };
     let program = CompiledQuickLongStraightLoop::compile(min_modulo_config)
-        .expect("MIN modulo -1 should lower to an operation side exit");
+        .expect("MIN modulo -1 should lower without division");
+    assert!(!contains_signed_divide(program.code()));
     let mut slots = [0_i64; 64];
     slots[0] = i64::MIN;
     slots[1] = i64::MIN + 1;
     let result = program.call(&mut slots, 32).unwrap();
-    assert_eq!(
-        result.outcome,
-        NativeStraightLongLoopOutcome::OperationSideExit
-    );
-    assert_eq!(result.failed_operation, Some(0));
-    assert_eq!(slots[0], i64::MIN);
+    assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+    assert_eq!(result.failed_operation, None);
+    assert_eq!(slots[0], i64::MIN + 1);
+    assert_eq!(slots[2], 0);
 
     guarded_operations[0] = NativeStraightLongOperation::BinaryAssign {
         kind: ScalarLongOpKind::Multiply,

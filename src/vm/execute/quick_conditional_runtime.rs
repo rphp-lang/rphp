@@ -309,6 +309,17 @@ fn native_conditional_long_loop_config(
     })
 }
 
+#[inline]
+fn checked_php_long_modulo(value: i64, divisor: i64) -> Option<i64> {
+    if divisor == -1 {
+        // PHP defines PHP_INT_MIN % -1 as zero even though Rust's checked_rem
+        // reports the corresponding signed-division overflow.
+        Some(0)
+    } else {
+        value.checked_rem(divisor)
+    }
+}
+
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
@@ -342,7 +353,7 @@ fn publish_native_conditional_body_state(
             condition_tmp,
             ..
         } => {
-            let Some(remainder) = induction.checked_rem(divisor) else {
+            let Some(remainder) = checked_php_long_modulo(induction, divisor) else {
                 return false;
             };
             slots[result as usize] = remainder;
@@ -648,9 +659,8 @@ unsafe fn dispatch_quick_long_conditional_kernel(
             slots,
             kernel,
             move |slots, dirty_long_mask, dirty_bool_mask| {
-                let remainder = slots[value as usize]
-                    .checked_rem(divisor)
-                    .ok_or(resume_ip)?;
+                let remainder =
+                    checked_php_long_modulo(slots[value as usize], divisor).ok_or(resume_ip)?;
                 slots[result as usize] = remainder;
                 *dirty_long_mask |= 1u64 << result;
                 let condition = slots[lhs as usize] == quick_long_operand(slots, rhs);
@@ -663,4 +673,3 @@ unsafe fn dispatch_quick_long_conditional_kernel(
         ),
     }
 }
-

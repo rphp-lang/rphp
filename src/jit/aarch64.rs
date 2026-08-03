@@ -126,6 +126,17 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `SUB Xd, Xn, Xm` (64-bit, unshifted register form).
+    fn subtract_register(
+        &mut self,
+        destination: Arm64Register,
+        lhs: Arm64Register,
+        rhs: Arm64Register,
+    ) {
+        let instruction = 0xcb00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode `EOR Xd, Xn, Xm`.
     fn exclusive_or_register(
         &mut self,
@@ -145,6 +156,13 @@ impl Arm64Assembler {
         rhs: Arm64Register,
     ) {
         let instruction = 0x8a00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `TST Xn, Xm`, the `ANDS XZR, Xn, Xm` alias.
+    fn test_registers(&mut self, lhs: Arm64Register, rhs: Arm64Register) {
+        const XZR: u32 = 31;
+        let instruction = 0xea00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | XZR;
         self.words.push(instruction);
     }
 
@@ -317,6 +335,42 @@ impl Arm64Assembler {
         }
         code
     }
+}
+
+/// Return the mask for a signed remainder by a positive or negative power of
+/// two. The magnitude is computed in unsigned space so `i64::MIN` remains a
+/// valid divisor with mask `i64::MAX`.
+#[inline]
+fn signed_power_of_two_remainder_mask(divisor: i64) -> Option<i64> {
+    let magnitude = divisor.unsigned_abs();
+    magnitude
+        .is_power_of_two()
+        .then_some(magnitude.wrapping_sub(1) as i64)
+}
+
+/// Lower PHP's truncating signed remainder for a constant power-of-two
+/// divisor without `SDIV`. A plain `value & mask` is only correct for
+/// non-negative values; the bias preserves negative results such as
+/// `-3 % 2 == -1`.
+fn emit_signed_power_of_two_remainder(
+    assembler: &mut Arm64Assembler,
+    value: Arm64Register,
+    mask: i64,
+    result: Arm64Register,
+    mask_register: Arm64Register,
+    bias: Arm64Register,
+) {
+    if mask == 0 {
+        assembler.move_immediate(result, 0);
+        return;
+    }
+
+    assembler.move_immediate(mask_register, mask);
+    assembler.arithmetic_shift_right(bias, value, 63);
+    assembler.bitwise_and_register(bias, bias, mask_register);
+    assembler.add_register(result, value, bias);
+    assembler.bitwise_and_register(result, result, mask_register);
+    assembler.subtract_register(result, result, bias);
 }
 
 struct ExecutableMemory {
@@ -920,9 +974,9 @@ struct NativeConditionalLongLoopControl {
 /// ```
 ///
 /// `condition` is either `induction < invariant` or
-/// `(induction % constant) == invariant`. The latter guards the two values for
-/// which AArch64 `SDIV` does not have PHP's observable behaviour and leaves
-/// through a precise condition side exit.
+/// `(induction % constant) == invariant`. Zero divisors leave through a
+/// precise condition side exit. Power-of-two divisors use a signed mask
+/// lowering, including PHP's defined `PHP_INT_MIN % -1 == 0` corner case.
 pub struct CompiledQuickLongConditionalAccumulateLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -947,7 +1001,6 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         let remainder = Arm64Register::from_code(10);
         let addition_executed = Arm64Register::from_code(11);
         let control = Arm64Register::from_code(12);
-        let guard = Arm64Register::from_code(13);
 
         // x2 carries the control pointer at the ABI boundary, but becomes the
         // induction register inside the leaf function.
@@ -963,7 +1016,10 @@ impl CompiledQuickLongConditionalAccumulateLoop {
                 emit_native_long_operand(&mut assembler, rhs, condition_operand);
             }
             NativeConditionalLongLoopCondition::ModuloEqual { divisor, rhs } => {
-                assembler.move_immediate(condition_operand, divisor);
+                assembler.move_immediate(
+                    condition_operand,
+                    signed_power_of_two_remainder_mask(divisor).unwrap_or(divisor),
+                );
                 emit_native_long_operand(&mut assembler, rhs, condition_rhs);
             }
         }
@@ -995,20 +1051,35 @@ impl CompiledQuickLongConditionalAccumulateLoop {
                     .push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
                 None
             }
+            NativeConditionalLongLoopCondition::ModuloEqual {
+                divisor,
+                rhs: QuickLongOperand::Const(0),
+            } if signed_power_of_two_remainder_mask(divisor).is_some() => {
+                // For either sign of a power-of-two divisor, the remainder is
+                // zero exactly when all masked dividend bits are zero. This
+                // avoids both SDIV and the signed-remainder correction.
+                assembler.test_registers(induction, condition_operand);
+                Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
+            }
             NativeConditionalLongLoopCondition::ModuloEqual { divisor, .. } => {
-                if divisor == -1 {
-                    assembler.move_immediate(guard, i64::MIN);
-                    assembler.compare_registers(induction, guard);
-                    condition_side_exit_branches
-                        .push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
+                if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
+                    emit_signed_power_of_two_remainder(
+                        &mut assembler,
+                        induction,
+                        mask,
+                        remainder,
+                        condition_operand,
+                        quotient,
+                    );
+                } else {
+                    assembler.signed_divide(quotient, induction, condition_operand);
+                    assembler.multiply_subtract(
+                        remainder,
+                        quotient,
+                        condition_operand,
+                        induction,
+                    );
                 }
-                assembler.signed_divide(quotient, induction, condition_operand);
-                assembler.multiply_subtract(
-                    remainder,
-                    quotient,
-                    condition_operand,
-                    induction,
-                );
                 assembler.compare_registers(remainder, condition_rhs);
                 Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
             }
@@ -1537,23 +1608,28 @@ impl CompiledQuickLongStraightLoop {
                         config.induction_slot,
                         induction,
                     );
-                    assembler.move_immediate(rhs, divisor);
                     if divisor == 0 {
                         assembler.compare_registers(induction, induction);
                         operation_side_exit_branches.push((
                             assembler.conditional_branch_placeholder(Arm64Condition::Equal),
                             index as u8,
                         ));
+                    } else if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
+                        emit_signed_power_of_two_remainder(
+                            &mut assembler,
+                            lhs,
+                            mask,
+                            result,
+                            rhs,
+                            auxiliary,
+                        );
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
                     } else {
-                        if divisor == -1 {
-                            assembler.move_immediate(guard, i64::MIN);
-                            assembler.compare_registers(lhs, guard);
-                            operation_side_exit_branches.push((
-                                assembler
-                                    .conditional_branch_placeholder(Arm64Condition::Equal),
-                                index as u8,
-                            ));
-                        }
+                        assembler.move_immediate(rhs, divisor);
                         assembler.signed_divide(auxiliary, lhs, rhs);
                         assembler.multiply_subtract(result, auxiliary, rhs, lhs);
                         assembler.store_u64(
@@ -1705,6 +1781,10 @@ impl CompiledQuickLongStraightLoop {
                     emit_checked_straight_binary(
                         &mut assembler,
                         kind,
+                        match rhs_operand {
+                            QuickLongOperand::Const(value) => Some(value),
+                            QuickLongOperand::Slot(_) => None,
+                        },
                         lhs,
                         rhs,
                         result,
@@ -1743,6 +1823,10 @@ impl CompiledQuickLongStraightLoop {
                     emit_checked_straight_binary(
                         &mut assembler,
                         kind,
+                        match rhs_operand {
+                            QuickLongOperand::Const(value) => Some(value),
+                            QuickLongOperand::Slot(_) => None,
+                        },
                         lhs,
                         rhs,
                         result,
@@ -2257,6 +2341,7 @@ fn validate_straight_long_binary(
 fn emit_checked_straight_binary(
     assembler: &mut Arm64Assembler,
     kind: ScalarLongOpKind,
+    rhs_constant: Option<i64>,
     lhs: Arm64Register,
     rhs: Arm64Register,
     result: Arm64Register,
@@ -2290,7 +2375,7 @@ fn emit_checked_straight_binary(
                 operation_index,
             ));
         }
-        ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
+        ScalarLongOpKind::IntDivide => {
             assembler.compare_with_zero(rhs);
             side_exit_branches.push((
                 assembler.conditional_branch_placeholder(Arm64Condition::Equal),
@@ -2312,9 +2397,35 @@ fn emit_checked_straight_binary(
                 return Err(QuickLongAccumulateJitError::BranchOutOfRange);
             }
 
-            if kind == ScalarLongOpKind::IntDivide {
-                assembler.signed_divide(result, lhs, rhs);
+            assembler.signed_divide(result, lhs, rhs);
+        }
+        ScalarLongOpKind::Modulo => {
+            if let Some(mask) = rhs_constant.and_then(signed_power_of_two_remainder_mask) {
+                emit_signed_power_of_two_remainder(
+                    assembler, lhs, mask, result, rhs, auxiliary,
+                );
             } else {
+                assembler.compare_with_zero(rhs);
+                side_exit_branches.push((
+                    assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+                    operation_index,
+                ));
+
+                assembler.move_immediate(guard, -1);
+                assembler.compare_registers(rhs, guard);
+                let not_minus_one =
+                    assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+                assembler.move_immediate(guard, i64::MIN);
+                assembler.compare_registers(lhs, guard);
+                side_exit_branches.push((
+                    assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+                    operation_index,
+                ));
+                let safe_remainder = assembler.word_count();
+                if !assembler.patch_conditional_branch(not_minus_one, safe_remainder) {
+                    return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+                }
+
                 assembler.signed_divide(auxiliary, lhs, rhs);
                 assembler.multiply_subtract(result, auxiliary, rhs, lhs);
             }
@@ -3197,10 +3308,23 @@ fn emit_scalar_operation(
             assembler.signed_divide(destination, lhs, rhs);
         }
         ScalarLongOpKind::Modulo => {
-            emit_division_guards(assembler, lhs, rhs, side_exit_branches)?;
-            let quotient = Arm64Register::from_code(4);
-            assembler.signed_divide(quotient, lhs, rhs);
-            assembler.multiply_subtract(destination, quotient, rhs, lhs);
+            if let ScalarLongSource::Constant(divisor) = operation.rhs
+                && let Some(mask) = signed_power_of_two_remainder_mask(divisor)
+            {
+                emit_signed_power_of_two_remainder(
+                    assembler,
+                    lhs,
+                    mask,
+                    destination,
+                    rhs,
+                    Arm64Register::from_code(4),
+                );
+            } else {
+                emit_division_guards(assembler, lhs, rhs, side_exit_branches)?;
+                let quotient = Arm64Register::from_code(4);
+                assembler.signed_divide(quotient, lhs, rhs);
+                assembler.multiply_subtract(destination, quotient, rhs, lhs);
+            }
         }
     }
     Ok(())
