@@ -1084,63 +1084,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::CallUserFuncArray => {
-                // Compiler-lowered call_user_func_array(callback, args). The
-                // callback is resolved at this opcode's own call site and the
-                // packed-array/direct-internal path can therefore avoid both
-                // the stdlib wrapper frame and the callback frame.
-                let callback_raw = unsafe {
-                    &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
-                };
-                let callback = if callback_raw.is_reference() {
-                    unsafe { &*callback_raw.as_ref_ptr() }
-                } else {
-                    callback_raw
-                };
-                let args_raw = unsafe {
-                    &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
-                };
-                let args = if args_raw.is_reference() {
-                    unsafe { &*args_raw.as_ref_ptr() }
-                } else {
-                    args_raw
-                };
-
-                let ip = unsafe {
-                    (opline as *const Instruction)
-                        .offset_from(op_array.instructions.as_ptr()) as usize
-                };
-                let cache_slot = unsafe {
-                    op_array.cache.as_ptr().add(ip)
-                        as *mut crate::vm::instruction::InlineCache
-                };
-                let caller_class = get_caller_class(frame, eg);
-                let result = crate::stdlib::invoke_call_user_func_array(
-                    callback,
-                    args,
-                    eg,
-                    caller_class.as_deref(),
-                    Some(cache_slot),
-                )?;
-
-                if let Some(exc) = eg.exception.take() {
-                    match throw_in_frame(eg, frame, exc) {
-                        ThrowResult::Handled(new_frame, new_op_array) => {
-                            frame = new_frame;
-                            op_array = new_op_array;
-                            continue;
-                        }
-                        ThrowResult::Unhandled(thrown) => {
-                            eg.exception = Some(thrown);
-                            return Ok(());
-                        }
+                match op_call_user_func_array(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(new_frame, new_op_array) => {
+                        frame = new_frame;
+                        op_array = new_op_array;
+                        continue;
                     }
-                }
-
-                if opline.result_type != OpType::Unused {
-                    let result_ptr = unsafe {
-                        (*frame).get_op_mut(opline.result as u32, opline.result_type)
-                    };
-                    unsafe { slot_set(result_ptr, result) };
+                    ColdResult::Unhandled(thrown) => {
+                        eg.exception = Some(thrown);
+                        return Ok(());
+                    }
+                    _ => {}
                 }
             }
 
@@ -2685,124 +2639,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchStaticProp => {
-                // Look up static property from class definition (used for enum cases)
-                let class_name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                let prop_name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
-                let cls = class_name_val.as_str().unwrap_or("");
-                let prop = prop_name_val.as_str().unwrap_or("");
-
-                let mut found = false;
-                if let Some(class_def) = eg.class_table.get(cls) {
-                    for (pname, default, _vis, _declaring) in &class_def.properties {
-                        if pname == prop {
-                            if let Some(val) = default {
-                                unsafe { slot_set(result_ptr, val.clone()) };
-                                found = true;
-                            }
-                            break;
-                        }
-                    }
-                }
-                if !found {
-                    unsafe { slot_set(result_ptr, Value::null()) };
-                }
+                op_fetch_static_prop(eg, frame, op_array, opline);
             }
 
             OpCode::Instanceof => {
-                let obj_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                let class_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let target = class_name.as_str().unwrap_or("");
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
-                let is_instance = if let Some(obj) = obj_val.as_object() {
-                    eg.class_is_a(&obj.class_name, target)
-                } else {
-                    false
-                };
-                unsafe { slot_set(result_ptr, Value::bool(is_instance)) };
+                op_instanceof(eg, frame, op_array, opline);
             }
 
             OpCode::FetchConst => {
-                if opline.extended_value == 1 {
-                    // Define mode: const FOO = value;
-                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                    let value_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                    let name = name_val.as_str().unwrap_or("").to_string();
-                    let value = value_val.clone();
-                    eg.define_constant(&name, value).map_err(|e| VmError::Fatal(e))?;
-                } else {
-                    // Read mode: fetch constant value
-                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                    let name = name_val.as_str().unwrap_or("");
-                    let value = eg.find_constant(name).ok_or_else(|| {
-                        VmError::Fatal(format!("Undefined constant \"{}\"", name))
-                    })?;
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                    unsafe { slot_set(result_ptr, value) };
-                }
+                op_fetch_const(eg, frame, op_array, opline)?;
             }
 
             OpCode::BindDefaultParam => {
-                // If CV slot is NOT undef (arg was passed), skip default init
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                let is_undef = unsafe { (*cv_ptr).is_undef() };
-                if !is_undef {
-                    // Jump past the default expr computation + AssignCv
-                    let target = opline.op2 as usize;
-                    unsafe {
-                        (*frame).opline = op_array.instructions.as_ptr().add(target);
-                    }
+                if op_bind_default_param(frame, op_array, opline) {
                     continue;
                 }
-                // Otherwise fall through — next instructions compute and assign default
             }
 
             OpCode::BindGlobal => {
-                // Bind a CV to a global variable: copy eg.globals[name] into CV
-                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let name = name_val.as_str().unwrap_or("").to_string();
-                if let Some(val) = eg.globals.get(&name) {
-                    let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                    unsafe { slot_set(cv_ptr, val.clone()) };
-                }
-                // If not in globals, CV stays undef/null — that's fine, it will be written back on return
+                op_bind_global(eg, frame, op_array, opline);
             }
 
             OpCode::BindStatic => {
-                // Bind a CV to a static variable
-                let name_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let var_name = name_val.as_str().unwrap_or("").to_string();
-                let func_name_val = &op_array.literals[opline.extended_value as usize];
-                let func_name = func_name_val.as_str().unwrap_or("").to_string();
-
-                let cv_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, OpType::Cv) };
-                if let Some(func_statics) = eg.static_vars.get(&func_name) {
-                    if let Some(val) = func_statics.get(&var_name) {
-                        unsafe { slot_set(cv_ptr, val.clone()) };
-                    } else {
-                        // First call — initialize with default value
-                        if opline.result_type != OpType::Unused {
-                            let default_val = unsafe {
-                                &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
-                            };
-                            unsafe { slot_set(cv_ptr, default_val.clone()) };
-                        } else {
-                            unsafe { slot_set(cv_ptr, Value::null()) };
-                        }
-                    }
-                } else {
-                    // First call — no statics for this function yet, use default
-                    if opline.result_type != OpType::Unused {
-                        let default_val = unsafe {
-                            &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
-                        };
-                        unsafe { slot_set(cv_ptr, default_val.clone()) };
-                    } else {
-                        unsafe { slot_set(cv_ptr, Value::null()) };
-                    }
-                }
+                op_bind_static(eg, frame, op_array, opline);
             }
 
             OpCode::Return => {
@@ -3233,46 +3092,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::CreateClosure => {
-                // op1 = CONST function name, result = TMP(closure value)
-                // Resolve function pointer via inline cache (first call does string lookup,
-                // subsequent calls use cached pointer).
-                let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
-                let cached = op_array.cache[ip].func;
-                let func_ptr = if !cached.is_null() {
-                    cached
-                } else {
-                    let name_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-                    let name = name_val.as_str().unwrap_or_else(|| {
-                        panic!("CreateClosure: op1 must be a function name string");
-                    });
-                    let ptr = eg.find_function(name).unwrap_or_else(|| {
-                        panic!("CreateClosure: closure function {} not found", name);
-                    });
-                    // Cache for next time (closures in loops)
-                    unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = ptr; }
-                    ptr
-                };
-                let num_captures = opline.extended_value as usize;
-                let closure = PhpClosure {
-                    func: func_ptr,
-                    captures: Vec::with_capacity(num_captures),
-                    has_heap_captures: false,
-                };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                unsafe { frame_tmp_set(frame, result_ptr, Value::closure(closure)) };
+                op_create_closure(eg, frame, op_array, opline);
             }
 
             OpCode::ClosureUseVar => {
-                // op1 = TMP(closure), op2 = CV(captured variable)
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let cloned_val = val.clone();
-                let closure_ptr = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
-                let closure_val = unsafe { &mut *closure_ptr };
-                let php_closure = closure_val.as_closure_mut().expect("ClosureUseVar: op1 must be a closure");
-                if cloned_val.needs_cleanup() {
-                    php_closure.has_heap_captures = true;
-                }
-                php_closure.captures.push(cloned_val);
+                op_closure_use_var(frame, op_array, opline);
             }
 
             OpCode::NullSafeCheck => {
@@ -3289,4 +3113,3 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         unsafe { (*frame).opline = opline_ptr.add(1); }
     }
 }
-

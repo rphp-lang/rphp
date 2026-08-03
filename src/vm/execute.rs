@@ -5847,6 +5847,7 @@ fn execute_full_call<'a>(
     }
 }
 
+include!("execute/baseline_dispatch_cold.rs");
 include!("execute/baseline_dispatch.rs");
 
 #[derive(Clone, Copy)]
