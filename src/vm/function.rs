@@ -507,6 +507,9 @@ pub struct ScalarLongCall {
 /// their compact SSA identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarStringSource {
+    /// Borrowed public String argument. The compact executor retains only its
+    /// length, so no heap ownership crosses the typed boundary.
+    Input(u8),
     Temporary(u8),
 }
 
@@ -549,6 +552,7 @@ pub struct ComposedTypedLongFunctionPlan {
     pub public_args: u8,
     pub long_argument_mask: u8,
     pub object_argument_mask: u8,
+    pub string_argument_mask: u8,
     pub program: ScalarLongProgram<ComposedTypedLongOp, 1>,
 }
 

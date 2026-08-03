@@ -3490,9 +3490,11 @@ fn resolve_composed_body_source(
 #[inline(always)]
 fn resolve_composed_string_source(
     source: ScalarStringSource,
+    arguments: &[Option<usize>; 8],
     temporaries: &[Option<usize>; COMPOSED_SCALAR_MAX_OPS],
 ) -> Option<usize> {
     match source {
+        ScalarStringSource::Input(index) => arguments[index as usize],
         ScalarStringSource::Temporary(index) => temporaries[index as usize],
     }
 }
@@ -3917,6 +3919,7 @@ unsafe fn evaluate_quick_composed_leaf_body(
 unsafe fn evaluate_quick_composed_typed_body(
     plan: &ComposedTypedLongFunctionPlan,
     arguments: &[i64; 8],
+    string_arguments: &[Option<usize>; 8],
     scalar_plans: &[*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
     string_plans: &[*const ScalarStringFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
 ) -> Option<i64> {
@@ -3977,7 +3980,11 @@ unsafe fn evaluate_quick_composed_typed_body(
             }
             ComposedTypedLongOp::StringConcatLiteral { value, literal_len } => {
                 string_temporaries[operation_index] = Some(
-                    resolve_composed_string_source(*value, &string_temporaries)?
+                    resolve_composed_string_source(
+                        *value,
+                        string_arguments,
+                        &string_temporaries,
+                    )?
                         .checked_add(*literal_len as usize)?,
                 );
                 0
@@ -3985,6 +3992,7 @@ unsafe fn evaluate_quick_composed_typed_body(
             ComposedTypedLongOp::StringLength(source) => {
                 i64::try_from(resolve_composed_string_source(
                     *source,
+                    string_arguments,
                     &string_temporaries,
                 )?).ok()?
             }
@@ -7605,6 +7613,10 @@ enum QuickResolvedObjectOp {
         user: *const UserFunction,
         plan: *const ObjectLongFunctionPlan,
     },
+    ComposedTypedMethod {
+        target: *const FunctionCommon,
+        plan: *const ComposedTypedLongFunctionPlan,
+    },
     ComposedProperty {
         outer_receiver: *const Value,
         outer_target: *const FunctionCommon,
@@ -7643,7 +7655,8 @@ impl QuickObjectCallRecorder<'_> {
                     QuickResolvedObjectOp::PropertyMethod { target, .. }
                     | QuickResolvedObjectOp::PropertyGetter { target, .. }
                     | QuickResolvedObjectOp::ScalarMethod { target, .. }
-                    | QuickResolvedObjectOp::ObjectLongMethod { target, .. } => {
+                    | QuickResolvedObjectOp::ObjectLongMethod { target, .. }
+                    | QuickResolvedObjectOp::ComposedTypedMethod { target, .. } => {
                         record_scalar_calls_bulk(&*target, *count);
                     }
                     QuickResolvedObjectOp::ComposedProperty {
@@ -7758,6 +7771,56 @@ fn quick_object_long_arguments_match(
 }
 
 #[cfg(feature = "quick-loops")]
+fn quick_composed_typed_arguments_match(
+    user: &UserFunction,
+    plan: &ComposedTypedLongFunctionPlan,
+    arguments: &[QuickObjectLongArgument; 8],
+    argument_count: u8,
+) -> bool {
+    if plan.public_args != argument_count
+        || plan.object_argument_mask != 0
+        || plan.program.operations.iter().any(|operation| {
+            matches!(
+                operation,
+                ComposedTypedLongOp::Call(_) | ComposedTypedLongOp::StringCall(_)
+            )
+        })
+    {
+        return false;
+    }
+    for (index, source) in arguments
+        .iter()
+        .copied()
+        .take(argument_count as usize)
+        .enumerate()
+    {
+        let bit = 1u8 << index;
+        let matches_plan = match source {
+            QuickObjectLongArgument::Long(_) => plan.long_argument_mask & bit != 0,
+            QuickObjectLongArgument::StringSlot(_) => plan.string_argument_mask & bit != 0,
+        };
+        if !matches_plan {
+            return false;
+        }
+        let hint = user
+            .common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        if !matches!(
+            (hint, source),
+            (ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int,
+                QuickObjectLongArgument::Long(_))
+                | (ParamTypeHint::String, QuickObjectLongArgument::StringSlot(_))
+        ) {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "quick-loops")]
 unsafe fn resolve_quick_object_ops(
     eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
@@ -7861,20 +7924,34 @@ unsafe fn resolve_quick_object_ops(
                     call.guard,
                     call.argument_count as usize,
                 )?;
-                let object_plan = (&*user).object_long_plan.as_deref()?;
-                if !quick_object_long_arguments_match(
-                    &*user,
-                    object_plan,
-                    &call.arguments,
-                    call.argument_count,
-                ) {
-                    return None;
-                }
-                QuickResolvedObjectOp::ObjectLongMethod {
-                    receiver,
-                    target,
-                    user,
-                    plan: object_plan,
+                if let Some(typed_plan) = (&*user).composed_typed_long_plan.as_deref()
+                    && quick_composed_typed_arguments_match(
+                        &*user,
+                        typed_plan,
+                        &call.arguments,
+                        call.argument_count,
+                    )
+                {
+                    QuickResolvedObjectOp::ComposedTypedMethod {
+                        target,
+                        plan: typed_plan,
+                    }
+                } else {
+                    let object_plan = (&*user).object_long_plan.as_deref()?;
+                    if !quick_object_long_arguments_match(
+                        &*user,
+                        object_plan,
+                        &call.arguments,
+                        call.argument_count,
+                    ) {
+                        return None;
+                    }
+                    QuickResolvedObjectOp::ObjectLongMethod {
+                        receiver,
+                        target,
+                        user,
+                        plan: object_plan,
+                    }
                 }
             }
             QuickLongOp::ComposedPropertyCall {
@@ -9345,6 +9422,7 @@ unsafe fn run_quick_long_accumulate_loop(
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
     let mut quick_composed_string_plans =
         [std::ptr::null(); COMPOSED_SCALAR_MAX_OPS];
+    let quick_composed_string_arguments = [None; 8];
     let mut quick_composed_leaf_body = false;
     if let QuickLongTerm::ScalarFunctionCall {
         guard,
@@ -9394,7 +9472,9 @@ unsafe fn run_quick_long_accumulate_loop(
                     composed_plan.long_argument_mask,
                     composed_plan.object_argument_mask,
                 )
-            } else if let Some(typed_plan) = user.composed_typed_long_plan.as_deref() {
+            } else if let Some(typed_plan) = user.composed_typed_long_plan.as_deref()
+                && typed_plan.string_argument_mask == 0
+            {
                 scalar_call_typed_plan = typed_plan;
                 (
                     typed_plan.public_args,
@@ -9693,6 +9773,7 @@ unsafe fn run_quick_long_accumulate_loop(
                             evaluate_quick_composed_typed_body(
                                 &*scalar_call_typed_plan,
                                 &arguments,
+                                &quick_composed_string_arguments,
                                 &quick_composed_plans,
                                 &quick_composed_string_plans,
                             )
@@ -11591,6 +11672,94 @@ unsafe fn evaluate_quick_object_long_method(
         &*user,
         &*plan,
     )
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn evaluate_quick_composed_typed_method(
+    plan: *const ComposedTypedLongFunctionPlan,
+    arguments: &[QuickObjectLongArgument; 8],
+    argument_count: u8,
+    long_slots: &[i64; 64],
+    string_state: &QuickStringSlotState,
+) -> Option<i64> {
+    let mut scalar_arguments = [0i64; 8];
+    for (index, source) in arguments
+        .iter()
+        .copied()
+        .take(argument_count as usize)
+        .enumerate()
+    {
+        match source {
+            QuickObjectLongArgument::Long(source) => {
+                scalar_arguments[index] = quick_long_operand(long_slots, source);
+            }
+            QuickObjectLongArgument::StringSlot(slot) => {
+                let value = string_state.value(slot);
+                if value.is_reference() {
+                    return None;
+                }
+                scalar_arguments[index] = i64::try_from(value.as_str()?.len()).ok()?;
+            }
+        }
+    }
+
+    let plan = &*plan;
+    if plan.program.output_count != 1 {
+        return None;
+    }
+    let mut temporaries = [0i64; COMPOSED_SCALAR_MAX_OPS];
+    for (operation_index, operation) in plan.program.operations.iter().enumerate() {
+        temporaries[operation_index] = match operation {
+            ComposedTypedLongOp::Arithmetic(operation) => {
+                let lhs = resolve_composed_body_source(
+                    operation.lhs,
+                    &scalar_arguments,
+                    &temporaries,
+                );
+                let rhs = resolve_composed_body_source(
+                    operation.rhs,
+                    &scalar_arguments,
+                    &temporaries,
+                );
+                apply_scalar_long_op(operation.kind, lhs, rhs)?
+            }
+            ComposedTypedLongOp::StringConcatLiteral { value, literal_len } => {
+                resolve_quick_direct_string_source(
+                    *value,
+                    &scalar_arguments,
+                    &temporaries,
+                )?
+                .checked_add(*literal_len as i64)?
+            }
+            ComposedTypedLongOp::StringLength(source) => {
+                resolve_quick_direct_string_source(
+                    *source,
+                    &scalar_arguments,
+                    &temporaries,
+                )?
+            }
+            ComposedTypedLongOp::Call(_) | ComposedTypedLongOp::StringCall(_) => return None,
+        };
+    }
+    Some(resolve_composed_body_source(
+        plan.program.outputs[0],
+        &scalar_arguments,
+        &temporaries,
+    ))
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+fn resolve_quick_direct_string_source(
+    source: ScalarStringSource,
+    arguments: &[i64; 8],
+    temporaries: &[i64; COMPOSED_SCALAR_MAX_OPS],
+) -> Option<i64> {
+    match source {
+        ScalarStringSource::Input(index) => arguments.get(index as usize).copied(),
+        ScalarStringSource::Temporary(index) => temporaries.get(index as usize).copied(),
+    }
 }
 
 #[inline(always)]
@@ -14425,24 +14594,33 @@ unsafe fn run_quick_long_ops_loop(
                 }
             }
             QuickLongOp::ObjectLongMethodCall { call, result } => {
-                let QuickResolvedObjectOp::ObjectLongMethod {
-                    receiver,
-                    user,
-                    plan,
-                    ..
-                } = *resolved_object_ops.get_unchecked(op_index)
-                else {
-                    unreachable!("resolved object-long method operation")
+                let value = match *resolved_object_ops.get_unchecked(op_index) {
+                    QuickResolvedObjectOp::ObjectLongMethod {
+                        receiver,
+                        user,
+                        plan,
+                        ..
+                    } => evaluate_quick_object_long_method(
+                        receiver,
+                        user,
+                        plan,
+                        &call.arguments,
+                        call.argument_count,
+                        &slots,
+                        &string_state,
+                    ),
+                    QuickResolvedObjectOp::ComposedTypedMethod { plan, .. } => {
+                        evaluate_quick_composed_typed_method(
+                            plan,
+                            &call.arguments,
+                            call.argument_count,
+                            &slots,
+                            &string_state,
+                        )
+                    }
+                    _ => unreachable!("resolved object-long method operation"),
                 };
-                if let Some(value) = evaluate_quick_object_long_method(
-                    receiver,
-                    user,
-                    plan,
-                    &call.arguments,
-                    call.argument_count,
-                    &slots,
-                    &string_state,
-                ) {
+                if let Some(value) = value {
                     slots[result as usize] = value;
                     dirty_long_mask |= 1u64 << result;
                     object_call_recorder.record(op_index);

@@ -2965,6 +2965,41 @@ fn composed_scalar_argument_masks(function: &UserFunction) -> Option<(u8, u8)> {
     Some((long_mask, object_mask))
 }
 
+fn composed_typed_argument_masks(function: &UserFunction) -> Option<(u8, u8, u8)> {
+    let common = &function.common;
+    let public_args = common.sig.public_arity();
+    if common.sig.is_variadic
+        || common.sig.ref_args != 0
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+        )
+    {
+        return None;
+    }
+
+    let mut long_mask = 0u8;
+    let mut object_mask = 0u8;
+    let mut string_mask = 0u8;
+    for index in 0..public_args as usize {
+        let hint = common
+            .sig
+            .param_type_hints
+            .get(index)
+            .unwrap_or(&ParamTypeHint::None);
+        match hint {
+            ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int => {
+                long_mask |= 1u8 << index;
+            }
+            ParamTypeHint::ClassName(_) => object_mask |= 1u8 << index,
+            ParamTypeHint::String => string_mask |= 1u8 << index,
+            _ => return None,
+        }
+    }
+    Some((long_mask, object_mask, string_mask))
+}
+
 fn composed_scalar_long_source(
     function: &UserFunction,
     long_argument_mask: u8,
@@ -3195,8 +3230,8 @@ pub(crate) fn build_composed_typed_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    let (long_argument_mask, object_argument_mask) =
-        composed_scalar_argument_masks(function)?;
+    let (long_argument_mask, object_argument_mask, string_argument_mask) =
+        composed_typed_argument_masks(function)?;
     if common.plan.ret != ReturnStrategy::Fast
         || op_array.instructions.len() > 32
     {
@@ -3205,15 +3240,22 @@ pub(crate) fn build_composed_typed_long_function_plan(
 
     let mut temporary_results = HashMap::new();
     let mut string_results = HashMap::new();
+    for argument in 0..public_args as usize {
+        if string_argument_mask & (1u8 << argument) != 0 {
+            string_results.insert(
+                common.sig.param_cv_index(argument as u32) as u16,
+                ScalarStringSource::Input(argument as u8),
+            );
+        }
+    }
     let mut operations = Vec::new();
-    let mut contains_call = false;
     let mut contains_string = false;
     let mut ip = 0usize;
 
     while ip < op_array.instructions.len() {
         let instruction = &op_array.instructions[ip];
         if instruction.opcode == OpCode::Return {
-            if instruction.extended_value == 0 || !contains_call || !contains_string {
+            if instruction.extended_value == 0 || !contains_string {
                 return None;
             }
             let result = composed_scalar_long_source(
@@ -3227,6 +3269,7 @@ pub(crate) fn build_composed_typed_long_function_plan(
                 public_args: public_args as u8,
                 long_argument_mask,
                 object_argument_mask,
+                string_argument_mask,
                 program: ScalarLongProgram {
                     operations: operations.into_boxed_slice(),
                     outputs: [result],
@@ -3312,7 +3355,6 @@ pub(crate) fn build_composed_typed_long_function_plan(
                     ScalarLongSource::Temporary(result_index),
                 );
             }
-            contains_call = true;
             ip += num_args + 2;
             continue;
         }
@@ -3393,6 +3435,7 @@ pub(crate) fn build_composed_typed_long_function_plan(
             }
             let result_index = operations.len() as u8;
             operations.push(ComposedTypedLongOp::StringLength(source));
+            contains_string = true;
             temporary_results.insert(
                 instruction.result,
                 ScalarLongSource::Temporary(result_index),

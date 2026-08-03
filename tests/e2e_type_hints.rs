@@ -6,7 +6,7 @@ use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::function::{
     CallStrategy, ComposedScalarLongOp, ComposedTypedLongOp, ReturnStrategy,
-    ScalarLongCallGuard, ScalarLongOpKind,
+    ScalarLongCallGuard, ScalarLongOpKind, ScalarStringSource,
 };
 use rphp::vm::instruction::{
     KnownScalarType, CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
@@ -1354,6 +1354,37 @@ function consume(int $value): int {
     assert!(plan.program.operations.iter().any(|operation| {
         matches!(operation, ComposedTypedLongOp::StringConcatLiteral { .. })
     }));
+}
+
+#[test]
+fn test_direct_typed_string_argument_builds_borrowed_length_plan() {
+    let result = compile_types(r#"<?php
+class Scorer {
+    public function score(int $value, string $key): int {
+        return $value + strlen($key);
+    }
+}
+"#);
+    let score = result
+        .class_defs
+        .iter()
+        .find(|class| class.name == "Scorer")
+        .unwrap()
+        .methods
+        .iter()
+        .find(|(name, _, _, _, _)| name == "score")
+        .map(|(_, _, _, _, function)| function)
+        .unwrap();
+    let plan = score
+        .composed_typed_long_plan
+        .as_deref()
+        .expect("direct borrowed String input plan");
+    assert_eq!(plan.long_argument_mask, 1);
+    assert_eq!(plan.string_argument_mask, 2);
+    assert!(plan.program.operations.iter().any(|operation| matches!(
+        operation,
+        ComposedTypedLongOp::StringLength(ScalarStringSource::Input(1))
+    )));
 }
 
 #[test]

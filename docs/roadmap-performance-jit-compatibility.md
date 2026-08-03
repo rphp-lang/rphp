@@ -1504,6 +1504,35 @@ at about 0.01393 s versus 0.01389 s. The specialized scalar-call trace region
 also remains flat at 0.01394 s versus 0.01391 s. Planner, mixed no-JIT, native
 updated-value side-exit, and direct native guard tests cover both executors.
 
+Direct typed String-input checkpoint (2026-08-03): the shared composed typed
+IR can now represent a borrowed public String argument directly, rather than
+requiring every String value to originate in a nested user call. A method such
+as `int + strlen(string)` therefore carries one general typed program with
+separate Long and String argument masks. The warmed receiver class and method
+cache are still checked once at mixed-region entry; no method identity or
+unchecked heap pointer is embedded in the program.
+
+The first runtime implementation exposed an important executor constraint:
+reusing the general nested-call evaluator allocated several large temporary
+arrays per iteration and regressed no-JIT performance. The final direct-method
+executor instead stores borrowed String lengths in the same eight scalar input
+lanes and uses one compact operation-temporary array. It supports checked Long
+arithmetic, String length and literal-length composition without constructing
+a PHP frame or a 64-slot object-plan frame. Programs containing nested calls
+retain the established guarded evaluator and are not selected by this direct
+method path.
+
+Twenty-one sequential native-CPU `max-perf` measurements of
+`bench_mixed_trace_guard_loop.php` produce identical output and medians of
+approximately 0.02426 s for RPHP JIT and 0.02526 s for RPHP without JIT,
+compared with 0.02840 s and 0.02726 s for the preceding binaries. The general
+typed method input therefore improves the mixed workload about 14.6 percent
+in the JIT build and 7.3 percent without JIT. PHP tracing JIT remains near
+0.00951 s, confirming that the majority of the remaining gap is the enclosing
+String-state and dynamic-hash region rather than the now-compacted method
+frame. Compiler, mixed-region, 109 core, 108 type-hint, 107 quick-loop and 59
+ARM64 prototype tests cover the checkpoint.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of
