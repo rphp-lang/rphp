@@ -1374,6 +1374,43 @@ typed scalar callee across an otherwise unsupported control-flow edge, rather
 than micro-tuning the arithmetic leaf or adding another source-shaped loop
 kernel.
 
+Unified scalar-call region checkpoint (2026-08-03): direct scalar functions
+now enter the same whole-loop native call region as monomorphic scalar methods.
+The recursive region builder already understood both `InitFcall` and
+`InitMethodCall`; only its outer admission gate and method-specific cache naming
+excluded the function term. The cache, prepared dispatch, slot ABI, exact
+target-identity list and root-call resume state are now explicitly shared
+`call` concepts, preventing later widening from accidentally selecting only
+one dispatch form.
+
+Simple function calls retain their compact `ScalarFunctionCall` argument plan
+and fused no-JIT executor. A genuinely nested function/function or
+function/method expression is recognized separately as a generic
+`ScalarCallTree`, so adding tree coverage does not slow the common leaf. The
+tree detector records all Long and object input guards, the native builder
+recursively lowers checked caller argument expressions and every proven scalar
+callee, and an inner arithmetic failure resumes the original root initializer.
+Tests cover a direct function region, `addNative($i + 1,
+mulNative($i, 2))`, a mixed function/method tree as one native region, and
+canonical root replay after an inner function overflow. The focused ARM64
+suite now contains 56 passing tests.
+
+Eight order-rotated `max-perf`, native-CPU runs of
+`bench_scalar_call_loop.php` produce identical `100000000000000` output and
+medians of approximately 0.01330 s for RPHP JIT, 0.04886 s for RPHP without
+JIT, 0.03325 s for PHP tracing JIT, and 0.07560 s for PHP without JIT. The
+whole-call region is therefore about 3.67x faster than the Rust quick executor
+and 2.50x faster than PHP tracing JIT. Its first native run is a visible
+0.02786 s cold outlier; the following measurements stay near 0.0131--0.0134 s.
+
+The new `bench_scalar_function_tree.php` independently exercises two nested
+functions plus a checked caller-side argument expression. Eight matched runs
+produce identical `37499997500000` output and medians of approximately
+0.00776 s RPHP JIT, 0.10382 s RPHP without JIT, 0.03775 s PHP tracing JIT, and
+0.07632 s PHP without JIT. Flattening the entire guarded tree is about 13.38x
+faster than RPHP's no-JIT recursive quick path and 4.87x faster than PHP tracing
+JIT on this admitted shape.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of

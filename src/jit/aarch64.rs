@@ -718,7 +718,7 @@ fn emit_long_accumulate_state(
 /// and profile counters are runtime state rather than compiler metadata.
 pub const NATIVE_QUICK_LONG_MAX_CALL_TARGETS: usize = 8;
 
-struct CachedQuickLongMethodLoop {
+struct CachedQuickLongCallLoop {
     target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     target_count: u8,
     program: CompiledQuickLongStraightLoop,
@@ -726,7 +726,7 @@ struct CachedQuickLongMethodLoop {
 
 pub struct QuickLongAccumulateJitCache {
     compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
-    method_compiled: OnceCell<Option<CachedQuickLongMethodLoop>>,
+    call_compiled: OnceCell<Option<CachedQuickLongCallLoop>>,
     native_entries: Cell<u64>,
     native_chunks: Cell<u64>,
     side_exits: Cell<u64>,
@@ -736,7 +736,7 @@ impl QuickLongAccumulateJitCache {
     pub const fn new() -> Self {
         Self {
             compiled: OnceCell::new(),
-            method_compiled: OnceCell::new(),
+            call_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
             native_chunks: Cell::new(0),
             side_exits: Cell::new(0),
@@ -774,18 +774,18 @@ impl QuickLongAccumulateJitCache {
         Some(outcome)
     }
 
-    pub fn prepare_method_program(
+    pub fn prepare_call_program(
         &self,
         target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
         target_count: u8,
         config: NativeStraightLongLoopConfig,
     ) -> Option<&CompiledQuickLongStraightLoop> {
         let cached = self
-            .method_compiled
+            .call_compiled
             .get_or_init(|| {
                 CompiledQuickLongStraightLoop::compile(config)
                     .ok()
-                    .map(|program| CachedQuickLongMethodLoop {
+                    .map(|program| CachedQuickLongCallLoop {
                         target_identities,
                         target_count,
                         program,
@@ -801,7 +801,7 @@ impl QuickLongAccumulateJitCache {
         Some(&cached.program)
     }
 
-    pub fn dispatch_prepared_method_chunk(
+    pub fn dispatch_prepared_call_chunk(
         &self,
         program: &CompiledQuickLongStraightLoop,
         slots: &mut [i64; 64],
@@ -829,11 +829,11 @@ impl QuickLongAccumulateJitCache {
     }
 
     pub fn is_compiled(&self) -> bool {
-        matches!(self.compiled.get(), Some(Some(_))) || self.is_method_compiled()
+        matches!(self.compiled.get(), Some(Some(_))) || self.is_call_compiled()
     }
 
-    pub fn is_method_compiled(&self) -> bool {
-        matches!(self.method_compiled.get(), Some(Some(_)))
+    pub fn is_call_compiled(&self) -> bool {
+        matches!(self.call_compiled.get(), Some(Some(_)))
     }
 
     pub fn native_entries(&self) -> u64 {
@@ -866,7 +866,7 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
         formatter
             .debug_struct("QuickLongAccumulateJitCache")
             .field("compiled", &self.is_compiled())
-            .field("method_compiled", &self.is_method_compiled())
+            .field("call_compiled", &self.is_call_compiled())
             .field("native_entries", &self.native_entries())
             .field("native_chunks", &self.native_chunks())
             .field("side_exits", &self.side_exits())

@@ -132,10 +132,10 @@ pub enum QuickLongTerm {
         argument_count: u8,
         term_tmp: u16,
     },
-    /// A scalar method call tree whose object receivers are invariant CVs.
-    /// Runtime validates each receiver class against the monomorphic method
-    /// cache before executing any compiler-proven scalar body.
-    ScalarMethodCall {
+    /// A nested scalar function/method call tree. Object receivers, when
+    /// present, are invariant CVs. Runtime validates every cached target
+    /// before executing any compiler-proven scalar body.
+    ScalarCallTree {
         guard: ScalarLongCallGuard,
         do_fcall_ip: usize,
         long_input_mask: u64,
@@ -1454,7 +1454,7 @@ pub fn detect_long_induction_loop(
     })
 }
 
-fn detect_scalar_method_call_tree(
+fn detect_scalar_call_tree(
     op_array: &OpArray,
     initializer_ip: usize,
     total_slots: u32,
@@ -1540,7 +1540,7 @@ fn detect_scalar_method_call_tree(
         }
 
         if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
-            let nested_do_fcall_ip = detect_scalar_method_call_tree(
+            let nested_do_fcall_ip = detect_scalar_call_tree(
                 op_array,
                 cursor,
                 total_slots,
@@ -1644,7 +1644,70 @@ pub fn detect_long_accumulate_loop(
     }
 
     let first_body = op_array.instructions[header_ip + 2];
-    let scalar_call_shape = if first_body.opcode == OpCode::InitFcall {
+    let call_ip = header_ip + 2;
+    let nested_function_call_shape = if first_body.opcode == OpCode::InitFcall {
+        let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+        if total_slots > 64 {
+            return None;
+        }
+        let mut long_input_mask = 0u64;
+        let mut object_input_mask = 0u64;
+        let do_fcall_ip = detect_scalar_call_tree(
+            op_array,
+            call_ip,
+            total_slots,
+            &mut long_input_mask,
+            &mut object_input_mask,
+            0,
+        )?;
+        let contains_nested_call = op_array.instructions[call_ip + 1..do_fcall_ip]
+            .iter()
+            .any(|instruction| {
+                matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall)
+            });
+        if contains_nested_call {
+            if long_input_mask & object_input_mask != 0 {
+                return None;
+            }
+            let argument_count = u8::try_from(first_body.op1).ok()?;
+            let do_fcall = op_array.instructions[do_fcall_ip];
+            let sum_ip = do_fcall_ip + 1;
+            let sum = *op_array.instructions.get(sum_ip)?;
+            if backedge_ip != do_fcall_ip + 4
+                || do_fcall.result_type != OpType::Tmp
+                || sum.opcode != OpCode::Add_CvTmp
+                || sum.op1_type != OpType::Cv
+                || sum.op2_type != OpType::Tmp
+                || sum.op2 != do_fcall.result
+                || sum.result_type != OpType::Tmp
+            {
+                return None;
+            }
+            Some((
+                sum.op1,
+                QuickLongTerm::ScalarCallTree {
+                    guard: ScalarLongCallGuard::FunctionCache {
+                        cache_ip: u32::try_from(call_ip).ok()?,
+                    },
+                    do_fcall_ip,
+                    long_input_mask,
+                    object_input_mask,
+                    argument_count,
+                    term_tmp: do_fcall.result,
+                },
+                sum.result,
+                sum_ip,
+                sum_ip + 1,
+            ))
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let scalar_call_shape = if nested_function_call_shape.is_some() {
+        nested_function_call_shape
+    } else if first_body.opcode == OpCode::InitFcall {
         let argument_count = first_body.op1 as usize;
         if argument_count > 8 {
             return None;
@@ -1777,7 +1840,7 @@ pub fn detect_long_accumulate_loop(
         let mut long_input_mask = 0u64;
         let mut object_input_mask = 0u64;
         let call_ip = header_ip + 2;
-        let do_fcall_ip = detect_scalar_method_call_tree(
+        let do_fcall_ip = detect_scalar_call_tree(
             op_array,
             call_ip,
             total_slots,
@@ -1804,7 +1867,7 @@ pub fn detect_long_accumulate_loop(
         }
         Some((
             sum.op1,
-            QuickLongTerm::ScalarMethodCall {
+            QuickLongTerm::ScalarCallTree {
                 guard: ScalarLongCallGuard::MethodCache {
                     cache_ip: u32::try_from(call_ip).ok()?,
                     receiver_slot: first_body.op1,
@@ -2069,7 +2132,7 @@ pub fn detect_long_accumulate_loop(
         | QuickLongTerm::StringLength { term_tmp, .. }
         | QuickLongTerm::AbsLong { term_tmp, .. }
         | QuickLongTerm::ScalarFunctionCall { term_tmp, .. }
-        | QuickLongTerm::ScalarMethodCall { term_tmp, .. } => {
+        | QuickLongTerm::ScalarCallTree { term_tmp, .. } => {
             temporary_slots.push(term_tmp);
         }
     }
@@ -4387,7 +4450,7 @@ for ($i = 0; $i < 100; $i++) {
         );
         assert!(matches!(
             plan.term,
-            QuickLongTerm::ScalarMethodCall {
+            QuickLongTerm::ScalarCallTree {
                 argument_count: 2,
                 long_input_mask,
                 object_input_mask,
@@ -4401,6 +4464,33 @@ for ($i = 0; $i < 100; $i++) {
                     ..
                 })
                 && do_fcall_ip == guard.cache_ip() + 7
+        ));
+    }
+
+    #[test]
+    fn detects_nested_scalar_function_accumulation_as_call_tree() {
+        let plan = quick_plan(
+            "<?php
+function addNative($left, $right) { return $left + $right; }
+function mulNative($left, $right) { return $left * $right; }
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += addNative($i + 1, mulNative($i, 2));
+}
+",
+        );
+        assert!(matches!(
+            plan.term,
+            QuickLongTerm::ScalarCallTree {
+                argument_count: 2,
+                long_input_mask,
+                object_input_mask: 0,
+                guard,
+                do_fcall_ip,
+                ..
+            } if long_input_mask == 1u64 << 1
+                && matches!(guard, ScalarLongCallGuard::FunctionCache { .. })
+                && do_fcall_ip > guard.cache_ip()
         ));
     }
 

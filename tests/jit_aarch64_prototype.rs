@@ -828,10 +828,167 @@ fn real_php_guarded_scalar_method_enters_native_accumulate_region() {
             _ => None,
         })
         .expect("compiler should select a scalar-method accumulate loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_scalar_function_enters_native_accumulate_region() {
+    let source = "<?php function calculateNative(int $value): int { return ($value * 2) + 1; } $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += calculateNative($i); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:10000000000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a scalar-function accumulate loop");
+    assert!(plan.native_jit().is_call_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn nested_scalar_functions_enter_one_native_accumulate_region() {
+    let source = "<?php function addNative(int $left, int $right): int { return $left + $right; } function mulNative(int $left, int $right): int { return $left * $right; } $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += addNative($i + 1, mulNative($i, 2)); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:14999950000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a nested scalar-function accumulate loop");
+    assert!(plan.native_jit().is_call_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn mixed_function_method_tree_enters_one_native_accumulate_region() {
+    let source = "<?php class NativeMultiplier { public function mul(int $left, int $right): int { return $left * $right; } } function addNative(int $left, int $right): int { return $left + $right; } $math = new NativeMultiplier(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += addNative($i, $math->mul($i, 2)); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:14999850000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a mixed scalar-call accumulate loop");
+    assert!(plan.native_jit().is_call_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn native_scalar_function_overflow_resumes_canonical_root_call() {
+    let source = "<?php function overflowNative(int $value): int { return ($value * 100000000000000000) % 7; } function runFunctionOverflow(): int { $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += overflowNative($i); } return $sum; } runFunctionOverflow();";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    drop(globals);
+    assert!(matches!(
+        error,
+        execute::VmError::Fatal(message)
+            if message == "Unsupported operand types for %"
+    ));
+    assert!(output.lock().unwrap().is_empty());
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runFunctionOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled runFunctionOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runFunctionOverflow should use a scalar-function accumulate loop");
+    assert!(plan.native_jit().is_call_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
 #[test]
@@ -863,7 +1020,7 @@ fn real_php_nested_scalar_methods_enter_one_native_accumulate_region() {
             _ => None,
         })
         .expect("compiler should select a nested scalar-method accumulate loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
@@ -898,7 +1055,7 @@ fn nested_scalar_methods_lower_checked_caller_argument_expressions() {
             _ => None,
         })
         .expect("compiler should select a scalar argument-expression loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
@@ -932,7 +1089,7 @@ fn conditional_scalar_method_enters_native_accumulate_region() {
             _ => None,
         })
         .expect("compiler should select a conditional scalar-method loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
@@ -967,7 +1124,7 @@ fn nested_conditional_scalar_method_flattens_with_outer_method() {
             _ => None,
         })
         .expect("compiler should select a nested conditional scalar loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
@@ -1001,7 +1158,7 @@ fn conditional_scalar_method_skips_overflow_in_inactive_arm() {
             _ => None,
         })
         .expect("compiler should select the inactive-overflow scalar loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -1047,7 +1204,7 @@ fn conditional_scalar_method_selected_overflow_replays_canonical_call() {
             _ => None,
         })
         .expect("runSelectedOverflow should use a conditional scalar loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
@@ -1091,7 +1248,7 @@ fn conditional_scalar_method_rejects_polymorphic_target() {
             _ => None,
         })
         .expect("runConditional should use a conditional scalar-method loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
 }
 
@@ -1135,7 +1292,7 @@ fn nested_scalar_method_guard_rejects_changed_inner_target() {
             _ => None,
         })
         .expect("runTree should use a nested scalar-method accumulate loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
 }
 
@@ -1181,7 +1338,7 @@ fn nested_scalar_method_overflow_replays_the_root_call_tree() {
             _ => None,
         })
         .expect("runNestedOverflow should use a nested scalar-method loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
@@ -1225,7 +1382,7 @@ fn native_scalar_method_guard_rejects_polymorphic_target() {
             _ => None,
         })
         .expect("runKernel should use a scalar-method accumulate loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
 }
 
@@ -1271,7 +1428,7 @@ fn native_scalar_method_overflow_resumes_canonical_call() {
             _ => None,
         })
         .expect("runOverflow should use a scalar-method accumulate loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
@@ -1315,7 +1472,7 @@ fn native_scalar_method_sum_overflow_resumes_canonical_add() {
             _ => None,
         })
         .expect("runSumOverflow should use a scalar-method accumulate loop");
-    assert!(plan.native_jit().is_method_compiled());
+    assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
