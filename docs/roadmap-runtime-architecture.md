@@ -95,6 +95,18 @@ independent routing holdout is +0.81 percent. The whole native-mixed vertical
 slice is therefore physically separated with no statistically actionable
 performance change.
 
+Third checkpoint (2026-08-04): the quick-runtime track begins by separating
+object/method resolution and call accounting (416 lines), borrowed packed/hash
+array state (117), retained String state and dynamic-key cache (246), and the
+guarded virtual object-array activation (352). All remain in the execute module
+through `include!`; `execute.rs` falls to 17,731 lines and the native-CPU
+`max-perf` binary again retains the same byte size. The first 101-run A/B put
+typed order and both ledger workloads between -0.61 and -0.28 percent, with
+the routing holdout at -0.44 percent. Untyped order initially
+reported +1.20 percent, so the checkpoint was not accepted on that batch; a
+dedicated 301-pair randomized rerun measured +0.02 percent with overlapping
+quartiles and identical output. No actionable performance change remains.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
