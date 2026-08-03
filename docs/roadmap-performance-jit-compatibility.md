@@ -1191,6 +1191,35 @@ on this four-operation body. PHP's own tracing JIT improves its no-JIT result by
 about 2.25x, confirming that the former near-identical PHP figures came from an
 incorrect JIT invocation.
 
+Scalar-expression widening checkpoint (2026-08-03): the same straight native
+region now accepts checked arithmetic whose result remains in a TMP and feeds a
+later operation. Existing `Binary`, `Add`, and `AddAssign` nodes lower directly;
+the existing two-add `AddAddAssign` fusion expands into two ordered native
+operations. This removes the former requirement that every arithmetic result
+be immediately materialized into a CV. Detection still depends only on typed
+IR, control-flow edges, operands, and the eight-operation capacity.
+
+Each expanded native operation retains its own canonical resume IP. The control
+ABI's failed-operation index therefore commits only successful TMP/CV prefixes
+and resumes the exact arithmetic instruction that overflowed. Direct tests
+cover a three-operation TMP chain and a second-operation overflow after a
+successful unpublished prefix. A real PHP test combines literal/TMP arithmetic
+with a CV-only two-add chain and proves that both enter the same native region.
+The focused ARM64 suite now contains 31 tests, and both full default and
+`jit-prototype` release matrices pass.
+
+Ten order-rotated `max-perf`, native-CPU runs of the previously unseen
+`bench_scalar_expression_chain_loop.php` produce identical
+`729999940,10000004` output. The medians are approximately 0.01376 s for the
+widened RPHP JIT, 0.10712 s for the preceding RPHP JIT binary that rejected the
+shape, 0.10696 s for current RPHP without JIT, 0.03863 s for PHP tracing JIT,
+and 0.06251 s for PHP without JIT. The new region is therefore about 7.79x
+faster than the previous fallback and 2.81x faster than PHP tracing JIT on this
+shape. The first native run is a visible 0.02892 s cold outlier. An eight-run
+A/B check of the already-supported `bench_binary_assign_loop.php` records
+0.01237 s for the widened binary and 0.01260 s for its predecessor, showing no
+regression in the original materialized shape within normal run variance.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of
@@ -1198,9 +1227,10 @@ approximately 0.06182 s RPHP JIT, 0.02575 s PHP tracing JIT, 0.06029 s RPHP
 without JIT, and 0.06432 s PHP without JIT. The RPHP prototype adds about 2.5
 percent overhead on this unadmitted path, while PHP's mature tracing JIT is
 about 2.40x faster than RPHP. This is now the clearest coverage gap: the next
-widening decision should be driven by mixed typed regions and calls, likely
-non-materialized `Binary`/`Assign` chains and scalar method composition before
-attempting general object or array effects in native code.
+widening decision should be driven by mixed typed regions and calls. With
+non-materialized arithmetic now covered, the next boundary is scalar method
+composition under receiver-class and method-identity guards, before attempting
+general object or array effects in native code.
 
 ### Nice to have: persistent compiled artifacts
 

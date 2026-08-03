@@ -12123,25 +12123,63 @@ fn native_quick_long_straight_kernel(
     let mut operations =
         [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut operation_resume_ips = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
-    let mut has_binary_assign = false;
+    let mut operation_count = 0usize;
+    let mut has_materialized_arithmetic = false;
+    let mut append_operation =
+        |operation: NativeStraightLongOperation, resume_ip: usize| -> Option<()> {
+            if operation_count == NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
+                return None;
+            }
+            operations[operation_count] = operation;
+            operation_resume_ips[operation_count] = resume_ip;
+            operation_count += 1;
+            Some(())
+        };
     for (body_index, operation) in plan.ops[1..body_end].iter().copied().enumerate() {
         let plan_index = body_index + 1;
-        let (native_operation, next_target, resume_ip) = match operation {
+        let next_target = match operation {
             QuickLongOp::ModConst {
                 value,
                 divisor,
                 result,
                 next_target,
                 resume_ip,
-            } if result != post_value => (
-                NativeStraightLongOperation::Modulo {
-                    value: QuickLongOperand::Slot(value),
-                    divisor,
-                    result,
-                },
+            } if result != post_value => {
+                append_operation(
+                    NativeStraightLongOperation::Modulo {
+                        value: QuickLongOperand::Slot(value),
+                        divisor,
+                        result,
+                    },
+                    resume_ip,
+                )?;
+                next_target
+            }
+            QuickLongOp::Binary {
+                kind,
+                lhs,
+                rhs,
+                result,
                 next_target,
                 resume_ip,
-            ),
+            } if matches!(
+                kind,
+                ScalarLongOpKind::Add
+                    | ScalarLongOpKind::Subtract
+                    | ScalarLongOpKind::Multiply
+            ) && result != post_value =>
+            {
+                append_operation(
+                    NativeStraightLongOperation::Binary {
+                        kind,
+                        lhs,
+                        rhs,
+                        result,
+                    },
+                    resume_ip,
+                )?;
+                next_target
+            }
             QuickLongOp::BinaryAssign {
                 kind,
                 lhs,
@@ -12158,8 +12196,7 @@ fn native_quick_long_straight_kernel(
             ) && result != post_value
                 && destination != post_value =>
             {
-                has_binary_assign = true;
-                (
+                append_operation(
                     NativeStraightLongOperation::BinaryAssign {
                         kind,
                         lhs,
@@ -12167,23 +12204,98 @@ fn native_quick_long_straight_kernel(
                         result,
                         destination,
                     },
-                    next_target,
                     resume_ip,
-                )
+                )?;
+                has_materialized_arithmetic = true;
+                next_target
+            }
+            QuickLongOp::Add {
+                lhs,
+                rhs,
+                result,
+                next_target,
+                resume_ip,
+            } if result != post_value => {
+                append_operation(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(lhs),
+                        rhs: QuickLongOperand::Slot(rhs),
+                        result,
+                    },
+                    resume_ip,
+                )?;
+                next_target
+            }
+            QuickLongOp::AddAssign {
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                add_resume_ip,
+            } if result != post_value && destination != post_value => {
+                append_operation(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(lhs),
+                        rhs: QuickLongOperand::Slot(rhs),
+                        result,
+                        destination,
+                    },
+                    add_resume_ip,
+                )?;
+                has_materialized_arithmetic = true;
+                next_target
+            }
+            QuickLongOp::AddAddAssign {
+                first_lhs,
+                first_rhs,
+                first_result,
+                second_lhs,
+                second_rhs,
+                second_result,
+                destination,
+                next_target,
+                first_resume_ip,
+                second_resume_ip,
+            } if first_result != post_value
+                && second_result != post_value
+                && destination != post_value =>
+            {
+                append_operation(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(first_lhs),
+                        rhs: QuickLongOperand::Slot(first_rhs),
+                        result: first_result,
+                    },
+                    first_resume_ip,
+                )?;
+                append_operation(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(second_lhs),
+                        rhs: QuickLongOperand::Slot(second_rhs),
+                        result: second_result,
+                        destination,
+                    },
+                    second_resume_ip,
+                )?;
+                has_materialized_arithmetic = true;
+                next_target
             }
             _ => return None,
         };
         if next_target.op_index() != Some(plan_index + 1) {
             return None;
         }
-        operations[body_index] = native_operation;
-        operation_resume_ips[body_index] = resume_ip;
     }
-    if !has_binary_assign {
+    if !has_materialized_arithmetic {
         return None;
     }
 
-    let operation_count = (body_end - 1) as u8;
+    let operation_count = operation_count as u8;
     let config = NativeStraightLongLoopConfig {
         induction_slot: post_value,
         bound: header_rhs,

@@ -1172,6 +1172,12 @@ pub enum NativeStraightLongOperation {
         divisor: i64,
         result: u16,
     },
+    Binary {
+        kind: ScalarLongOpKind,
+        lhs: QuickLongOperand,
+        rhs: QuickLongOperand,
+        result: u16,
+    },
     BinaryAssign {
         kind: ScalarLongOpKind,
         lhs: QuickLongOperand,
@@ -1186,6 +1192,7 @@ impl NativeStraightLongOperation {
         match self {
             Self::Unused => 0,
             Self::Modulo { result, .. } => 1u64 << result,
+            Self::Binary { result, .. } => 1u64 << result,
             Self::BinaryAssign {
                 result,
                 destination,
@@ -1342,6 +1349,43 @@ impl CompiledQuickLongStraightLoop {
                         );
                     }
                 }
+                NativeStraightLongOperation::Binary {
+                    kind,
+                    lhs: lhs_operand,
+                    rhs: rhs_operand,
+                    result: result_slot,
+                } => {
+                    emit_straight_long_operand(
+                        &mut assembler,
+                        lhs_operand,
+                        lhs,
+                        config.induction_slot,
+                        induction,
+                    );
+                    emit_straight_long_operand(
+                        &mut assembler,
+                        rhs_operand,
+                        rhs,
+                        config.induction_slot,
+                        induction,
+                    );
+                    emit_checked_straight_binary(
+                        &mut assembler,
+                        kind,
+                        lhs,
+                        rhs,
+                        result,
+                        auxiliary,
+                        guard,
+                        index as u8,
+                        &mut operation_side_exit_branches,
+                    );
+                    assembler.store_u64(
+                        result,
+                        Arm64Register::X0,
+                        long_slot_offset(result_slot),
+                    );
+                }
                 NativeStraightLongOperation::BinaryAssign {
                     kind,
                     lhs: lhs_operand,
@@ -1363,36 +1407,17 @@ impl CompiledQuickLongStraightLoop {
                         config.induction_slot,
                         induction,
                     );
-                    match kind {
-                        ScalarLongOpKind::Add => {
-                            assembler.add_register_checked(result, lhs, rhs);
-                            operation_side_exit_branches.push((
-                                assembler
-                                    .conditional_branch_placeholder(Arm64Condition::Overflow),
-                                index as u8,
-                            ));
-                        }
-                        ScalarLongOpKind::Subtract => {
-                            assembler.subtract_register_checked(result, lhs, rhs);
-                            operation_side_exit_branches.push((
-                                assembler
-                                    .conditional_branch_placeholder(Arm64Condition::Overflow),
-                                index as u8,
-                            ));
-                        }
-                        ScalarLongOpKind::Multiply => {
-                            assembler.multiply_register(result, lhs, rhs);
-                            assembler.signed_multiply_high(auxiliary, lhs, rhs);
-                            assembler.arithmetic_shift_right(guard, result, 63);
-                            assembler.compare_registers(auxiliary, guard);
-                            operation_side_exit_branches.push((
-                                assembler
-                                    .conditional_branch_placeholder(Arm64Condition::NotEqual),
-                                index as u8,
-                            ));
-                        }
-                        _ => unreachable!("validated straight binary operation"),
-                    }
+                    emit_checked_straight_binary(
+                        &mut assembler,
+                        kind,
+                        lhs,
+                        rhs,
+                        result,
+                        auxiliary,
+                        guard,
+                        index as u8,
+                        &mut operation_side_exit_branches,
+                    );
                     assembler.store_u64(
                         result,
                         Arm64Register::X0,
@@ -1600,6 +1625,16 @@ fn validate_straight_long_loop_config(
                 validate_straight_long_output(result, config.induction_slot)?;
                 output_mask |= 1u64 << result;
             }
+            NativeStraightLongOperation::Binary {
+                kind,
+                lhs,
+                rhs,
+                result,
+            } => {
+                validate_straight_long_binary(kind, lhs, rhs)?;
+                validate_straight_long_output(result, config.induction_slot)?;
+                output_mask |= 1u64 << result;
+            }
             NativeStraightLongOperation::BinaryAssign {
                 kind,
                 lhs,
@@ -1607,18 +1642,7 @@ fn validate_straight_long_loop_config(
                 result,
                 destination,
             } => {
-                if !matches!(
-                    kind,
-                    ScalarLongOpKind::Add
-                        | ScalarLongOpKind::Subtract
-                        | ScalarLongOpKind::Multiply
-                ) {
-                    return Err(QuickLongAccumulateJitError::InvalidProgram(
-                        "unsupported straight-loop binary operation",
-                    ));
-                }
-                validate_straight_long_operand(lhs)?;
-                validate_straight_long_operand(rhs)?;
+                validate_straight_long_binary(kind, lhs, rhs)?;
                 validate_straight_long_output(result, config.induction_slot)?;
                 validate_straight_long_output(destination, config.induction_slot)?;
                 output_mask |= (1u64 << result) | (1u64 << destination);
@@ -1633,6 +1657,64 @@ fn validate_straight_long_loop_config(
         }
     }
     Ok(())
+}
+
+fn validate_straight_long_binary(
+    kind: ScalarLongOpKind,
+    lhs: QuickLongOperand,
+    rhs: QuickLongOperand,
+) -> Result<(), QuickLongAccumulateJitError> {
+    if !matches!(
+        kind,
+        ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
+    ) {
+        return Err(QuickLongAccumulateJitError::InvalidProgram(
+            "unsupported straight-loop binary operation",
+        ));
+    }
+    validate_straight_long_operand(lhs)?;
+    validate_straight_long_operand(rhs)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_checked_straight_binary(
+    assembler: &mut Arm64Assembler,
+    kind: ScalarLongOpKind,
+    lhs: Arm64Register,
+    rhs: Arm64Register,
+    result: Arm64Register,
+    auxiliary: Arm64Register,
+    guard: Arm64Register,
+    operation_index: u8,
+    side_exit_branches: &mut Vec<(usize, u8)>,
+) {
+    match kind {
+        ScalarLongOpKind::Add => {
+            assembler.add_register_checked(result, lhs, rhs);
+            side_exit_branches.push((
+                assembler.conditional_branch_placeholder(Arm64Condition::Overflow),
+                operation_index,
+            ));
+        }
+        ScalarLongOpKind::Subtract => {
+            assembler.subtract_register_checked(result, lhs, rhs);
+            side_exit_branches.push((
+                assembler.conditional_branch_placeholder(Arm64Condition::Overflow),
+                operation_index,
+            ));
+        }
+        ScalarLongOpKind::Multiply => {
+            assembler.multiply_register(result, lhs, rhs);
+            assembler.signed_multiply_high(auxiliary, lhs, rhs);
+            assembler.arithmetic_shift_right(guard, result, 63);
+            assembler.compare_registers(auxiliary, guard);
+            side_exit_branches.push((
+                assembler.conditional_branch_placeholder(Arm64Condition::NotEqual),
+                operation_index,
+            ));
+        }
+        _ => unreachable!("validated straight binary operation"),
+    }
 }
 
 fn validate_straight_long_operand(

@@ -841,6 +841,90 @@ fn straight_long_loop_lowers_linear_modulo_and_binary_assign_body() {
 }
 
 #[test]
+fn straight_long_loop_lowers_non_materialized_binary_chain() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Multiply,
+        lhs: QuickLongOperand::Slot(0),
+        rhs: QuickLongOperand::Const(73),
+        result: 2,
+    };
+    operations[1] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(2),
+        rhs: QuickLongOperand::Const(20),
+        result: 3,
+    };
+    operations[2] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Subtract,
+        lhs: QuickLongOperand::Slot(3),
+        rhs: QuickLongOperand::Const(7),
+        result: 4,
+        destination: 5,
+    };
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 3,
+        post_result: None,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(config)
+        .expect("non-materialized binary chain should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 10;
+
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+    assert_eq!(slots[0], 10);
+    assert_eq!(slots[2], 657);
+    assert_eq!(slots[3], 677);
+    assert_eq!(slots[4], 670);
+    assert_eq!(slots[5], 670);
+    assert_eq!(config.output_mask_before(0), 0);
+    assert_eq!(config.output_mask_before(1), 1u64 << 2);
+    assert_eq!(
+        config.output_mask_before(2),
+        (1u64 << 2) | (1u64 << 3)
+    );
+
+    let mut overflow_operations = operations;
+    overflow_operations[0] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(0),
+        rhs: QuickLongOperand::Const(1),
+        result: 2,
+    };
+    overflow_operations[1] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(6),
+        rhs: QuickLongOperand::Const(1),
+        result: 3,
+    };
+    let overflow_program = CompiledQuickLongStraightLoop::compile(
+        NativeStraightLongLoopConfig {
+            operations: overflow_operations,
+            ..config
+        },
+    )
+    .expect("checked intermediate binary operation should lower");
+    slots = [0_i64; 64];
+    slots[1] = 1;
+    slots[6] = i64::MAX;
+    let result = overflow_program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(1));
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[2], 1);
+    assert_eq!(slots[3], 0);
+    assert_eq!(slots[5], 0);
+}
+
+#[test]
 fn straight_long_loop_reports_exact_failed_operation_transactionally() {
     let mut operations =
         [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
@@ -1127,6 +1211,37 @@ fn real_php_straight_binary_body_enters_general_native_ir_region() {
             _ => None,
         })
         .expect("compiler should select the straight Long loop IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_scalar_expression_chains_enter_general_native_ir_region() {
+    let source = "<?php $bound = 100000; $left = 2; $right = 3; $literal = 0; $cv = 0; for ($i = 0; $i < $bound; $i++) { $literal = (($i * 73) + 20) - 7; $cv = $i + $left + $right; } echo $i . ':' . $literal . ':' . $cv;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:7299940:100004"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the scalar-expression Long loop IR");
     assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
