@@ -121,6 +121,19 @@ routing holdout range from -0.47 to +0.51 percent. Core, default, no-default,
 quick-loop, type-hint, corpus and ARM64/JIT matrices all pass, so the movement
 is treated as normal process noise rather than an actionable regression.
 
+Fifth checkpoint (2026-08-04): the remaining 1,132-line
+`run_quick_long_ops_loop` dispatcher is isolated as one 1,137-line source unit
+including its structural header. It intentionally stays a single Rust
+function: after the specialized kernels are attempted, its generic operation
+loop is still a measured hot path, so source decomposition must not introduce
+unconditional function calls per operation. `execute.rs` is now 14,089 lines,
+and a reconstruction check verifies all 44,242 moved source bytes. The
+native-CPU `max-perf` binary and Mach-O segments retain the same sizes. Across
+101 randomized A/B pairs, four corpus workloads and the routing holdout range
+from -0.19 to +0.22 percent with identical output. All applicable feature
+matrices pass; the dispatcher extraction is therefore codegen-neutral within
+measurement resolution.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
