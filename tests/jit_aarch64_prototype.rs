@@ -4,28 +4,39 @@
     target_os = "macos"
 ))]
 
+mod common;
+
+use rphp::compiler::compile::Compiler;
+use rphp::compiler::make_user_function;
 use rphp::jit::{
-    Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledScalarLongProgram,
+    Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledQuickLongAccumulateLoop,
+    CompiledScalarLongProgram, NativeLongAccumulateState, QuickLongAccumulateJitError,
+    QuickLongAccumulateJitOutcome, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch,
     ScalarLongJitError, ScalarLongJitOutcome,
 };
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
+use rphp::vm::execute;
 use rphp::vm::function::{
-    ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+    FunctionCommon, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram,
+    ScalarLongSource,
 };
+use rphp::vm::planner::BlockPlan;
 
 fn scalar_plan(
     public_args: u8,
     operations: Vec<ScalarLongOp>,
     output: ScalarLongSource,
 ) -> ScalarLongFunctionPlan {
-    ScalarLongFunctionPlan {
+    ScalarLongFunctionPlan::new(
         public_args,
-        program: ScalarLongProgram {
+        ScalarLongProgram {
             operations: operations.into_boxed_slice(),
             outputs: [output],
             output_count: 1,
         },
-        select: None,
-    }
+        None,
+    )
 }
 
 #[test]
@@ -140,7 +151,7 @@ fn checked_arithmetic_side_exits_before_publishing_an_overflowed_result() {
 }
 
 #[test]
-fn invalid_or_unsupported_ir_is_rejected_before_code_becomes_executable() {
+fn invalid_ir_is_rejected_before_code_becomes_executable() {
     let forward_temporary = scalar_plan(
         1,
         vec![ScalarLongOp {
@@ -154,22 +165,47 @@ fn invalid_or_unsupported_ir_is_rejected_before_code_becomes_executable() {
         CompiledScalarLongProgram::compile(&forward_temporary),
         Err(ScalarLongJitError::InvalidProgram(_))
     ));
+}
 
-    let division = scalar_plan(
-        2,
-        vec![ScalarLongOp {
-            kind: ScalarLongOpKind::IntDivide,
-            lhs: ScalarLongSource::Input(0),
-            rhs: ScalarLongSource::Input(1),
-        }],
-        ScalarLongSource::Temporary(0),
-    );
-    assert!(matches!(
-        CompiledScalarLongProgram::compile(&division),
-        Err(ScalarLongJitError::UnsupportedOperation(
-            ScalarLongOpKind::IntDivide
-        ))
-    ));
+#[test]
+fn division_and_modulo_match_checked_scalar_semantics() {
+    for kind in [ScalarLongOpKind::IntDivide, ScalarLongOpKind::Modulo] {
+        let plan = scalar_plan(
+            2,
+            vec![ScalarLongOp {
+                kind,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Input(1),
+            }],
+            ScalarLongSource::Temporary(0),
+        );
+        let function = CompiledScalarLongProgram::compile(&plan).expect("operation should lower");
+
+        for (lhs, rhs) in [
+            (17_i64, 5_i64),
+            (-17_i64, 5_i64),
+            (17_i64, -5_i64),
+            (-17_i64, -5_i64),
+        ] {
+            let expected = match kind {
+                ScalarLongOpKind::IntDivide => lhs.checked_div(rhs),
+                ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),
+                _ => unreachable!(),
+            }
+            .map(ScalarLongJitOutcome::Value)
+            .unwrap_or(ScalarLongJitOutcome::SideExit);
+            assert_eq!(function.call(&[lhs, rhs]).unwrap(), expected);
+        }
+
+        assert_eq!(
+            function.call(&[123, 0]).unwrap(),
+            ScalarLongJitOutcome::SideExit
+        );
+        assert_eq!(
+            function.call(&[i64::MIN, -1]).unwrap(),
+            ScalarLongJitOutcome::SideExit
+        );
+    }
 }
 
 #[test]
@@ -215,6 +251,8 @@ fn native_checked_arithmetic_matches_rust_over_many_inputs() {
         ScalarLongOpKind::Subtract,
         ScalarLongOpKind::Multiply,
         ScalarLongOpKind::BitwiseXor,
+        ScalarLongOpKind::IntDivide,
+        ScalarLongOpKind::Modulo,
     ];
     let mut state = 0x6a09_e667_f3bc_c909_u64;
 
@@ -245,7 +283,8 @@ fn native_checked_arithmetic_matches_rust_over_many_inputs() {
                 ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
                 ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
                 ScalarLongOpKind::BitwiseXor => Some(lhs ^ rhs),
-                ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => unreachable!(),
+                ScalarLongOpKind::IntDivide => lhs.checked_div(rhs),
+                ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),
             };
             let expected = expected
                 .map(ScalarLongJitOutcome::Value)
@@ -253,4 +292,219 @@ fn native_checked_arithmetic_matches_rust_over_many_inputs() {
             assert_eq!(function.call(&[lhs, rhs]).unwrap(), expected);
         }
     }
+}
+
+#[test]
+fn plan_cache_compiles_only_after_hotness_and_tracks_native_side_exits() {
+    let plan = scalar_plan(
+        2,
+        vec![
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Input(1),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Temporary(0),
+                rhs: ScalarLongSource::Constant(3),
+            },
+        ],
+        ScalarLongSource::Temporary(1),
+    );
+    let mut arguments = [0_i64; 8];
+    arguments[0] = 7;
+    arguments[1] = 5;
+
+    for _ in 1..SCALAR_LONG_JIT_HOT_THRESHOLD {
+        assert_eq!(
+            plan.native_jit().dispatch(&plan, &arguments),
+            ScalarLongJitDispatch::Interpret
+        );
+    }
+    assert!(!plan.native_jit().is_compiled());
+    assert_eq!(
+        plan.native_jit().dispatch(&plan, &arguments),
+        ScalarLongJitDispatch::Value(36)
+    );
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+
+    arguments[0] = i64::MAX;
+    arguments[1] = 1;
+    assert_eq!(
+        plan.native_jit().dispatch(&plan, &arguments),
+        ScalarLongJitDispatch::SideExit
+    );
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn real_php_calls_enter_cached_native_plan_and_fallback_on_overflow() {
+    let call_count = usize::from(SCALAR_LONG_JIT_HOT_THRESHOLD) + 8;
+    let mut source = String::from(
+        "<?php function calc(int $a, int $b): int { return ($a + $b) * 3; } $total = 0;",
+    );
+    for _ in 0..call_count {
+        source.push_str("$total = $total + calc(1, 2);");
+    }
+    source.push_str(
+        "echo $total; try { calc(PHP_INT_MAX, 1); } catch (TypeError $error) { echo ':caught'; }",
+    );
+
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "648:caught"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("calc"))
+        .map(|(_, function)| function)
+        .expect("compiled calc function");
+    let plan = function.scalar_long_plan.as_deref().expect("scalar plan");
+    assert!(plan.native_jit().is_compiled());
+    assert!(plan.native_jit().native_entries() >= 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn native_accumulate_loop_preserves_chunk_and_overflow_boundaries() {
+    let program =
+        CompiledQuickLongAccumulateLoop::compile().expect("loop should lower to ARM64");
+    let mut state = NativeLongAccumulateState {
+        induction: 0,
+        bound: 100,
+        accumulator: 0,
+    };
+
+    assert_eq!(
+        program.call(&mut state, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::ChunkExhausted
+    );
+    assert_eq!(state.induction, 32);
+    assert_eq!(state.accumulator, 496);
+
+    assert_eq!(
+        program.call(&mut state, 64).unwrap(),
+        QuickLongAccumulateJitOutcome::ChunkExhausted
+    );
+    assert_eq!(state.induction, 96);
+    assert_eq!(state.accumulator, 4_560);
+
+    assert_eq!(
+        program.call(&mut state, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::Completed
+    );
+    assert_eq!(state.induction, 100);
+    assert_eq!(state.accumulator, 4_950);
+
+    let mut overflow = NativeLongAccumulateState {
+        induction: 1,
+        bound: 2,
+        accumulator: i64::MAX,
+    };
+    assert_eq!(
+        program.call(&mut overflow, 32).unwrap(),
+        QuickLongAccumulateJitOutcome::SumOverflow
+    );
+    assert_eq!(
+        overflow,
+        NativeLongAccumulateState {
+            induction: 1,
+            bound: 2,
+            accumulator: i64::MAX,
+        },
+        "overflow must not publish the wrapped ADD result"
+    );
+    assert!(matches!(
+        program.call(&mut state, 0),
+        Err(QuickLongAccumulateJitError::ZeroIterationBudget)
+    ));
+    assert!(!program.code().is_empty());
+}
+
+#[test]
+fn real_php_accumulate_loop_enters_native_region() {
+    let source = "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i; } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:4999950000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select an accumulate quick loop");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn native_loop_sum_overflow_resumes_canonical_php_instruction() {
+    let source = "<?php function overflow(): int { $sum = PHP_INT_MAX - 1000; for ($i = 0; $i < 60; $i++) { $sum += $i; } return $sum; } try { overflow(); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let overflow = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("overflow"))
+        .map(|(_, function)| function)
+        .expect("compiled overflow function");
+    let plan = overflow
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("overflow function should have an accumulate plan");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }

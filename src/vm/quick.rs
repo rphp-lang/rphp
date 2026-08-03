@@ -178,6 +178,24 @@ pub struct QuickLongAccumulateLoop {
     pub increment_tmp: Option<u16>,
     pub sum_ip: usize,
     pub increment_ip: usize,
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    native_jit: crate::jit::QuickLongAccumulateJitCache,
+}
+
+impl QuickLongAccumulateLoop {
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    #[inline(always)]
+    pub fn native_jit(&self) -> &crate::jit::QuickLongAccumulateJitCache {
+        &self.native_jit
+    }
 }
 
 /// Guarded induction-only loop:
@@ -2108,6 +2126,12 @@ pub fn detect_long_accumulate_loop(
         increment_tmp,
         sum_ip,
         increment_ip,
+        #[cfg(all(
+            feature = "jit-prototype",
+            target_arch = "aarch64",
+            target_os = "macos"
+        ))]
+        native_jit: crate::jit::QuickLongAccumulateJitCache::new(),
     })
 }
 
@@ -4281,9 +4305,9 @@ for ($i = 0; $i < 100; $i++) {
             outputs: argument_outputs,
             output_count: 2,
         };
-        let body = ScalarLongFunctionPlan {
-            public_args: 2,
-            program: ScalarLongProgram {
+        let body = ScalarLongFunctionPlan::new(
+            2,
+            ScalarLongProgram {
                 operations: vec![
                     ScalarLongOp {
                         kind: ScalarLongOpKind::Multiply,
@@ -4300,8 +4324,8 @@ for ($i = 0; $i < 100; $i++) {
                 outputs: [ScalarLongSource::Temporary(1)],
                 output_count: 1,
             },
-            select: None,
-        };
+            None,
+        );
 
         let fused = compose_quick_scalar_leaf_program(&arguments, &body).unwrap();
         assert_eq!(fused.operations.len(), 3);

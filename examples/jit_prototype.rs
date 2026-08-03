@@ -9,9 +9,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
     };
 
-    let plan = ScalarLongFunctionPlan {
-        public_args: 3,
-        program: ScalarLongProgram {
+    let plan = ScalarLongFunctionPlan::new(
+        3,
+        ScalarLongProgram {
             operations: vec![
                 ScalarLongOp {
                     kind: ScalarLongOpKind::Add,
@@ -28,8 +28,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             outputs: [ScalarLongSource::Temporary(1)],
             output_count: 1,
         },
-        select: None,
-    };
+        None,
+    );
     let function = CompiledScalarLongProgram::compile(&plan)?;
     let first = 7;
     let second = 5;

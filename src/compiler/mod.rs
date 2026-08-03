@@ -1010,15 +1010,15 @@ fn build_straight_scalar_long_function_plan(
                 instruction.op1_type,
                 instruction.op1,
             )?;
-            return Some(Box::new(ScalarLongFunctionPlan {
-                public_args: public_args as u8,
-                program: ScalarLongProgram {
+            return Some(Box::new(ScalarLongFunctionPlan::new(
+                public_args as u8,
+                ScalarLongProgram {
                     operations: operations.into_boxed_slice(),
                     outputs: [result],
                     output_count: 1,
                 },
-                select: None,
-            }));
+                None,
+            )));
         }
 
         if instruction.opcode == OpCode::AssignCv {
@@ -1371,14 +1371,14 @@ fn build_conditional_scalar_long_function_plan(
         )
     };
 
-    Some(Box::new(ScalarLongFunctionPlan {
-        public_args: public_args as u8,
-        program: ScalarLongProgram {
+    Some(Box::new(ScalarLongFunctionPlan::new(
+        public_args as u8,
+        ScalarLongProgram {
             operations: operations.into_boxed_slice(),
             outputs: [when_true],
             output_count: 1,
         },
-        select: Some(ScalarLongSelect {
+        Some(ScalarLongSelect {
             kind,
             lhs,
             rhs,
@@ -1387,7 +1387,7 @@ fn build_conditional_scalar_long_function_plan(
             when_true,
             when_false,
         }),
-    }))
+    )))
 }
 
 const OBJECT_LONG_PLAN_MAX_ARGS: u32 = 8;

@@ -1,4 +1,6 @@
 use crate::vm::function::{ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongSource};
+use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongTerm};
+use std::cell::{Cell, OnceCell};
 use std::ffi::{c_int, c_void};
 use std::fmt;
 use std::io;
@@ -54,8 +56,10 @@ impl Arm64Register {
 #[derive(Debug, Clone, Copy)]
 #[repr(u8)]
 enum Arm64Condition {
+    Equal = 0,
     NotEqual = 1,
     Overflow = 6,
+    GreaterOrEqual = 10,
 }
 
 /// Small binary ARM64 encoder. It emits instruction words directly and never
@@ -138,6 +142,33 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `SDIV Xd, Xn, Xm`.
+    fn signed_divide(
+        &mut self,
+        destination: Arm64Register,
+        lhs: Arm64Register,
+        rhs: Arm64Register,
+    ) {
+        let instruction = 0x9ac0_0c00 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `MSUB Xd, Xn, Xm, Xa`: `Xa - (Xn * Xm)`.
+    fn multiply_subtract(
+        &mut self,
+        destination: Arm64Register,
+        multiplicand: Arm64Register,
+        multiplier: Arm64Register,
+        minuend: Arm64Register,
+    ) {
+        let instruction = 0x9b00_8000
+            | (multiplier.bits() << 16)
+            | (minuend.bits() << 10)
+            | (multiplicand.bits() << 5)
+            | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode the `ASR Xd, Xn, #shift` alias of `SBFM`.
     fn arithmetic_shift_right(
         &mut self,
@@ -158,6 +189,19 @@ impl Arm64Assembler {
     fn compare_registers(&mut self, lhs: Arm64Register, rhs: Arm64Register) {
         const XZR: u32 = 31;
         let instruction = 0xeb00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | XZR;
+        self.words.push(instruction);
+    }
+
+    /// Encode `CMP Xn, XZR` without exposing register 31 through the API.
+    fn compare_with_zero(&mut self, value: Arm64Register) {
+        const XZR: u32 = 31;
+        let instruction = 0xeb00_0000 | (XZR << 16) | (value.bits() << 5) | XZR;
+        self.words.push(instruction);
+    }
+
+    /// Encode the `MOV Xd, Xm` alias of `ORR Xd, XZR, Xm`.
+    fn move_register(&mut self, destination: Arm64Register, source: Arm64Register) {
+        let instruction = 0xaa00_03e0 | (source.bits() << 16) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -201,8 +245,8 @@ impl Arm64Assembler {
         }
     }
 
-    /// Emit a forward `B.cond` whose displacement will be patched once the
-    /// shared side-exit label is known.
+    /// Emit a `B.cond` whose displacement will be patched once its target is
+    /// known. Both forward exits and backward loop edges use this relocation.
     fn conditional_branch_placeholder(&mut self, condition: Arm64Condition) -> usize {
         let word = self.words.len();
         self.words.push(0x5400_0000 | condition as u32);
@@ -363,6 +407,316 @@ impl fmt::Debug for CompiledAddMultiply {
     }
 }
 
+const NATIVE_LONG_ACCUMULATE_COMPLETED: u32 = 0;
+const NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED: u32 = 1;
+const NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW: u32 = 2;
+const NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW: u32 = 3;
+
+/// Mutable state shared with the native accumulate-loop ABI.
+///
+/// The generated function owns no PHP values and cannot observe the VM. It
+/// advances this scalar snapshot for at most the supplied iteration budget;
+/// the VM publishes it only at an interrupt boundary, completion, or precise
+/// side exit.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(C)]
+pub struct NativeLongAccumulateState {
+    pub induction: i64,
+    pub bound: i64,
+    pub accumulator: i64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickLongAccumulateJitOutcome {
+    Completed,
+    ChunkExhausted,
+    SumOverflow,
+    IncrementOverflow,
+}
+
+#[derive(Debug)]
+pub enum QuickLongAccumulateJitError {
+    ZeroIterationBudget,
+    BranchOutOfRange,
+    Memory(io::Error),
+    InvalidNativeStatus(u32),
+}
+
+impl fmt::Display for QuickLongAccumulateJitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ZeroIterationBudget => {
+                formatter.write_str("native loop iteration budget must be non-zero")
+            }
+            Self::BranchOutOfRange => {
+                formatter.write_str("ARM64 loop branch is out of range")
+            }
+            Self::Memory(error) => write!(formatter, "cannot create executable memory: {error}"),
+            Self::InvalidNativeStatus(status) => {
+                write!(formatter, "native loop returned an unknown status {status}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for QuickLongAccumulateJitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Memory(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for QuickLongAccumulateJitError {
+    fn from(error: io::Error) -> Self {
+        Self::Memory(error)
+    }
+}
+
+/// Native lowering of the guarded region:
+///
+/// ```text
+/// while induction < bound {
+///     accumulator = checked_add(accumulator, induction)
+///     induction = checked_add(induction, 1)
+/// }
+/// ```
+///
+/// ABI: `x0` points to `NativeLongAccumulateState`, `x1` is a non-zero
+/// iteration budget, and `w0` returns a `QuickLongAccumulateJitOutcome`
+/// discriminator. Checked operations publish neither their wrapped result nor
+/// an ambiguous resume position.
+pub struct CompiledQuickLongAccumulateLoop {
+    memory: ExecutableMemory,
+    code: Box<[u8]>,
+}
+
+impl CompiledQuickLongAccumulateLoop {
+    pub fn compile() -> Result<Self, QuickLongAccumulateJitError> {
+        let mut assembler = Arm64Assembler::new();
+        let induction = Arm64Register::from_code(2);
+        let bound = Arm64Register::from_code(3);
+        let accumulator = Arm64Register::from_code(4);
+        let one = Arm64Register::from_code(5);
+        let checked_result = Arm64Register::from_code(6);
+
+        assembler.load_u64(induction, Arm64Register::X0, 0);
+        assembler.load_u64(bound, Arm64Register::X0, 8);
+        assembler.load_u64(accumulator, Arm64Register::X0, 16);
+        assembler.move_immediate(one, 1);
+
+        let loop_word = assembler.word_count();
+        assembler.compare_registers(induction, bound);
+        let completed_branch = assembler
+            .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+
+        // Keep the old accumulator live until the overflow branch has passed.
+        assembler.add_register_checked(checked_result, accumulator, induction);
+        let sum_overflow_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+        assembler.move_register(accumulator, checked_result);
+
+        // The same transactional rule preserves the old induction value for
+        // the baseline increment instruction on overflow.
+        assembler.add_register_checked(checked_result, induction, one);
+        let increment_overflow_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+        assembler.move_register(induction, checked_result);
+
+        assembler.subtract_register_checked(
+            Arm64Register::X1,
+            Arm64Register::X1,
+            one,
+        );
+        let loop_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+        let chunk_exhausted_word = assembler.word_count();
+        emit_long_accumulate_state(&mut assembler, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED),
+        );
+        assembler.ret();
+
+        let completed_word = assembler.word_count();
+        emit_long_accumulate_state(&mut assembler, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
+        );
+        assembler.ret();
+
+        let sum_overflow_word = assembler.word_count();
+        emit_long_accumulate_state(&mut assembler, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW),
+        );
+        assembler.ret();
+
+        let increment_overflow_word = assembler.word_count();
+        emit_long_accumulate_state(&mut assembler, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW),
+        );
+        assembler.ret();
+
+        for (branch, target) in [
+            (completed_branch, completed_word),
+            (sum_overflow_branch, sum_overflow_word),
+            (increment_overflow_branch, increment_overflow_word),
+            (loop_branch, loop_word),
+        ] {
+            if !assembler.patch_conditional_branch(branch, target) {
+                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+        }
+        debug_assert!(chunk_exhausted_word < completed_word);
+
+        let code = assembler.finish().into_boxed_slice();
+        let memory = ExecutableMemory::from_code(&code)?;
+        Ok(Self { memory, code })
+    }
+
+    pub fn call(
+        &self,
+        state: &mut NativeLongAccumulateState,
+        iteration_budget: u64,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+        if iteration_budget == 0 {
+            return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
+        }
+        type NativeFunction =
+            unsafe extern "C" fn(*mut NativeLongAccumulateState, u64) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
+        let status = unsafe { function(state, iteration_budget) };
+        match status {
+            NATIVE_LONG_ACCUMULATE_COMPLETED => {
+                Ok(QuickLongAccumulateJitOutcome::Completed)
+            }
+            NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
+                Ok(QuickLongAccumulateJitOutcome::ChunkExhausted)
+            }
+            NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => {
+                Ok(QuickLongAccumulateJitOutcome::SumOverflow)
+            }
+            NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW => {
+                Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
+            }
+            status => Err(QuickLongAccumulateJitError::InvalidNativeStatus(status)),
+        }
+    }
+
+    pub fn code(&self) -> &[u8] {
+        &self.code
+    }
+}
+
+fn emit_long_accumulate_state(
+    assembler: &mut Arm64Assembler,
+    induction: Arm64Register,
+    accumulator: Arm64Register,
+) {
+    assembler.store_u64(induction, Arm64Register::X0, 0);
+    assembler.store_u64(accumulator, Arm64Register::X0, 16);
+}
+
+/// Lazy native cache attached to one already-hot quick-loop plan. Cloning a
+/// compiler plan intentionally starts with an empty cache; executable mappings
+/// and profile counters are runtime state rather than compiler metadata.
+pub struct QuickLongAccumulateJitCache {
+    compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
+    native_entries: Cell<u64>,
+    native_chunks: Cell<u64>,
+    side_exits: Cell<u64>,
+}
+
+impl QuickLongAccumulateJitCache {
+    pub const fn new() -> Self {
+        Self {
+            compiled: OnceCell::new(),
+            native_entries: Cell::new(0),
+            native_chunks: Cell::new(0),
+            side_exits: Cell::new(0),
+        }
+    }
+
+    pub fn dispatch_chunk(
+        &self,
+        plan: &QuickLongAccumulateLoop,
+        state: &mut NativeLongAccumulateState,
+        iteration_budget: u64,
+    ) -> Option<Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError>> {
+        if !matches!(plan.term, QuickLongTerm::Induction) {
+            return None;
+        }
+        let program = self
+            .compiled
+            .get_or_init(|| CompiledQuickLongAccumulateLoop::compile().ok())
+            .as_ref()?;
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(1));
+        let outcome = program.call(state, iteration_budget);
+        if matches!(
+            outcome,
+            Ok(QuickLongAccumulateJitOutcome::SumOverflow)
+                | Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
+                | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        Some(outcome)
+    }
+
+    pub fn record_region_entry(&self) {
+        self.native_entries
+            .set(self.native_entries.get().saturating_add(1));
+    }
+
+    pub fn is_compiled(&self) -> bool {
+        matches!(self.compiled.get(), Some(Some(_)))
+    }
+
+    pub fn native_entries(&self) -> u64 {
+        self.native_entries.get()
+    }
+
+    pub fn native_chunks(&self) -> u64 {
+        self.native_chunks.get()
+    }
+
+    pub fn side_exits(&self) -> u64 {
+        self.side_exits.get()
+    }
+}
+
+impl Default for QuickLongAccumulateJitCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for QuickLongAccumulateJitCache {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for QuickLongAccumulateJitCache {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QuickLongAccumulateJitCache")
+            .field("compiled", &self.is_compiled())
+            .field("native_entries", &self.native_entries())
+            .field("native_chunks", &self.native_chunks())
+            .field("side_exits", &self.side_exits())
+            .finish()
+    }
+}
+
 const MAX_SCALAR_LONG_INPUTS: usize = 8;
 const MAX_SCALAR_LONG_OPERATIONS: usize = 8;
 const FIRST_TEMPORARY_REGISTER: u8 = 9;
@@ -427,6 +781,89 @@ pub enum ScalarLongJitOutcome {
     SideExit,
 }
 
+pub const SCALAR_LONG_JIT_HOT_THRESHOLD: u16 = 64;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongJitDispatch {
+    Interpret,
+    Value(i64),
+    SideExit,
+}
+
+/// Per-plan lazy native-code cache. RPHP's VM is deliberately single-threaded,
+/// so `Cell` and `OnceCell` match the existing FunctionCommon hotness model and
+/// add no atomic operations to the call path.
+pub struct ScalarLongJitCache {
+    calls: Cell<u16>,
+    compiled: OnceCell<Option<CompiledScalarLongProgram>>,
+    native_entries: Cell<u64>,
+    side_exits: Cell<u64>,
+}
+
+impl ScalarLongJitCache {
+    pub const fn new() -> Self {
+        Self {
+            calls: Cell::new(0),
+            compiled: OnceCell::new(),
+            native_entries: Cell::new(0),
+            side_exits: Cell::new(0),
+        }
+    }
+
+    pub fn dispatch(
+        &self,
+        plan: &ScalarLongFunctionPlan,
+        arguments: &[i64; 8],
+    ) -> ScalarLongJitDispatch {
+        // A one-op leaf is already inlined by the no-JIT executor. Paying an
+        // indirect native call for it would move in the wrong direction.
+        if plan.select.is_some() || plan.program.operations.len() < 2 {
+            return ScalarLongJitDispatch::Interpret;
+        }
+
+        if self.compiled.get().is_none() {
+            let calls = self.calls.get().saturating_add(1);
+            self.calls.set(calls);
+            if calls < SCALAR_LONG_JIT_HOT_THRESHOLD {
+                return ScalarLongJitDispatch::Interpret;
+            }
+            let compiled = CompiledScalarLongProgram::compile(plan).ok();
+            let _ = self.compiled.set(compiled);
+        }
+
+        let Some(program) = self.compiled.get().and_then(Option::as_ref) else {
+            return ScalarLongJitDispatch::Interpret;
+        };
+        self.native_entries
+            .set(self.native_entries.get().saturating_add(1));
+        match program.call(&arguments[..plan.public_args as usize]) {
+            Ok(ScalarLongJitOutcome::Value(value)) => ScalarLongJitDispatch::Value(value),
+            Ok(ScalarLongJitOutcome::SideExit) | Err(_) => {
+                self.side_exits.set(self.side_exits.get().saturating_add(1));
+                ScalarLongJitDispatch::SideExit
+            }
+        }
+    }
+
+    pub fn is_compiled(&self) -> bool {
+        matches!(self.compiled.get(), Some(Some(_)))
+    }
+
+    pub fn native_entries(&self) -> u64 {
+        self.native_entries.get()
+    }
+
+    pub fn side_exits(&self) -> u64 {
+        self.side_exits.get()
+    }
+}
+
+impl Default for ScalarLongJitCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// An isolated native lowering of RPHP's existing straight-line integer IR.
 ///
 /// ABI: `x0` points to an input array, `x1` points to one output slot, and `w0`
@@ -477,8 +914,15 @@ impl CompiledScalarLongProgram {
                 ScalarLongOpKind::BitwiseXor => {
                     assembler.exclusive_or_register(destination, lhs, rhs);
                 }
-                ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
-                    return Err(ScalarLongJitError::UnsupportedOperation(operation.kind));
+                ScalarLongOpKind::IntDivide => {
+                    emit_division_guards(&mut assembler, lhs, rhs, &mut side_exit_branches)?;
+                    assembler.signed_divide(destination, lhs, rhs);
+                }
+                ScalarLongOpKind::Modulo => {
+                    emit_division_guards(&mut assembler, lhs, rhs, &mut side_exit_branches)?;
+                    let quotient = Arm64Register::from_code(4);
+                    assembler.signed_divide(quotient, lhs, rhs);
+                    assembler.multiply_subtract(destination, quotient, rhs, lhs);
                 }
             }
         }
@@ -563,10 +1007,9 @@ fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Scalar
             ScalarLongOpKind::Add
             | ScalarLongOpKind::Subtract
             | ScalarLongOpKind::Multiply
-            | ScalarLongOpKind::BitwiseXor => {}
-            ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
-                return Err(ScalarLongJitError::UnsupportedOperation(operation.kind));
-            }
+            | ScalarLongOpKind::BitwiseXor
+            | ScalarLongOpKind::IntDivide
+            | ScalarLongOpKind::Modulo => {}
         }
         validate_scalar_source(operation.lhs, index, plan.public_args)?;
         validate_scalar_source(operation.rhs, index, plan.public_args)?;
@@ -576,6 +1019,34 @@ fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Scalar
         plan.program.operations.len(),
         plan.public_args,
     )
+}
+
+fn emit_division_guards(
+    assembler: &mut Arm64Assembler,
+    lhs: Arm64Register,
+    rhs: Arm64Register,
+    side_exit_branches: &mut Vec<usize>,
+) -> Result<(), ScalarLongJitError> {
+    // AArch64 SDIV deliberately returns zero for a zero divisor and wraps
+    // MIN / -1. RPHP's typed executor uses checked_div/checked_rem, so both
+    // cases must leave native code and resume canonical PHP execution.
+    assembler.compare_with_zero(rhs);
+    side_exit_branches.push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
+
+    let guard_constant = Arm64Register::from_code(4);
+    assembler.move_immediate(guard_constant, -1);
+    assembler.compare_registers(rhs, guard_constant);
+    let not_minus_one = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+    assembler.move_immediate(guard_constant, i64::MIN);
+    assembler.compare_registers(lhs, guard_constant);
+    side_exit_branches.push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
+
+    let safe_division = assembler.word_count();
+    if !assembler.patch_conditional_branch(not_minus_one, safe_division) {
+        return Err(ScalarLongJitError::BranchOutOfRange);
+    }
+    Ok(())
 }
 
 fn validate_scalar_source(

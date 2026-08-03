@@ -7,6 +7,14 @@ use crate::value::{Value, PhpArray, PhpClosure, PhpObject, ArrayKey, ValueType, 
 use crate::runtime::ExecutorGlobals;
 use crate::parser::Visibility;
 use crate::vm::stats;
+#[cfg(all(
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+use crate::jit::{
+    NativeLongAccumulateState, QuickLongAccumulateJitOutcome, ScalarLongJitDispatch,
+};
 use super::opcode::OpCode;
 use super::instruction::{
     Instruction, KnownScalarType, OpType, ARRAY_INIT_HASH_HINT,
@@ -1304,6 +1312,16 @@ fn evaluate_scalar_long_plan(
 ) -> Option<i64> {
     if plan.program.operations.len() > 8 || plan.program.output_count != 1 {
         return None;
+    }
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    match plan.native_jit().dispatch(plan, arguments) {
+        ScalarLongJitDispatch::Interpret => {}
+        ScalarLongJitDispatch::Value(value) => return Some(value),
+        ScalarLongJitDispatch::SideExit => return None,
     }
     let mut temporaries = [0i64; 8];
     let evaluate_operations = |start: usize, end: usize, temporaries: &mut [i64; 8]| {
@@ -7901,6 +7919,161 @@ unsafe fn resolve_quick_object_ops(
     Some(resolved)
 }
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_LONG_ACCUMULATE_CHUNK: u64 = 32;
+
+#[inline(never)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn run_native_long_accumulate_loop(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongAccumulateLoop,
+    induction_ptr: *mut Value,
+    accumulator_ptr: *mut Value,
+    condition_ptr: Option<*mut Value>,
+    sum_ptr: *mut Value,
+    increment_ptr: Option<*mut Value>,
+    induction: i64,
+    accumulator: i64,
+    bound: i64,
+) -> Result<Option<QuickLoopOutcome>, VmError> {
+    let mut state = NativeLongAccumulateState {
+        induction,
+        bound,
+        accumulator,
+    };
+    let mut iterations = 0u64;
+    let cache = plan.native_jit();
+    let mut entered_native = false;
+
+    loop {
+        let before = state;
+        let Some(native_result) = cache.dispatch_chunk(
+            plan,
+            &mut state,
+            NATIVE_LONG_ACCUMULATE_CHUNK,
+        ) else {
+            return Ok(None);
+        };
+        if !entered_native {
+            cache.record_region_entry();
+            entered_native = true;
+        }
+
+        let completed_in_chunk = (state.induction as u64)
+            .wrapping_sub(before.induction as u64);
+        iterations = iterations.saturating_add(completed_in_chunk);
+
+        let outcome = match native_result {
+            Ok(outcome) => outcome,
+            Err(_) => {
+                // A malformed native return status is an internal backend
+                // failure, not a PHP side exit. Discard this chunk, publish the
+                // last known-good boundary, and resume the canonical header.
+                state = before;
+                Value::write_long(induction_ptr, state.induction);
+                Value::write_long(accumulator_ptr, state.accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if iterations > completed_in_chunk {
+                    let last_term = state.induction - 1;
+                    Value::write_long(sum_ptr, state.accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        let last_increment_result = match plan.increment_kind {
+                            QuickIncrementKind::Pre => state.induction,
+                            QuickIncrementKind::Post => last_term,
+                        };
+                        Value::write_long(ptr, last_increment_result);
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                stats::inc_quick_loop_deoptimized(
+                    iterations.saturating_sub(completed_in_chunk),
+                );
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        };
+
+        match outcome {
+            QuickLongAccumulateJitOutcome::Completed => {
+                Value::write_long(induction_ptr, state.induction);
+                Value::write_long(accumulator_ptr, state.accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, false);
+                }
+                if iterations != 0 {
+                    let last_term = state.induction - 1;
+                    Value::write_long(sum_ptr, state.accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        let last_increment_result = match plan.increment_kind {
+                            QuickIncrementKind::Pre => state.induction,
+                            QuickIncrementKind::Post => last_term,
+                        };
+                        Value::write_long(ptr, last_increment_result);
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
+                stats::inc_quick_loop_completed(iterations);
+                return Ok(Some(QuickLoopOutcome::Completed));
+            }
+            QuickLongAccumulateJitOutcome::ChunkExhausted => {
+                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_ACCUMULATE_CHUNK);
+                if eg.vm_interrupt.load(Ordering::Relaxed) {
+                    Value::write_long(induction_ptr, state.induction);
+                    Value::write_long(accumulator_ptr, state.accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    let last_term = state.induction - 1;
+                    Value::write_long(sum_ptr, state.accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        let last_increment_result = match plan.increment_kind {
+                            QuickIncrementKind::Pre => state.induction,
+                            QuickIncrementKind::Post => last_term,
+                        };
+                        Value::write_long(ptr, last_increment_result);
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                    handle_interrupt(eg)?;
+                }
+            }
+            QuickLongAccumulateJitOutcome::SumOverflow => {
+                Value::write_long(induction_ptr, state.induction);
+                Value::write_long(accumulator_ptr, state.accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+            QuickLongAccumulateJitOutcome::IncrementOverflow => {
+                Value::write_long(induction_ptr, state.induction);
+                Value::write_long(accumulator_ptr, state.accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                Value::write_long(sum_ptr, state.accumulator);
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        }
+    }
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_accumulate_loop(
@@ -8084,6 +8257,27 @@ unsafe fn run_quick_long_accumulate_loop(
         QuickLongBound::Cv(_) => (*bound_ptr.unwrap_unchecked()).raw_long(),
         QuickLongBound::Const(value) => value,
     };
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    if let Some(outcome) = run_native_long_accumulate_loop(
+        eg,
+        frame,
+        op_array,
+        plan,
+        induction_ptr,
+        accumulator_ptr,
+        condition_ptr,
+        sum_ptr,
+        increment_ptr,
+        induction,
+        accumulator,
+        bound,
+    )? {
+        return Ok(outcome);
+    }
     let invariant_addend = addend_ptr.map(|ptr| (*ptr).raw_long());
     let quick_array = array_ptr.map(|ptr| {
         QuickLongArray::from_array((*ptr).as_array().unwrap_unchecked())

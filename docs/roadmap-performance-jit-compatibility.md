@@ -997,6 +997,67 @@ guards needed by representative plans, then attach a compiled native region to
 an existing guarded quick-plan cache; native entry must happen outside the hot
 per-operation dispatch loop, with the canonical resume point retained.
 
+Native-leaf integration checkpoint (2026-08-03): `IntDivide` and `Modulo` now
+lower through ARM64 `SDIV` and `MSUB`. Explicit native guards side-exit for a
+zero divisor and `PHP_INT_MIN / -1`, matching the existing `checked_div` and
+`checked_rem` typed contract; canonical execution therefore still owns PHP's
+division error and the modulo result for the overflow corner case. The focused
+matrix now covers all six `ScalarLongOpKind` variants and 60,000 deterministic
+differential arithmetic inputs.
+
+Each straight-line scalar function plan also owns a lazy native cache in the
+prototype build. It remains interpreted for its first 63 evaluations, compiles
+once at the 64th, and records native entries and side exits. One-operation
+leaves deliberately stay on the existing inlined Rust path. A real PHP test
+warms a two-operation typed function, proves subsequent native entry, then
+forces overflow and observes the original canonical `TypeError` plus one native
+side exit. Default and prototype release suites both pass.
+
+The first isolated profitability check disables quick-loop fusion so it
+measures the leaf boundary itself. Across seven interleaved runs, the
+two-operation scalar-call workload improves from a 0.1710 s median to 0.1558 s
+(about 8.9 percent), while the three-operation typed workload improves from
+0.0969 s to 0.0794 s (about 18 percent), with identical results. This licenses
+the cached leaf entry but does not replace the larger goal: quick loops already
+compose such leaves, so the next native slice should lower a guarded whole
+region with conditions and looping rather than reintroducing one native call
+per inner operation.
+
+Whole-region loop checkpoint (2026-08-03): the first guarded quick region now
+executes as native ARM64 rather than calling native code once per scalar
+operation. The initial shape is the general `$accumulator += $induction` loop
+with an exclusive Long bound. Its compact ABI receives only a three-Long state
+snapshot and a non-zero iteration budget. The generated block performs the
+condition, checked accumulation, checked increment, backedge and state commit;
+it returns distinct statuses for completion, budget exhaustion, sum overflow,
+and increment overflow.
+
+Execution is deliberately chunked at 32 iterations, matching the established
+quick executor's interrupt cadence. Between chunks the VM can service its
+interrupt flag. Completion publishes the final CV/TMP state and jumps to the
+original exit. Sum overflow leaves the accumulator transactional and resumes
+at `sum_ip`; increment overflow publishes the completed sum and resumes at
+`increment_ip`. An invalid backend status discards the current chunk and
+returns to the canonical header from the last known-good state. Compilation is
+attached lazily to an already-hot `QuickLongAccumulateLoop`; unsupported term
+shapes continue through the unchanged Rust quick executor.
+
+Direct ABI tests cover multi-chunk progress, early completion, zero-budget
+rejection and transactional overflow. Real PHP tests prove native entry for a
+100,000-iteration loop and prove that a native sum overflow resumes bytecode
+and produces the original typed-return `TypeError`. The focused ARM64 suite now
+has 15 tests, and both the default and `jit-prototype` release matrices pass.
+
+The first isolated region benchmark uses the existing 10-million-iteration
+`$sum += $i` workload. Across seven interleaved runs with identical
+`49999995000000` output, the existing Rust quick region has a 0.02030 s median
+and the native region a 0.00571 s median: approximately 3.55x faster, or a 71.9
+percent time reduction. Local PHP 8.4.12 CLI with OPcache/JIT disabled records
+a 0.02518 s median on the same script, so this narrow RPHP native region is
+about 4.41x faster than PHP without JIT. The next widening step should lower
+`InductionPlusConst` without weakening these resume contracts, then move the
+same chunk/status ABI to more general typed loop IR.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -191,6 +191,42 @@ pub struct ScalarLongFunctionPlan {
     /// Present for a pure `if`/guard-clause body with one scalar return on each
     /// edge. `None` preserves the compact straight-line leaf representation.
     pub select: Option<ScalarLongSelect>,
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    native_jit: crate::jit::ScalarLongJitCache,
+}
+
+impl ScalarLongFunctionPlan {
+    pub fn new(
+        public_args: u8,
+        program: ScalarLongProgram<ScalarLongOp, 1>,
+        select: Option<ScalarLongSelect>,
+    ) -> Self {
+        Self {
+            public_args,
+            program,
+            select,
+            #[cfg(all(
+                feature = "jit-prototype",
+                target_arch = "aarch64",
+                target_os = "macos"
+            ))]
+            native_jit: crate::jit::ScalarLongJitCache::new(),
+        }
+    }
+
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    #[inline(always)]
+    pub fn native_jit(&self) -> &crate::jit::ScalarLongJitCache {
+        &self.native_jit
+    }
 }
 
 /// Scalar source in a small guarded object-reading program. Slot indices use
