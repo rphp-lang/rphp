@@ -511,6 +511,175 @@ fn real_php_accumulate_loop_enters_native_region() {
 }
 
 #[test]
+fn real_php_guarded_scalar_method_enters_native_accumulate_region() {
+    let source = "<?php class ScalarKernel { public function transform(int $value, int $scale): int { return ($value * $scale) + 7; } } $kernel = new ScalarKernel(); $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $kernel->transform($i, 73); } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:364997050000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a scalar-method accumulate loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn native_scalar_method_guard_rejects_polymorphic_target() {
+    let source = "<?php class FirstKernel { public function transform(int $value): int { return $value + 1; } } class SecondKernel { public function transform(int $value): int { return $value + 2; } } function runKernel($kernel): int { $sum = 0; for ($i = 0; $i < 1000; $i++) { $sum += $kernel->transform($i); } return $sum; } echo runKernel(new FirstKernel()) . ':' . runKernel(new SecondKernel());";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "500500:501500"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runKernel"))
+        .map(|(_, function)| function)
+        .expect("compiled runKernel function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runKernel should use a scalar-method accumulate loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+}
+
+#[test]
+fn native_scalar_method_overflow_resumes_canonical_call() {
+    let source = "<?php class OverflowKernel { public function transform(int $value): int { return ($value * 100000000000000000) % 7; } } function runOverflow(): int { $kernel = new OverflowKernel(); $sum = 0; for ($i = 0; $i < 100; $i++) { $sum += $kernel->transform($i); } return $sum; } try { runOverflow(); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    drop(globals);
+    assert!(matches!(
+        error,
+        execute::VmError::Fatal(message)
+            if message == "Unsupported operand types for %"
+    ));
+    assert!(output.lock().unwrap().is_empty());
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled runOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runOverflow should use a scalar-method accumulate loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn native_scalar_method_sum_overflow_resumes_canonical_add() {
+    let source = "<?php class SumKernel { public function transform(int $value): int { return $value + 1; } } function runSumOverflow(): int { $kernel = new SumKernel(); $sum = PHP_INT_MAX - 100000; for ($i = 0; $i < 1000; $i++) { $sum += $kernel->transform($i); } return $sum; } try { runSumOverflow(); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runSumOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled runSumOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("runSumOverflow should use a scalar-method accumulate loop");
+    assert!(plan.native_jit().is_method_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
 fn real_php_constant_term_loop_enters_specialized_native_region() {
     let source = "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i + 1; } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -922,6 +1091,78 @@ fn straight_long_loop_lowers_non_materialized_binary_chain() {
     assert_eq!(slots[2], 1);
     assert_eq!(slots[3], 0);
     assert_eq!(slots[5], 0);
+}
+
+#[test]
+fn straight_long_loop_lowers_division_modulo_xor_and_move() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::IntDivide,
+        lhs: QuickLongOperand::Const(17),
+        rhs: QuickLongOperand::Const(5),
+        result: 2,
+    };
+    operations[1] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Modulo,
+        lhs: QuickLongOperand::Const(17),
+        rhs: QuickLongOperand::Const(5),
+        result: 3,
+    };
+    operations[2] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::BitwiseXor,
+        lhs: QuickLongOperand::Slot(2),
+        rhs: QuickLongOperand::Slot(3),
+        result: 4,
+    };
+    operations[3] = NativeStraightLongOperation::Move {
+        source: QuickLongOperand::Slot(4),
+        result: 5,
+    };
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 4,
+        post_result: None,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(config)
+        .expect("division, modulo, xor, and move should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 1;
+
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap().outcome,
+        NativeStraightLongLoopOutcome::Completed
+    );
+    assert_eq!(slots[2], 3);
+    assert_eq!(slots[3], 2);
+    assert_eq!(slots[4], 1);
+    assert_eq!(slots[5], 1);
+
+    operations[0] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::IntDivide,
+        lhs: QuickLongOperand::Const(17),
+        rhs: QuickLongOperand::Const(0),
+        result: 2,
+    };
+    let guarded = CompiledQuickLongStraightLoop::compile(
+        NativeStraightLongLoopConfig {
+            operations,
+            ..config
+        },
+    )
+    .expect("division by zero should lower to a precise side exit");
+    slots = [0_i64; 64];
+    slots[1] = 1;
+    let result = guarded.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(0));
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[2], 0);
 }
 
 #[test]

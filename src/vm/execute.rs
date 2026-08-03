@@ -7931,6 +7931,478 @@ unsafe fn resolve_quick_object_ops(
 ))]
 const NATIVE_LONG_ACCUMULATE_CHUNK: u64 = 32;
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_INDUCTION_SLOT: u16 = 0;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_BOUND_SLOT: u16 = 1;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_ACCUMULATOR_SLOT: u16 = 2;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_ARGUMENT_BASE_SLOT: u16 = 3;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_TEMPORARY_BASE_SLOT: u16 = 16;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_TERM_SLOT: u16 = 32;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_SUM_RESULT_SLOT: u16 = 33;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_METHOD_POST_RESULT_SLOT: u16 = 34;
+
+#[derive(Clone, Copy)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+struct NativeQuickLongMethodAccumulateKernel {
+    config: NativeStraightLongLoopConfig,
+    target: *const FunctionCommon,
+    method_operation_count: u8,
+    sum_operation_index: u8,
+    method_resume_ip: usize,
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn native_method_source(
+    source: ScalarLongSource,
+    argument_bindings: &[QuickLongOperand; 8],
+    argument_count: u8,
+    operation_count: usize,
+) -> Option<QuickLongOperand> {
+    match source {
+        ScalarLongSource::Input(index) if index < u16::from(argument_count) => {
+            Some(argument_bindings[index as usize])
+        }
+        ScalarLongSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+        ScalarLongSource::Temporary(index) if (index as usize) < operation_count => Some(
+            QuickLongOperand::Slot(NATIVE_METHOD_TEMPORARY_BASE_SLOT + u16::from(index)),
+        ),
+        _ => None,
+    }
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn native_quick_long_method_accumulate_kernel(
+    op_array: &crate::compiler::OpArray,
+    slot_base: *mut Value,
+    plan: &QuickLongAccumulateLoop,
+    target: *const FunctionCommon,
+    method_plan: &ScalarLongFunctionPlan,
+    induction: i64,
+    accumulator: i64,
+    bound: i64,
+) -> Option<(NativeQuickLongMethodAccumulateKernel, [i64; 64])> {
+    let QuickLongTerm::ScalarMethodCall {
+        guard,
+        do_fcall_ip,
+        argument_count,
+        ..
+    } = plan.term
+    else {
+        return None;
+    };
+    if target.is_null()
+        || method_plan.select.is_some()
+        || method_plan.public_args != argument_count
+        || method_plan.program.output_count != 1
+        || method_plan.program.operations.len() + 2
+            > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
+    {
+        return None;
+    }
+
+    let common = &*target;
+    let initializer_ip = guard.cache_ip();
+    let initializer = *op_array.instructions.get(initializer_ip)?;
+    if initializer.opcode != OpCode::InitMethodCall
+        || initializer.op1_type != OpType::Cv
+        || initializer.extended_value != u32::from(argument_count)
+    {
+        return None;
+    }
+
+    let mut slots = [0i64; 64];
+    slots[NATIVE_METHOD_INDUCTION_SLOT as usize] = induction;
+    slots[NATIVE_METHOD_BOUND_SLOT as usize] = bound;
+    slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize] = accumulator;
+    let mut argument_bindings = [QuickLongOperand::Const(0); 8];
+    let mut cursor = initializer_ip + 1;
+    for argument_index in 0..argument_count as usize {
+        let send = *op_array.instructions.get(cursor)?;
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(argument_index as u32)
+        {
+            return None;
+        }
+        argument_bindings[argument_index] = match send.op1_type {
+            OpType::Cv if send.op1 == plan.induction_cv => {
+                QuickLongOperand::Slot(NATIVE_METHOD_INDUCTION_SLOT)
+            }
+            OpType::Cv if send.op1 == plan.accumulator_cv => {
+                QuickLongOperand::Slot(NATIVE_METHOD_ACCUMULATOR_SLOT)
+            }
+            OpType::Cv => {
+                let value = &*slot_base.add(send.op1 as usize);
+                if value.value_type() != ValueType::Long || value.is_reference() {
+                    return None;
+                }
+                let native_slot = NATIVE_METHOD_ARGUMENT_BASE_SLOT
+                    .checked_add(argument_index as u16)?;
+                slots[native_slot as usize] = value.raw_long();
+                QuickLongOperand::Slot(native_slot)
+            }
+            OpType::Const => QuickLongOperand::Const(
+                op_array
+                    .literals
+                    .get(send.op1 as usize)?
+                    .as_long()?,
+            ),
+            OpType::Tmp | OpType::Var | OpType::Unused => return None,
+        };
+        cursor += 1;
+    }
+    if cursor != do_fcall_ip
+        || op_array.instructions.get(cursor)?.opcode != OpCode::DoFcall
+    {
+        return None;
+    }
+
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    for (index, operation) in method_plan.program.operations.iter().copied().enumerate() {
+        operations[index] = NativeStraightLongOperation::Binary {
+            kind: operation.kind,
+            lhs: native_method_source(
+                operation.lhs,
+                &argument_bindings,
+                argument_count,
+                index,
+            )?,
+            rhs: native_method_source(
+                operation.rhs,
+                &argument_bindings,
+                argument_count,
+                index,
+            )?,
+            result: NATIVE_METHOD_TEMPORARY_BASE_SLOT + index as u16,
+        };
+    }
+    let method_operation_count = method_plan.program.operations.len() as u8;
+    let term = native_method_source(
+        method_plan.program.outputs[0],
+        &argument_bindings,
+        argument_count,
+        method_plan.program.operations.len(),
+    )?;
+    operations[method_operation_count as usize] = NativeStraightLongOperation::Move {
+        source: term,
+        result: NATIVE_METHOD_TERM_SLOT,
+    };
+    let sum_operation_index = method_operation_count + 1;
+    operations[sum_operation_index as usize] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(NATIVE_METHOD_ACCUMULATOR_SLOT),
+        rhs: QuickLongOperand::Slot(NATIVE_METHOD_TERM_SLOT),
+        result: NATIVE_METHOD_SUM_RESULT_SLOT,
+        destination: NATIVE_METHOD_ACCUMULATOR_SLOT,
+    };
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: NATIVE_METHOD_INDUCTION_SLOT,
+        bound: QuickLongOperand::Slot(NATIVE_METHOD_BOUND_SLOT),
+        operations,
+        operation_count: sum_operation_index + 1,
+        post_result: Some(NATIVE_METHOD_POST_RESULT_SLOT),
+    };
+    Some((
+        NativeQuickLongMethodAccumulateKernel {
+            config,
+            target,
+            method_operation_count,
+            sum_operation_index,
+            method_resume_ip: initializer_ip,
+        },
+        slots,
+    ))
+}
+
+#[inline(never)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn run_native_long_method_accumulate_loop(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongAccumulateLoop,
+    target: *const FunctionCommon,
+    method_plan: &ScalarLongFunctionPlan,
+    induction_ptr: *mut Value,
+    accumulator_ptr: *mut Value,
+    condition_ptr: Option<*mut Value>,
+    term_ptr: Option<*mut Value>,
+    sum_ptr: *mut Value,
+    increment_ptr: Option<*mut Value>,
+    induction: i64,
+    accumulator: i64,
+    bound: i64,
+) -> Result<Option<QuickLoopOutcome>, VmError> {
+    let Some((kernel, mut slots)) = native_quick_long_method_accumulate_kernel(
+        op_array,
+        (frame as *mut Value).add(CALL_FRAME_SLOTS),
+        plan,
+        target,
+        method_plan,
+        induction,
+        accumulator,
+        bound,
+    ) else {
+        return Ok(None);
+    };
+    let cache = plan.native_jit();
+    let mut native_iterations = 0u64;
+    let mut entered_native = false;
+
+    loop {
+        let before_induction = slots[NATIVE_METHOD_INDUCTION_SLOT as usize];
+        let before_accumulator = slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize];
+        let before_term = slots[NATIVE_METHOD_TERM_SLOT as usize];
+        let before_post = slots[NATIVE_METHOD_POST_RESULT_SLOT as usize];
+        let Some(native_result) = cache.dispatch_method_chunk(
+            kernel.target as usize,
+            kernel.config,
+            &mut slots,
+            NATIVE_LONG_ACCUMULATE_CHUNK,
+        ) else {
+            return Ok(None);
+        };
+        if !entered_native {
+            cache.record_region_entry();
+            entered_native = true;
+        }
+        let mut result = match native_result {
+            Ok(result) => result,
+            Err(_) => {
+                Value::write_long(induction_ptr, before_induction);
+                Value::write_long(accumulator_ptr, before_accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if native_iterations != 0 {
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, before_term);
+                    }
+                    Value::write_long(sum_ptr, before_accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => before_induction,
+                                QuickIncrementKind::Post => before_post,
+                            },
+                        );
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                stats::inc_quick_loop_deoptimized(native_iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        };
+
+        let induction = slots[NATIVE_METHOD_INDUCTION_SLOT as usize];
+        let completed_in_chunk =
+            (induction as u64).wrapping_sub(before_induction as u64);
+        native_iterations = native_iterations.saturating_add(completed_in_chunk);
+        if result.outcome == NativeStraightLongLoopOutcome::ChunkExhausted
+            && induction >= bound
+        {
+            result.outcome = NativeStraightLongLoopOutcome::Completed;
+        }
+
+        let successful_calls = match result.outcome {
+            NativeStraightLongLoopOutcome::Completed
+            | NativeStraightLongLoopOutcome::ChunkExhausted => completed_in_chunk,
+            NativeStraightLongLoopOutcome::OperationSideExit
+                if result.failed_operation == Some(kernel.sum_operation_index) =>
+            {
+                completed_in_chunk.saturating_add(1)
+            }
+            NativeStraightLongLoopOutcome::IncrementOverflow => {
+                completed_in_chunk.saturating_add(1)
+            }
+            NativeStraightLongLoopOutcome::OperationSideExit => completed_in_chunk,
+        };
+        record_scalar_calls_bulk(&*kernel.target, successful_calls);
+
+        match result.outcome {
+            NativeStraightLongLoopOutcome::Completed => {
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(
+                    accumulator_ptr,
+                    slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                );
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, false);
+                }
+                if native_iterations != 0 {
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, slots[NATIVE_METHOD_TERM_SLOT as usize]);
+                    }
+                    Value::write_long(
+                        sum_ptr,
+                        slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                    );
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => induction,
+                                QuickIncrementKind::Post => {
+                                    slots[NATIVE_METHOD_POST_RESULT_SLOT as usize]
+                                }
+                            },
+                        );
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
+                stats::inc_quick_loop_completed(native_iterations);
+                return Ok(Some(QuickLoopOutcome::Completed));
+            }
+            NativeStraightLongLoopOutcome::ChunkExhausted => {
+                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_ACCUMULATE_CHUNK);
+                if eg.vm_interrupt.load(Ordering::Relaxed) {
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(
+                        accumulator_ptr,
+                        slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                    );
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, slots[NATIVE_METHOD_TERM_SLOT as usize]);
+                    }
+                    Value::write_long(
+                        sum_ptr,
+                        slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                    );
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => induction,
+                                QuickIncrementKind::Post => {
+                                    slots[NATIVE_METHOD_POST_RESULT_SLOT as usize]
+                                }
+                            },
+                        );
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                    handle_interrupt(eg)?;
+                }
+            }
+            NativeStraightLongLoopOutcome::OperationSideExit => {
+                let failed_operation = result
+                    .failed_operation
+                    .expect("method operation side exit carries its operation index");
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(
+                    accumulator_ptr,
+                    slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                );
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                let resume_ip = if failed_operation < kernel.method_operation_count {
+                    kernel.method_resume_ip
+                } else {
+                    debug_assert_eq!(failed_operation, kernel.sum_operation_index);
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, slots[NATIVE_METHOD_TERM_SLOT as usize]);
+                    }
+                    plan.sum_ip
+                };
+                (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                stats::inc_quick_loop_deoptimized(native_iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+            NativeStraightLongLoopOutcome::IncrementOverflow => {
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(
+                    accumulator_ptr,
+                    slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                );
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, slots[NATIVE_METHOD_TERM_SLOT as usize]);
+                }
+                Value::write_long(
+                    sum_ptr,
+                    slots[NATIVE_METHOD_ACCUMULATOR_SLOT as usize],
+                );
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
+                stats::inc_quick_loop_deoptimized(native_iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        }
+    }
+}
+
 #[inline(never)]
 #[cfg(all(
     feature = "quick-loops",
@@ -8545,6 +9017,34 @@ unsafe fn run_quick_long_accumulate_loop(
         }
         scalar_call_common = cached;
         scalar_call_plan = method_plan;
+    }
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    if matches!(plan.term, QuickLongTerm::ScalarMethodCall { .. })
+        && !scalar_call_common.is_null()
+        && !scalar_call_plan.is_null()
+        && let Some(outcome) = run_native_long_method_accumulate_loop(
+            eg,
+            frame,
+            op_array,
+            plan,
+            scalar_call_common,
+            &*scalar_call_plan,
+            induction_ptr,
+            accumulator_ptr,
+            condition_ptr,
+            term_ptr,
+            sum_ptr,
+            increment_ptr,
+            induction,
+            accumulator,
+            bound,
+        )?
+    {
+        return Ok(outcome);
     }
     let mut iterations = 0u64;
     let mut last_term = 0i64;

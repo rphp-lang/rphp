@@ -89,6 +89,7 @@ BENCHMARKS=(
     "bench_property.php:Property R/W 5M"
     "bench_method_chain.php:Method chain 5M"
     "bench_scalar_method.php:Scalar method 5M"
+    "bench_scalar_method_native_loop.php:Scalar method native loop 10M"
     "bench_obj_dispatch.php:App-like obj dispatch 5M"
 )
 

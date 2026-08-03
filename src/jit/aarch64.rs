@@ -683,8 +683,14 @@ fn emit_long_accumulate_state(
 /// Lazy native cache attached to one already-hot quick-loop plan. Cloning a
 /// compiler plan intentionally starts with an empty cache; executable mappings
 /// and profile counters are runtime state rather than compiler metadata.
+struct CachedQuickLongMethodLoop {
+    target_identity: usize,
+    program: CompiledQuickLongStraightLoop,
+}
+
 pub struct QuickLongAccumulateJitCache {
     compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
+    method_compiled: OnceCell<Option<CachedQuickLongMethodLoop>>,
     native_entries: Cell<u64>,
     native_chunks: Cell<u64>,
     side_exits: Cell<u64>,
@@ -694,6 +700,7 @@ impl QuickLongAccumulateJitCache {
     pub const fn new() -> Self {
         Self {
             compiled: OnceCell::new(),
+            method_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
             native_chunks: Cell::new(0),
             side_exits: Cell::new(0),
@@ -731,13 +738,54 @@ impl QuickLongAccumulateJitCache {
         Some(outcome)
     }
 
+    pub fn dispatch_method_chunk(
+        &self,
+        target_identity: usize,
+        config: NativeStraightLongLoopConfig,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Option<Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError>> {
+        let cached = self
+            .method_compiled
+            .get_or_init(|| {
+                CompiledQuickLongStraightLoop::compile(config)
+                    .ok()
+                    .map(|program| CachedQuickLongMethodLoop {
+                        target_identity,
+                        program,
+                    })
+            })
+            .as_ref()?;
+        if cached.target_identity != target_identity || cached.program.config() != config {
+            return None;
+        }
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(1));
+        let outcome = cached.program.call(slots, iteration_budget);
+        if matches!(
+            outcome,
+            Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit
+                    | NativeStraightLongLoopOutcome::IncrementOverflow,
+                ..
+            }) | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        Some(outcome)
+    }
+
     pub fn record_region_entry(&self) {
         self.native_entries
             .set(self.native_entries.get().saturating_add(1));
     }
 
     pub fn is_compiled(&self) -> bool {
-        matches!(self.compiled.get(), Some(Some(_)))
+        matches!(self.compiled.get(), Some(Some(_))) || self.is_method_compiled()
+    }
+
+    pub fn is_method_compiled(&self) -> bool {
+        matches!(self.method_compiled.get(), Some(Some(_)))
     }
 
     pub fn native_entries(&self) -> u64 {
@@ -770,6 +818,7 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
         formatter
             .debug_struct("QuickLongAccumulateJitCache")
             .field("compiled", &self.is_compiled())
+            .field("method_compiled", &self.is_method_compiled())
             .field("native_entries", &self.native_entries())
             .field("native_chunks", &self.native_chunks())
             .field("side_exits", &self.side_exits())
@@ -1162,7 +1211,7 @@ fn emit_conditional_long_loop_state(
     assembler.store_u64(addition_executed, control, 0);
 }
 
-pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 8;
+pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 12;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeStraightLongOperation {
@@ -1170,6 +1219,10 @@ pub enum NativeStraightLongOperation {
     Modulo {
         value: QuickLongOperand,
         divisor: i64,
+        result: u16,
+    },
+    Move {
+        source: QuickLongOperand,
         result: u16,
     },
     Binary {
@@ -1192,6 +1245,7 @@ impl NativeStraightLongOperation {
         match self {
             Self::Unused => 0,
             Self::Modulo { result, .. } => 1u64 << result,
+            Self::Move { result, .. } => 1u64 << result,
             Self::Binary { result, .. } => 1u64 << result,
             Self::BinaryAssign {
                 result,
@@ -1349,6 +1403,23 @@ impl CompiledQuickLongStraightLoop {
                         );
                     }
                 }
+                NativeStraightLongOperation::Move {
+                    source,
+                    result: result_slot,
+                } => {
+                    emit_straight_long_operand(
+                        &mut assembler,
+                        source,
+                        result,
+                        config.induction_slot,
+                        induction,
+                    );
+                    assembler.store_u64(
+                        result,
+                        Arm64Register::X0,
+                        long_slot_offset(result_slot),
+                    );
+                }
                 NativeStraightLongOperation::Binary {
                     kind,
                     lhs: lhs_operand,
@@ -1379,7 +1450,7 @@ impl CompiledQuickLongStraightLoop {
                         guard,
                         index as u8,
                         &mut operation_side_exit_branches,
-                    );
+                    )?;
                     assembler.store_u64(
                         result,
                         Arm64Register::X0,
@@ -1417,7 +1488,7 @@ impl CompiledQuickLongStraightLoop {
                         guard,
                         index as u8,
                         &mut operation_side_exit_branches,
-                    );
+                    )?;
                     assembler.store_u64(
                         result,
                         Arm64Register::X0,
@@ -1625,6 +1696,11 @@ fn validate_straight_long_loop_config(
                 validate_straight_long_output(result, config.induction_slot)?;
                 output_mask |= 1u64 << result;
             }
+            NativeStraightLongOperation::Move { source, result } => {
+                validate_straight_long_operand(source)?;
+                validate_straight_long_output(result, config.induction_slot)?;
+                output_mask |= 1u64 << result;
+            }
             NativeStraightLongOperation::Binary {
                 kind,
                 lhs,
@@ -1664,13 +1740,13 @@ fn validate_straight_long_binary(
     lhs: QuickLongOperand,
     rhs: QuickLongOperand,
 ) -> Result<(), QuickLongAccumulateJitError> {
-    if !matches!(
-        kind,
-        ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
-    ) {
-        return Err(QuickLongAccumulateJitError::InvalidProgram(
-            "unsupported straight-loop binary operation",
-        ));
+    match kind {
+        ScalarLongOpKind::Add
+        | ScalarLongOpKind::Subtract
+        | ScalarLongOpKind::Multiply
+        | ScalarLongOpKind::IntDivide
+        | ScalarLongOpKind::Modulo
+        | ScalarLongOpKind::BitwiseXor => {}
     }
     validate_straight_long_operand(lhs)?;
     validate_straight_long_operand(rhs)
@@ -1687,7 +1763,7 @@ fn emit_checked_straight_binary(
     guard: Arm64Register,
     operation_index: u8,
     side_exit_branches: &mut Vec<(usize, u8)>,
-) {
+) -> Result<(), QuickLongAccumulateJitError> {
     match kind {
         ScalarLongOpKind::Add => {
             assembler.add_register_checked(result, lhs, rhs);
@@ -1713,8 +1789,40 @@ fn emit_checked_straight_binary(
                 operation_index,
             ));
         }
-        _ => unreachable!("validated straight binary operation"),
+        ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
+            assembler.compare_with_zero(rhs);
+            side_exit_branches.push((
+                assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+                operation_index,
+            ));
+
+            assembler.move_immediate(guard, -1);
+            assembler.compare_registers(rhs, guard);
+            let not_minus_one =
+                assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+            assembler.move_immediate(guard, i64::MIN);
+            assembler.compare_registers(lhs, guard);
+            side_exit_branches.push((
+                assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+                operation_index,
+            ));
+            let safe_division = assembler.word_count();
+            if !assembler.patch_conditional_branch(not_minus_one, safe_division) {
+                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+
+            if kind == ScalarLongOpKind::IntDivide {
+                assembler.signed_divide(result, lhs, rhs);
+            } else {
+                assembler.signed_divide(auxiliary, lhs, rhs);
+                assembler.multiply_subtract(result, auxiliary, rhs, lhs);
+            }
+        }
+        ScalarLongOpKind::BitwiseXor => {
+            assembler.exclusive_or_register(result, lhs, rhs);
+        }
     }
+    Ok(())
 }
 
 fn validate_straight_long_operand(

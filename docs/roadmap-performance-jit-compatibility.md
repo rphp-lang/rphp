@@ -1220,6 +1220,50 @@ A/B check of the already-supported `bench_binary_assign_loop.php` records
 0.01237 s for the widened binary and 0.01260 s for its predecessor, showing no
 regression in the original materialized shape within normal run variance.
 
+Guarded scalar-method composition checkpoint (2026-08-03): a direct typed
+method call can now be composed into the same native loop instead of returning
+to the Rust quick executor once per iteration. Admission reuses the existing
+object tag, receiver-class, warmed method-cache, exact function identity, and
+arity guards. The first deliberately narrow shape accepts direct CV or Long
+constant arguments and a straight `ScalarLongFunctionPlan`; a nested method
+call, branch, unsupported argument source, or changed target remains on the
+authoritative quick/canonical path.
+
+Lowering consumes the existing typed scalar plan rather than matching source
+names or benchmark constants. Runtime invariant CV arguments live in the
+native slot state, while induction and accumulator CVs stay live across the
+region. The straight ARM64 emitter now covers checked add, subtract, multiply,
+integer divide, modulo, bitwise XOR, and an explicit move operation. Division
+by zero, `PHP_INT_MIN / -1`, arithmetic overflow, method-body failure, sum
+failure, and increment overflow all retain distinct side exits. A method-body
+exit resumes at its canonical initializer; a later sum or increment exit also
+publishes every already-successful PHP-visible prefix.
+
+Tests exercise a real 100,000-iteration method loop, exact-target rejection for
+a second class with the same method name, method-body overflow, caller-sum
+overflow, and the widened division/modulo/XOR/move emitter. The focused ARM64
+suite now contains 36 tests, and both full default and `jit-prototype` release
+matrices pass.
+
+Ten order-rotated `max-perf`, native-CPU runs of the new
+`bench_scalar_method_native_loop.php` produce identical
+`3649999705000000` output. Medians are approximately 0.02018 s for the widened
+RPHP JIT, 0.10013 s for the preceding RPHP JIT binary that rejected this shape,
+0.11733 s for current RPHP without JIT, 0.04898 s for PHP 8.4.12 tracing JIT,
+and 0.12138 s for PHP without JIT. The composed region is therefore about 4.96x
+faster than the previous RPHP JIT fallback, 5.81x faster than RPHP without JIT,
+and 2.43x faster than PHP tracing JIT on this admitted direct-method shape. The
+first native measurement is a modest 0.02354 s cold outlier.
+
+The existing nested `bench_scalar_method.php` is a useful boundary test: its
+`add(mul(...))` call tree is intentionally rejected by this first slice. Ten
+order-rotated runs retain identical `37499992500000` output with medians of
+approximately 0.11107 s current RPHP JIT, 0.11209 s preceding RPHP JIT,
+0.10161 s RPHP without JIT, 0.04634 s PHP tracing JIT, and 0.09324 s PHP without
+JIT. This confirms both safe fallback and the next concrete optimization:
+recursively flatten guarded nested scalar-call trees into one native scalar
+program without materializing intermediate PHP call frames.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of
@@ -1227,10 +1271,10 @@ approximately 0.06182 s RPHP JIT, 0.02575 s PHP tracing JIT, 0.06029 s RPHP
 without JIT, and 0.06432 s PHP without JIT. The RPHP prototype adds about 2.5
 percent overhead on this unadmitted path, while PHP's mature tracing JIT is
 about 2.40x faster than RPHP. This is now the clearest coverage gap: the next
-widening decision should be driven by mixed typed regions and calls. With
-non-materialized arithmetic now covered, the next boundary is scalar method
-composition under receiver-class and method-identity guards, before attempting
-general object or array effects in native code.
+widening decision after nested scalar-call flattening should be driven by mixed
+typed regions and calls. Direct scalar-method composition and
+non-materialized arithmetic are now covered; internal branches, general object
+effects, strings, and arrays remain outside native code.
 
 ### Nice to have: persistent compiled artifacts
 
