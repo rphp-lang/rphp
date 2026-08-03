@@ -11,8 +11,11 @@ use rphp::compiler::make_user_function;
 use rphp::jit::{
     Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledQuickLongAccumulateLoop,
     CompiledQuickLongConditionalAccumulateLoop, CompiledScalarLongProgram,
-    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
-    NativeLongAccumulateState, QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
+    CompiledQuickLongStraightLoop, NativeConditionalLongLoopCondition,
+    NativeConditionalLongLoopConfig, NativeLongAccumulateState,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
+    NativeStraightLongOperation, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
     SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch, ScalarLongJitError,
     ScalarLongJitOutcome,
 };
@@ -771,6 +774,229 @@ fn general_conditional_loop_ir_lowers_modulo_equality_and_precise_guards() {
 }
 
 #[test]
+fn straight_long_loop_lowers_linear_modulo_and_binary_assign_body() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::Modulo {
+        value: QuickLongOperand::Slot(0),
+        divisor: 400,
+        result: 2,
+    };
+    operations[1] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Const(20),
+        rhs: QuickLongOperand::Slot(2),
+        result: 3,
+        destination: 4,
+    };
+    operations[2] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Multiply,
+        lhs: QuickLongOperand::Slot(0),
+        rhs: QuickLongOperand::Const(73),
+        result: 5,
+        destination: 6,
+    };
+    operations[3] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Subtract,
+        lhs: QuickLongOperand::Slot(1),
+        rhs: QuickLongOperand::Slot(0),
+        result: 7,
+        destination: 8,
+    };
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 4,
+        post_result: Some(9),
+    };
+    let program = CompiledQuickLongStraightLoop::compile(config)
+        .expect("straight Long loop should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 100;
+
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap().outcome,
+        NativeStraightLongLoopOutcome::ChunkExhausted
+    );
+    assert_eq!(slots[0], 32);
+    assert_eq!(slots[2], 31);
+    assert_eq!(slots[4], 51);
+    assert_eq!(slots[6], 2_263);
+    assert_eq!(slots[8], 69);
+    assert_eq!(slots[9], 31);
+
+    assert_eq!(
+        program.call(&mut slots, 128).unwrap().outcome,
+        NativeStraightLongLoopOutcome::Completed
+    );
+    assert_eq!(slots[0], 100);
+    assert_eq!(slots[2], 99);
+    assert_eq!(slots[4], 119);
+    assert_eq!(slots[6], 7_227);
+    assert_eq!(slots[8], 1);
+    assert_eq!(slots[9], 99);
+    assert_eq!(program.config(), config);
+    assert!(!program.code().is_empty());
+}
+
+#[test]
+fn straight_long_loop_reports_exact_failed_operation_transactionally() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(0),
+        rhs: QuickLongOperand::Const(1),
+        result: 2,
+        destination: 3,
+    };
+    operations[1] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(4),
+        rhs: QuickLongOperand::Const(1),
+        result: 5,
+        destination: 4,
+    };
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 2,
+        post_result: None,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(config)
+        .expect("checked straight Long loop should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 10;
+    slots[4] = i64::MAX;
+
+    let outcome = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        outcome.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(outcome.failed_operation, Some(1));
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[2], 1);
+    assert_eq!(slots[3], 1);
+    assert_eq!(slots[4], i64::MAX);
+    assert_eq!(slots[5], 0);
+
+    let invalid_bound_alias = NativeStraightLongLoopConfig {
+        bound: QuickLongOperand::Slot(3),
+        ..config
+    };
+    assert!(matches!(
+        CompiledQuickLongStraightLoop::compile(invalid_bound_alias),
+        Err(QuickLongAccumulateJitError::InvalidProgram(_))
+    ));
+
+    let mut guarded_operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    guarded_operations[0] = NativeStraightLongOperation::Modulo {
+        value: QuickLongOperand::Slot(0),
+        divisor: 0,
+        result: 2,
+    };
+    let guarded_config = NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations: guarded_operations,
+        operation_count: 1,
+        post_result: None,
+    };
+    let program = CompiledQuickLongStraightLoop::compile(guarded_config)
+        .expect("zero divisor should lower to an operation side exit");
+    let mut slots = [0_i64; 64];
+    assert_eq!(
+        program.call(&mut slots, 32).unwrap().outcome,
+        NativeStraightLongLoopOutcome::Completed
+    );
+    slots[1] = 1;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(0));
+    assert_eq!(slots[0], 0);
+    assert_eq!(slots[2], 0);
+
+    guarded_operations[0] = NativeStraightLongOperation::Modulo {
+        value: QuickLongOperand::Slot(0),
+        divisor: -1,
+        result: 2,
+    };
+    let min_modulo_config = NativeStraightLongLoopConfig {
+        operations: guarded_operations,
+        ..guarded_config
+    };
+    let program = CompiledQuickLongStraightLoop::compile(min_modulo_config)
+        .expect("MIN modulo -1 should lower to an operation side exit");
+    let mut slots = [0_i64; 64];
+    slots[0] = i64::MIN;
+    slots[1] = i64::MIN + 1;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(0));
+    assert_eq!(slots[0], i64::MIN);
+
+    guarded_operations[0] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Multiply,
+        lhs: QuickLongOperand::Slot(2),
+        rhs: QuickLongOperand::Const(2),
+        result: 3,
+        destination: 2,
+    };
+    let multiply_overflow_config = NativeStraightLongLoopConfig {
+        operations: guarded_operations,
+        ..guarded_config
+    };
+    let program = CompiledQuickLongStraightLoop::compile(multiply_overflow_config)
+        .expect("checked multiply should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 1;
+    slots[2] = i64::MAX;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(0));
+    assert_eq!(slots[2], i64::MAX);
+    assert_eq!(slots[3], 0);
+
+    guarded_operations[0] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Subtract,
+        lhs: QuickLongOperand::Slot(2),
+        rhs: QuickLongOperand::Const(1),
+        result: 3,
+        destination: 2,
+    };
+    let subtract_overflow_config = NativeStraightLongLoopConfig {
+        operations: guarded_operations,
+        ..guarded_config
+    };
+    let program = CompiledQuickLongStraightLoop::compile(subtract_overflow_config)
+        .expect("checked subtraction should lower");
+    let mut slots = [0_i64; 64];
+    slots[1] = 1;
+    slots[2] = i64::MIN;
+    let result = program.call(&mut slots, 32).unwrap();
+    assert_eq!(
+        result.outcome,
+        NativeStraightLongLoopOutcome::OperationSideExit
+    );
+    assert_eq!(result.failed_operation, Some(0));
+    assert_eq!(slots[2], i64::MIN);
+    assert_eq!(slots[3], 0);
+}
+
+#[test]
 fn real_php_branch_loop_enters_general_native_ir_region() {
     let source = "<?php $sum = 0; $bound = 100000; $cutoff = 50000; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum += $i; } } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -874,6 +1100,77 @@ fn real_php_modulo_min_over_minus_one_preserves_canonical_semantics() {
     // backedge region, so MIN % -1 is already resolved when native code sees
     // MIN + 1. The direct ABI test above covers the native guard itself.
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_straight_binary_body_enters_general_native_ir_region() {
+    let source = "<?php $bound = 100000; $last = 0; $product = 0; $remaining = 0; for ($i = 0; $i < $bound; $i++) { $last = 20 + ($i % 400); $product = $i * 73; $remaining = $bound - $i; } echo $i . ':' . $last . ':' . $product . ':' . $remaining;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:419:7299927:1"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the straight Long loop IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_straight_binary_overflow_resumes_exact_canonical_operation() {
+    let source = "<?php function binaryOverflow(): int { $value = PHP_INT_MAX - 40; $prefix = 0; for ($i = 0; $i < 100; $i++) { $prefix = $i + 1; $value = $value + 1; } return $prefix + $value; } try { binaryOverflow(); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("binaryOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled binaryOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("binaryOverflow should use general Long loop IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
 #[test]

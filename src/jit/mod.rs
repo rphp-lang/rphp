@@ -20,9 +20,13 @@ mod aarch64;
 pub use aarch64::{
     Arm64Assembler, Arm64Register, CompiledAddMultiply,
     CompiledQuickLongAccumulateLoop, CompiledQuickLongConditionalAccumulateLoop,
-    CompiledScalarLongProgram, NativeConditionalLongLoopCondition,
+    CompiledQuickLongStraightLoop, CompiledScalarLongProgram,
+    NativeConditionalLongLoopCondition,
     NativeConditionalLongLoopConfig, NativeConditionalLongLoopResult,
     NativeLongAccumulateState, QuickLongAccumulateJitCache, QuickLongAccumulateJitError,
-    QuickLongAccumulateJitOutcome, QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD,
-    ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
+    NativeStraightLongLoopResult, NativeStraightLongOperation,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, QuickLongAccumulateJitOutcome,
+    QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache,
+    ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
 };

@@ -14,7 +14,10 @@ use crate::vm::stats;
 ))]
 use crate::jit::{
     NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
-    NativeLongAccumulateState, QuickLongAccumulateJitOutcome, ScalarLongJitDispatch,
+    NativeLongAccumulateState, NativeStraightLongLoopConfig,
+    NativeStraightLongLoopOutcome, NativeStraightLongOperation,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, QuickLongAccumulateJitOutcome,
+    ScalarLongJitDispatch,
 };
 use super::opcode::OpCode;
 use super::instruction::{
@@ -9703,6 +9706,24 @@ enum QuickLongConditionalBody {
     },
 }
 
+#[derive(Clone, Copy)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+struct NativeQuickLongStraightKernel {
+    config: NativeStraightLongLoopConfig,
+    header_condition_tmp: Option<u16>,
+    body_target: QuickLongTarget,
+    exit_target: QuickLongTarget,
+    post_resume_ip: usize,
+    operation_resume_ips: [usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    mutable_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2],
+    mutable_slot_count: u8,
+}
+
 const QUICK_LONG_BRANCH_CONDITION_LIMIT: usize = 8;
 
 #[derive(Clone, Copy)]
@@ -11757,7 +11778,7 @@ unsafe fn run_native_quick_long_conditional_kernel(
                 }
                 (result.outcome, result.addition_executed)
             }
-            Err(_) if !cache.is_compiled() => return Ok(None),
+            Err(_) if !cache.is_conditional_compiled() => return Ok(None),
             Err(_) => {
                 slots[config.induction_slot as usize] = before_induction;
                 slots[config.accumulator_slot as usize] = before_accumulator;
@@ -12020,6 +12041,339 @@ unsafe fn dispatch_quick_long_conditional_kernel(
     }
 }
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn native_quick_long_straight_kernel(
+    plan: &QuickLongOpsLoop,
+) -> Option<NativeQuickLongStraightKernel> {
+    if plan.entry_op != 0
+        || plan.ops.len() < 3
+        || plan.ops.len() > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 2
+    {
+        return None;
+    }
+
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match *plan.ops.first()? {
+        QuickLongOp::BranchUnlessLt {
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
+            ..
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    header_false_target.exit_ip()?;
+
+    let (
+        post_value,
+        post_result,
+        post_condition_lhs,
+        post_condition_rhs,
+        post_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match *plan.ops.last()? {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+    let body_end = plan.ops.len() - 1;
+    if header_lhs != post_value
+        || header_next_target.op_index() != Some(1)
+        || body_target.op_index() != Some(1)
+        || exit_target != header_false_target
+        || post_condition_lhs != header_lhs
+        || post_condition_rhs != header_rhs
+        || post_condition_tmp != header_condition_tmp
+        || post_result == Some(post_value)
+    {
+        return None;
+    }
+
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operation_resume_ips = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut has_binary_assign = false;
+    for (body_index, operation) in plan.ops[1..body_end].iter().copied().enumerate() {
+        let plan_index = body_index + 1;
+        let (native_operation, next_target, resume_ip) = match operation {
+            QuickLongOp::ModConst {
+                value,
+                divisor,
+                result,
+                next_target,
+                resume_ip,
+            } if result != post_value => (
+                NativeStraightLongOperation::Modulo {
+                    value: QuickLongOperand::Slot(value),
+                    divisor,
+                    result,
+                },
+                next_target,
+                resume_ip,
+            ),
+            QuickLongOp::BinaryAssign {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                resume_ip,
+            } if matches!(
+                kind,
+                ScalarLongOpKind::Add
+                    | ScalarLongOpKind::Subtract
+                    | ScalarLongOpKind::Multiply
+            ) && result != post_value
+                && destination != post_value =>
+            {
+                has_binary_assign = true;
+                (
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind,
+                        lhs,
+                        rhs,
+                        result,
+                        destination,
+                    },
+                    next_target,
+                    resume_ip,
+                )
+            }
+            _ => return None,
+        };
+        if next_target.op_index() != Some(plan_index + 1) {
+            return None;
+        }
+        operations[body_index] = native_operation;
+        operation_resume_ips[body_index] = resume_ip;
+    }
+    if !has_binary_assign {
+        return None;
+    }
+
+    let operation_count = (body_end - 1) as u8;
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: post_value,
+        bound: header_rhs,
+        operations,
+        operation_count,
+        post_result,
+    };
+    let mut mutable_mask = config.body_output_mask() | (1u64 << post_value);
+    if let Some(slot) = post_result {
+        mutable_mask |= 1u64 << slot;
+    }
+    if matches!(header_rhs, QuickLongOperand::Slot(slot) if mutable_mask & (1u64 << slot) != 0) {
+        return None;
+    }
+
+    let mut mutable_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+    let mut mutable_slot_count = 0usize;
+    while mutable_mask != 0 {
+        if mutable_slot_count == mutable_slots.len() {
+            return None;
+        }
+        let slot = mutable_mask.trailing_zeros() as u8;
+        mutable_mask &= mutable_mask - 1;
+        mutable_slots[mutable_slot_count] = slot;
+        mutable_slot_count += 1;
+    }
+
+    Some(NativeQuickLongStraightKernel {
+        config,
+        header_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+        operation_resume_ips,
+        mutable_slots,
+        mutable_slot_count: mutable_slot_count as u8,
+    })
+}
+
+#[inline(never)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn run_native_quick_long_straight_kernel(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    slots: &mut [i64; 64],
+    kernel: NativeQuickLongStraightKernel,
+) -> Result<Option<QuickLoopOutcome>, VmError> {
+    let config = kernel.config;
+    let bound = quick_long_operand(slots, config.bound);
+    let cache = plan.native_jit();
+    let body_output_mask = config.body_output_mask();
+    let post_result_mask = config.post_result.map_or(0, |slot| 1u64 << slot);
+    let mut iterations = 0u64;
+    let mut dirty_long_mask = 0u64;
+    let mut dirty_bool_mask = 0u64;
+    let mut entered_native = false;
+
+    loop {
+        let before_induction = slots[config.induction_slot as usize];
+        let mut before_values = [0i64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+        for index in 0..kernel.mutable_slot_count as usize {
+            before_values[index] = slots[kernel.mutable_slots[index] as usize];
+        }
+
+        let native_result = cache.dispatch_straight_chunk(
+            config,
+            slots,
+            NATIVE_LONG_ACCUMULATE_CHUNK,
+        );
+        let mut result = match native_result {
+            Ok(result) => {
+                if !entered_native {
+                    cache.record_region_entry();
+                    entered_native = true;
+                }
+                result
+            }
+            Err(_) if !cache.is_straight_compiled() => return Ok(None),
+            Err(_) => {
+                for index in 0..kernel.mutable_slot_count as usize {
+                    slots[kernel.mutable_slots[index] as usize] = before_values[index];
+                }
+                if let Some(slot) = kernel.header_condition_tmp {
+                    slots[slot as usize] = 1;
+                    dirty_bool_mask |= 1u64 << slot;
+                }
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                let next_ip = plan.target_ip(kernel.body_target).unwrap_unchecked();
+                (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        };
+
+        let induction = slots[config.induction_slot as usize];
+        let completed_in_chunk =
+            (induction as u64).wrapping_sub(before_induction as u64);
+        iterations = iterations.saturating_add(completed_in_chunk);
+        if completed_in_chunk != 0 {
+            dirty_long_mask |=
+                (1u64 << config.induction_slot) | body_output_mask | post_result_mask;
+        }
+
+        if result.outcome == NativeStraightLongLoopOutcome::ChunkExhausted
+            && induction >= bound
+        {
+            result.outcome = NativeStraightLongLoopOutcome::Completed;
+        }
+        let completed = result.outcome == NativeStraightLongLoopOutcome::Completed;
+        if let Some(slot) = kernel.header_condition_tmp {
+            slots[slot as usize] = i64::from(!completed);
+            dirty_bool_mask |= 1u64 << slot;
+        }
+
+        match result.outcome {
+            NativeStraightLongLoopOutcome::Completed => {
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                let next_ip = kernel.exit_target.exit_ip().unwrap_unchecked();
+                (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+                stats::inc_quick_loop_completed(iterations);
+                return Ok(Some(QuickLoopOutcome::Completed));
+            }
+            NativeStraightLongLoopOutcome::ChunkExhausted => {
+                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_ACCUMULATE_CHUNK);
+                if eg.vm_interrupt.load(Ordering::Relaxed) {
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    let next_ip = plan.target_ip(kernel.body_target).unwrap_unchecked();
+                    (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+                    handle_interrupt(eg)?;
+                }
+            }
+            NativeStraightLongLoopOutcome::OperationSideExit => {
+                let failed_operation = result
+                    .failed_operation
+                    .expect("operation side exit carries its operation index");
+                dirty_long_mask |= config.output_mask_before(failed_operation);
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                (*frame).opline = op_array.instructions.as_ptr().add(
+                    kernel.operation_resume_ips[failed_operation as usize],
+                );
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+            NativeStraightLongLoopOutcome::IncrementOverflow => {
+                dirty_long_mask |= body_output_mask;
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(kernel.post_resume_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        }
+    }
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_ops_loop(
@@ -12100,6 +12454,25 @@ unsafe fn run_quick_long_ops_loop(
         return dispatch_quick_long_conditional_kernel(
             eg, frame, op_array, plan, slot_base, slots, kernel, body,
         );
+    }
+
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    if let Some(kernel) = native_quick_long_straight_kernel(plan) {
+        if let Some(outcome) = run_native_quick_long_straight_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            &mut slots,
+            kernel,
+        )? {
+            return Ok(outcome);
+        }
     }
 
     let mut mutable_strings = [std::ptr::null_mut(); 64];

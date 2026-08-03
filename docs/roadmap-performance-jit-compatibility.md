@@ -1141,6 +1141,43 @@ The next structural operation remains general straight-line checked
 `BinaryAssign` bodies; expanding coverage is more valuable than further tuning
 this modulo loop.
 
+Straight-body widening checkpoint (2026-08-03): a second general
+`QuickLongOpsLoop` native shape now accepts a linear body of up to eight
+existing `ModConst` and checked `BinaryAssign` nodes. `BinaryAssign` supports
+addition, subtraction, and multiplication with slot or literal operands. The
+detector validates the ordinary `<` header, every linear successor, the fused
+post-increment/backedge, immutable bound state, output aliasing, and the exact
+operation capacity. It is independent of source names and constants.
+
+Each successful native operation writes its TMP/CV outputs into the private
+64-Long shadow state in program order; PHP values are still committed only at
+an interrupt, completion, or side exit. A failed operation writes neither its
+result nor destination and returns its body-operation index through the native
+control ABI. The VM maps that index to the corresponding `resume_ip`, commits
+only prior successful outputs, and replays exactly the failing PHP instruction.
+The wrapper snapshots only the finite set of mutable shadow slots, so an
+invalid backend status can discard its current chunk without copying the full
+slot file. Modulo zero, `PHP_INT_MIN % -1`, add/subtract/multiply overflow,
+empty loops, prefix commits, chunk boundaries, dynamic bounds, and real PHP
+fallback are covered. The focused ARM64 suite now contains 29 tests.
+
+Eight order-rotated `max-perf`, native-CPU runs of the new
+`bench_binary_assign_loop.php` produce identical `419,729999927,1` output. The
+medians are approximately 0.01284 s for RPHP with the prototype JIT, 0.10188 s
+for RPHP without JIT, 0.07497 s for PHP 8.4.12 with tracing JIT, and 0.07454 s
+for PHP without JIT. The native region is therefore about 7.93x faster than
+RPHP's general Rust executor and 5.84x faster than PHP's tracing JIT on this
+four-operation body.
+
+The mixed routing holdout remains intentionally outside this native shape
+because it contains object calls, strings, dynamic arrays, and internal
+branches. Five runs retain identical output with medians of approximately
+0.06341 s RPHP JIT, 0.06224 s RPHP without JIT, and 0.06544 s PHP tracing JIT;
+the unsupported corpus path is therefore unchanged within normal feature/code
+layout variance. The next widening decision should come from admitted-region
+coverage: likely non-materialized `Binary`/`Assign` chains before attempting
+object or array effects in native code.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
