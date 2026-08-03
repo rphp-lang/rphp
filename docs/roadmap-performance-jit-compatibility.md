@@ -1533,17 +1533,51 @@ String-state and dynamic-hash region rather than the now-compacted method
 frame. Compiler, mixed-region, 109 core, 108 type-hint, 107 quick-loop and 59
 ARM64 prototype tests cover the checkpoint.
 
-The mixed routing holdout remains intentionally outside this native shape
-because it contains object calls, strings, dynamic arrays, and internal
-branches. Eight order-rotated runs retain identical output with medians of
-approximately 0.06182 s RPHP JIT, 0.02575 s PHP tracing JIT, 0.06029 s RPHP
-without JIT, and 0.06432 s PHP without JIT. The RPHP prototype adds about 2.5
-percent overhead on this unadmitted path, while PHP's mature tracing JIT is
-about 2.40x faster than RPHP. This is now the clearest coverage gap: the next
-widening decision should be driven by mixed typed regions and calls. Direct and
-nested scalar-method composition plus non-materialized arithmetic are now
-covered, including pure scalar branches. Mixed object effects, strings, arrays,
-and their internal control flow remain outside native code.
+Finite String/hash native checkpoint (2026-08-03): admitted mixed regions can
+now keep a finite immutable String state as small activation-validated tokens.
+Generated ARM64 selects compile-time String lengths from those tokens and uses
+them to inline direct call-free typed methods. Dynamic hash accesses select
+pre-resolved runtime entry pointers from a per-activation context table; the
+generated code does not embed borrowed heap addresses. Admission still
+requires a unique COW array, an existing Long entry for every finite key, a
+warmed receiver class/method cache, and the same guarded typed method target.
+Structural array mutation and unrestricted String contents retain the general
+executor fallback.
+
+The whole accepted loop is one native region: String assignment, typed method
+arithmetic, hash load/update/store, scalar control flow, and trace guards.
+Visible PHP slots are separated from private native shadow slots. Before each
+chunk, mutable shadow values and entry payloads are snapshotted so a failing
+operation can restore only the current chunk and resume at the exact canonical
+PHP operation. Stores completed before a later cold trace guard remain visible
+exactly once. Completed calls and guard condition temporaries are likewise
+published according to the failed native operation rather than approximately
+per chunk.
+
+Twenty-one sequential native-CPU `max-perf` measurements of
+`bench_mixed_trace_guard_loop.php` produce identical
+`250002000000:250002000000` output and medians of approximately 0.00280 s for
+the new RPHP JIT, 0.02550 s for the preceding direct-typed-input RPHP JIT,
+0.00979 s for PHP tracing JIT, and 0.02942 s for PHP without JIT. This admitted
+mixed region is about 9.1x faster than its preceding RPHP path and 3.5x faster
+than PHP tracing JIT. Fifteen-run regression medians remain approximately flat:
+the general scalar trace loop is 0.01032 s versus 0.01022 s, the scalar-call
+loop is 0.01226 s versus 0.01252 s, and the unadmitted routing holdout is
+0.06442 s versus 0.06608 s. The checkpoint passes 109 core, 108 type-hint, 107
+quick-loop, and 62 ARM64/JIT tests, including a taken cold edge after an array
+store and direct context validation.
+
+The mixed routing holdout remains intentionally outside this first native
+mixed shape. Its loop carries three String routes, updates two hash arrays, and
+performs two object calls; one method contains `intdiv` plus internal branches
+and the second contains compound branch logic. The finite String and existing
+entry representation is sufficient for its data, but the current native method
+lowerer deliberately admits only one direct call-free composed typed body.
+Current and preceding RPHP JIT medians remain approximately flat at 0.06442 s
+and 0.06608 s; the earlier PHP tracing-JIT median was 0.02575 s. This separates
+the next coverage gap from the data representation already solved here: widen
+the shared native region to multiple monomorphic calls, internal typed-method
+control flow, and selected scalar builtins without weakening exact side exits.
 
 ### Nice to have: persistent compiled artifacts
 

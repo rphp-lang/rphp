@@ -15,7 +15,7 @@ use rphp::jit::{
     NativeConditionalLongLoopConfig, NativeLongAccumulateState,
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongOperation,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
     SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch, ScalarLongJitError,
     ScalarLongJitOutcome,
@@ -868,6 +868,74 @@ fn real_php_guarded_scalar_method_enters_native_accumulate_region() {
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_finite_string_method_and_hash_update_enter_one_native_region() {
+    let source = "<?php class MixedNativeModel { public function score(int $value, string $key): int { return $value + strlen($key); } } $model = new MixedNativeModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = -1; for ($i = 0; $i < 100000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'never'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "2500200000:2500200000:100000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a mixed typed loop");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn native_mixed_hash_region_replays_taken_cold_edge_after_prior_store() {
+    let source = "<?php class MixedColdModel { public function score(int $value, string $key): int { return $value + strlen($key); } } $model = new MixedColdModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = 73; for ($i = 0; $i < 1000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'hit:' . $i . '|'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "hit:73|252000:252000:1000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should retain the mixed cold-edge region");
+    assert!(plan.native_jit().native_entries() >= 2);
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
 #[test]
@@ -2146,6 +2214,74 @@ fn straight_long_guard_side_exits_after_prior_outputs_and_before_increment() {
     assert_eq!(slots[2], 3, "prior result remains in shadow state");
     assert_eq!(slots[3], 3, "prior assignment remains in shadow state");
     assert_eq!(slots[4], 1, "last completed post-increment remains published");
+}
+
+#[test]
+fn finite_string_hash_operations_use_runtime_context_without_embedded_pointers() {
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::StringToken {
+        token: 1,
+        result: 2,
+    };
+    operations[1] = NativeStraightLongOperation::StringLength {
+        source: 2,
+        lengths: [4, 5, 0, 0],
+        token_count: 2,
+        result: 3,
+    };
+    operations[2] = NativeStraightLongOperation::HashLoad {
+        key: 2,
+        entry_base: 0,
+        token_count: 2,
+        result: 4,
+        destination: None,
+    };
+    operations[3] = NativeStraightLongOperation::Binary {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(4),
+        rhs: QuickLongOperand::Slot(3),
+        result: 5,
+    };
+    operations[4] = NativeStraightLongOperation::HashStore {
+        key: 2,
+        entry_base: 0,
+        token_count: 2,
+        source: QuickLongOperand::Slot(5),
+    };
+    let program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        induction_slot: 0,
+        bound: QuickLongOperand::Slot(1),
+        operations,
+        operation_count: 5,
+        post_result: None,
+    })
+    .expect("finite String and contextual hash operations should lower");
+
+    let mut left = 7i64;
+    let mut right = 10i64;
+    let mut entries = [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    entries[0] = &mut left;
+    entries[1] = &mut right;
+    let mut slots = [0i64; 64];
+    slots[1] = 1;
+    let outcome = program.call_with_context(&mut slots, 8, &entries).unwrap();
+
+    assert_eq!(outcome.outcome, NativeStraightLongLoopOutcome::Completed);
+    assert_eq!(slots[0], 1);
+    assert_eq!(slots[2], 1);
+    assert_eq!(slots[3], 5);
+    assert_eq!(slots[4], 10);
+    assert_eq!(slots[5], 15);
+    assert_eq!(left, 7);
+    assert_eq!(right, 15);
+
+    let missing_entries =
+        [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    assert!(matches!(
+        program.call_with_context(&mut slots, 8, &missing_entries),
+        Err(QuickLongAccumulateJitError::InvalidProgram(_))
+    ));
 }
 
 #[test]

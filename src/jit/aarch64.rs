@@ -719,6 +719,9 @@ fn emit_long_accumulate_state(
 /// compiler plan intentionally starts with an empty cache; executable mappings
 /// and profile counters are runtime state rather than compiler metadata.
 pub const NATIVE_QUICK_LONG_MAX_CALL_TARGETS: usize = 8;
+/// Runtime entry pointers address the payload word of already validated Long
+/// hash values. They are activation state and are never embedded in code.
+pub const NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES: usize = 16;
 
 struct CachedQuickLongCallLoop {
     target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
@@ -1284,6 +1287,37 @@ pub enum NativeStraightLongOperation {
         source: QuickLongOperand,
         result: u16,
     },
+    /// Store a finite-state String token in the private shadow. The VM maps it
+    /// back to the guarded immutable String value when native execution exits.
+    StringToken {
+        token: u8,
+        result: u16,
+    },
+    /// Resolve the byte length of a finite-state String without dereferencing
+    /// Rust's heap representation from generated code.
+    StringLength {
+        source: u16,
+        lengths: [i64; 4],
+        token_count: u8,
+        result: u16,
+    },
+    /// Load an existing, entry-guarded Long hash value selected by a String
+    /// token. Entry pointers are supplied through the per-dispatch context.
+    HashLoad {
+        key: u16,
+        entry_base: u8,
+        token_count: u8,
+        result: u16,
+        destination: Option<u16>,
+    },
+    /// Store a Long payload through the same prevalidated contextual entry
+    /// table. Structural array writes remain outside this native operation.
+    HashStore {
+        key: u16,
+        entry_base: u8,
+        token_count: u8,
+        source: QuickLongOperand,
+    },
     Binary {
         kind: ScalarLongOpKind,
         lhs: QuickLongOperand,
@@ -1322,6 +1356,14 @@ impl NativeStraightLongOperation {
             Self::Unused => 0,
             Self::Modulo { result, .. } => 1u64 << result,
             Self::Move { result, .. } => 1u64 << result,
+            Self::StringToken { .. } => 0,
+            Self::StringLength { result, .. } => 1u64 << result,
+            Self::HashLoad {
+                result,
+                destination,
+                ..
+            } => (1u64 << result) | destination.map_or(0, |slot| 1u64 << slot),
+            Self::HashStore { .. } => 0,
             Self::Binary { result, .. } => 1u64 << result,
             Self::BinaryAssign {
                 result,
@@ -1329,6 +1371,13 @@ impl NativeStraightLongOperation {
                 ..
             } => (1u64 << result) | (1u64 << destination),
             Self::Guard { .. } | Self::BranchUnless { .. } | Self::Jump { .. } => 0,
+        }
+    }
+
+    pub fn shadow_output_mask(self) -> u64 {
+        match self {
+            Self::StringToken { result, .. } => 1u64 << result,
+            _ => self.output_mask(),
         }
     }
 }
@@ -1378,12 +1427,14 @@ pub struct NativeStraightLongLoopResult {
 #[repr(C)]
 struct NativeStraightLongLoopControl {
     failed_operation: u64,
+    entry_pointers: [*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
 }
 
 impl Default for NativeStraightLongLoopControl {
     fn default() -> Self {
         Self {
             failed_operation: u64::MAX,
+            entry_pointers: [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         }
     }
 }
@@ -1501,6 +1552,108 @@ impl CompiledQuickLongStraightLoop {
                         Arm64Register::X0,
                         long_slot_offset(result_slot),
                     );
+                }
+                NativeStraightLongOperation::StringToken {
+                    token,
+                    result: result_slot,
+                } => {
+                    assembler.move_immediate(result, i64::from(token));
+                    assembler.store_u64(
+                        result,
+                        Arm64Register::X0,
+                        long_slot_offset(result_slot),
+                    );
+                }
+                NativeStraightLongOperation::StringLength {
+                    source,
+                    lengths,
+                    token_count,
+                    result: result_slot,
+                } => {
+                    emit_straight_token_immediate_select(
+                        &mut assembler,
+                        source,
+                        &lengths,
+                        token_count,
+                        lhs,
+                        rhs,
+                        result,
+                        induction,
+                        config.induction_slot,
+                        index as u8,
+                        &mut operation_side_exit_branches,
+                    )?;
+                    assembler.store_u64(
+                        result,
+                        Arm64Register::X0,
+                        long_slot_offset(result_slot),
+                    );
+                }
+                NativeStraightLongOperation::HashLoad {
+                    key,
+                    entry_base,
+                    token_count,
+                    result: result_slot,
+                    destination,
+                } => {
+                    emit_straight_context_entry_select(
+                        &mut assembler,
+                        key,
+                        entry_base,
+                        token_count,
+                        lhs,
+                        rhs,
+                        auxiliary,
+                        control,
+                        induction,
+                        config.induction_slot,
+                        index as u8,
+                        &mut operation_side_exit_branches,
+                    )?;
+                    assembler.load_u64(result, auxiliary, 0);
+                    assembler.store_u64(
+                        result,
+                        Arm64Register::X0,
+                        long_slot_offset(result_slot),
+                    );
+                    if let Some(destination) = destination
+                        && destination != result_slot
+                    {
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(destination),
+                        );
+                    }
+                }
+                NativeStraightLongOperation::HashStore {
+                    key,
+                    entry_base,
+                    token_count,
+                    source,
+                } => {
+                    emit_straight_context_entry_select(
+                        &mut assembler,
+                        key,
+                        entry_base,
+                        token_count,
+                        lhs,
+                        rhs,
+                        auxiliary,
+                        control,
+                        induction,
+                        config.induction_slot,
+                        index as u8,
+                        &mut operation_side_exit_branches,
+                    )?;
+                    emit_straight_long_operand(
+                        &mut assembler,
+                        source,
+                        result,
+                        config.induction_slot,
+                        induction,
+                    );
+                    assembler.store_u64(result, auxiliary, 0);
                 }
                 NativeStraightLongOperation::Binary {
                     kind,
@@ -1779,14 +1932,83 @@ impl CompiledQuickLongStraightLoop {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
         }
+        if self.config.operations.iter().copied()
+            .take(self.config.operation_count as usize)
+            .any(|operation| matches!(
+                operation,
+                NativeStraightLongOperation::HashLoad { .. }
+                    | NativeStraightLongOperation::HashStore { .. }
+            ))
+        {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "straight-loop hash operation requires runtime context",
+            ));
+        }
+        let mut control = std::mem::MaybeUninit::<NativeStraightLongLoopControl>::uninit();
+        unsafe {
+            std::ptr::addr_of_mut!((*control.as_mut_ptr()).failed_operation)
+                .write(u64::MAX);
+            self.call_with_control(slots, iteration_budget, control.as_mut_ptr())
+        }
+    }
+
+    pub fn call_with_context(
+        &self,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+        entry_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
+        if iteration_budget == 0 {
+            return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
+        }
+        for operation in self
+            .config
+            .operations
+            .iter()
+            .copied()
+            .take(self.config.operation_count as usize)
+        {
+            let (entry_base, token_count) = match operation {
+                NativeStraightLongOperation::HashLoad {
+                    entry_base,
+                    token_count,
+                    ..
+                }
+                | NativeStraightLongOperation::HashStore {
+                    entry_base,
+                    token_count,
+                    ..
+                } => (entry_base, token_count),
+                _ => continue,
+            };
+            if entry_pointers[usize::from(entry_base)
+                ..usize::from(entry_base) + usize::from(token_count)]
+                .iter()
+                .any(|pointer| pointer.is_null())
+            {
+                return Err(QuickLongAccumulateJitError::InvalidProgram(
+                    "straight-loop hash context contains a null entry pointer",
+                ));
+            }
+        }
+        let mut control = NativeStraightLongLoopControl::default();
+        control.entry_pointers = *entry_pointers;
+        unsafe { self.call_with_control(slots, iteration_budget, &mut control) }
+    }
+
+    unsafe fn call_with_control(
+        &self,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+        control: *mut NativeStraightLongLoopControl,
+    ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
         type NativeFunction = unsafe extern "C" fn(
             *mut i64,
             u64,
             *mut NativeStraightLongLoopControl,
         ) -> u32;
-        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
-        let mut control = NativeStraightLongLoopControl::default();
-        let status = unsafe { function(slots.as_mut_ptr(), iteration_budget, &mut control) };
+        let function: NativeFunction = std::mem::transmute(self.memory.entry());
+        let status = function(slots.as_mut_ptr(), iteration_budget, control);
         let outcome = match status {
             NATIVE_LONG_ACCUMULATE_COMPLETED => NativeStraightLongLoopOutcome::Completed,
             NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
@@ -1801,7 +2023,8 @@ impl CompiledQuickLongStraightLoop {
             status => return Err(QuickLongAccumulateJitError::InvalidNativeStatus(status)),
         };
         let failed_operation = if outcome == NativeStraightLongLoopOutcome::OperationSideExit {
-            let operation = u8::try_from(control.failed_operation).map_err(|_| {
+            let failed_operation = std::ptr::addr_of!((*control).failed_operation).read();
+            let operation = u8::try_from(failed_operation).map_err(|_| {
                 QuickLongAccumulateJitError::InvalidNativeStatus(status)
             })?;
             if operation >= self.config.operation_count {
@@ -1878,6 +2101,49 @@ fn validate_straight_long_loop_config(
                 validate_straight_long_output(result, config.induction_slot)?;
                 output_mask |= 1u64 << result;
             }
+            NativeStraightLongOperation::StringToken { token, result } => {
+                if token >= 4 {
+                    return Err(QuickLongAccumulateJitError::InvalidProgram(
+                        "straight-loop String token exceeds the finite-state capacity",
+                    ));
+                }
+                validate_straight_long_output(result, config.induction_slot)?;
+                output_mask |= 1u64 << result;
+            }
+            NativeStraightLongOperation::StringLength {
+                source,
+                token_count,
+                result,
+                ..
+            } => {
+                validate_straight_token_input(source, token_count)?;
+                validate_straight_long_output(result, config.induction_slot)?;
+                output_mask |= 1u64 << result;
+            }
+            NativeStraightLongOperation::HashLoad {
+                key,
+                entry_base,
+                token_count,
+                result,
+                destination,
+            } => {
+                validate_straight_context_input(key, entry_base, token_count)?;
+                validate_straight_long_output(result, config.induction_slot)?;
+                output_mask |= 1u64 << result;
+                if let Some(destination) = destination {
+                    validate_straight_long_output(destination, config.induction_slot)?;
+                    output_mask |= 1u64 << destination;
+                }
+            }
+            NativeStraightLongOperation::HashStore {
+                key,
+                entry_base,
+                token_count,
+                source,
+            } => {
+                validate_straight_context_input(key, entry_base, token_count)?;
+                validate_straight_long_operand(source)?;
+            }
             NativeStraightLongOperation::Binary {
                 kind,
                 lhs,
@@ -1937,6 +2203,34 @@ fn validate_straight_long_loop_config(
                 "straight-loop bound is outside or aliases mutable state",
             ));
         }
+    }
+    Ok(())
+}
+
+fn validate_straight_token_input(
+    source: u16,
+    token_count: u8,
+) -> Result<(), QuickLongAccumulateJitError> {
+    if source >= 64 || token_count == 0 || token_count > 4 {
+        return Err(QuickLongAccumulateJitError::InvalidProgram(
+            "straight-loop finite String input is outside the native ABI",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_straight_context_input(
+    key: u16,
+    entry_base: u8,
+    token_count: u8,
+) -> Result<(), QuickLongAccumulateJitError> {
+    validate_straight_token_input(key, token_count)?;
+    if usize::from(entry_base) + usize::from(token_count)
+        > NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
+    {
+        return Err(QuickLongAccumulateJitError::InvalidProgram(
+            "straight-loop hash context exceeds the native entry table",
+        ));
     }
     Ok(())
 }
@@ -2088,6 +2382,119 @@ fn emit_straight_long_operand(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_straight_token_immediate_select(
+    assembler: &mut Arm64Assembler,
+    source: u16,
+    values: &[i64; 4],
+    token_count: u8,
+    token: Arm64Register,
+    comparison: Arm64Register,
+    destination: Arm64Register,
+    induction: Arm64Register,
+    induction_slot: u16,
+    operation_index: u8,
+    operation_side_exit_branches: &mut Vec<(usize, u8)>,
+) -> Result<(), QuickLongAccumulateJitError> {
+    emit_straight_long_operand(
+        assembler,
+        QuickLongOperand::Slot(source),
+        token,
+        induction_slot,
+        induction,
+    );
+    let mut selected_branches = [usize::MAX; 4];
+    for index in 0..token_count as usize {
+        assembler.move_immediate(comparison, index as i64);
+        assembler.compare_registers(token, comparison);
+        let next = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+        assembler.move_immediate(destination, values[index]);
+        selected_branches[index] = assembler.branch_placeholder();
+        let next_word = assembler.word_count();
+        if !assembler.patch_conditional_branch(next, next_word) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+    }
+    assembler.compare_registers(induction, induction);
+    operation_side_exit_branches.push((
+        assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+        operation_index,
+    ));
+    let selected_word = assembler.word_count();
+    for branch in selected_branches
+        .iter()
+        .copied()
+        .take(token_count as usize)
+    {
+        if !assembler.patch_branch(branch, selected_word) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_straight_context_entry_select(
+    assembler: &mut Arm64Assembler,
+    key: u16,
+    entry_base: u8,
+    token_count: u8,
+    token: Arm64Register,
+    comparison: Arm64Register,
+    destination: Arm64Register,
+    control: Arm64Register,
+    induction: Arm64Register,
+    induction_slot: u16,
+    operation_index: u8,
+    operation_side_exit_branches: &mut Vec<(usize, u8)>,
+) -> Result<(), QuickLongAccumulateJitError> {
+    emit_straight_long_operand(
+        assembler,
+        QuickLongOperand::Slot(key),
+        token,
+        induction_slot,
+        induction,
+    );
+    let mut selected_branches = [usize::MAX; 4];
+    for index in 0..token_count as usize {
+        assembler.move_immediate(comparison, index as i64);
+        assembler.compare_registers(token, comparison);
+        let next = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+        let entry_index = usize::from(entry_base) + index;
+        let offset = u16::try_from(
+            std::mem::offset_of!(NativeStraightLongLoopControl, entry_pointers)
+                + entry_index * std::mem::size_of::<*mut i64>(),
+        )
+        .map_err(|_| {
+            QuickLongAccumulateJitError::InvalidProgram(
+                "straight-loop context entry offset exceeds the native ABI",
+            )
+        })?;
+        assembler.load_u64(destination, control, offset);
+        selected_branches[index] = assembler.branch_placeholder();
+        let next_word = assembler.word_count();
+        if !assembler.patch_conditional_branch(next, next_word) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+    }
+    assembler.compare_registers(induction, induction);
+    operation_side_exit_branches.push((
+        assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+        operation_index,
+    ));
+    let selected_word = assembler.word_count();
+    for branch in selected_branches
+        .iter()
+        .copied()
+        .take(token_count as usize)
+    {
+        if !assembler.patch_branch(branch, selected_word) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+    }
+    Ok(())
+}
+
 fn emit_straight_long_condition_operand(
     assembler: &mut Arm64Assembler,
     operand: NativeStraightLongConditionOperand,
@@ -2216,6 +2623,29 @@ impl QuickLongOpsJitCache {
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call(slots, iteration_budget);
+        if matches!(
+            outcome,
+            Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit
+                    | NativeStraightLongLoopOutcome::IncrementOverflow,
+                ..
+            }) | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        outcome
+    }
+
+    pub fn dispatch_prepared_straight_chunk_with_context(
+        &self,
+        program: &CompiledQuickLongStraightLoop,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+        entry_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(1));
+        let outcome = program.call_with_context(slots, iteration_budget, entry_pointers);
         if matches!(
             outcome,
             Ok(NativeStraightLongLoopResult {

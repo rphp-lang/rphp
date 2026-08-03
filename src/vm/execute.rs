@@ -17,7 +17,8 @@ use crate::jit::{
     NativeLongAccumulateState, NativeStraightLongConditionOperand,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
     NativeStraightLongOperation,
-    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     QuickLongAccumulateJitOutcome,
     ScalarLongJitDispatch,
 };
@@ -10821,6 +10822,46 @@ struct NativeQuickLongStraightKernel {
     mutable_slot_count: u8,
 }
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+const NATIVE_FINITE_STRING_LIMIT: usize = 4;
+
+#[derive(Clone, Copy)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+struct NativeQuickLongMixedKernel {
+    config: NativeStraightLongLoopConfig,
+    header_condition_tmp: Option<u16>,
+    body_target: QuickLongTarget,
+    exit_target: QuickLongTarget,
+    post_resume_ip: usize,
+    operation_resume_ips: [usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    string_literals: [u16; NATIVE_FINITE_STRING_LIMIT],
+    string_token_count: u8,
+    context_array_slots: [u16; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_tokens: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_count: u8,
+    call_targets: [*const FunctionCommon; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+    call_completion_operations: [u8; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+    call_count: u8,
+    trace_guard_operation_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_condition_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_expected: [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    trace_guard_count: u8,
+    long_output_mask: u64,
+    string_output_mask: u64,
+    mutable_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2],
+    mutable_slot_count: u8,
+}
+
 const QUICK_LONG_BRANCH_CONDITION_LIMIT: usize = 8;
 
 #[derive(Clone, Copy)]
@@ -13232,6 +13273,745 @@ unsafe fn dispatch_quick_long_conditional_kernel(
     target_arch = "aarch64",
     target_os = "macos"
 ))]
+struct NativeMixedBuildState {
+    operations: [NativeStraightLongOperation; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    operation_resume_ips: [usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    operation_count: usize,
+    used_slots: u64,
+    string_literals: [u16; NATIVE_FINITE_STRING_LIMIT],
+    string_lengths: [i64; NATIVE_FINITE_STRING_LIMIT],
+    string_token_count: usize,
+    context_array_slots: [u16; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_tokens: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_count: usize,
+    call_targets: [*const FunctionCommon; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+    call_completion_operations: [u8; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+    call_count: usize,
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+impl NativeMixedBuildState {
+    fn append(
+        &mut self,
+        operation: NativeStraightLongOperation,
+        resume_ip: usize,
+    ) -> Option<u8> {
+        if self.operation_count == NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
+            return None;
+        }
+        let index = self.operation_count;
+        self.operations[index] = operation;
+        self.operation_resume_ips[index] = resume_ip;
+        self.operation_count += 1;
+        Some(index as u8)
+    }
+
+    fn allocate_slot(&mut self) -> Option<u16> {
+        for slot in (0..64u16).rev() {
+            let bit = 1u64 << slot;
+            if self.used_slots & bit == 0 {
+                self.used_slots |= bit;
+                return Some(slot);
+            }
+        }
+        None
+    }
+
+    fn token_for_literal(&self, literal: u16) -> Option<u8> {
+        self.string_literals[..self.string_token_count]
+            .iter()
+            .position(|candidate| *candidate == literal)
+            .and_then(|index| u8::try_from(index).ok())
+    }
+
+    fn typed_long_source(
+        source: ScalarLongSource,
+        arguments: &[QuickObjectLongArgument; 8],
+        argument_count: u8,
+        temporaries: &[Option<QuickLongOperand>; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    ) -> Option<QuickLongOperand> {
+        match source {
+            ScalarLongSource::Input(index) if index < u16::from(argument_count) => {
+                match arguments[index as usize] {
+                    QuickObjectLongArgument::Long(source) => Some(source),
+                    QuickObjectLongArgument::StringSlot(_) => None,
+                }
+            }
+            ScalarLongSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+            ScalarLongSource::Temporary(index) => temporaries.get(index as usize).copied().flatten(),
+            _ => None,
+        }
+    }
+
+    fn typed_string_length_source(
+        source: ScalarStringSource,
+        arguments: &[QuickObjectLongArgument; 8],
+        argument_count: u8,
+        string_temporaries: &[Option<QuickLongOperand>; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    ) -> Option<Result<u16, QuickLongOperand>> {
+        match source {
+            ScalarStringSource::Input(index) if index < argument_count => {
+                match arguments[index as usize] {
+                    QuickObjectLongArgument::StringSlot(slot) => Some(Ok(slot)),
+                    QuickObjectLongArgument::Long(_) => None,
+                }
+            }
+            ScalarStringSource::Temporary(index) => string_temporaries
+                .get(index as usize)
+                .copied()
+                .flatten()
+                .map(Err),
+            _ => None,
+        }
+    }
+
+    fn lower_typed_method(
+        &mut self,
+        target: *const FunctionCommon,
+        plan: &ComposedTypedLongFunctionPlan,
+        call: &QuickObjectLongMethodCall,
+        result_slot: u16,
+    ) -> Option<()> {
+        if self.call_count == NATIVE_QUICK_LONG_MAX_CALL_TARGETS
+            || plan.public_args != call.argument_count
+            || plan.program.output_count != 1
+            || plan.program.operations.len() > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
+            || plan.program.operations.iter().any(|operation| matches!(
+                operation,
+                ComposedTypedLongOp::Call(_) | ComposedTypedLongOp::StringCall(_)
+            ))
+        {
+            return None;
+        }
+
+        let mut temporaries = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        let mut string_temporaries = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        for (index, operation) in plan.program.operations.iter().enumerate() {
+            match operation {
+                ComposedTypedLongOp::Arithmetic(operation) => {
+                    let lhs = Self::typed_long_source(
+                        operation.lhs,
+                        &call.arguments,
+                        call.argument_count,
+                        &temporaries,
+                    )?;
+                    let rhs = Self::typed_long_source(
+                        operation.rhs,
+                        &call.arguments,
+                        call.argument_count,
+                        &temporaries,
+                    )?;
+                    let result = self.allocate_slot()?;
+                    self.append(
+                        NativeStraightLongOperation::Binary {
+                            kind: operation.kind,
+                            lhs,
+                            rhs,
+                            result,
+                        },
+                        call.resume_ip,
+                    )?;
+                    temporaries[index] = Some(QuickLongOperand::Slot(result));
+                }
+                ComposedTypedLongOp::StringLength(source) => {
+                    let length = match Self::typed_string_length_source(
+                        *source,
+                        &call.arguments,
+                        call.argument_count,
+                        &string_temporaries,
+                    )? {
+                        Ok(source) => {
+                            let result = self.allocate_slot()?;
+                            self.append(
+                                NativeStraightLongOperation::StringLength {
+                                    source,
+                                    lengths: self.string_lengths,
+                                    token_count: self.string_token_count as u8,
+                                    result,
+                                },
+                                call.resume_ip,
+                            )?;
+                            QuickLongOperand::Slot(result)
+                        }
+                        Err(length) => length,
+                    };
+                    temporaries[index] = Some(length);
+                }
+                ComposedTypedLongOp::StringConcatLiteral { value, literal_len } => {
+                    let base = match Self::typed_string_length_source(
+                        *value,
+                        &call.arguments,
+                        call.argument_count,
+                        &string_temporaries,
+                    )? {
+                        Ok(source) => {
+                            let result = self.allocate_slot()?;
+                            self.append(
+                                NativeStraightLongOperation::StringLength {
+                                    source,
+                                    lengths: self.string_lengths,
+                                    token_count: self.string_token_count as u8,
+                                    result,
+                                },
+                                call.resume_ip,
+                            )?;
+                            QuickLongOperand::Slot(result)
+                        }
+                        Err(length) => length,
+                    };
+                    let result = self.allocate_slot()?;
+                    self.append(
+                        NativeStraightLongOperation::Binary {
+                            kind: ScalarLongOpKind::Add,
+                            lhs: base,
+                            rhs: QuickLongOperand::Const(i64::from(*literal_len)),
+                            result,
+                        },
+                        call.resume_ip,
+                    )?;
+                    string_temporaries[index] = Some(QuickLongOperand::Slot(result));
+                }
+                ComposedTypedLongOp::Call(_) | ComposedTypedLongOp::StringCall(_) => {
+                    return None;
+                }
+            }
+        }
+
+        let output = Self::typed_long_source(
+            plan.program.outputs[0],
+            &call.arguments,
+            call.argument_count,
+            &temporaries,
+        )?;
+        let completion = self.append(
+            NativeStraightLongOperation::Move {
+                source: output,
+                result: result_slot,
+            },
+            call.resume_ip,
+        )?;
+        self.call_targets[self.call_count] = target;
+        self.call_completion_operations[self.call_count] = completion;
+        self.call_count += 1;
+        Some(())
+    }
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn native_quick_long_mixed_kernel(
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    resolved_object_ops: &[QuickResolvedObjectOp],
+) -> Option<NativeQuickLongMixedKernel> {
+    if plan.entry_op != 0
+        || plan.ops.len() < 3
+        || plan.ops.len() > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 2
+        || plan.string_input_mask == 0
+        || plan.array_output_mask == 0
+    {
+        return None;
+    }
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match *plan.ops.first()? {
+        QuickLongOp::BranchUnlessLt {
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
+            ..
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    header_false_target.exit_ip()?;
+    let (
+        post_value,
+        post_result,
+        post_condition_lhs,
+        post_condition_rhs,
+        post_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match *plan.ops.last()? {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+    if header_lhs != post_value
+        || header_next_target.op_index() != Some(1)
+        || body_target.op_index() != Some(1)
+        || exit_target != header_false_target
+        || post_condition_lhs != header_lhs
+        || post_condition_rhs != header_rhs
+        || post_condition_tmp != header_condition_tmp
+        || post_result == Some(post_value)
+    {
+        return None;
+    }
+
+    let mut string_literals = [0u16; NATIVE_FINITE_STRING_LIMIT];
+    let mut string_lengths = [0i64; NATIVE_FINITE_STRING_LIMIT];
+    let mut string_token_count = 0usize;
+    for operation in plan.ops.iter().copied() {
+        let QuickLongOp::AssignStringLiteral { literal, .. } = operation else {
+            continue;
+        };
+        if string_literals[..string_token_count].contains(&literal) {
+            continue;
+        }
+        if string_token_count == NATIVE_FINITE_STRING_LIMIT {
+            return None;
+        }
+        string_literals[string_token_count] = literal;
+        string_lengths[string_token_count] = i64::try_from(
+            op_array.literals.get(literal as usize)?.as_str()?.len(),
+        )
+        .ok()?;
+        string_token_count += 1;
+    }
+    if string_token_count == 0 {
+        return None;
+    }
+
+    let mut builder = NativeMixedBuildState {
+        operations: [NativeStraightLongOperation::Unused;
+            NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+        operation_resume_ips: [0; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+        operation_count: 0,
+        used_slots: plan.involved_mask,
+        string_literals,
+        string_lengths,
+        string_token_count,
+        context_array_slots: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_tokens: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_count: 0,
+        call_targets: [std::ptr::null(); NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+        call_completion_operations: [0; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+        call_count: 0,
+    };
+    let body_end = plan.ops.len() - 1;
+    let mut plan_to_native = vec![u8::MAX; plan.ops.len()];
+    let mut pending_branches = Vec::new();
+    let mut pending_jumps = Vec::new();
+    let mut trace_guard_operation_indices = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_condition_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_expected = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut trace_guard_count = 0usize;
+    let mut has_hash_update = false;
+    let mut has_typed_method = false;
+    let mut plan_index = 1usize;
+
+    while plan_index < body_end {
+        plan_to_native[plan_index] = u8::try_from(builder.operation_count).ok()?;
+        match plan.ops[plan_index] {
+            QuickLongOp::BranchUnlessLt {
+                lhs,
+                rhs,
+                false_target,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let target = false_target.op_index()?;
+                let native_index = builder.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::LessThan,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(lhs),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    resume_ip,
+                )?;
+                pending_branches.push((native_index, target));
+            }
+            QuickLongOp::BranchUnlessEq {
+                lhs,
+                rhs,
+                false_target,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let target = false_target.op_index()?;
+                let native_index = builder.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::Equal,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(lhs),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    resume_ip,
+                )?;
+                pending_branches.push((native_index, target));
+            }
+            QuickLongOp::BranchUnlessLe {
+                lhs,
+                rhs,
+                false_target,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let target = false_target.op_index()?;
+                let native_index = builder.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::LessThanOrEqual,
+                        lhs: NativeStraightLongConditionOperand::Source(lhs),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    resume_ip,
+                )?;
+                pending_branches.push((native_index, target));
+            }
+            QuickLongOp::Jump { target } => {
+                let native_index = builder.append(
+                    NativeStraightLongOperation::Jump { target: 0 },
+                    plan.target_ip(target)?,
+                )?;
+                pending_jumps.push((native_index, target.op_index()?));
+            }
+            QuickLongOp::ModConst {
+                value,
+                divisor,
+                result,
+                next_target,
+                resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Modulo {
+                        value: QuickLongOperand::Slot(value),
+                        divisor,
+                        result,
+                    },
+                    resume_ip,
+                )?;
+            }
+            QuickLongOp::AssignStringLiteral {
+                destination,
+                literal,
+                next_target,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::StringToken {
+                        token: builder.token_for_literal(literal)?,
+                        result: destination,
+                    },
+                    plan.target_ip(next_target)?.saturating_sub(1),
+                )?;
+            }
+            QuickLongOp::AssignStringSlot {
+                destination,
+                source,
+                next_target,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Move {
+                        source: QuickLongOperand::Slot(source),
+                        result: destination,
+                    },
+                    plan.target_ip(next_target)?.saturating_sub(1),
+                )?;
+            }
+            QuickLongOp::ObjectLongMethodCall { call, result } => {
+                if call.next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let QuickResolvedObjectOp::ComposedTypedMethod {
+                    target,
+                    plan: typed_plan,
+                } = *resolved_object_ops.get(plan_index)?
+                else {
+                    return None;
+                };
+                builder.lower_typed_method(target, &*typed_plan, &call, result)?;
+                has_typed_method = true;
+            }
+            QuickLongOp::FetchArrayLong {
+                array,
+                index: QuickArrayIndex::ValueSlot(key),
+                result,
+                destination,
+                resume_ip,
+                ..
+            } => {
+                let fusion = plan.array_update_fusions.get(plan_index).copied().flatten()?;
+                if plan_index + 2 >= body_end
+                    || fusion.next_target.op_index() != Some(plan_index + 3)
+                    || builder.context_count + string_token_count
+                        > NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
+                {
+                    return None;
+                }
+                let entry_base = builder.context_count as u8;
+                for token in 0..string_token_count {
+                    builder.context_array_slots[builder.context_count] = array;
+                    builder.context_tokens[builder.context_count] = token as u8;
+                    builder.context_count += 1;
+                }
+                plan_to_native[plan_index] = builder.operation_count as u8;
+                builder.append(
+                    NativeStraightLongOperation::HashLoad {
+                        key,
+                        entry_base,
+                        token_count: string_token_count as u8,
+                        result,
+                        destination,
+                    },
+                    resume_ip,
+                )?;
+                plan_to_native[plan_index + 1] = builder.operation_count as u8;
+                builder.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: fusion.kind,
+                        lhs: fusion.lhs,
+                        rhs: fusion.rhs,
+                        result: fusion.result,
+                    },
+                    fusion.arithmetic_resume_ip,
+                )?;
+                let QuickLongOp::StoreArrayLong {
+                    resume_ip: store_resume_ip,
+                    ..
+                } = plan.ops[plan_index + 2]
+                else {
+                    return None;
+                };
+                plan_to_native[plan_index + 2] = builder.operation_count as u8;
+                builder.append(
+                    NativeStraightLongOperation::HashStore {
+                        key,
+                        entry_base,
+                        token_count: string_token_count as u8,
+                        source: QuickLongOperand::Slot(fusion.result),
+                    },
+                    store_resume_ip,
+                )?;
+                has_hash_update = true;
+                plan_index += 2;
+            }
+            QuickLongOp::Binary {
+                kind,
+                lhs,
+                rhs,
+                result,
+                next_target,
+                resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Binary {
+                        kind,
+                        lhs,
+                        rhs,
+                        result,
+                    },
+                    resume_ip,
+                )?;
+            }
+            QuickLongOp::Add {
+                lhs,
+                rhs,
+                result,
+                next_target,
+                resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(lhs),
+                        rhs: QuickLongOperand::Slot(rhs),
+                        result,
+                    },
+                    resume_ip,
+                )?;
+            }
+            QuickLongOp::TraceGuard {
+                kind,
+                lhs,
+                rhs,
+                expected,
+                condition_tmp: Some(condition_tmp),
+                next_target,
+                resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1)
+                    || trace_guard_count == NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
+                {
+                    return None;
+                }
+                let operation_index = builder.append(
+                    NativeStraightLongOperation::Guard {
+                        kind,
+                        lhs: NativeStraightLongConditionOperand::Source(lhs),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        expected,
+                    },
+                    resume_ip,
+                )?;
+                trace_guard_operation_indices[trace_guard_count] = operation_index;
+                trace_guard_condition_slots[trace_guard_count] = u8::try_from(condition_tmp).ok()?;
+                trace_guard_expected[trace_guard_count] = expected;
+                trace_guard_count += 1;
+            }
+            _ => return None,
+        }
+        plan_index += 1;
+    }
+    plan_to_native[body_end] = u8::try_from(builder.operation_count).ok()?;
+    for (native_index, target_plan) in pending_branches {
+        let false_target = *plan_to_native.get(target_plan)?;
+        if false_target == u8::MAX {
+            return None;
+        }
+        let NativeStraightLongOperation::BranchUnless { kind, lhs, rhs, .. } =
+            builder.operations[native_index as usize]
+        else {
+            return None;
+        };
+        builder.operations[native_index as usize] = NativeStraightLongOperation::BranchUnless {
+            kind,
+            lhs,
+            rhs,
+            false_target,
+        };
+    }
+    for (native_index, target_plan) in pending_jumps {
+        let target = *plan_to_native.get(target_plan)?;
+        if target == u8::MAX {
+            return None;
+        }
+        builder.operations[native_index as usize] = NativeStraightLongOperation::Jump { target };
+    }
+    if !has_hash_update || !has_typed_method || builder.operation_count == 0 {
+        return None;
+    }
+
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: post_value,
+        bound: header_rhs,
+        operations: builder.operations,
+        operation_count: builder.operation_count as u8,
+        post_result,
+    };
+    let mut mutable_mask = config
+        .operations
+        .iter()
+        .copied()
+        .take(config.operation_count as usize)
+        .fold(1u64 << post_value, |mask, operation| {
+            mask | operation.shadow_output_mask()
+        });
+    if let Some(slot) = post_result {
+        mutable_mask |= 1u64 << slot;
+    }
+    if matches!(header_rhs, QuickLongOperand::Slot(slot) if mutable_mask & (1u64 << slot) != 0) {
+        return None;
+    }
+    let mut mutable_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+    let mut mutable_slot_count = 0usize;
+    while mutable_mask != 0 {
+        if mutable_slot_count == mutable_slots.len() {
+            return None;
+        }
+        let slot = mutable_mask.trailing_zeros() as u8;
+        mutable_mask &= mutable_mask - 1;
+        mutable_slots[mutable_slot_count] = slot;
+        mutable_slot_count += 1;
+    }
+
+    Some(NativeQuickLongMixedKernel {
+        config,
+        header_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+        operation_resume_ips: builder.operation_resume_ips,
+        string_literals: builder.string_literals,
+        string_token_count: builder.string_token_count as u8,
+        context_array_slots: builder.context_array_slots,
+        context_tokens: builder.context_tokens,
+        context_count: builder.context_count as u8,
+        call_targets: builder.call_targets,
+        call_completion_operations: builder.call_completion_operations,
+        call_count: builder.call_count as u8,
+        trace_guard_operation_indices,
+        trace_guard_condition_slots,
+        trace_guard_expected,
+        trace_guard_count: trace_guard_count as u8,
+        long_output_mask: plan.long_output_mask,
+        string_output_mask: plan.string_output_mask,
+        mutable_slots,
+        mutable_slot_count: mutable_slot_count as u8,
+    })
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
 fn native_quick_long_straight_kernel(
     plan: &QuickLongOpsLoop,
 ) -> Option<NativeQuickLongStraightKernel> {
@@ -13775,6 +14555,372 @@ unsafe fn run_native_quick_long_straight_kernel(
     }
 }
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn native_mixed_string_mask_before(
+    kernel: NativeQuickLongMixedKernel,
+    before_operation: u8,
+) -> u64 {
+    kernel
+        .config
+        .operations
+        .iter()
+        .copied()
+        .take(before_operation as usize)
+        .fold(0u64, |mask, operation| match operation {
+            NativeStraightLongOperation::StringToken { result, .. }
+            | NativeStraightLongOperation::Move { result, .. }
+                if kernel.string_output_mask & (1u64 << result) != 0 =>
+            {
+                mask | (1u64 << result)
+            }
+            _ => mask,
+        })
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn publish_native_mixed_trace_guards(
+    kernel: NativeQuickLongMixedKernel,
+    slots: &mut [i64; 64],
+    dirty_bool_mask: &mut u64,
+    before_operation: Option<u8>,
+) {
+    for index in 0..kernel.trace_guard_count as usize {
+        if before_operation.is_some_and(|limit| {
+            kernel.trace_guard_operation_indices[index] >= limit
+        }) {
+            continue;
+        }
+        let slot = kernel.trace_guard_condition_slots[index] as usize;
+        slots[slot] = i64::from(kernel.trace_guard_expected[index]);
+        *dirty_bool_mask |= 1u64 << slot;
+    }
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn publish_native_mixed_strings(
+    op_array: &crate::compiler::OpArray,
+    kernel: NativeQuickLongMixedKernel,
+    slots: &[i64; 64],
+    string_state: &mut QuickStringSlotState,
+    mut mask: u64,
+) -> Option<()> {
+    while mask != 0 {
+        let slot = mask.trailing_zeros() as usize;
+        mask &= mask - 1;
+        let token = usize::try_from(slots[slot]).ok()?;
+        if token >= kernel.string_token_count as usize {
+            return None;
+        }
+        let literal = kernel.string_literals[token] as usize;
+        let value = op_array.literals.get(literal)? as *const Value;
+        string_state.assign_literal(slot as u16, value);
+    }
+    Some(())
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+fn record_native_mixed_calls(
+    kernel: NativeQuickLongMixedKernel,
+    completed_iterations: u64,
+    completed_current_before: Option<u8>,
+) {
+    for index in 0..kernel.call_count as usize {
+        let current = u64::from(completed_current_before.is_some_and(|failed| {
+            kernel.call_completion_operations[index] < failed
+        }));
+        let count = completed_iterations.saturating_add(current);
+        if count != 0 {
+            unsafe { record_scalar_calls_bulk(&*kernel.call_targets[index], count) };
+        }
+    }
+}
+
+#[inline(never)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn run_native_quick_long_mixed_kernel(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    slots: &mut [i64; 64],
+    mutable_arrays: &[*mut PhpArray; 64],
+    string_state: &mut QuickStringSlotState,
+    kernel: NativeQuickLongMixedKernel,
+) -> Result<Option<QuickLoopOutcome>, VmError> {
+    for slot in 0..64usize {
+        if plan.string_input_mask & (1u64 << slot) == 0 {
+            continue;
+        }
+        let value = string_state.value(slot as u16).as_str().unwrap_unchecked();
+        let token = (0..kernel.string_token_count as usize).find(|token| {
+            op_array.literals[kernel.string_literals[*token] as usize]
+                .as_str()
+                .is_some_and(|literal| literal == value)
+        });
+        let Some(token) = token else {
+            return Ok(None);
+        };
+        slots[slot] = token as i64;
+    }
+
+    let mut entry_pointers =
+        [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    for index in 0..kernel.context_count as usize {
+        let array = mutable_arrays[kernel.context_array_slots[index] as usize];
+        if array.is_null() {
+            return Ok(None);
+        }
+        let token = kernel.context_tokens[index] as usize;
+        let key = op_array.literals[kernel.string_literals[token] as usize]
+            .as_str()
+            .unwrap_unchecked();
+        let value = match canonical_decimal_array_key(key) {
+            Some(key) => (*array).get_int_mut(key),
+            None => (*array).get_str_mut(key),
+        };
+        let Some(value) = value else {
+            return Ok(None);
+        };
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return Ok(None);
+        }
+        entry_pointers[index] = value as *mut Value as *mut i64;
+    }
+
+    let cache = plan.native_jit();
+    let Some(program) = cache.prepare_straight_program(kernel.config) else {
+        return Ok(None);
+    };
+    let bound = quick_long_operand(slots, kernel.config.bound);
+    let visible_body_output_mask = kernel.config.body_output_mask() & kernel.long_output_mask;
+    let post_result_mask = kernel.config.post_result.map_or(0, |slot| 1u64 << slot);
+    let mut iterations = 0u64;
+    let mut dirty_long_mask = 0u64;
+    let mut dirty_bool_mask = 0u64;
+    let mut entered_native = false;
+
+    loop {
+        let before_induction = slots[kernel.config.induction_slot as usize];
+        let mut before_values = [0i64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS * 2 + 2];
+        for index in 0..kernel.mutable_slot_count as usize {
+            before_values[index] = slots[kernel.mutable_slots[index] as usize];
+        }
+        let mut before_entries = [0i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+        for index in 0..kernel.context_count as usize {
+            before_entries[index] = *entry_pointers[index];
+        }
+
+        let native_result = cache.dispatch_prepared_straight_chunk_with_context(
+            program,
+            slots,
+            NATIVE_LONG_ACCUMULATE_CHUNK,
+            &entry_pointers,
+        );
+        let mut result = match native_result {
+            Ok(result) => {
+                if !entered_native {
+                    cache.record_region_entry();
+                    entered_native = true;
+                }
+                result
+            }
+            Err(error) => {
+                for index in 0..kernel.mutable_slot_count as usize {
+                    slots[kernel.mutable_slots[index] as usize] = before_values[index];
+                }
+                for index in 0..kernel.context_count as usize {
+                    *entry_pointers[index] = before_entries[index];
+                }
+                return Err(VmError::Fatal(format!(
+                    "native mixed-region dispatch failed: {:?}",
+                    error
+                )));
+            }
+        };
+
+        let induction = slots[kernel.config.induction_slot as usize];
+        let completed_in_chunk =
+            (induction as u64).wrapping_sub(before_induction as u64);
+        iterations = iterations.saturating_add(completed_in_chunk);
+        if completed_in_chunk != 0 {
+            dirty_long_mask |= (1u64 << kernel.config.induction_slot)
+                | visible_body_output_mask
+                | post_result_mask;
+        }
+        if result.outcome == NativeStraightLongLoopOutcome::ChunkExhausted
+            && induction >= bound
+        {
+            result.outcome = NativeStraightLongLoopOutcome::Completed;
+        }
+        let completed = result.outcome == NativeStraightLongLoopOutcome::Completed;
+        if let Some(slot) = kernel.header_condition_tmp {
+            slots[slot as usize] = i64::from(!completed);
+            dirty_bool_mask |= 1u64 << slot;
+        }
+
+        match result.outcome {
+            NativeStraightLongLoopOutcome::Completed => {
+                record_native_mixed_calls(kernel, completed_in_chunk, None);
+                if iterations != 0 {
+                    publish_native_mixed_trace_guards(
+                        kernel,
+                        slots,
+                        &mut dirty_bool_mask,
+                        None,
+                    );
+                    publish_native_mixed_strings(
+                        op_array,
+                        kernel,
+                        slots,
+                        string_state,
+                        kernel.string_output_mask,
+                    )
+                    .expect("validated native String token");
+                }
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                string_state.commit();
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(kernel.exit_target.exit_ip().unwrap_unchecked());
+                stats::inc_quick_loop_completed(iterations);
+                return Ok(Some(QuickLoopOutcome::Completed));
+            }
+            NativeStraightLongLoopOutcome::ChunkExhausted => {
+                record_native_mixed_calls(kernel, completed_in_chunk, None);
+                if eg.vm_interrupt.load(Ordering::Relaxed) {
+                    if iterations != 0 {
+                        publish_native_mixed_trace_guards(
+                            kernel,
+                            slots,
+                            &mut dirty_bool_mask,
+                            None,
+                        );
+                        publish_native_mixed_strings(
+                            op_array,
+                            kernel,
+                            slots,
+                            string_state,
+                            kernel.string_output_mask,
+                        )
+                        .expect("validated native String token");
+                    }
+                    commit_quick_long_ops_slots(
+                        slot_base,
+                        slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                    );
+                    string_state.commit();
+                    (*frame).opline = op_array.instructions.as_ptr().add(
+                        plan.target_ip(kernel.body_target).unwrap_unchecked(),
+                    );
+                    handle_interrupt(eg)?;
+                }
+            }
+            NativeStraightLongLoopOutcome::OperationSideExit => {
+                let failed = result.failed_operation.expect("native mixed side-exit index");
+                record_native_mixed_calls(kernel, completed_in_chunk, Some(failed));
+                dirty_long_mask |=
+                    kernel.config.output_mask_before(failed) & kernel.long_output_mask;
+                publish_native_mixed_trace_guards(
+                    kernel,
+                    slots,
+                    &mut dirty_bool_mask,
+                    (iterations == 0).then_some(failed),
+                );
+                let string_mask = if iterations != 0 {
+                    kernel.string_output_mask
+                } else {
+                    native_mixed_string_mask_before(kernel, failed)
+                };
+                publish_native_mixed_strings(
+                    op_array,
+                    kernel,
+                    slots,
+                    string_state,
+                    string_mask,
+                )
+                .expect("validated native String token");
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                string_state.commit();
+                (*frame).opline = op_array.instructions.as_ptr().add(
+                    kernel.operation_resume_ips[failed as usize],
+                );
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+            NativeStraightLongLoopOutcome::IncrementOverflow => {
+                record_native_mixed_calls(kernel, completed_in_chunk, Some(u8::MAX));
+                dirty_long_mask |= visible_body_output_mask;
+                publish_native_mixed_trace_guards(
+                    kernel,
+                    slots,
+                    &mut dirty_bool_mask,
+                    None,
+                );
+                publish_native_mixed_strings(
+                    op_array,
+                    kernel,
+                    slots,
+                    string_state,
+                    kernel.string_output_mask,
+                )
+                .expect("validated native String token");
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                string_state.commit();
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(kernel.post_resume_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        }
+    }
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_ops_loop(
@@ -13959,6 +15105,30 @@ unsafe fn run_quick_long_ops_loop(
         };
         resolved
     };
+    #[cfg(all(
+        feature = "jit-prototype",
+        target_arch = "aarch64",
+        target_os = "macos"
+    ))]
+    if let Some(kernel) = native_quick_long_mixed_kernel(
+        op_array,
+        plan,
+        &resolved_object_ops,
+    ) {
+        if let Some(outcome) = run_native_quick_long_mixed_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            &mut slots,
+            &mutable_arrays,
+            &mut string_state,
+            kernel,
+        )? {
+            return Ok(outcome);
+        }
+    }
     let mut object_call_recorder = QuickObjectCallRecorder {
         counts: vec![0; resolved_object_ops.len()],
         resolved: &resolved_object_ops,
