@@ -160,6 +160,18 @@ randomized A/B pairs, all four corpus workloads and the routing holdout retain
 identical output and range from -0.25 to +0.30 percent. Default, all-feature,
 no-default, corpus, quick-loop, type-hint and ARM64/JIT matrices all pass.
 
+Eighth checkpoint (2026-08-04): the 3,289-line `execute_ex` body is isolated as
+a 3,292-line `baseline_dispatch.rs` source unit including its structural
+header. This is an intentional exception to the normal source-unit size: it
+remains one Rust function and one dispatch loop, so the refactor adds no
+per-opcode call, dynamic dispatch or allocation. `execute.rs` falls to 5,974
+lines, and all 172,265 moved source bytes reconstruct exactly. The native-CPU
+`max-perf` binary and Mach-O segment sizes remain unchanged. In 101 randomized
+A/B pairs, the four corpus workloads and routing holdout retain identical
+output and range from -1.00 to +0.46 percent, with routing at +0.07 percent.
+The negative edge is treated as layout or measurement noise rather than an
+optimization claim. All applicable feature matrices pass.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
