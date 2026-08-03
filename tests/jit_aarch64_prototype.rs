@@ -24,8 +24,8 @@ use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::execute;
 use rphp::vm::function::{
-    FunctionCommon, ScalarLongConditionKind, ScalarLongFunctionPlan, ScalarLongOp,
-    ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+    FunctionCommon, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan,
+    ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSelect, ScalarLongSource,
 };
 use rphp::vm::planner::BlockPlan;
 use rphp::vm::quick::QuickLongOperand;
@@ -43,6 +43,22 @@ fn scalar_plan(
             output_count: 1,
         },
         None,
+    )
+}
+
+fn conditional_scalar_plan(
+    public_args: u8,
+    operations: Vec<ScalarLongOp>,
+    select: ScalarLongSelect,
+) -> ScalarLongFunctionPlan {
+    ScalarLongFunctionPlan::new(
+        public_args,
+        ScalarLongProgram {
+            operations: operations.into_boxed_slice(),
+            outputs: [select.when_true],
+            output_count: 1,
+        },
+        Some(select),
     )
 }
 
@@ -99,6 +115,121 @@ fn scalar_long_ir_is_lowered_and_executed_as_native_code() {
     assert_eq!(
         function.call(&[-9, 4, 8]).unwrap(),
         ScalarLongJitOutcome::Value(-40)
+    );
+}
+
+#[test]
+fn conditional_scalar_ir_lowers_all_comparison_kinds() {
+    let cases = [
+        (ScalarLongConditionKind::Equal, [4, 4], 11),
+        (ScalarLongConditionKind::Equal, [4, 5], 22),
+        (ScalarLongConditionKind::NotEqual, [4, 5], 11),
+        (ScalarLongConditionKind::NotEqual, [4, 4], 22),
+        (ScalarLongConditionKind::LessThan, [4, 5], 11),
+        (ScalarLongConditionKind::LessThan, [5, 4], 22),
+        (ScalarLongConditionKind::LessThanOrEqual, [4, 4], 11),
+        (ScalarLongConditionKind::LessThanOrEqual, [5, 4], 22),
+    ];
+
+    for (kind, inputs, expected) in cases {
+        let plan = conditional_scalar_plan(
+            2,
+            vec![],
+            ScalarLongSelect {
+                kind,
+                lhs: ScalarLongConditionOperand::Source(ScalarLongSource::Input(0)),
+                rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Input(1)),
+                shared_operation_count: 0,
+                when_true_operation_count: 0,
+                when_true: ScalarLongSource::Constant(11),
+                when_false: ScalarLongSource::Constant(22),
+            },
+        );
+        let function = CompiledScalarLongProgram::compile(&plan).expect("select should lower");
+        assert_eq!(
+            function.call(&inputs).unwrap(),
+            ScalarLongJitOutcome::Value(expected),
+            "{kind:?} with {inputs:?}"
+        );
+    }
+}
+
+#[test]
+fn conditional_scalar_ir_executes_only_the_selected_bitmask_arm() {
+    let plan = conditional_scalar_plan(
+        1,
+        vec![
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(3),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(5),
+            },
+        ],
+        ScalarLongSelect {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: ScalarLongConditionOperand::BitwiseAnd {
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(1),
+            },
+            rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+            shared_operation_count: 0,
+            when_true_operation_count: 1,
+            when_true: ScalarLongSource::Temporary(0),
+            when_false: ScalarLongSource::Temporary(1),
+        },
+    );
+    let function = CompiledScalarLongProgram::compile(&plan).expect("select should lower");
+
+    assert_eq!(
+        function.call(&[4]).unwrap(),
+        ScalarLongJitOutcome::Value(12)
+    );
+    assert_eq!(
+        function.call(&[5]).unwrap(),
+        ScalarLongJitOutcome::Value(25)
+    );
+}
+
+#[test]
+fn conditional_scalar_ir_skips_inactive_overflow_and_exits_on_selected_overflow() {
+    let plan = conditional_scalar_plan(
+        1,
+        vec![
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(1),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(100_000_000_000_000_000),
+            },
+        ],
+        ScalarLongSelect {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: ScalarLongConditionOperand::Source(ScalarLongSource::Input(0)),
+            rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Constant(100)),
+            shared_operation_count: 0,
+            when_true_operation_count: 1,
+            when_true: ScalarLongSource::Temporary(0),
+            when_false: ScalarLongSource::Temporary(1),
+        },
+    );
+    let function = CompiledScalarLongProgram::compile(&plan).expect("select should lower");
+
+    assert_eq!(
+        function.call(&[5]).unwrap(),
+        ScalarLongJitOutcome::Value(6)
+    );
+    assert_eq!(
+        function.call(&[100]).unwrap(),
+        ScalarLongJitOutcome::SideExit
     );
 }
 
@@ -170,6 +301,35 @@ fn invalid_ir_is_rejected_before_code_becomes_executable() {
     );
     assert!(matches!(
         CompiledScalarLongProgram::compile(&forward_temporary),
+        Err(ScalarLongJitError::InvalidProgram(_))
+    ));
+
+    let false_edge_uses_true_temporary = conditional_scalar_plan(
+        1,
+        vec![
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(1),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Temporary(0),
+                rhs: ScalarLongSource::Constant(2),
+            },
+        ],
+        ScalarLongSelect {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: ScalarLongConditionOperand::Source(ScalarLongSource::Input(0)),
+            rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+            shared_operation_count: 0,
+            when_true_operation_count: 1,
+            when_true: ScalarLongSource::Temporary(0),
+            when_false: ScalarLongSource::Temporary(1),
+        },
+    );
+    assert!(matches!(
+        CompiledScalarLongProgram::compile(&false_edge_uses_true_temporary),
         Err(ScalarLongJitError::InvalidProgram(_))
     ));
 }
@@ -347,6 +507,52 @@ fn plan_cache_compiles_only_after_hotness_and_tracks_native_side_exits() {
 }
 
 #[test]
+fn conditional_plan_cache_compiles_after_hotness() {
+    let plan = conditional_scalar_plan(
+        1,
+        vec![
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(3),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(5),
+            },
+        ],
+        ScalarLongSelect {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: ScalarLongConditionOperand::BitwiseAnd {
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(1),
+            },
+            rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+            shared_operation_count: 0,
+            when_true_operation_count: 1,
+            when_true: ScalarLongSource::Temporary(0),
+            when_false: ScalarLongSource::Temporary(1),
+        },
+    );
+    let mut arguments = [0_i64; 8];
+    arguments[0] = 4;
+
+    for _ in 1..SCALAR_LONG_JIT_HOT_THRESHOLD {
+        assert_eq!(
+            plan.native_jit().dispatch(&plan, &arguments),
+            ScalarLongJitDispatch::Interpret
+        );
+    }
+    assert_eq!(
+        plan.native_jit().dispatch(&plan, &arguments),
+        ScalarLongJitDispatch::Value(12)
+    );
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+}
+
+#[test]
 fn real_php_calls_enter_cached_native_plan_and_fallback_on_overflow() {
     let call_count = usize::from(SCALAR_LONG_JIT_HOT_THRESHOLD) + 8;
     let mut source = String::from(
@@ -387,6 +593,88 @@ fn real_php_calls_enter_cached_native_plan_and_fallback_on_overflow() {
     assert!(plan.native_jit().is_compiled());
     assert!(plan.native_jit().native_entries() >= 1);
     assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn real_php_conditional_calls_enter_the_standalone_native_plan() {
+    let call_count = usize::from(SCALAR_LONG_JIT_HOT_THRESHOLD) + 8;
+    let mut source = String::from(
+        "<?php function route(int $value): int { if (($value & 1) == 0) { return ($value * 3) + 1; } return ($value * 5) - 2; } $total = 0;",
+    );
+    for index in 0..call_count {
+        source.push_str(if index & 1 == 0 {
+            "$total = $total + route(4);"
+        } else {
+            "$total = $total + route(5);"
+        });
+    }
+    source.push_str("echo $total;");
+
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "1296"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("route"))
+        .map(|(_, function)| function)
+        .expect("compiled route function");
+    let plan = function.scalar_long_plan.as_deref().expect("scalar plan");
+    assert!(plan.select.is_some());
+    assert!(plan.native_jit().is_compiled());
+    assert!(plan.native_jit().native_entries() >= 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn unsupported_loop_body_keeps_conditional_calls_on_the_standalone_jit() {
+    let source = "<?php function routeStandalone(int $value): int { if (($value & 1) == 0) { return ($value * 3) + 1; } return ($value * 5) - 2; } $total = 0; for ($i = 0; $i < 100; $i++) { $total += routeStandalone($i); if ($i === -1) { echo 'never'; } } echo $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "19800"
+    );
+    assert!(main.op_array.block_plans.iter().all(|plan| !matches!(
+        plan,
+        BlockPlan::QuickLongAccumulate(_) | BlockPlan::QuickLongOps(_)
+    )));
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("routeStandalone"))
+        .map(|(_, function)| function)
+        .expect("compiled routeStandalone function");
+    let plan = function.scalar_long_plan.as_deref().expect("scalar plan");
+    assert!(plan.native_jit().is_compiled());
+    assert!(plan.native_jit().native_entries() >= 1);
 }
 
 #[test]

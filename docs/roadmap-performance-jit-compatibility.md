@@ -1332,6 +1332,48 @@ improving existing admitted methods: the direct-method median moves from about
 0.00696 s. The unrelated general `bench_binary_assign_loop.php` region remains
 effectively flat at 0.01224 s versus 0.01219 s, within run variance.
 
+Standalone conditional-call checkpoint (2026-08-03): the same structured
+`ScalarLongFunctionPlan` select now lowers through the per-plan hot-call cache,
+not only when a surrounding loop can absorb it. The native leaf emits the
+shared arithmetic prefix, predicate, selected true or false operation range,
+and one transactional output. All four signed comparison forms and the
+predicate-only bitwise mask share the region encoder. The inactive arm is not
+executed; overflow or an invalid division in the selected arm returns the
+existing `SideExit` status and lets the canonical call produce PHP's result or
+error.
+
+Validation independently proves shared/true/false operation boundaries,
+predicate temporary availability, and that false-edge operations and outputs
+cannot read a true-edge temporary. Hot conditional plans enter native code on
+their 64th call. Straight one-operation leaves retain their specialized Rust
+path, while even a zero-arithmetic conditional leaf is admitted: an isolated
+10-million-call check measured about 0.20892 s with the native select versus
+0.22500 s without JIT, a small but repeatable gain. Direct ABI, inactive-arm,
+selected-overflow, cache-hotness, unrolled real-call, and deliberately
+uncomposed-loop tests bring the focused ARM64 suite to 52 passing tests.
+
+The new `bench_scalar_call_branch_standalone.php` contains a strict-comparison
+and unreachable echo edge specifically to keep its loop outside native region
+composition while retaining ordinary statically resolved calls. Ten
+order-rotated `max-perf` runs produce identical `199999980000000` output and
+medians of approximately 0.21464 s for the new RPHP call JIT, 0.32185 s for the
+preceding JIT that rejected selects, 0.26959 s for current RPHP without JIT,
+0.04832 s for PHP 8.4.12 tracing JIT, and 0.12429 s for PHP without JIT. The
+new leaf is therefore about 1.50x faster than the previous RPHP fallback and
+1.26x faster than current RPHP without JIT, but remains about 4.44x slower than
+PHP tracing JIT. A separate straight two-operation call A/B improves from
+about 0.23114 s to 0.21058 s, so the shared emitter refactor does not regress
+the already-supported leaf.
+
+This comparison locates the next bottleneck more precisely. Once `route()` is
+native, RPHP still executes the surrounding VM loop backedge, strict condition,
+call-site scan, argument capture, native ABI transition, result publication,
+and accumulator op ten million times. PHP tracing JIT keeps that caller state
+inside one trace. The next widening should therefore join a hot caller and its
+typed scalar callee across an otherwise unsupported control-flow edge, rather
+than micro-tuning the arithmetic leaf or adding another source-shaped loop
+kernel.
+
 The mixed routing holdout remains intentionally outside this native shape
 because it contains object calls, strings, dynamic arrays, and internal
 branches. Eight order-rotated runs retain identical output with medians of

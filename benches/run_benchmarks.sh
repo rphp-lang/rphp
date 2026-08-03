@@ -63,6 +63,7 @@ BENCHMARKS=(
     "bench_loop.php:Loop 10M iterations"
     "bench_scalar_loop.php:Scalar quick loop 50M"
     "bench_scalar_call_loop.php:Scalar call quick loop 10M"
+    "bench_scalar_call_branch_standalone.php:Standalone scalar branch calls 10M"
     "bench_branch_loop.php:Branched scalar loop 10M"
     "bench_modulo_branch_loop.php:Modulo branch loop 10M"
     "bench_binary_assign_loop.php:Binary assign loop 10M"

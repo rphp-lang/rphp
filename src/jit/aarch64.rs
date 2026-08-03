@@ -1,5 +1,6 @@
 use crate::vm::function::{
-    ScalarLongConditionKind, ScalarLongFunctionPlan, ScalarLongOpKind, ScalarLongSource,
+    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
+    ScalarLongOpKind, ScalarLongSource,
 };
 use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
 use std::cell::{Cell, OnceCell};
@@ -2320,9 +2321,11 @@ impl ScalarLongJitCache {
         plan: &ScalarLongFunctionPlan,
         arguments: &[i64; 8],
     ) -> ScalarLongJitDispatch {
-        // A one-op leaf is already inlined by the no-JIT executor. Paying an
-        // indirect native call for it would move in the wrong direction.
-        if plan.select.is_some() || plan.program.operations.len() < 2 {
+        // A straight one-op leaf is already inlined by the no-JIT executor.
+        // Conditional leaves still execute a predicate and one selected arm,
+        // so admit them here and let the shared hotness threshold amortize
+        // code generation.
+        if plan.select.is_none() && plan.program.operations.len() < 2 {
             return ScalarLongJitDispatch::Interpret;
         }
 
@@ -2369,7 +2372,7 @@ impl Default for ScalarLongJitCache {
     }
 }
 
-/// An isolated native lowering of RPHP's existing straight-line integer IR.
+/// An isolated native lowering of RPHP's typed scalar integer IR.
 ///
 /// ABI: `x0` points to an input array, `x1` points to one output slot, and `w0`
 /// returns zero on success or one when checked arithmetic requires canonical
@@ -2387,57 +2390,77 @@ impl CompiledScalarLongProgram {
         let mut assembler = Arm64Assembler::new();
         let mut side_exit_branches = Vec::new();
 
-        for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-            let lhs =
-                emit_scalar_source(&mut assembler, operation.lhs, Arm64Register::from_code(2));
-            let rhs =
-                emit_scalar_source(&mut assembler, operation.rhs, Arm64Register::from_code(3));
-            let destination = scalar_temporary_register(index);
+        let mut selected_true_join = None;
+        if let Some(select) = plan.select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end + select.when_true_operation_count as usize;
+            emit_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                0,
+                shared_end,
+                &mut side_exit_branches,
+            )?;
 
-            match operation.kind {
-                ScalarLongOpKind::Add => {
-                    assembler.add_register_checked(destination, lhs, rhs);
-                    side_exit_branches
-                        .push(assembler.conditional_branch_placeholder(Arm64Condition::Overflow));
-                }
-                ScalarLongOpKind::Subtract => {
-                    assembler.subtract_register_checked(destination, lhs, rhs);
-                    side_exit_branches
-                        .push(assembler.conditional_branch_placeholder(Arm64Condition::Overflow));
-                }
-                ScalarLongOpKind::Multiply => {
-                    assembler.multiply_register(destination, lhs, rhs);
-                    assembler.signed_multiply_high(Arm64Register::from_code(2), lhs, rhs);
-                    assembler.arithmetic_shift_right(Arm64Register::from_code(3), destination, 63);
-                    assembler.compare_registers(
-                        Arm64Register::from_code(2),
-                        Arm64Register::from_code(3),
-                    );
-                    side_exit_branches
-                        .push(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual));
-                }
-                ScalarLongOpKind::BitwiseXor => {
-                    assembler.exclusive_or_register(destination, lhs, rhs);
-                }
-                ScalarLongOpKind::IntDivide => {
-                    emit_division_guards(&mut assembler, lhs, rhs, &mut side_exit_branches)?;
-                    assembler.signed_divide(destination, lhs, rhs);
-                }
-                ScalarLongOpKind::Modulo => {
-                    emit_division_guards(&mut assembler, lhs, rhs, &mut side_exit_branches)?;
-                    let quotient = Arm64Register::from_code(4);
-                    assembler.signed_divide(quotient, lhs, rhs);
-                    assembler.multiply_subtract(destination, quotient, rhs, lhs);
-                }
+            let condition_lhs = emit_scalar_condition_operand(
+                &mut assembler,
+                select.lhs,
+                Arm64Register::from_code(5),
+            );
+            let condition_rhs = emit_scalar_condition_operand(
+                &mut assembler,
+                select.rhs,
+                Arm64Register::from_code(6),
+            );
+            assembler.compare_registers(condition_lhs, condition_rhs);
+            let false_condition = match select.kind {
+                ScalarLongConditionKind::Equal => Arm64Condition::NotEqual,
+                ScalarLongConditionKind::NotEqual => Arm64Condition::Equal,
+                ScalarLongConditionKind::LessThan => Arm64Condition::GreaterOrEqual,
+                ScalarLongConditionKind::LessThanOrEqual => Arm64Condition::GreaterThan,
+            };
+            let selected_false_branch =
+                assembler.conditional_branch_placeholder(false_condition);
+
+            emit_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                shared_end,
+                true_end,
+                &mut side_exit_branches,
+            )?;
+            emit_scalar_output(&mut assembler, select.when_true);
+            selected_true_join = Some(assembler.branch_placeholder());
+
+            let false_word = assembler.word_count();
+            if !assembler.patch_conditional_branch(selected_false_branch, false_word) {
+                return Err(ScalarLongJitError::BranchOutOfRange);
             }
+            emit_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                true_end,
+                plan.program.operations.len(),
+                &mut side_exit_branches,
+            )?;
+            emit_scalar_output(&mut assembler, select.when_false);
+        } else {
+            emit_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                0,
+                plan.program.operations.len(),
+                &mut side_exit_branches,
+            )?;
+            emit_scalar_output(&mut assembler, plan.program.outputs[0]);
         }
 
-        let output = emit_scalar_source(
-            &mut assembler,
-            plan.program.outputs[0],
-            Arm64Register::from_code(2),
-        );
-        assembler.store_u64(output, Arm64Register::X1, 0);
+        let success_word = assembler.word_count();
+        if let Some(branch) = selected_true_join
+            && !assembler.patch_branch(branch, success_word)
+        {
+            return Err(ScalarLongJitError::BranchOutOfRange);
+        }
         assembler.move_immediate(Arm64Register::X0, i64::from(NATIVE_STATUS_SUCCESS));
         assembler.ret();
 
@@ -2486,11 +2509,6 @@ impl CompiledScalarLongProgram {
 }
 
 fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), ScalarLongJitError> {
-    if plan.select.is_some() {
-        return Err(ScalarLongJitError::InvalidProgram(
-            "conditional selects are not part of the first native slice",
-        ));
-    }
     if plan.public_args as usize > MAX_SCALAR_LONG_INPUTS {
         return Err(ScalarLongJitError::InvalidProgram(
             "too many public inputs for the prototype ABI",
@@ -2507,7 +2525,7 @@ fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Scalar
         ));
     }
 
-    for (index, operation) in plan.program.operations.iter().enumerate() {
+    for operation in plan.program.operations.iter() {
         match operation.kind {
             ScalarLongOpKind::Add
             | ScalarLongOpKind::Subtract
@@ -2516,14 +2534,208 @@ fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Scalar
             | ScalarLongOpKind::IntDivide
             | ScalarLongOpKind::Modulo => {}
         }
+    }
+
+    if let Some(select) = plan.select {
+        validate_scalar_long_select(plan, select)
+    } else {
+        for (index, operation) in plan.program.operations.iter().enumerate() {
+            validate_scalar_source(operation.lhs, index, plan.public_args)?;
+            validate_scalar_source(operation.rhs, index, plan.public_args)?;
+        }
+        validate_scalar_source(
+            plan.program.outputs[0],
+            plan.program.operations.len(),
+            plan.public_args,
+        )
+    }
+}
+
+fn validate_scalar_long_select(
+    plan: &ScalarLongFunctionPlan,
+    select: crate::vm::function::ScalarLongSelect,
+) -> Result<(), ScalarLongJitError> {
+    let operation_count = plan.program.operations.len();
+    let shared_end = select.shared_operation_count as usize;
+    let true_end = shared_end
+        .checked_add(select.when_true_operation_count as usize)
+        .ok_or(ScalarLongJitError::InvalidProgram(
+            "conditional operation ranges overflow",
+        ))?;
+    if shared_end > operation_count || true_end > operation_count {
+        return Err(ScalarLongJitError::InvalidProgram(
+            "conditional operation range is outside the program",
+        ));
+    }
+
+    for (index, operation) in plan.program.operations[..shared_end].iter().enumerate() {
         validate_scalar_source(operation.lhs, index, plan.public_args)?;
         validate_scalar_source(operation.rhs, index, plan.public_args)?;
     }
-    validate_scalar_source(
-        plan.program.outputs[0],
-        plan.program.operations.len(),
+    validate_scalar_condition_operand(select.lhs, shared_end, plan.public_args)?;
+    validate_scalar_condition_operand(select.rhs, shared_end, plan.public_args)?;
+
+    for (index, operation) in plan.program.operations[shared_end..true_end]
+        .iter()
+        .enumerate()
+    {
+        let absolute_index = shared_end + index;
+        validate_scalar_source(operation.lhs, absolute_index, plan.public_args)?;
+        validate_scalar_source(operation.rhs, absolute_index, plan.public_args)?;
+    }
+    validate_scalar_source(select.when_true, true_end, plan.public_args)?;
+
+    for (index, operation) in plan.program.operations[true_end..].iter().enumerate() {
+        let absolute_index = true_end + index;
+        validate_false_edge_scalar_source(
+            operation.lhs,
+            shared_end,
+            true_end,
+            absolute_index,
+            plan.public_args,
+        )?;
+        validate_false_edge_scalar_source(
+            operation.rhs,
+            shared_end,
+            true_end,
+            absolute_index,
+            plan.public_args,
+        )?;
+    }
+    validate_false_edge_scalar_source(
+        select.when_false,
+        shared_end,
+        true_end,
+        operation_count,
         plan.public_args,
     )
+}
+
+fn validate_scalar_condition_operand(
+    operand: ScalarLongConditionOperand,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), ScalarLongJitError> {
+    match operand {
+        ScalarLongConditionOperand::Source(source) => {
+            validate_scalar_source(source, available_temporaries, input_count)
+        }
+        ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            validate_scalar_source(lhs, available_temporaries, input_count)?;
+            validate_scalar_source(rhs, available_temporaries, input_count)
+        }
+    }
+}
+
+fn validate_false_edge_scalar_source(
+    source: ScalarLongSource,
+    shared_end: usize,
+    false_start: usize,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), ScalarLongJitError> {
+    match source {
+        ScalarLongSource::Temporary(index)
+            if !((index as usize) < shared_end
+                || ((index as usize) >= false_start
+                    && (index as usize) < available_temporaries)) =>
+        {
+            Err(ScalarLongJitError::InvalidProgram(
+                "false edge references a true-edge temporary",
+            ))
+        }
+        _ => validate_scalar_source(source, available_temporaries, input_count),
+    }
+}
+
+fn emit_scalar_operations(
+    assembler: &mut Arm64Assembler,
+    operations: &[ScalarLongOp],
+    start: usize,
+    end: usize,
+    side_exit_branches: &mut Vec<usize>,
+) -> Result<(), ScalarLongJitError> {
+    for (index, operation) in operations[start..end].iter().copied().enumerate() {
+        emit_scalar_operation(
+            assembler,
+            start + index,
+            operation,
+            side_exit_branches,
+        )?;
+    }
+    Ok(())
+}
+
+fn emit_scalar_operation(
+    assembler: &mut Arm64Assembler,
+    index: usize,
+    operation: ScalarLongOp,
+    side_exit_branches: &mut Vec<usize>,
+) -> Result<(), ScalarLongJitError> {
+    let lhs = emit_scalar_source(assembler, operation.lhs, Arm64Register::from_code(2));
+    let rhs = emit_scalar_source(assembler, operation.rhs, Arm64Register::from_code(3));
+    let destination = scalar_temporary_register(index);
+
+    match operation.kind {
+        ScalarLongOpKind::Add => {
+            assembler.add_register_checked(destination, lhs, rhs);
+            side_exit_branches
+                .push(assembler.conditional_branch_placeholder(Arm64Condition::Overflow));
+        }
+        ScalarLongOpKind::Subtract => {
+            assembler.subtract_register_checked(destination, lhs, rhs);
+            side_exit_branches
+                .push(assembler.conditional_branch_placeholder(Arm64Condition::Overflow));
+        }
+        ScalarLongOpKind::Multiply => {
+            assembler.multiply_register(destination, lhs, rhs);
+            assembler.signed_multiply_high(Arm64Register::from_code(2), lhs, rhs);
+            assembler.arithmetic_shift_right(Arm64Register::from_code(3), destination, 63);
+            assembler.compare_registers(
+                Arm64Register::from_code(2),
+                Arm64Register::from_code(3),
+            );
+            side_exit_branches
+                .push(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual));
+        }
+        ScalarLongOpKind::BitwiseXor => {
+            assembler.exclusive_or_register(destination, lhs, rhs);
+        }
+        ScalarLongOpKind::IntDivide => {
+            emit_division_guards(assembler, lhs, rhs, side_exit_branches)?;
+            assembler.signed_divide(destination, lhs, rhs);
+        }
+        ScalarLongOpKind::Modulo => {
+            emit_division_guards(assembler, lhs, rhs, side_exit_branches)?;
+            let quotient = Arm64Register::from_code(4);
+            assembler.signed_divide(quotient, lhs, rhs);
+            assembler.multiply_subtract(destination, quotient, rhs, lhs);
+        }
+    }
+    Ok(())
+}
+
+fn emit_scalar_condition_operand(
+    assembler: &mut Arm64Assembler,
+    operand: ScalarLongConditionOperand,
+    destination: Arm64Register,
+) -> Arm64Register {
+    match operand {
+        ScalarLongConditionOperand::Source(source) => {
+            emit_scalar_source(assembler, source, destination)
+        }
+        ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            let lhs = emit_scalar_source(assembler, lhs, Arm64Register::from_code(2));
+            let rhs = emit_scalar_source(assembler, rhs, Arm64Register::from_code(3));
+            assembler.bitwise_and_register(destination, lhs, rhs);
+            destination
+        }
+    }
+}
+
+fn emit_scalar_output(assembler: &mut Arm64Assembler, source: ScalarLongSource) {
+    let output = emit_scalar_source(assembler, source, Arm64Register::from_code(2));
+    assembler.store_u64(output, Arm64Register::X1, 0);
 }
 
 fn emit_division_guards(
