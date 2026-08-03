@@ -1616,6 +1616,43 @@ cost to existing generated code. The checkpoint passes 109 core, 108
 type-hint, 107 quick-loop and 63 ARM64/JIT tests; its end-to-end holdout test
 requires one native entry, multiple chunks and zero side exits.
 
+Application-corpus native checkpoint (2026-08-03): the shared mixed-region
+builder now lowers both remaining corpus boundaries without class, method or
+benchmark-name recognition. A non-escaping constructor plus ObjectArray
+method pipeline is scalar-replaced through nested monomorphic calls, checked
+arithmetic, finite String selection, result-entry selection and its immediate
+Long consumers. No request object or result array is materialized in the hot
+loop. Constructor, outer method and nested method identities remain guarded,
+and every call is accounted only after the complete virtual transaction has
+succeeded.
+
+The same builder also accepts ordinary scalar method plans followed by a
+declared-property mutator. Long properties are activation-resolved and seeded
+into private native shadow slots; the compiled program contains neither a PHP
+object pointer nor a property address. All mutations in one method are
+calculated first and published to persistent property shadows only through
+non-failing moves. Completion, interrupt and exact side-exit paths then commit
+those shadows to the current activation's guarded object. An overflow after an
+earlier property update therefore replays the canonical method once with no
+partial or duplicate mutation. Add, subtract, set, min and max property plans
+share this transactional lowering.
+
+Twenty-five order-rotated native-CPU `max-perf` before/after runs preserve the
+complete output. The untyped order pipeline falls from approximately 0.07957 s
+to 0.00459 s (17.3x) and its typed counterpart from 0.09413 s to 0.00498 s
+(18.9x). The subsequent property slice moves the untyped ledger from 0.02021 s
+to 0.00254 s (8.0x) and the typed ledger from 0.02016 s to 0.00257 s (7.8x),
+while both already-native order variants remain flat around 0.00446--0.00449 s.
+A separate 21-run four-mode batch, after verifying PHP reports tracing JIT as
+`enabled:on`, records RPHP JIT/PHP tracing-JIT medians of 0.00535/0.05960 s,
+0.00533/0.05788 s, 0.00275/0.01066 s and 0.00387/0.01255 s for untyped order,
+typed order, untyped ledger and typed ledger respectively. RPHP without JIT
+also remains slightly ahead of PHP without JIT in all four workloads in that
+batch. The checkpoint passes 109 core, 108 type-hint, 107 quick-loop and 67
+ARM64/JIT tests, including both complete corpus variants, rebinding one cached
+program to distinct activation objects, and a deliberate mid-method property
+overflow with exactly one native side exit.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

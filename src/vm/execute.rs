@@ -10857,6 +10857,10 @@ struct NativeQuickLongMixedKernel {
     context_array_slots: [u16; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_tokens: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_count: u8,
+    property_binding_op_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_property_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_count: u8,
     call_targets: [*const FunctionCommon; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     call_completion_operations: [u8; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     call_count: u8,
@@ -13292,6 +13296,12 @@ struct NativeMixedBuildState {
     context_array_slots: [u16; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_tokens: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_count: usize,
+    property_binding_op_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_property_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_slots: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_receivers: [*const Value; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_object_slots: [usize; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    property_binding_count: usize,
     call_targets: [*const FunctionCommon; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     call_completion_operations: [u8; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     call_count: usize,
@@ -13563,6 +13573,98 @@ impl NativeMixedBuildState {
             return self.record_call(target, completion);
         }
 
+        if let Some(select) = plan.string_intdiv_select.as_deref() {
+            if select.string_argument >= call.argument_count {
+                return None;
+            }
+            let input = Self::object_long_source(user, select.input, call)?;
+            let QuickObjectLongArgument::StringSlot(string_slot) =
+                call.arguments[select.string_argument as usize]
+            else {
+                return None;
+            };
+            let work = self.allocate_slot()?;
+            let selected = self.allocate_slot()?;
+            let mut selected_tokens = 0u64;
+            let mut completion_jumps = Vec::with_capacity(select.cases.len());
+            for case in select.cases.iter() {
+                let Some(token) = self.token_for_callee_literal(caller, user, case.literal)? else {
+                    continue;
+                };
+                let bit = 1u64 << token;
+                if selected_tokens & bit != 0 {
+                    return None;
+                }
+                selected_tokens |= bit;
+                let branch = self.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::Equal,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(string_slot),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Const(i64::from(token)),
+                        ),
+                        false_target: 0,
+                    },
+                    call.resume_ip,
+                )?;
+                self.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Multiply,
+                        lhs: input,
+                        rhs: QuickLongOperand::Const(case.arm.multiplier),
+                        result: work,
+                    },
+                    call.resume_ip,
+                )?;
+                self.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::IntDivide,
+                        lhs: QuickLongOperand::Slot(work),
+                        rhs: QuickLongOperand::Const(case.arm.divisor),
+                        result: selected,
+                    },
+                    call.resume_ip,
+                )?;
+                completion_jumps.push(self.append(
+                    NativeStraightLongOperation::Jump { target: 0 },
+                    call.resume_ip,
+                )?);
+                self.patch_branch_target(branch, u8::try_from(self.operation_count).ok()?)?;
+            }
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: input,
+                    rhs: QuickLongOperand::Const(select.default_arm.multiplier),
+                    result: work,
+                },
+                call.resume_ip,
+            )?;
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::IntDivide,
+                    lhs: QuickLongOperand::Slot(work),
+                    rhs: QuickLongOperand::Const(select.default_arm.divisor),
+                    result: selected,
+                },
+                call.resume_ip,
+            )?;
+            let completion_target = u8::try_from(self.operation_count).ok()?;
+            let completion = self.append(
+                NativeStraightLongOperation::Move {
+                    source: QuickLongOperand::Slot(selected),
+                    result: result_slot,
+                },
+                call.resume_ip,
+            )?;
+            for jump in completion_jumps {
+                self.patch_jump_target(jump, completion_target)?;
+            }
+            return self.record_call(target, completion);
+        }
+
         if let Some(select) = plan.modulo_any_select.as_deref() {
             let selected = self.allocate_slot()?;
             let remainder = self.allocate_slot()?;
@@ -13626,6 +13728,1041 @@ impl NativeMixedBuildState {
         }
 
         None
+    }
+
+    fn virtual_property_argument(
+        resolved: &QuickResolvedVirtualPipeline,
+        owner: &UserFunction,
+        object: ObjectLongObjectSource,
+        cache_ip: u16,
+    ) -> Option<u8> {
+        if object != ObjectLongObjectSource::Argument(0) {
+            return None;
+        }
+        let cache = owner.op_array.cache.get(cache_ip as usize)?;
+        if cache.class_id != resolved.class_id || cache.property_flags() & 1 == 0 {
+            return None;
+        }
+        let property_slot = cache.property_slot();
+        resolved.property_slots[..resolved.property_count as usize]
+            .iter()
+            .position(|candidate| *candidate == property_slot)
+            .map(|index| resolved.property_arguments[index])
+    }
+
+    fn virtual_long_argument(
+        resolved: &QuickResolvedVirtualPipeline,
+        constructor_arguments: &[QuickVirtualValueSource; 8],
+        owner: &UserFunction,
+        object: ObjectLongObjectSource,
+        cache_ip: u16,
+    ) -> Option<QuickLongOperand> {
+        let argument = Self::virtual_property_argument(resolved, owner, object, cache_ip)?;
+        match *constructor_arguments.get(argument as usize)? {
+            QuickVirtualValueSource::Long(source) => Some(source),
+            QuickVirtualValueSource::StringLiteral(_)
+            | QuickVirtualValueSource::StringSlot(_) => None,
+        }
+    }
+
+    fn virtual_string_slot(
+        &mut self,
+        resolved: &QuickResolvedVirtualPipeline,
+        constructor_arguments: &[QuickVirtualValueSource; 8],
+        owner: &UserFunction,
+        object: ObjectLongObjectSource,
+        cache_ip: u16,
+        resume_ip: usize,
+    ) -> Option<u16> {
+        let argument = Self::virtual_property_argument(resolved, owner, object, cache_ip)?;
+        match *constructor_arguments.get(argument as usize)? {
+            QuickVirtualValueSource::StringSlot(slot) => Some(slot),
+            QuickVirtualValueSource::StringLiteral(literal) => {
+                let slot = self.allocate_slot()?;
+                self.append(
+                    NativeStraightLongOperation::StringToken {
+                        token: self.token_for_literal(literal)?,
+                        result: slot,
+                    },
+                    resume_ip,
+                )?;
+                Some(slot)
+            }
+            QuickVirtualValueSource::Long(_) => None,
+        }
+    }
+
+    fn native_local_destination(
+        &mut self,
+        destinations: &mut [Option<u16>; 64],
+        sources: &mut [Option<QuickLongOperand>; 64],
+        destination: u16,
+    ) -> Option<u16> {
+        let index = destination as usize;
+        if index >= destinations.len() {
+            return None;
+        }
+        let slot = match destinations[index] {
+            Some(slot) => slot,
+            None => {
+                let slot = self.allocate_slot()?;
+                destinations[index] = Some(slot);
+                slot
+            }
+        };
+        sources[index] = Some(QuickLongOperand::Slot(slot));
+        Some(slot)
+    }
+
+    fn object_array_long_source(
+        resolved: &QuickResolvedVirtualPipeline,
+        constructor_arguments: &[QuickVirtualValueSource; 8],
+        owner: &UserFunction,
+        sources: &[Option<QuickLongOperand>; 64],
+        source: ObjectArraySource,
+    ) -> Option<QuickLongOperand> {
+        match source {
+            ObjectArraySource::LongSlot(slot) => sources.get(slot as usize).copied().flatten(),
+            ObjectArraySource::Literal(literal) => owner
+                .op_array
+                .literals
+                .get(literal as usize)
+                .filter(|value| value.value_type() == ValueType::Long)
+                .map(|value| QuickLongOperand::Const(unsafe { value.raw_long() })),
+            ObjectArraySource::Property { object, cache_ip } => Self::virtual_long_argument(
+                resolved,
+                constructor_arguments,
+                owner,
+                object,
+                cache_ip,
+            ),
+            ObjectArraySource::Receiver | ObjectArraySource::Argument(_) => None,
+        }
+    }
+
+    unsafe fn virtual_nested_call(
+        resolved: &QuickResolvedVirtualPipeline,
+        call: &ObjectArrayLongCall,
+    ) -> Option<(*const FunctionCommon, *const UserFunction, *const ObjectLongFunctionPlan)> {
+        let ObjectArraySource::Property {
+            object: ObjectLongObjectSource::Receiver,
+            cache_ip: receiver_cache_ip,
+        } = call.receiver
+        else {
+            return None;
+        };
+        let owner = &*resolved.method_user;
+        let receiver = &*resolved.method_receiver;
+        let receiver_cache = owner.op_array.cache.get(receiver_cache_ip as usize)?;
+        if receiver.value_type() != ValueType::Object
+            || receiver.is_reference()
+            || receiver_cache.property_flags() & 1 == 0
+        {
+            return None;
+        }
+        let receiver_class_id = receiver.object_class_id_unchecked();
+        if receiver_class_id == 0 || receiver_cache.class_id != receiver_class_id {
+            return None;
+        }
+        let nested_receiver = receiver.object_property_slot_unchecked(
+            receiver_cache.property_slot(),
+        );
+        if nested_receiver.is_null()
+            || (*nested_receiver).value_type() != ValueType::Object
+            || (*nested_receiver).is_reference()
+        {
+            return None;
+        }
+        let nested_class_id = (*nested_receiver).object_class_id_unchecked();
+        let cache = owner.op_array.cache.get(call.cache_ip as usize)?;
+        let initializer = owner.op_array.instructions.get(call.cache_ip as usize)?;
+        if nested_class_id == 0
+            || cache.class_id != nested_class_id
+            || cache.func.is_null()
+            || !method_return_dispatch_contract_matches(initializer, &*cache.func)
+        {
+            return None;
+        }
+        let common = &*cache.func;
+        if common.fn_type != FunctionType::User
+            || common.sig.public_arity() != call.arguments.len() as u32
+            || common.sig.required_num_args != call.arguments.len() as u32
+            || common.sig.ref_args != 0
+            || common.sig.is_variadic
+            || !common.plan.call.is_compact_user_call()
+            || common.plan.ret != ReturnStrategy::Fast
+        {
+            return None;
+        }
+        let user = &*(cache.func as *const UserFunction);
+        let plan = user.object_long_plan.as_deref()?;
+        if plan.public_args as usize != call.arguments.len() {
+            return None;
+        }
+        Some((cache.func, user, plan))
+    }
+
+    fn lower_virtual_object_method(
+        &mut self,
+        resolved: &QuickResolvedVirtualPipeline,
+        constructor_arguments: &[QuickVirtualValueSource; 8],
+        target: *const FunctionCommon,
+        user: &UserFunction,
+        plan: &ObjectLongFunctionPlan,
+        result_slot: u16,
+        resume_ip: usize,
+    ) -> Option<()> {
+        if plan.operations.is_empty()
+            || plan.operations.len() > 64
+            || plan.public_args != 1
+            || plan.object_argument_mask != 1
+            || plan.long_argument_mask != 0
+            || plan.string_argument_mask != 0
+        {
+            return None;
+        }
+        let mut sources = [None; 64];
+        let mut destinations = [None; 64];
+        let mut conditions = [None; 64];
+        let mut plan_to_native = [u8::MAX; 65];
+        let mut pending_branches = Vec::new();
+        let mut pending_jumps = Vec::new();
+        let mut ip = 0usize;
+        let mut completion = None;
+        while ip < plan.operations.len() {
+            plan_to_native[ip] = u8::try_from(self.operation_count).ok()?;
+            match plan.operations[ip] {
+                ObjectLongOp::Noop => {}
+                ObjectLongOp::Assign {
+                    destination,
+                    source,
+                } => {
+                    let source = match source {
+                        ObjectLongSource::Constant(value) => QuickLongOperand::Const(value),
+                        ObjectLongSource::Slot(slot) => {
+                            sources.get(slot as usize).copied().flatten()?
+                        }
+                    };
+                    let destination = self.native_local_destination(
+                        &mut destinations,
+                        &mut sources,
+                        destination,
+                    )?;
+                    self.append(
+                        NativeStraightLongOperation::Move {
+                            source,
+                            result: destination,
+                        },
+                        resume_ip,
+                    )?;
+                }
+                ObjectLongOp::FetchProperty {
+                    object,
+                    cache_ip,
+                    destination,
+                } => {
+                    let source = Self::virtual_long_argument(
+                        resolved,
+                        constructor_arguments,
+                        user,
+                        object,
+                        cache_ip,
+                    )?;
+                    *sources.get_mut(destination as usize)? = Some(source);
+                }
+                ObjectLongOp::Arithmetic {
+                    kind,
+                    lhs,
+                    rhs,
+                    destination,
+                } => {
+                    let resolve = |source| match source {
+                        ObjectLongSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+                        ObjectLongSource::Slot(slot) => {
+                            sources.get(slot as usize).copied().flatten()
+                        }
+                    };
+                    let lhs = resolve(lhs)?;
+                    let rhs = resolve(rhs)?;
+                    let mut native_destination = destination;
+                    let mut skip_assign = false;
+                    if let Some(ObjectLongOp::Assign {
+                        destination: assigned,
+                        source: ObjectLongSource::Slot(source),
+                    }) = plan.operations.get(ip + 1)
+                        && *source == destination
+                        && !plan.operations.iter().any(|operation| match operation {
+                            ObjectLongOp::JumpIfFalse { target, .. }
+                            | ObjectLongOp::JumpIfTrue { target, .. }
+                            | ObjectLongOp::Jump { target } => usize::from(*target) == ip + 1,
+                            _ => false,
+                        })
+                    {
+                        native_destination = *assigned;
+                        skip_assign = true;
+                    }
+                    let result = self.native_local_destination(
+                        &mut destinations,
+                        &mut sources,
+                        native_destination,
+                    )?;
+                    self.append(
+                        NativeStraightLongOperation::Binary {
+                            kind,
+                            lhs,
+                            rhs,
+                            result,
+                        },
+                        resume_ip,
+                    )?;
+                    if skip_assign {
+                        *sources.get_mut(destination as usize)? =
+                            Some(QuickLongOperand::Slot(result));
+                        plan_to_native[ip + 1] = u8::try_from(self.operation_count).ok()?;
+                        ip += 1;
+                    }
+                }
+                ObjectLongOp::Compare {
+                    kind,
+                    lhs,
+                    rhs,
+                    destination,
+                } => {
+                    let resolve = |source| match source {
+                        ObjectLongSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+                        ObjectLongSource::Slot(slot) => {
+                            sources.get(slot as usize).copied().flatten()
+                        }
+                    };
+                    *conditions.get_mut(destination as usize)? = Some((
+                        kind,
+                        resolve(lhs)?,
+                        resolve(rhs)?,
+                    ));
+                }
+                ObjectLongOp::JumpIfFalse { condition, target } => {
+                    let ObjectLongSource::Slot(condition) = condition else {
+                        return None;
+                    };
+                    let (kind, lhs, rhs) = conditions
+                        .get(condition as usize)
+                        .copied()
+                        .flatten()?;
+                    let branch = self.append(
+                        NativeStraightLongOperation::BranchUnless {
+                            kind,
+                            lhs: NativeStraightLongConditionOperand::Source(lhs),
+                            rhs: NativeStraightLongConditionOperand::Source(rhs),
+                            false_target: 0,
+                        },
+                        resume_ip,
+                    )?;
+                    pending_branches.push((branch, target));
+                }
+                ObjectLongOp::Jump { target } => {
+                    let jump = self.append(
+                        NativeStraightLongOperation::Jump { target: 0 },
+                        resume_ip,
+                    )?;
+                    pending_jumps.push((jump, target));
+                }
+                ObjectLongOp::Return { value } => {
+                    let value = match value {
+                        ObjectLongSource::Constant(value) => QuickLongOperand::Const(value),
+                        ObjectLongSource::Slot(slot) => {
+                            sources.get(slot as usize).copied().flatten()?
+                        }
+                    };
+                    completion = Some(self.append(
+                        NativeStraightLongOperation::Move {
+                            source: value,
+                            result: result_slot,
+                        },
+                        resume_ip,
+                    )?);
+                    ip += 1;
+                    while matches!(plan.operations.get(ip), Some(ObjectLongOp::Bail)) {
+                        plan_to_native[ip] = u8::try_from(self.operation_count).ok()?;
+                        ip += 1;
+                    }
+                    if ip != plan.operations.len() {
+                        return None;
+                    }
+                    break;
+                }
+                ObjectLongOp::JumpIfTrue { .. }
+                | ObjectLongOp::StringLiteralBranch { .. }
+                | ObjectLongOp::StringLength { .. }
+                | ObjectLongOp::IntDiv { .. }
+                | ObjectLongOp::Bail => return None,
+            }
+            ip += 1;
+        }
+        plan_to_native[plan.operations.len()] = u8::try_from(self.operation_count).ok()?;
+        for (branch, target) in pending_branches {
+            let target = *plan_to_native.get(target as usize)?;
+            if target == u8::MAX {
+                return None;
+            }
+            self.patch_branch_target(branch, target)?;
+        }
+        for (jump, target) in pending_jumps {
+            let target = *plan_to_native.get(target as usize)?;
+            if target == u8::MAX {
+                return None;
+            }
+            self.patch_jump_target(jump, target)?;
+        }
+        self.record_call(target, completion?)
+    }
+
+    fn object_array_entry_source(
+        caller: &crate::compiler::OpArray,
+        key_literal: u16,
+        owner: &UserFunction,
+        plan: &ObjectArrayFunctionPlan,
+    ) -> Option<ObjectArraySource> {
+        let key = caller.literals.get(key_literal as usize)?.as_str()?;
+        plan.entries.iter().rev().find_map(|entry| {
+            owner
+                .op_array
+                .literals
+                .get(entry.key_literal as usize)
+                .and_then(Value::as_str)
+                .filter(|candidate| *candidate == key)
+                .map(|_| entry.value)
+        })
+    }
+
+    unsafe fn lower_virtual_pipeline(
+        &mut self,
+        caller: &crate::compiler::OpArray,
+        resolved: &QuickResolvedVirtualPipeline,
+        constructor_arguments: &[QuickVirtualValueSource; 8],
+        consumers: &[QuickObjectArrayConsumer; 4],
+        consumer_count: u8,
+        trailing_key_literal: Option<u16>,
+        trailing_result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    ) -> Option<()> {
+        let owner = &*resolved.method_user;
+        let plan = &*resolved.method_plan;
+        if plan.operations.is_empty()
+            || plan.operations.len() > 64
+            || plan.entries.is_empty()
+            || plan.entries.len() > 4
+            || consumer_count == 0
+            || consumer_count > 4
+        {
+            return None;
+        }
+        let transaction_call_start = self.call_count;
+        let mut sources = [None; 64];
+        let mut destinations = [None; 64];
+        for operation in plan.operations.iter() {
+            match operation {
+                ObjectArrayLongOp::Assign {
+                    destination,
+                    source,
+                } => {
+                    let source = Self::object_array_long_source(
+                        resolved,
+                        constructor_arguments,
+                        owner,
+                        &sources,
+                        *source,
+                    )?;
+                    *sources.get_mut(*destination as usize)? = Some(source);
+                }
+                ObjectArrayLongOp::Arithmetic {
+                    kind,
+                    lhs,
+                    rhs,
+                    destination,
+                } => {
+                    let lhs = Self::object_array_long_source(
+                        resolved,
+                        constructor_arguments,
+                        owner,
+                        &sources,
+                        *lhs,
+                    )?;
+                    let rhs = Self::object_array_long_source(
+                        resolved,
+                        constructor_arguments,
+                        owner,
+                        &sources,
+                        *rhs,
+                    )?;
+                    let result = self.native_local_destination(
+                        &mut destinations,
+                        &mut sources,
+                        *destination,
+                    )?;
+                    self.append(
+                        NativeStraightLongOperation::Binary {
+                            kind: *kind,
+                            lhs,
+                            rhs,
+                            result,
+                        },
+                        resume_ip,
+                    )?;
+                }
+                ObjectArrayLongOp::IntDiv {
+                    lhs,
+                    rhs,
+                    destination,
+                } => {
+                    let lhs = Self::object_array_long_source(
+                        resolved,
+                        constructor_arguments,
+                        owner,
+                        &sources,
+                        *lhs,
+                    )?;
+                    let rhs = Self::object_array_long_source(
+                        resolved,
+                        constructor_arguments,
+                        owner,
+                        &sources,
+                        *rhs,
+                    )?;
+                    let result = self.native_local_destination(
+                        &mut destinations,
+                        &mut sources,
+                        *destination,
+                    )?;
+                    self.append(
+                        NativeStraightLongOperation::Binary {
+                            kind: ScalarLongOpKind::IntDivide,
+                            lhs,
+                            rhs,
+                            result,
+                        },
+                        resume_ip,
+                    )?;
+                }
+                ObjectArrayLongOp::Call(call) => {
+                    let (target, user, nested_plan) =
+                        Self::virtual_nested_call(resolved, call)?;
+                    let user = &*user;
+                    let nested_plan = &*nested_plan;
+                    let result = self.native_local_destination(
+                        &mut destinations,
+                        &mut sources,
+                        call.destination,
+                    )?;
+                    if nested_plan.object_argument_mask != 0 {
+                        if call.arguments.len() != 1
+                            || call.arguments[0] != ObjectArraySource::Argument(0)
+                        {
+                            return None;
+                        }
+                        self.lower_virtual_object_method(
+                            resolved,
+                            constructor_arguments,
+                            target,
+                            user,
+                            nested_plan,
+                            result,
+                            resume_ip,
+                        )?;
+                    } else {
+                        if call.arguments.len() > 8 {
+                            return None;
+                        }
+                        let mut arguments = [QuickObjectLongArgument::Long(
+                            QuickLongOperand::Const(0),
+                        ); 8];
+                        for (index, source) in call.arguments.iter().copied().enumerate() {
+                            let bit = 1u8 << index;
+                            arguments[index] = if nested_plan.long_argument_mask & bit != 0 {
+                                QuickObjectLongArgument::Long(Self::object_array_long_source(
+                                    resolved,
+                                    constructor_arguments,
+                                    owner,
+                                    &sources,
+                                    source,
+                                )?)
+                            } else if nested_plan.string_argument_mask & bit != 0 {
+                                let ObjectArraySource::Property { object, cache_ip } = source else {
+                                    return None;
+                                };
+                                QuickObjectLongArgument::StringSlot(self.virtual_string_slot(
+                                    resolved,
+                                    constructor_arguments,
+                                    owner,
+                                    object,
+                                    cache_ip,
+                                    resume_ip,
+                                )?)
+                            } else {
+                                return None;
+                            };
+                        }
+                        let method_call = QuickObjectLongMethodCall {
+                            guard: ScalarLongCallGuard::FunctionCache {
+                                cache_ip: u32::from(call.cache_ip),
+                            },
+                            arguments,
+                            argument_count: call.arguments.len() as u8,
+                            next_target,
+                            resume_ip,
+                        };
+                        self.lower_object_method(
+                            caller,
+                            target,
+                            user,
+                            nested_plan,
+                            &method_call,
+                            result,
+                        )?;
+                    }
+                }
+            }
+        }
+
+        let mut committed_destinations = [u16::MAX; 4];
+        let mut committed_sources = [QuickLongOperand::Const(0); 4];
+        let mut committed_count = 0usize;
+        for consumer in consumers.iter().copied().take(consumer_count as usize) {
+            let current = committed_destinations[..committed_count]
+                .iter()
+                .rposition(|destination| *destination == consumer.accumulator)
+                .map(|index| committed_sources[index])
+                .unwrap_or(QuickLongOperand::Slot(consumer.accumulator));
+            let entry = Self::object_array_entry_source(
+                caller,
+                consumer.key_literal,
+                owner,
+                plan,
+            )?;
+            let value = Self::object_array_long_source(
+                resolved,
+                constructor_arguments,
+                owner,
+                &sources,
+                entry,
+            )?;
+            let result = self.allocate_slot()?;
+            self.append(
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: current,
+                    rhs: value,
+                    result,
+                },
+                resume_ip,
+            )?;
+            if let Some(index) = committed_destinations[..committed_count]
+                .iter()
+                .position(|destination| *destination == consumer.accumulator)
+            {
+                committed_sources[index] = QuickLongOperand::Slot(result);
+            } else {
+                *committed_destinations.get_mut(committed_count)? = consumer.accumulator;
+                committed_sources[committed_count] = QuickLongOperand::Slot(result);
+                committed_count += 1;
+            }
+        }
+        let trailing = match trailing_key_literal {
+            Some(key) => {
+                let entry = Self::object_array_entry_source(caller, key, owner, plan)?;
+                Some(Self::object_array_long_source(
+                    resolved,
+                    constructor_arguments,
+                    owner,
+                    &sources,
+                    entry,
+                )?)
+            }
+            None => None,
+        };
+        let mut final_completion = None;
+        for index in 0..committed_count {
+            final_completion = Some(self.append(
+                NativeStraightLongOperation::Move {
+                    source: committed_sources[index],
+                    result: committed_destinations[index],
+                },
+                resume_ip,
+            )?);
+        }
+        if let Some(source) = trailing {
+            final_completion = Some(self.append(
+                NativeStraightLongOperation::Move {
+                    source,
+                    result: trailing_result,
+                },
+                resume_ip,
+            )?);
+        }
+        let final_completion = final_completion?;
+        self.record_call(resolved.constructor_target, final_completion)?;
+        self.record_call(resolved.method_target, final_completion)?;
+        for index in transaction_call_start..self.call_count {
+            self.call_completion_operations[index] = final_completion;
+        }
+        Some(())
+    }
+
+    fn scalar_method_source(
+        source: ScalarLongSource,
+        call: &QuickTypedMethodCall,
+        temporaries: &[Option<QuickLongOperand>; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+        temporary_count: usize,
+    ) -> Option<QuickLongOperand> {
+        match source {
+            ScalarLongSource::Input(index) if index < u16::from(call.argument_count) => {
+                call.arguments.get(index as usize).copied()
+            }
+            ScalarLongSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+            ScalarLongSource::Temporary(index) if (index as usize) < temporary_count => {
+                temporaries.get(index as usize).copied().flatten()
+            }
+            _ => None,
+        }
+    }
+
+    fn lower_scalar_method_operation(
+        &mut self,
+        plan: &ScalarLongFunctionPlan,
+        call: &QuickTypedMethodCall,
+        temporaries: &mut [Option<QuickLongOperand>;
+            NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+        index: usize,
+    ) -> Option<()> {
+        let operation = *plan.program.operations.get(index)?;
+        let lhs = Self::scalar_method_source(operation.lhs, call, temporaries, index)?;
+        let rhs = Self::scalar_method_source(operation.rhs, call, temporaries, index)?;
+        let result = self.allocate_slot()?;
+        self.append(
+            NativeStraightLongOperation::Binary {
+                kind: operation.kind,
+                lhs,
+                rhs,
+                result,
+            },
+            call.resume_ip,
+        )?;
+        temporaries[index] = Some(QuickLongOperand::Slot(result));
+        Some(())
+    }
+
+    fn scalar_method_condition_operand(
+        operand: ScalarLongConditionOperand,
+        call: &QuickTypedMethodCall,
+        temporaries: &[Option<QuickLongOperand>; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+        temporary_count: usize,
+    ) -> Option<NativeStraightLongConditionOperand> {
+        match operand {
+            ScalarLongConditionOperand::Source(source) => {
+                Some(NativeStraightLongConditionOperand::Source(
+                    Self::scalar_method_source(source, call, temporaries, temporary_count)?,
+                ))
+            }
+            ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+                Some(NativeStraightLongConditionOperand::BitwiseAnd {
+                    lhs: Self::scalar_method_source(
+                        lhs,
+                        call,
+                        temporaries,
+                        temporary_count,
+                    )?,
+                    rhs: Self::scalar_method_source(
+                        rhs,
+                        call,
+                        temporaries,
+                        temporary_count,
+                    )?,
+                })
+            }
+        }
+    }
+
+    fn lower_scalar_method(
+        &mut self,
+        target: *const FunctionCommon,
+        plan: &ScalarLongFunctionPlan,
+        call: &QuickTypedMethodCall,
+        result_slot: u16,
+    ) -> Option<()> {
+        if plan.public_args != call.argument_count
+            || plan.program.output_count != 1
+            || plan.program.operations.len() > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
+        {
+            return None;
+        }
+        let mut temporaries = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        let output = if let Some(select) = plan.select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end.checked_add(select.when_true_operation_count as usize)?;
+            if true_end > plan.program.operations.len() {
+                return None;
+            }
+            for index in 0..shared_end {
+                self.lower_scalar_method_operation(plan, call, &mut temporaries, index)?;
+            }
+            let lhs = Self::scalar_method_condition_operand(
+                select.lhs,
+                call,
+                &temporaries,
+                shared_end,
+            )?;
+            let rhs = Self::scalar_method_condition_operand(
+                select.rhs,
+                call,
+                &temporaries,
+                shared_end,
+            )?;
+            let branch = self.append(
+                NativeStraightLongOperation::BranchUnless {
+                    kind: select.kind,
+                    lhs,
+                    rhs,
+                    false_target: 0,
+                },
+                call.resume_ip,
+            )?;
+            for index in shared_end..true_end {
+                self.lower_scalar_method_operation(plan, call, &mut temporaries, index)?;
+            }
+            let result = self.allocate_slot()?;
+            let when_true = Self::scalar_method_source(
+                select.when_true,
+                call,
+                &temporaries,
+                true_end,
+            )?;
+            self.append(
+                NativeStraightLongOperation::Move {
+                    source: when_true,
+                    result,
+                },
+                call.resume_ip,
+            )?;
+            let jump = self.append(
+                NativeStraightLongOperation::Jump { target: 0 },
+                call.resume_ip,
+            )?;
+            self.patch_branch_target(branch, u8::try_from(self.operation_count).ok()?)?;
+            for index in true_end..plan.program.operations.len() {
+                let operation = plan.program.operations[index];
+                let available = |source| match source {
+                    ScalarLongSource::Temporary(temporary) => {
+                        let temporary = temporary as usize;
+                        temporary < shared_end || (temporary >= true_end && temporary < index)
+                    }
+                    ScalarLongSource::Input(_) | ScalarLongSource::Constant(_) => true,
+                };
+                if !available(operation.lhs) || !available(operation.rhs) {
+                    return None;
+                }
+                self.lower_scalar_method_operation(plan, call, &mut temporaries, index)?;
+            }
+            if matches!(select.when_false, ScalarLongSource::Temporary(temporary)
+                if (temporary as usize) >= shared_end && (temporary as usize) < true_end)
+            {
+                return None;
+            }
+            let when_false = Self::scalar_method_source(
+                select.when_false,
+                call,
+                &temporaries,
+                plan.program.operations.len(),
+            )?;
+            self.append(
+                NativeStraightLongOperation::Move {
+                    source: when_false,
+                    result,
+                },
+                call.resume_ip,
+            )?;
+            self.patch_jump_target(jump, u8::try_from(self.operation_count).ok()?)?;
+            QuickLongOperand::Slot(result)
+        } else {
+            for index in 0..plan.program.operations.len() {
+                self.lower_scalar_method_operation(plan, call, &mut temporaries, index)?;
+            }
+            Self::scalar_method_source(
+                plan.program.outputs[0],
+                call,
+                &temporaries,
+                plan.program.operations.len(),
+            )?
+        };
+        let completion = self.append(
+            NativeStraightLongOperation::Move {
+                source: output,
+                result: result_slot,
+            },
+            call.resume_ip,
+        )?;
+        self.record_call(target, completion)
+    }
+
+    fn property_binding_slot(
+        &mut self,
+        op_index: usize,
+        receiver: *const Value,
+        object_slot: usize,
+        property_index: usize,
+    ) -> Option<u16> {
+        for index in 0..self.property_binding_count {
+            if self.property_binding_receivers[index] == receiver
+                && self.property_binding_object_slots[index] == object_slot
+            {
+                return Some(u16::from(self.property_binding_slots[index]));
+            }
+        }
+        if self.property_binding_count == NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES {
+            return None;
+        }
+        let shadow_slot = self.allocate_slot()?;
+        let index = self.property_binding_count;
+        self.property_binding_op_indices[index] = u8::try_from(op_index).ok()?;
+        self.property_binding_property_indices[index] = u8::try_from(property_index).ok()?;
+        self.property_binding_slots[index] = u8::try_from(shadow_slot).ok()?;
+        self.property_binding_receivers[index] = receiver;
+        self.property_binding_object_slots[index] = object_slot;
+        self.property_binding_count += 1;
+        Some(shadow_slot)
+    }
+
+    fn property_method_source(
+        source: LongPlanSource,
+        call: &QuickTypedMethodCall,
+    ) -> Option<QuickLongOperand> {
+        match source {
+            LongPlanSource::Argument(index) if index < call.argument_count => {
+                call.arguments.get(index as usize).copied()
+            }
+            LongPlanSource::Constant(value) => Some(QuickLongOperand::Const(value)),
+            LongPlanSource::Argument(_) => None,
+        }
+    }
+
+    fn lower_property_method(
+        &mut self,
+        op_index: usize,
+        receiver: *const Value,
+        target: *const FunctionCommon,
+        plan: &LongPropertyMethodPlan,
+        property_slots: &[usize; 8],
+        property_count: u8,
+        call: &QuickTypedMethodCall,
+    ) -> Option<()> {
+        if plan.public_args != call.argument_count
+            || property_count == 0
+            || property_count as usize != plan.properties.len()
+            || property_count > 8
+            || plan.operations.is_empty()
+        {
+            return None;
+        }
+        let mut values = [None; 8];
+        let mut bindings = [u16::MAX; 8];
+        for index in 0..property_count as usize {
+            let slot = self.property_binding_slot(
+                op_index,
+                receiver,
+                property_slots[index],
+                index,
+            )?;
+            bindings[index] = slot;
+            values[index] = Some(QuickLongOperand::Slot(slot));
+        }
+        let mut written = 0u8;
+        for operation in plan.operations.iter().copied() {
+            let (property, value) = match operation {
+                LongPropertyOp::Add { property, rhs }
+                | LongPropertyOp::Sub { property, rhs } => {
+                    let current = values.get(property as usize).copied().flatten()?;
+                    let rhs = Self::property_method_source(rhs, call)?;
+                    let result = self.allocate_slot()?;
+                    self.append(
+                        NativeStraightLongOperation::Binary {
+                            kind: if matches!(operation, LongPropertyOp::Add { .. }) {
+                                ScalarLongOpKind::Add
+                            } else {
+                                ScalarLongOpKind::Subtract
+                            },
+                            lhs: current,
+                            rhs,
+                            result,
+                        },
+                        call.resume_ip,
+                    )?;
+                    (property, QuickLongOperand::Slot(result))
+                }
+                LongPropertyOp::Set { property, value } => {
+                    (property, Self::property_method_source(value, call)?)
+                }
+                LongPropertyOp::Min {
+                    property,
+                    candidate,
+                }
+                | LongPropertyOp::Max {
+                    property,
+                    candidate,
+                } => {
+                    let current = values.get(property as usize).copied().flatten()?;
+                    let candidate = Self::property_method_source(candidate, call)?;
+                    let result = self.allocate_slot()?;
+                    self.append(
+                        NativeStraightLongOperation::Move {
+                            source: current,
+                            result,
+                        },
+                        call.resume_ip,
+                    )?;
+                    let (lhs, rhs) = if matches!(operation, LongPropertyOp::Min { .. }) {
+                        (candidate, current)
+                    } else {
+                        (current, candidate)
+                    };
+                    let branch = self.append(
+                        NativeStraightLongOperation::BranchUnless {
+                            kind: ScalarLongConditionKind::LessThan,
+                            lhs: NativeStraightLongConditionOperand::Source(lhs),
+                            rhs: NativeStraightLongConditionOperand::Source(rhs),
+                            false_target: 0,
+                        },
+                        call.resume_ip,
+                    )?;
+                    self.append(
+                        NativeStraightLongOperation::Move {
+                            source: candidate,
+                            result,
+                        },
+                        call.resume_ip,
+                    )?;
+                    self.patch_branch_target(
+                        branch,
+                        u8::try_from(self.operation_count).ok()?,
+                    )?;
+                    (property, QuickLongOperand::Slot(result))
+                }
+            };
+            *values.get_mut(property as usize)? = Some(value);
+            written |= 1u8.checked_shl(u32::from(property))?;
+        }
+        let mut completion = None;
+        for index in 0..property_count as usize {
+            if written & (1u8 << index) == 0 {
+                continue;
+            }
+            completion = Some(self.append(
+                NativeStraightLongOperation::Move {
+                    source: values[index]?,
+                    result: bindings[index],
+                },
+                call.resume_ip,
+            )?);
+        }
+        self.record_call(target, completion?)
     }
 
     fn typed_long_source(
@@ -13815,8 +14952,6 @@ unsafe fn native_quick_long_mixed_kernel(
     if plan.entry_op != 0
         || plan.ops.len() < 3
         || plan.ops.len() > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 2
-        || plan.string_input_mask == 0
-        || plan.array_output_mask == 0
     {
         return None;
     }
@@ -13901,10 +15036,6 @@ unsafe fn native_quick_long_mixed_kernel(
         .ok()?;
         string_token_count += 1;
     }
-    if string_token_count == 0 {
-        return None;
-    }
-
     let mut builder = NativeMixedBuildState {
         operations: [NativeStraightLongOperation::Unused;
             NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
@@ -13917,6 +15048,14 @@ unsafe fn native_quick_long_mixed_kernel(
         context_array_slots: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         context_tokens: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         context_count: 0,
+        property_binding_op_indices: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        property_binding_property_indices: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        property_binding_slots: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        property_binding_receivers: [std::ptr::null();
+            NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        property_binding_object_slots: [usize::MAX;
+            NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        property_binding_count: 0,
         call_targets: [std::ptr::null(); NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
         call_completion_operations: [0; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
         call_count: 0,
@@ -13930,6 +15069,8 @@ unsafe fn native_quick_long_mixed_kernel(
     let mut trace_guard_expected = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_count = 0usize;
     let mut has_hash_update = false;
+    let mut has_virtual_pipeline = false;
+    let mut has_property_method = false;
     let mut has_typed_method = false;
     let mut plan_index = 1usize;
 
@@ -14099,34 +15240,97 @@ unsafe fn native_quick_long_mixed_kernel(
                     plan.target_ip(next_target)?.saturating_sub(1),
                 )?;
             }
-            QuickLongOp::ScalarMethodCall { call, result } => {
+            QuickLongOp::VirtualObjectArrayPipeline {
+                constructor_arguments,
+                consumers,
+                consumer_count,
+                trailing_key_literal,
+                trailing_result,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let QuickResolvedObjectOp::VirtualPipeline { pipeline } =
+                    *resolved_object_ops.get(plan_index)?
+                else {
+                    return None;
+                };
+                builder.lower_virtual_pipeline(
+                    op_array,
+                    &pipeline,
+                    &constructor_arguments,
+                    &consumers,
+                    consumer_count,
+                    trailing_key_literal,
+                    trailing_result,
+                    next_target,
+                    resume_ip,
+                )?;
+                has_virtual_pipeline = true;
+                has_typed_method = true;
+            }
+            QuickLongOp::PropertyMethodCall { call } => {
                 if call.next_target.op_index() != Some(plan_index + 1) {
                     return None;
                 }
-                let QuickResolvedObjectOp::ObjectLongMethod {
+                let QuickResolvedObjectOp::PropertyMethod {
+                    receiver,
                     target,
-                    user,
-                    plan: object_plan,
-                    ..
+                    plan: property_plan,
+                    property_slots,
+                    property_count,
                 } = *resolved_object_ops.get(plan_index)?
                 else {
                     return None;
                 };
-                let mixed_call = QuickObjectLongMethodCall {
-                    guard: call.guard,
-                    arguments: call.arguments.map(QuickObjectLongArgument::Long),
-                    argument_count: call.argument_count,
-                    next_target: call.next_target,
-                    resume_ip: call.resume_ip,
-                };
-                builder.lower_object_method(
-                    op_array,
+                builder.lower_property_method(
+                    plan_index,
+                    receiver,
                     target,
-                    &*user,
-                    &*object_plan,
-                    &mixed_call,
-                    result,
+                    &*property_plan,
+                    &property_slots,
+                    property_count,
+                    &call,
                 )?;
+                has_property_method = true;
+                has_typed_method = true;
+            }
+            QuickLongOp::ScalarMethodCall { call, result } => {
+                if call.next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                match *resolved_object_ops.get(plan_index)? {
+                    QuickResolvedObjectOp::ScalarMethod {
+                        target,
+                        plan: scalar_plan,
+                    } => builder.lower_scalar_method(target, &*scalar_plan, &call, result)?,
+                    QuickResolvedObjectOp::ObjectLongMethod {
+                        target,
+                        user,
+                        plan: object_plan,
+                        ..
+                    } => {
+                        let mixed_call = QuickObjectLongMethodCall {
+                            guard: call.guard,
+                            arguments: call.arguments.map(QuickObjectLongArgument::Long),
+                            argument_count: call.argument_count,
+                            next_target: call.next_target,
+                            resume_ip: call.resume_ip,
+                        };
+                        builder.lower_object_method(
+                            op_array,
+                            target,
+                            &*user,
+                            &*object_plan,
+                            &mixed_call,
+                            result,
+                        )?;
+                    }
+                    _ => return None,
+                }
                 has_typed_method = true;
             }
             QuickLongOp::ObjectLongMethodCall { call, result } => {
@@ -14339,7 +15543,10 @@ unsafe fn native_quick_long_mixed_kernel(
         }
         builder.operations[native_index as usize] = NativeStraightLongOperation::Jump { target };
     }
-    if !has_hash_update || !has_typed_method || builder.operation_count == 0 {
+    if (!has_hash_update && !has_virtual_pipeline && !has_property_method)
+        || !has_typed_method
+        || builder.operation_count == 0
+    {
         return None;
     }
 
@@ -14388,6 +15595,10 @@ unsafe fn native_quick_long_mixed_kernel(
         context_array_slots: builder.context_array_slots,
         context_tokens: builder.context_tokens,
         context_count: builder.context_count as u8,
+        property_binding_op_indices: builder.property_binding_op_indices,
+        property_binding_property_indices: builder.property_binding_property_indices,
+        property_binding_slots: builder.property_binding_slots,
+        property_binding_count: builder.property_binding_count as u8,
         call_targets: builder.call_targets,
         call_completion_operations: builder.call_completion_operations,
         call_count: builder.call_count as u8,
@@ -15051,6 +16262,68 @@ fn record_native_mixed_calls(
     }
 }
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn prepare_native_mixed_properties(
+    kernel: &NativeQuickLongMixedKernel,
+    resolved_object_ops: &[QuickResolvedObjectOp],
+    slots: &mut [i64; 64],
+) -> Option<[*mut Value; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES]> {
+    let mut values = [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    for index in 0..kernel.property_binding_count as usize {
+        let op_index = kernel.property_binding_op_indices[index] as usize;
+        let property_index = kernel.property_binding_property_indices[index] as usize;
+        let QuickResolvedObjectOp::PropertyMethod {
+            receiver,
+            property_slots,
+            property_count,
+            ..
+        } = *resolved_object_ops.get(op_index)?
+        else {
+            return None;
+        };
+        if receiver.is_null() || property_index >= property_count as usize {
+            return None;
+        }
+        let value = (*receiver)
+            .object_property_slot_unchecked(property_slots[property_index])
+            as *mut Value;
+        if value.is_null()
+            || (*value).value_type() != ValueType::Long
+            || (*value).is_reference()
+        {
+            return None;
+        }
+        let shadow_slot = kernel.property_binding_slots[index] as usize;
+        slots[shadow_slot] = (*value).raw_long();
+        values[index] = value;
+    }
+    Some(values)
+}
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    target_arch = "aarch64",
+    target_os = "macos"
+))]
+unsafe fn commit_native_mixed_properties(
+    kernel: &NativeQuickLongMixedKernel,
+    properties: &[*mut Value; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    slots: &[i64; 64],
+) {
+    for index in 0..kernel.property_binding_count as usize {
+        Value::write_long(
+            properties[index],
+            slots[kernel.property_binding_slots[index] as usize],
+        );
+    }
+}
+
 #[inline(never)]
 #[cfg(all(
     feature = "quick-loops",
@@ -15067,6 +16340,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
     slots: &mut [i64; 64],
     mutable_arrays: &[*mut PhpArray; 64],
     string_state: &mut QuickStringSlotState,
+    resolved_object_ops: &[QuickResolvedObjectOp],
     kernel: &NativeQuickLongMixedKernel,
 ) -> Result<Option<QuickLoopOutcome>, VmError> {
     for slot in 0..64usize {
@@ -15084,6 +16358,14 @@ unsafe fn run_native_quick_long_mixed_kernel(
         };
         slots[slot] = token as i64;
     }
+
+    let Some(property_values) = prepare_native_mixed_properties(
+        kernel,
+        resolved_object_ops,
+        slots,
+    ) else {
+        return Ok(None);
+    };
 
     let mut entry_pointers =
         [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
@@ -15153,6 +16435,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
                 for index in 0..kernel.context_count as usize {
                     *entry_pointers[index] = before_entries[index];
                 }
+                commit_native_mixed_properties(kernel, &property_values, slots);
                 return Err(VmError::Fatal(format!(
                     "native mixed-region dispatch failed: {:?}",
                     error
@@ -15205,6 +16488,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
                     dirty_long_mask,
                     dirty_bool_mask,
                 );
+                commit_native_mixed_properties(kernel, &property_values, slots);
                 string_state.commit();
                 (*frame).opline = op_array
                     .instructions
@@ -15238,6 +16522,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
                         dirty_long_mask,
                         dirty_bool_mask,
                     );
+                    commit_native_mixed_properties(kernel, &property_values, slots);
                     string_state.commit();
                     (*frame).opline = op_array.instructions.as_ptr().add(
                         plan.target_ip(kernel.body_target).unwrap_unchecked(),
@@ -15275,6 +16560,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
                     dirty_long_mask,
                     dirty_bool_mask,
                 );
+                commit_native_mixed_properties(kernel, &property_values, slots);
                 string_state.commit();
                 (*frame).opline = op_array.instructions.as_ptr().add(
                     kernel.operation_resume_ips[failed as usize],
@@ -15305,6 +16591,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
                     dirty_long_mask,
                     dirty_bool_mask,
                 );
+                commit_native_mixed_properties(kernel, &property_values, slots);
                 string_state.commit();
                 (*frame).opline = op_array
                     .instructions
@@ -15520,6 +16807,7 @@ unsafe fn run_quick_long_ops_loop(
             &mut slots,
             &mutable_arrays,
             &mut string_state,
+            &resolved_object_ops,
             &kernel,
         )? {
             return Ok(outcome);

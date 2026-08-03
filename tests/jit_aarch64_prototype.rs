@@ -981,6 +981,208 @@ fn real_php_routing_holdout_enters_multi_method_native_region() {
 }
 
 #[test]
+fn application_order_corpus_enters_virtual_pipeline_native_region() {
+    for (function_name, original) in [
+        (
+            "runQuotePipeline",
+            include_str!("../benches/corpus_order_pipeline.php"),
+        ),
+        (
+            "runTypedQuotePipeline",
+            include_str!("../benches/corpus_typed_order_pipeline.php"),
+        ),
+    ] {
+        let source = original
+            .replace("$start = microtime(true);", "")
+            .replace("$elapsed = microtime(true) - $start;", "$elapsed = 0;");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compilation = Compiler::new().compile(&statements).unwrap();
+        let main = make_user_function(compilation.main);
+        let functions = compilation.functions;
+        let class_defs = compilation.class_defs;
+        let (mut globals, output) = common::make_eg_with_capture();
+        for (name, function) in &functions {
+            globals
+                .register_function(name, &function.common as *const FunctionCommon)
+                .unwrap();
+        }
+        for class_def in class_defs {
+            globals.register_class(class_def).unwrap();
+        }
+        execute::execute(&mut globals, &main).unwrap();
+        drop(globals);
+        assert_eq!(
+            String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+            "9895778000,1327440292,11223218292,210000|0"
+        );
+
+        let function = functions
+            .iter()
+            .find_map(|(name, function)| (name == function_name).then_some(function))
+            .expect("corpus function should be compiled");
+        let plan = function
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickLongOps(plan)
+                    if plan
+                        .ops
+                        .iter()
+                        .any(|operation| matches!(operation, QuickLongOp::VirtualObjectArrayPipeline { .. })) =>
+                {
+                    Some(plan)
+                }
+                _ => None,
+            })
+            .expect("compiler should select the virtual object-array pipeline");
+        assert!(plan.native_jit().is_straight_compiled());
+        assert_eq!(plan.native_jit().native_entries(), 1);
+        assert!(plan.native_jit().native_chunks() > 1);
+        assert_eq!(plan.native_jit().side_exits(), 0);
+    }
+}
+
+#[test]
+fn application_ledger_corpus_enters_property_native_region() {
+    for (function_name, original) in [
+        (
+            "runLedgerPipeline",
+            include_str!("../benches/corpus_ledger_pipeline.php"),
+        ),
+        (
+            "runTypedLedgerPipeline",
+            include_str!("../benches/corpus_typed_ledger_pipeline.php"),
+        ),
+    ] {
+        let source = original
+            .replace("$start = microtime(true);", "")
+            .replace("$elapsed = microtime(true) - $start;", "$elapsed = 0;");
+        let tokens = Lexer::new(&source).tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let compilation = Compiler::new().compile(&statements).unwrap();
+        let main = make_user_function(compilation.main);
+        let functions = compilation.functions;
+        let class_defs = compilation.class_defs;
+        let (mut globals, output) = common::make_eg_with_capture();
+        for (name, function) in &functions {
+            globals
+                .register_function(name, &function.common as *const FunctionCommon)
+                .unwrap();
+        }
+        for class_def in class_defs {
+            globals.register_class(class_def).unwrap();
+        }
+        execute::execute(&mut globals, &main).unwrap();
+        drop(globals);
+        assert_eq!(
+            String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+            "500000,7981250000,280500000,182500|0"
+        );
+
+        let function = functions
+            .iter()
+            .find_map(|(name, function)| (name == function_name).then_some(function))
+            .expect("corpus function should be compiled");
+        let plan = function
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickLongOps(plan)
+                    if plan
+                        .ops
+                        .iter()
+                        .any(|operation| matches!(operation, QuickLongOp::PropertyMethodCall { .. })) =>
+                {
+                    Some(plan)
+                }
+                _ => None,
+            })
+            .expect("compiler should select the stateful property pipeline");
+        assert!(plan.native_jit().is_straight_compiled());
+        assert_eq!(plan.native_jit().native_entries(), 1);
+        assert!(plan.native_jit().native_chunks() > 1);
+        assert_eq!(plan.native_jit().side_exits(), 0);
+    }
+}
+
+#[test]
+fn native_property_method_replays_overflow_transaction_exactly_once() {
+    let source = "<?php class NativePropertyLedger { public $count = 0; public $total = 9223372036854775707; public function record($value) { $this->count = $this->count + 1; $this->total = $this->total + $value; } } $ledger = new NativePropertyLedger(); for ($i = 0; $i < 1000; $i++) { $ledger->record(1); } echo $ledger->count . ':' . $i;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "1000:1000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the property method loop");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn native_property_method_rebinds_cached_program_to_each_activation() {
+    let source = "<?php class NativeReboundLedger { public $total = 0; public function record($value) { $this->total = $this->total + $value; } } function runNativeReboundLedger($iterations) { $ledger = new NativeReboundLedger(); for ($i = 0; $i < $iterations; $i++) { $ledger->record($i); } return $ledger->total; } echo runNativeReboundLedger(1000) . ':' . runNativeReboundLedger(2000);";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "499500:1999000"
+    );
+
+    let plan = functions
+        .iter()
+        .find_map(|(_, function)| {
+            function.op_array.block_plans.iter().find_map(|plan| match plan {
+                BlockPlan::QuickLongOps(plan) => Some(plan),
+                _ => None,
+            })
+        })
+        .expect("compiler should select the rebound property loop");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 2);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_scalar_function_enters_native_accumulate_region() {
     let source = "<?php function calculateNative(int $value): int { return ($value * 2) + 1; } $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += calculateNative($i); } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
