@@ -15,50 +15,64 @@ const NATIVE_LONG_SAFEPOINT_INTERVAL: u64 = 1024;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_INDUCTION_SLOT: u16 = 0;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_BOUND_SLOT: u16 = 1;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_ACCUMULATOR_SLOT: u16 = 2;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_FIRST_DYNAMIC_SLOT: u16 = 3;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_TERM_SLOT: u16 = 61;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_SUM_RESULT_SLOT: u16 = 62;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_CALL_POST_RESULT_SLOT: u16 = 63;
 
@@ -66,8 +80,10 @@ const NATIVE_CALL_POST_RESULT_SLOT: u16 = 63;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 struct NativeQuickLongCallAccumulateKernel {
     config: NativeStraightLongLoopConfig,
@@ -82,8 +98,10 @@ struct NativeQuickLongCallAccumulateKernel {
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 struct NativeQuickLongCallTreeBuilder<'a> {
     op_array: &'a crate::compiler::OpArray,
@@ -104,8 +122,10 @@ struct NativeQuickLongCallTreeBuilder<'a> {
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 impl<'a> NativeQuickLongCallTreeBuilder<'a> {
     unsafe fn new(
@@ -554,8 +574,10 @@ impl<'a> NativeQuickLongCallTreeBuilder<'a> {
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 unsafe fn native_quick_long_call_accumulate_kernel(
     op_array: &crate::compiler::OpArray,
@@ -964,8 +986,10 @@ unsafe fn run_native_long_accumulate_loop(
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 unsafe fn run_native_long_call_accumulate_loop(
     eg: &ExecutorGlobals,

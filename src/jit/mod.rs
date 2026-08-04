@@ -26,7 +26,8 @@ pub use x86_64::{
 };
 
 pub use straight::{
-    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
 };
@@ -50,7 +51,6 @@ pub use aarch64::{
     NativeConditionalLongLoopCondition,
     NativeConditionalLongLoopConfig, NativeConditionalLongLoopResult,
     NativeLongAccumulateState, QuickLongAccumulateJitCache, QuickLongAccumulateJitError,
-    NATIVE_QUICK_LONG_MAX_CALL_TARGETS,
     QuickLongAccumulateJitOutcome,
     QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache,
     ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,

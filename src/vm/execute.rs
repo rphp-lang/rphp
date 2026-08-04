@@ -15,7 +15,8 @@ use crate::vm::stats;
     )
 ))]
 use crate::jit::{
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NativeStraightLongConditionOperand,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
     ScalarLongJitDispatch,
 };
@@ -25,8 +26,8 @@ use crate::jit::{
     target_os = "macos"
 ))]
 use crate::jit::{
-    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
-    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig, NativeLongAccumulateState,
+    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NativeConditionalLongLoopCondition,
+    NativeConditionalLongLoopConfig, NativeLongAccumulateState,
     QuickLongAccumulateJitOutcome,
 };
 use super::opcode::OpCode;

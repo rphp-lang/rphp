@@ -1263,6 +1263,27 @@ impl X86QuickLongOpsJitCache {
         self.prepare_straight_program(config)
     }
 
+    pub fn prepare_call_program(
+        &self,
+        _target_identities: [usize; super::NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+        _target_count: u8,
+        config: NativeStraightLongLoopConfig,
+    ) -> Option<&CompiledX86StraightLongLoop> {
+        // The builder revalidates the guarded target tree on every region
+        // entry. The compiled config comparison below additionally prevents a
+        // semantically different scalar plan from reusing this mapping.
+        self.prepare_straight_program(&config)
+    }
+
+    pub fn dispatch_prepared_call_chunk(
+        &self,
+        program: &CompiledX86StraightLongLoop,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
+        self.dispatch_prepared_straight_chunk(program, slots, iteration_budget)
+    }
+
     pub(crate) fn dispatch_prepared_proven_straight_remaining(
         &self,
         program: &CompiledX86StraightLongLoop,

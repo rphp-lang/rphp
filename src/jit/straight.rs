@@ -46,6 +46,10 @@ pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 48;
 /// hash values. They are activation state and are never embedded in code.
 pub const NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES: usize = 16;
 
+/// Maximum number of guarded scalar callees composed into one native region.
+/// This is part of the shared region ABI rather than an architecture detail.
+pub const NATIVE_QUICK_LONG_MAX_CALL_TARGETS: usize = 8;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeStraightLongConditionOperand {
     Source(QuickLongOperand),

@@ -2796,10 +2796,29 @@ RPHP still crosses Rust/native ABI once per standalone call, while a tracing
 compiler can inline the selected leaf into its caller. x86-64 now passes 150
 library tests, five real-PHP JIT integration tests and the four-test corpus.
 
+The call-composition checkpoint removes that per-call boundary inside supported
+accumulate loops. The existing ARM call-tree builder was target-neutral through
+its final `NativeStraightLongLoopConfig`, so its function/method target guards,
+nested argument lowering, conditional selects and root-call replay are now
+shared with x86-64. The call-target capacity moves into the shared IR ABI. x86
+reuses its checked structured-scalar backend in 1,024-iteration chunks and
+records logical scalar calls in bulk; overflow before the sum resumes the
+canonical root call, while later failure publishes the completed term or sum
+at its exact PHP instruction boundary.
+
+Real-PHP tests cover a direct scalar function, nested function tree, nested
+method tree and an overflowing call whose canonical replay raises the expected
+PHP error. The pre-existing 10M `bench_scalar_call_loop.php` falls from
+48.548937 ms median (48.233032/48.994780 ms p10/p90) to 17.046928 ms
+(16.949892/17.168283 ms), a 64.89 percent reduction or 2.85x speedup. PHP 8.5.9
+records 110.527992 ms without JIT and 35.614967 ms with tracing JIT, so composed
+RPHP is about 2.09x faster than PHP tracing JIT on this measured call loop.
+x86-64 now passes 150 library tests, nine real-PHP JIT integration tests and the
+four-test corpus.
+
 This is still not full ARM64 feature parity. x86-64 conservatively rejects
-inlined scalar call trees plus property/array/string context operations. Those
-forms continue through the existing typed or canonical executor and define the
-next parity steps.
+property/array/string context operations. Those forms continue through the
+existing typed or canonical executor and define the next parity steps.
 
 The frozen workstream is:
 

@@ -5,7 +5,8 @@ use crate::vm::function::{
 use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
 use super::memory::ExecutableMemory;
 use super::straight::{
-    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
     StraightLongRangeProof, straight_long_best_invariant_slot_masks,
@@ -1135,8 +1136,6 @@ mod accumulate_range_proof_tests;
 /// Lazy native cache attached to one already-hot quick-loop plan. Cloning a
 /// compiler plan intentionally starts with an empty cache; executable mappings
 /// and profile counters are runtime state rather than compiler metadata.
-pub const NATIVE_QUICK_LONG_MAX_CALL_TARGETS: usize = 8;
-
 struct CachedQuickLongCallLoop {
     target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     target_count: u8,
