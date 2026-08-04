@@ -64,8 +64,10 @@ struct NativeQuickLongStraightKernel {
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 const NATIVE_FINITE_STRING_LIMIT: usize = 4;
 
@@ -83,8 +85,10 @@ const NATIVE_QUICK_LONG_SLOT_CAPACITY: usize = 64;
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 struct NativeQuickLongMixedKernel {
     config: NativeStraightLongLoopConfig,

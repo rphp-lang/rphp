@@ -1,11 +1,5 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 fn native_mixed_string_mask_before(
     kernel: &NativeQuickLongMixedKernel,
     before_operation: u8,
@@ -27,12 +21,6 @@ fn native_mixed_string_mask_before(
         })
 }
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 fn publish_native_mixed_trace_guards(
     kernel: &NativeQuickLongMixedKernel,
     slots: &mut [i64; 64],
@@ -51,12 +39,6 @@ fn publish_native_mixed_trace_guards(
     }
 }
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 unsafe fn publish_native_mixed_strings(
     op_array: &crate::compiler::OpArray,
     kernel: &NativeQuickLongMixedKernel,
@@ -78,12 +60,6 @@ unsafe fn publish_native_mixed_strings(
     Some(())
 }
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 fn record_native_mixed_calls(
     kernel: &NativeQuickLongMixedKernel,
     completed_iterations: u64,
@@ -100,12 +76,6 @@ fn record_native_mixed_calls(
     }
 }
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 unsafe fn prepare_native_mixed_properties(
     kernel: &NativeQuickLongMixedKernel,
     resolved_object_ops: &[QuickResolvedObjectOp],
@@ -143,12 +113,6 @@ unsafe fn prepare_native_mixed_properties(
     Some(values)
 }
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 unsafe fn commit_native_mixed_properties(
     kernel: &NativeQuickLongMixedKernel,
     properties: &[*mut Value; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
@@ -163,12 +127,6 @@ unsafe fn commit_native_mixed_properties(
 }
 
 #[inline(never)]
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 unsafe fn run_native_quick_long_mixed_kernel(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,

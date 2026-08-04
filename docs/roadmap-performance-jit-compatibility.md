@@ -2816,9 +2816,35 @@ RPHP is about 2.09x faster than PHP tracing JIT on this measured call loop.
 x86-64 now passes 150 library tests, nine real-PHP JIT integration tests and the
 four-test corpus.
 
-This is still not full ARM64 feature parity. x86-64 conservatively rejects
-property/array/string context operations. Those forms continue through the
-existing typed or canonical executor and define the next parity steps.
+The finite-String/hash-context checkpoint makes the existing mixed-region
+builder target-neutral and adds the same `StringToken`, `StringLength`,
+`HashLoad` and `HashStore` IR lowering to x86-64. The SysV chunk ABI receives a
+per-dispatch table of already guarded Long payload pointers. Generated code
+keeps that table in callee-saved `R12`, including across x86's architectural
+`RAX:RDX` signed-division pair, and restores it on completion, chunk return and
+every precise side exit. Token selection admits at most four guarded String
+values; an unknown token exits before the failing operation. Structural array
+changes and missing, referenced or non-Long entries are rejected before native
+entry, so no heap pointer is embedded in generated code.
+
+The permanent one-million-iteration mixed benchmark combines a typed method,
+`strlen($key)`, two alternating String keys, a guarded hash load/update/store
+and a cold trace edge. In 51 pinned, order-rotated runs, the immediately prior
+x86 binary records a 32.307386 ms median (32.182932/32.695055 ms p10/p90), while
+the new contextual region records 2.765656 ms
+(2.711773/2.815962 ms), a 91.44 percent reduction or 11.68x speedup. PHP 8.5.9
+records 38.563013 ms without JIT and 12.542009 ms with tracing JIT on the same
+source, making RPHP about 4.53x faster than PHP tracing JIT for this shape. A
+second real-PHP test takes a cold edge after a hash store and proves canonical
+replay neither loses nor duplicates that update. x86-64 passes 152 library
+tests, eleven real-PHP JIT integration tests and the four-test corpus; ARM64
+continues to pass 150 library tests, 83 JIT integration tests and the corpus.
+
+This is still not full ARM64 feature parity. Finite guarded String/hash
+contexts now share the backend contract, but arbitrary dynamic String domains,
+structural array writes and the remaining ARM-specific publication/register
+optimizations continue through the typed or canonical executor and define the
+next parity steps.
 
 The frozen workstream is:
 

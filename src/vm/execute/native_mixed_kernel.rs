@@ -1,11 +1,5 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
-#[cfg(all(
-    feature = "quick-loops",
-    feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
-))]
 unsafe fn native_quick_long_mixed_kernel(
     op_array: &crate::compiler::OpArray,
     plan: &QuickLongOpsLoop,

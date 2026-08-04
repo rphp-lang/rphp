@@ -15,7 +15,8 @@ use crate::vm::stats;
     )
 ))]
 use crate::jit::{
-    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
     ScalarLongJitDispatch,
@@ -26,9 +27,8 @@ use crate::jit::{
     target_os = "macos"
 ))]
 use crate::jit::{
-    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NativeConditionalLongLoopCondition,
-    NativeConditionalLongLoopConfig, NativeLongAccumulateState,
-    QuickLongAccumulateJitOutcome,
+    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
+    NativeLongAccumulateState, QuickLongAccumulateJitOutcome,
 };
 use super::opcode::OpCode;
 use super::instruction::{
@@ -4835,32 +4835,48 @@ include!("execute/quick_conditional_runtime.rs");
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 include!("execute/native_mixed_core.rs");
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 include!("execute/native_mixed_virtual.rs");
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 include!("execute/native_mixed_scalar.rs");
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 include!("execute/native_mixed_typed.rs");
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
 include!("execute/native_mixed_kernel.rs");
 
 #[cfg(all(
@@ -5621,6 +5637,14 @@ unsafe fn run_native_quick_long_straight_kernel(
     }
 }
 
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
 include!("execute/native_mixed_runtime.rs");
 
 include!("execute/quick_dispatch.rs");

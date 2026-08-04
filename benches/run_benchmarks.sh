@@ -88,6 +88,7 @@ BENCHMARKS=(
     "bench_hash_irregular_prefix_int_array_transform.php:Irregular-prefix hash transform 1M"
     "bench_hash_string_array_loop.php:Hash string-key reads 10M"
     "bench_hash_string_array_materialized_loop.php:Hash string materialized 10M"
+    "bench_jit_mixed_string_hash_update.php:Mixed String/hash update 1M"
     "bench_string.php:String concat 200K"
     "bench_array.php:Array build+sum 500K"
     "bench_foreach.php:Foreach sum 500K"
