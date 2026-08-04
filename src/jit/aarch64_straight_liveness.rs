@@ -11,7 +11,7 @@ pub(super) fn straight_long_linear_live_after(
     for index in (0..config.operation_count as usize).rev() {
         let operation = config.operations[index];
         live_after[index] = live;
-        live = (live & !operation.output_mask()) | operation_input_mask(operation);
+        live = (live & !operation.output_mask()) | straight_long_operation_input_mask(operation);
     }
     live_after
 }
@@ -46,7 +46,7 @@ pub(super) fn straight_long_linear_final_publication_masks(
     final_masks
 }
 
-fn operation_input_mask(operation: NativeStraightLongOperation) -> u64 {
+pub(super) fn straight_long_operation_input_mask(operation: NativeStraightLongOperation) -> u64 {
     match operation {
         NativeStraightLongOperation::Unused
         | NativeStraightLongOperation::StringToken { .. }
@@ -368,5 +368,73 @@ mod tests {
             super::super::NativeStraightLongLoopOutcome::Completed
         );
         assert_eq!(&slots[10..14], &[29_997, 10_006, 49_995, 9_997]);
+    }
+
+    #[test]
+    fn two_loop_carried_values_remain_in_fixed_registers_across_backedges() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+            destination: 1,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(2),
+            result: 4,
+            destination: 3,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10_000),
+            operations,
+            operation_count: 2,
+            post_result: None,
+        };
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+            config,
+            1_024,
+            (1u64 << 1) | (1u64 << 3),
+            (1u64 << 1) | (1u64 << 3),
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
+        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8
+
+        let interrupt = AtomicBool::new(true);
+        let mut slots = [0i64; 64];
+        slots[1] = 10;
+        slots[3] = -5;
+        let interrupted = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 1_024)
+            .unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            super::super::NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(slots[0], 1_024);
+        assert_eq!(slots[1], 523_786);
+        assert_eq!(slots[3], 2_043);
+
+        interrupt.store(false, Ordering::Relaxed);
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 2_048)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[0], 10_000);
+        assert_eq!(slots[1], 49_995_010);
+        assert_eq!(slots[3], 19_995);
     }
 }

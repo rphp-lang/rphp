@@ -5332,18 +5332,20 @@ unsafe fn run_native_quick_long_straight_kernel(
     let config = &kernel.config;
     let bound = quick_long_operand(slots, config.bound);
     let cache = plan.native_jit();
-    let remaining_range_proven = cache.prove_straight_remaining_range(config, slots);
+    let remaining_range_proof = cache.prove_straight_remaining_range(config, slots);
+    let remaining_range_proven = remaining_range_proof.is_some();
     let cv_mask = if op_array.num_cvs == 64 {
         u64::MAX
     } else {
         (1u64 << op_array.num_cvs) - 1
     };
     let publication_mask = config.body_output_mask() & cv_mask;
-    let program = if remaining_range_proven {
+    let program = if let Some(range_proof) = remaining_range_proof {
         cache.prepare_range_proven_straight_program(
             config,
             NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
             publication_mask,
+            range_proof.carried_mask,
         )
     } else {
         cache.prepare_straight_program(config)

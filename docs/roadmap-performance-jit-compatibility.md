@@ -2075,6 +2075,41 @@ faster. Typed order is flat at +0.01 percent and typed ledger at -0.16 percent.
 The fixed-register exit contract is now sufficient to revisit loop-carried
 recurrence values without reintroducing per-iteration publication.
 
+Register-resident recurrence checkpoint (2026-08-04): the straight range
+proof now admits up to three independent additive or subtractive loop-carried
+Long CVs. The recurrence delta may be a constant, the induction value, or an
+invariant Long slot. For every candidate, an `i128` prefix envelope starts at
+the activation's current CV value and includes the worst contribution of every
+remaining prefix. Acceptance therefore proves every intermediate update, not
+only the final closed-form result. Multiplicative, dependent, branch-carried,
+multiply-written, or capacity-exceeding recurrences retain checked chunking.
+
+The proof returns an explicit carried mask to the backend. Each carried CV is
+loaded once into `x4`, `x5`, or `x11` before the native loop entry, consumed
+from that register, moved back after its defining operation, and kept across
+the polling backedge. Completion and interrupt exits reuse the multi-CV
+publication contract, so no recurrence shadow store occurs inside the loop.
+Unsafe activations compile and execute the existing checked program with its
+canonical operation side exit.
+
+A two-recurrence direct ABI test covers interrupt publication at iteration
+1,024 and exact resume to completion. A real PHP test requires one proof and
+one native call, while the existing overflow test still rejects the proof and
+exits at the precise PHP operation. A matrix over positive and negative
+induction ranges, add/subtract deltas, and initial values near both `i64`
+limits asserts that no overflowing prefix is ever accepted. The checkpoint
+passes 132 library tests, 74 ARM64/JIT integration tests, all four application
+corpus tests, and `cargo check --all-features`.
+
+In 101 order-rotated `max-perf` runs against the multi-CV publication commit,
+the permanent two-recurrence benchmark improves from 6.485 ms to 2.615 ms
+(paired median -59.74 percent, 2.48x faster). PHP tracing JIT records 30.860
+ms, making RPHP 11.80x faster. The non-recurrence binary and overlapping-value
+controls remain flat at +0.02 and +0.16 percent. This reverses the earlier
+slot-based recurrence prototype's roughly 60-percent regression and confirms
+that range proof became profitable only after register residency and exit-only
+publication were established.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

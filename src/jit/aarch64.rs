@@ -2195,7 +2195,9 @@ use straight_liveness::{
 
 #[path = "aarch64_straight_range.rs"]
 mod straight_range;
-use straight_range::straight_long_remaining_range_is_proven;
+use straight_range::{
+    StraightLongRangeProof, straight_long_remaining_range_proof,
+};
 
 /// Upper bound for one closed native scalar/mixed region. The byte-sized
 /// branch ABI still leaves ample headroom; 48 admits application-shaped
@@ -2388,6 +2390,7 @@ pub struct CompiledQuickLongStraightLoop {
     code: Box<[u8]>,
     config: NativeStraightLongLoopConfig,
     publication_mask: u64,
+    carried_mask: u64,
     required_context_mask: u16,
 }
 
@@ -2395,7 +2398,7 @@ impl CompiledQuickLongStraightLoop {
     pub fn compile(
         config: NativeStraightLongLoopConfig,
     ) -> Result<Self, QuickLongAccumulateJitError> {
-        Self::compile_mode(config, None, u64::MAX)
+        Self::compile_mode(config, None, u64::MAX, 0)
     }
 
     #[cfg(test)]
@@ -2408,28 +2411,54 @@ impl CompiledQuickLongStraightLoop {
                 "native polling interval must fit a non-zero ARM64 immediate",
             ));
         }
-        Self::compile_mode(config, Some(safepoint_interval), u64::MAX)
+        Self::compile_mode(config, Some(safepoint_interval), u64::MAX, 0)
     }
 
+    #[cfg(test)]
     fn compile_range_proven_polling_with_publication(
         config: NativeStraightLongLoopConfig,
         safepoint_interval: u16,
         publication_mask: u64,
+    ) -> Result<Self, QuickLongAccumulateJitError> {
+        Self::compile_range_proven_polling_with_publication_and_carried(
+            config,
+            safepoint_interval,
+            publication_mask,
+            0,
+        )
+    }
+
+    fn compile_range_proven_polling_with_publication_and_carried(
+        config: NativeStraightLongLoopConfig,
+        safepoint_interval: u16,
+        publication_mask: u64,
+        carried_mask: u64,
     ) -> Result<Self, QuickLongAccumulateJitError> {
         if safepoint_interval == 0 || safepoint_interval >= 4_096 {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
                 "native polling interval must fit a non-zero ARM64 immediate",
             ));
         }
-        Self::compile_mode(config, Some(safepoint_interval), publication_mask)
+        Self::compile_mode(
+            config,
+            Some(safepoint_interval),
+            publication_mask,
+            carried_mask,
+        )
     }
 
     fn compile_mode(
         config: NativeStraightLongLoopConfig,
         polling_interval: Option<u16>,
         publication_mask: u64,
+        carried_mask: u64,
     ) -> Result<Self, QuickLongAccumulateJitError> {
         validate_straight_long_loop_config(&config)?;
+        if carried_mask & !publication_mask != 0 || carried_mask.count_ones() > 3 {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "straight-loop carried state exceeds fixed publication registers",
+            ));
+        }
         let required_context_mask = config
             .operations
             .iter()
@@ -2502,7 +2531,7 @@ impl CompiledQuickLongStraightLoop {
             Arm64Register::X0,
             long_slot_offset(config.induction_slot),
         );
-        let (loop_word, completed_branch) = if polling_interval.is_some() {
+        let (mut loop_word, completed_branch) = if polling_interval.is_some() {
             (assembler.word_count(), None)
         } else {
             emit_native_long_operand(&mut assembler, config.bound, bound);
@@ -2536,6 +2565,7 @@ impl CompiledQuickLongStraightLoop {
         let mut deferred_exit_value_count = 0usize;
         let mut deferred_exit_publication_mask = 0u64;
         let mut reserved_resident_registers = [false; 4];
+        let mut initial_carried_masks = [0u64; 4];
         let mut next_publication_cache = 1usize;
         if keeps_linear_scalar_values_resident {
             for (index, slot_mask) in final_publication_masks
@@ -2544,7 +2574,37 @@ impl CompiledQuickLongStraightLoop {
                 .take(config.operation_count as usize)
                 .enumerate()
             {
+                let operation_carried_mask = slot_mask & carried_mask;
+                if operation_carried_mask == 0 {
+                    continue;
+                }
+                if operation_carried_mask.count_ones() != 1
+                    || next_publication_cache >= resident_values.len()
+                {
+                    return Err(QuickLongAccumulateJitError::InvalidProgram(
+                        "straight-loop carried state cannot be assigned to a fixed register",
+                    ));
+                }
+                let resident_index = next_publication_cache;
+                next_publication_cache += 1;
+                deferred_register_by_operation[index] = resident_index;
+                deferred_exit_values[deferred_exit_value_count] =
+                    (slot_mask, resident_values[resident_index].1);
+                deferred_exit_value_count += 1;
+                deferred_exit_publication_mask |= slot_mask;
+                reserved_resident_registers[resident_index] = true;
+                initial_carried_masks[resident_index] = operation_carried_mask;
+            }
+            for (index, slot_mask) in final_publication_masks
+                .iter()
+                .copied()
+                .take(config.operation_count as usize)
+                .enumerate()
+            {
                 if slot_mask == 0 {
+                    continue;
+                }
+                if deferred_register_by_operation[index] != usize::MAX {
                     continue;
                 }
                 let resident_index = if index + 1 == config.operation_count as usize {
@@ -2568,6 +2628,35 @@ impl CompiledQuickLongStraightLoop {
             }
         }
         let mut active_exit_masks = [0u64; 4];
+        if carried_mask != 0 && !keeps_linear_scalar_values_resident {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "straight-loop carried state requires linear range-proven lowering",
+            ));
+        }
+        for resident_index in 1..resident_values.len() {
+            let carried_slots = initial_carried_masks[resident_index];
+            if carried_slots == 0 {
+                continue;
+            }
+            let slot = carried_slots.trailing_zeros() as u16;
+            assembler.load_u64(
+                resident_values[resident_index].1,
+                Arm64Register::X0,
+                long_slot_offset(slot),
+            );
+            resident_values[resident_index].0 = carried_slots;
+            active_exit_masks[resident_index] = deferred_exit_values
+                .iter()
+                .copied()
+                .take(deferred_exit_value_count)
+                .find_map(|(mask, register)| {
+                    (register == resident_values[resident_index].1).then_some(mask)
+                })
+                .unwrap_or(0);
+        }
+        if polling_interval.is_some() && carried_mask != 0 {
+            loop_word = assembler.word_count();
+        }
         for (index, operation) in config
             .operations
             .iter()
@@ -3147,6 +3236,7 @@ impl CompiledQuickLongStraightLoop {
             code,
             config,
             publication_mask,
+            carried_mask,
             required_context_mask,
         })
     }
@@ -3289,6 +3379,10 @@ impl CompiledQuickLongStraightLoop {
 
     fn publication_mask(&self) -> u64 {
         self.publication_mask
+    }
+
+    fn carried_mask(&self) -> u64 {
+        self.carried_mask
     }
 
     pub fn code(&self) -> &[u8] {
@@ -4037,10 +4131,10 @@ impl QuickLongOpsJitCache {
         &self,
         config: &NativeStraightLongLoopConfig,
         slots: &[i64; 64],
-    ) -> bool {
+    ) -> Option<StraightLongRangeProof> {
         self.range_proof_evaluations
             .set(self.range_proof_evaluations.get().saturating_add(1));
-        straight_long_remaining_range_is_proven(config, slots)
+        straight_long_remaining_range_proof(config, slots)
     }
 
     pub(crate) fn prepare_range_proven_straight_program(
@@ -4048,20 +4142,24 @@ impl QuickLongOpsJitCache {
         config: &NativeStraightLongLoopConfig,
         safepoint_interval: u16,
         publication_mask: u64,
+        carried_mask: u64,
     ) -> Option<&CompiledQuickLongStraightLoop> {
         let program = self
             .straight_range_proven_polling_compiled
             .get_or_init(|| {
-                CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+                CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
                     *config,
                     safepoint_interval,
                     publication_mask,
+                    carried_mask,
                 )
                 .ok()
             })
             .as_ref()?;
-        (program.config() == *config && program.publication_mask() == publication_mask)
-            .then_some(program)
+        (program.config() == *config
+            && program.publication_mask() == publication_mask
+            && program.carried_mask() == carried_mask)
+        .then_some(program)
     }
 
     pub(crate) fn dispatch_prepared_proven_straight_remaining(

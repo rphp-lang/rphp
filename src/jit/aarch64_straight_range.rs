@@ -1,3 +1,4 @@
+use super::straight_liveness::straight_long_operation_input_mask;
 use super::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
     QuickLongOperand, ScalarLongOpKind, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
@@ -38,6 +39,17 @@ struct StraightRangeState {
     definitely_written: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct StraightLongRangeProof {
+    pub(crate) carried_mask: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DirectRecurrenceProof {
+    operation_ranges: [Option<LongInterval>; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+    carried_mask: u64,
+}
+
 impl StraightRangeState {
     fn initial(slots: &[i64; 64]) -> Self {
         Self {
@@ -56,20 +68,20 @@ impl StraightRangeState {
 }
 
 /// Conservatively proves every checked arithmetic result over the complete
-/// remaining induction range. The first domain is deliberately straight and
-/// side-effect free. Reading a body output before it is overwritten means the
-/// value is loop-carried, which requires a recurrence proof and is rejected.
-pub(super) fn straight_long_remaining_range_is_proven(
+/// remaining induction range. Direct additive and subtractive loop-carried
+/// values are admitted when their delta is a constant, the induction value,
+/// or an invariant slot. More general recurrences retain the checked path.
+pub(super) fn straight_long_remaining_range_proof(
     config: &NativeStraightLongLoopConfig,
     slots: &[i64; 64],
-) -> bool {
+) -> Option<StraightLongRangeProof> {
     let induction = slots[config.induction_slot as usize];
     let bound = operand_value(slots, config.bound);
     if induction >= bound {
-        return false;
+        return None;
     }
     let Some(last_induction) = bound.checked_sub(1) else {
-        return false;
+        return None;
     };
     let induction_range = LongInterval {
         minimum: i128::from(induction),
@@ -78,10 +90,21 @@ pub(super) fn straight_long_remaining_range_is_proven(
     let output_mask = config.body_output_mask();
     let operation_count = config.operation_count as usize;
     if operation_count == 0 || operation_count > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
-        return false;
+        return None;
     }
+    let iterations = (bound as u64).wrapping_sub(induction as u64);
+    let recurrence =
+        direct_recurrence_proof(config, slots, induction_range, iterations, output_mask)?;
     let mut states = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
-    states[0] = Some(StraightRangeState::initial(slots));
+    let mut initial_state = StraightRangeState::initial(slots);
+    for slot in 0..64 {
+        if recurrence.carried_mask & (1u64 << slot) == 0 {
+            continue;
+        }
+        let operation_index = recurrence_operation_for_slot(config, slot as u16)?;
+        initial_state.ranges[slot] = recurrence.operation_ranges[operation_index]?;
+    }
+    states[0] = Some(initial_state);
 
     for operation_index in 0..operation_count {
         let Some(mut state) = states[operation_index] else {
@@ -95,7 +118,7 @@ pub(super) fn straight_long_remaining_range_is_proven(
                 result,
             } => {
                 if divisor == 0 {
-                    return false;
+                    return None;
                 }
                 let Some(value) = operand_range(
                     value,
@@ -104,8 +127,9 @@ pub(super) fn straight_long_remaining_range_is_proven(
                     induction_range,
                     output_mask,
                     state.definitely_written,
+                    recurrence.carried_mask,
                 ) else {
-                    return false;
+                    return None;
                 };
                 state.ranges[result as usize] =
                     modulo_interval(value, LongInterval::exact(divisor));
@@ -119,8 +143,9 @@ pub(super) fn straight_long_remaining_range_is_proven(
                     induction_range,
                     output_mask,
                     state.definitely_written,
+                    recurrence.carried_mask,
                 ) else {
-                    return false;
+                    return None;
                 };
                 state.ranges[result as usize] = value;
                 state.definitely_written |= 1u64 << result;
@@ -131,19 +156,21 @@ pub(super) fn straight_long_remaining_range_is_proven(
                 rhs,
                 result,
             } => {
-                let Some((lhs, rhs)) = binary_operand_ranges(
-                    lhs,
-                    rhs,
-                    &state.ranges,
-                    config,
-                    induction_range,
-                    output_mask,
-                    state.definitely_written,
-                ) else {
-                    return false;
-                };
-                let Some(result_range) = binary_interval(kind, lhs, rhs) else {
-                    return false;
+                let result_range = if let Some(range) = recurrence.operation_ranges[operation_index]
+                {
+                    range
+                } else {
+                    let (lhs, rhs) = binary_operand_ranges(
+                        lhs,
+                        rhs,
+                        &state.ranges,
+                        config,
+                        induction_range,
+                        output_mask,
+                        state.definitely_written,
+                        recurrence.carried_mask,
+                    )?;
+                    binary_interval(kind, lhs, rhs)?
                 };
                 state.ranges[result as usize] = result_range;
                 state.definitely_written |= 1u64 << result;
@@ -155,19 +182,21 @@ pub(super) fn straight_long_remaining_range_is_proven(
                 result,
                 destination,
             } => {
-                let Some((lhs, rhs)) = binary_operand_ranges(
-                    lhs,
-                    rhs,
-                    &state.ranges,
-                    config,
-                    induction_range,
-                    output_mask,
-                    state.definitely_written,
-                ) else {
-                    return false;
-                };
-                let Some(result_range) = binary_interval(kind, lhs, rhs) else {
-                    return false;
+                let result_range = if let Some(range) = recurrence.operation_ranges[operation_index]
+                {
+                    range
+                } else {
+                    let (lhs, rhs) = binary_operand_ranges(
+                        lhs,
+                        rhs,
+                        &state.ranges,
+                        config,
+                        induction_range,
+                        output_mask,
+                        state.definitely_written,
+                        recurrence.carried_mask,
+                    )?;
+                    binary_interval(kind, lhs, rhs)?
                 };
                 state.ranges[result as usize] = result_range;
                 state.ranges[destination as usize] = result_range;
@@ -185,18 +214,20 @@ pub(super) fn straight_long_remaining_range_is_proven(
                     config.induction_slot,
                     induction_range,
                     output_mask,
+                    recurrence.carried_mask,
                 ) || !condition_operand_is_available(
                     rhs,
                     &state,
                     config.induction_slot,
                     induction_range,
                     output_mask,
+                    recurrence.carried_mask,
                 ) {
-                    return false;
+                    return None;
                 }
                 let false_target = false_target as usize;
                 if false_target <= operation_index || false_target > operation_count {
-                    return false;
+                    return None;
                 }
                 merge_range_state(&mut states[operation_index + 1], state);
                 merge_range_state(&mut states[false_target], state);
@@ -205,7 +236,7 @@ pub(super) fn straight_long_remaining_range_is_proven(
             NativeStraightLongOperation::Jump { target } => {
                 let target = target as usize;
                 if target <= operation_index || target > operation_count {
-                    return false;
+                    return None;
                 }
                 merge_range_state(&mut states[target], state);
                 continue;
@@ -215,11 +246,157 @@ pub(super) fn straight_long_remaining_range_is_proven(
             | NativeStraightLongOperation::StringLength { .. }
             | NativeStraightLongOperation::HashLoad { .. }
             | NativeStraightLongOperation::HashStore { .. }
-            | NativeStraightLongOperation::Guard { .. } => return false,
+            | NativeStraightLongOperation::Guard { .. } => return None,
         }
         merge_range_state(&mut states[operation_index + 1], state);
     }
-    states[operation_count].is_some()
+    states[operation_count]?;
+    Some(StraightLongRangeProof {
+        carried_mask: recurrence.carried_mask,
+    })
+}
+
+#[cfg(test)]
+pub(super) fn straight_long_remaining_range_is_proven(
+    config: &NativeStraightLongLoopConfig,
+    slots: &[i64; 64],
+) -> bool {
+    straight_long_remaining_range_proof(config, slots).is_some()
+}
+
+fn direct_recurrence_proof(
+    config: &NativeStraightLongLoopConfig,
+    slots: &[i64; 64],
+    induction_range: LongInterval,
+    iterations: u64,
+    output_mask: u64,
+) -> Option<DirectRecurrenceProof> {
+    let mut written_mask = 0u64;
+    let mut carried_mask = 0u64;
+    let mut has_control_flow = false;
+    for operation in config
+        .operations
+        .iter()
+        .copied()
+        .take(config.operation_count as usize)
+    {
+        carried_mask |= straight_long_operation_input_mask(operation) & output_mask & !written_mask;
+        written_mask |= operation.output_mask();
+        has_control_flow |= matches!(
+            operation,
+            NativeStraightLongOperation::BranchUnless { .. }
+                | NativeStraightLongOperation::Jump { .. }
+        );
+    }
+    carried_mask &= !(1u64 << config.induction_slot);
+    if carried_mask == 0 {
+        return Some(DirectRecurrenceProof {
+            operation_ranges: [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+            carried_mask: 0,
+        });
+    }
+    if has_control_flow || carried_mask.count_ones() > 3 {
+        return None;
+    }
+
+    let mut operation_ranges = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut remaining = carried_mask;
+    while remaining != 0 {
+        let slot = remaining.trailing_zeros() as u16;
+        remaining &= remaining - 1;
+        let operation_index = recurrence_operation_for_slot(config, slot)?;
+        if operation_ranges[operation_index].is_some()
+            || (config.operations[operation_index].output_mask() & carried_mask).count_ones() != 1
+        {
+            return None;
+        }
+        let (kind, delta) = match config.operations[operation_index] {
+            NativeStraightLongOperation::BinaryAssign {
+                kind: ScalarLongOpKind::Add,
+                lhs: QuickLongOperand::Slot(lhs),
+                rhs,
+                destination,
+                ..
+            } if lhs == slot && destination == slot => (ScalarLongOpKind::Add, rhs),
+            NativeStraightLongOperation::BinaryAssign {
+                kind: ScalarLongOpKind::Add,
+                lhs,
+                rhs: QuickLongOperand::Slot(rhs),
+                destination,
+                ..
+            } if rhs == slot && destination == slot => (ScalarLongOpKind::Add, lhs),
+            NativeStraightLongOperation::BinaryAssign {
+                kind: ScalarLongOpKind::Subtract,
+                lhs: QuickLongOperand::Slot(lhs),
+                rhs,
+                destination,
+                ..
+            } if lhs == slot && destination == slot => (ScalarLongOpKind::Subtract, rhs),
+            _ => return None,
+        };
+        let delta = match delta {
+            QuickLongOperand::Const(value) => LongInterval::exact(value),
+            QuickLongOperand::Slot(delta_slot) if delta_slot == config.induction_slot => {
+                induction_range
+            }
+            QuickLongOperand::Slot(delta_slot) if output_mask & (1u64 << delta_slot) == 0 => {
+                LongInterval::exact(slots[delta_slot as usize])
+            }
+            QuickLongOperand::Slot(_) => return None,
+        };
+        let contribution = match kind {
+            ScalarLongOpKind::Add => delta,
+            ScalarLongOpKind::Subtract => LongInterval {
+                minimum: -delta.maximum,
+                maximum: -delta.minimum,
+            },
+            _ => unreachable!("direct recurrence admits only add or subtract"),
+        };
+        let count = i128::from(iterations);
+        let minimum_delta = if contribution.minimum < 0 {
+            contribution.minimum.checked_mul(count)?
+        } else {
+            0
+        };
+        let maximum_delta = if contribution.maximum > 0 {
+            contribution.maximum.checked_mul(count)?
+        } else {
+            0
+        };
+        let initial = i128::from(slots[slot as usize]);
+        operation_ranges[operation_index] = LongInterval::new(
+            initial.checked_add(minimum_delta)?,
+            initial.checked_add(maximum_delta)?,
+        );
+    }
+
+    Some(DirectRecurrenceProof {
+        operation_ranges,
+        carried_mask,
+    })
+}
+
+fn recurrence_operation_for_slot(
+    config: &NativeStraightLongLoopConfig,
+    slot: u16,
+) -> Option<usize> {
+    let slot_mask = 1u64 << slot;
+    let mut operation_index = None;
+    for (index, operation) in config
+        .operations
+        .iter()
+        .copied()
+        .take(config.operation_count as usize)
+        .enumerate()
+    {
+        if operation.output_mask() & slot_mask == 0 {
+            continue;
+        }
+        if operation_index.replace(index).is_some() {
+            return None;
+        }
+    }
+    operation_index
 }
 
 fn merge_range_state(target: &mut Option<StraightRangeState>, incoming: StraightRangeState) {
@@ -235,6 +412,7 @@ fn condition_operand_is_available(
     induction_slot: u16,
     induction_range: LongInterval,
     output_mask: u64,
+    carried_mask: u64,
 ) -> bool {
     let available = |operand| {
         operand_range(
@@ -244,6 +422,7 @@ fn condition_operand_is_available(
             induction_range,
             output_mask,
             state.definitely_written,
+            carried_mask,
         )
         .is_some()
     };
@@ -269,12 +448,15 @@ fn operand_range(
     induction_range: LongInterval,
     output_mask: u64,
     written_mask: u64,
+    carried_mask: u64,
 ) -> Option<LongInterval> {
     match operand {
         QuickLongOperand::Const(value) => Some(LongInterval::exact(value)),
         QuickLongOperand::Slot(slot) if slot == induction_slot => Some(induction_range),
         QuickLongOperand::Slot(slot)
-            if output_mask & (1u64 << slot) != 0 && written_mask & (1u64 << slot) == 0 =>
+            if output_mask & (1u64 << slot) != 0
+                && written_mask & (1u64 << slot) == 0
+                && carried_mask & (1u64 << slot) == 0 =>
         {
             None
         }
@@ -291,6 +473,7 @@ fn binary_operand_ranges(
     induction_range: LongInterval,
     output_mask: u64,
     written_mask: u64,
+    carried_mask: u64,
 ) -> Option<(LongInterval, LongInterval)> {
     Some((
         operand_range(
@@ -300,6 +483,7 @@ fn binary_operand_ranges(
             induction_range,
             output_mask,
             written_mask,
+            carried_mask,
         )?,
         operand_range(
             rhs,
@@ -308,6 +492,7 @@ fn binary_operand_ranges(
             induction_range,
             output_mask,
             written_mask,
+            carried_mask,
         )?,
     ))
 }
@@ -534,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_overflow_division_guards_and_loop_carried_values() {
+    fn rejects_overflow_division_and_unsupported_loop_carried_values() {
         let multiply = config(
             &[NativeStraightLongOperation::Binary {
                 kind: ScalarLongOpKind::Multiply,
@@ -573,8 +758,29 @@ mod tests {
             }],
             100,
         );
+        let carried_proof = straight_long_remaining_range_proof(&carried, &[0_i64; 64])
+            .expect("safe direct recurrence should be proven");
+        assert_eq!(carried_proof.carried_mask, 1u64 << 1);
+
+        let mut overflowing_slots = [0_i64; 64];
+        overflowing_slots[1] = i64::MAX - 10;
         assert!(!straight_long_remaining_range_is_proven(
             &carried,
+            &overflowing_slots
+        ));
+
+        let unsupported = config(
+            &[NativeStraightLongOperation::BinaryAssign {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: QuickLongOperand::Slot(1),
+                rhs: QuickLongOperand::Const(2),
+                result: 2,
+                destination: 1,
+            }],
+            10,
+        );
+        assert!(!straight_long_remaining_range_is_proven(
+            &unsupported,
             &[0_i64; 64]
         ));
 
@@ -603,6 +809,64 @@ mod tests {
             &partially_written,
             &[0_i64; 64]
         ));
+    }
+
+    #[test]
+    fn direct_recurrence_proof_never_accepts_an_overflowing_prefix() {
+        for start in [-100_i64, -3, 0, 7] {
+            for distance in [1_i64, 2, 17, 101] {
+                let bound = start + distance;
+                for initial in [i64::MIN + 1_000, -100, 0, 100, i64::MAX - 1_000] {
+                    for step in [-13_i64, -1, 0, 1, 11] {
+                        let config = config(
+                            &[
+                                NativeStraightLongOperation::BinaryAssign {
+                                    kind: ScalarLongOpKind::Add,
+                                    lhs: QuickLongOperand::Slot(1),
+                                    rhs: QuickLongOperand::Slot(0),
+                                    result: 2,
+                                    destination: 1,
+                                },
+                                NativeStraightLongOperation::BinaryAssign {
+                                    kind: ScalarLongOpKind::Subtract,
+                                    lhs: QuickLongOperand::Slot(3),
+                                    rhs: QuickLongOperand::Slot(5),
+                                    result: 4,
+                                    destination: 3,
+                                },
+                            ],
+                            bound,
+                        );
+                        let mut slots = [0_i64; 64];
+                        slots[0] = start;
+                        slots[1] = initial;
+                        slots[3] = initial;
+                        slots[5] = step;
+
+                        let proven = straight_long_remaining_range_proof(&config, &slots);
+                        let mut first = initial;
+                        let mut second = initial;
+                        let mut safe = true;
+                        for induction in start..bound {
+                            let Some(next_first) = first.checked_add(induction) else {
+                                safe = false;
+                                break;
+                            };
+                            let Some(next_second) = second.checked_sub(step) else {
+                                safe = false;
+                                break;
+                            };
+                            first = next_first;
+                            second = next_second;
+                        }
+                        assert!(proven.is_none() || safe);
+                        if let Some(proof) = proven {
+                            assert_eq!(proof.carried_mask, (1u64 << 1) | (1u64 << 3));
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
