@@ -2355,6 +2355,35 @@ definition directly into its fixed merge register and remove those moves.
 The checkpoint passes 140 library tests, 81 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Direct structured-result checkpoint (2026-08-04): a structured scalar
+definition assigned to a fixed carried or merge-publication register now emits
+its arithmetic result directly into that register. The previous unconditional
+`MOV fixed, x8` remains only as a conservative fallback when one operation
+defines multiple fixed groups or its result TMP alias is consumed immediately
+inside the same basic block. Register-state metadata records whether `x8` or
+the fixed register actually owns the result, so later operand selection cannot
+observe a stale path-local value.
+
+Two bounded fallbacks are explicit in generated-code tests. An immediate TMP
+consumer keeps `x8`, copies the visible alias to its fixed register, omits the
+TMP store and produces the exact result. A structured body with four
+independent visible results assigns the first three to `x4`, `x5` and `x11`,
+then retains the fourth per-iteration shadow store because the fixed-register
+budget is exhausted. Thus direct result selection changes neither the three-
+register ABI limit nor correctness outside it.
+
+In 101 order-rotated native-CPU `max-perf` A/B pairs against merge-publication
+checkpoint `90e5d57`, the permanent structured branch-expression benchmark
+falls from 6.614 ms to 5.251 ms (paired median -21.29 percent). The simple
+conditional recurrence falls from 4.312 ms to 4.089 ms (-6.18 percent). The
+conditional composed recurrence is flat at +0.17 percent and the linear
+composed recurrence at +0.19 percent. A separate 101-run comparison records
+RPHP at 5.183 ms versus PHP tracing JIT at 34.503 ms with identical output, or
+6.66x faster on this workload.
+
+The checkpoint passes 142 library tests, 81 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

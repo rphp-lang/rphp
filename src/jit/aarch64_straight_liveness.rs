@@ -754,8 +754,8 @@ mod tests {
             .chunks_exact(4)
             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
-        assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
-        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8
+        assert!(!words.contains(&0xaa08_03e4)); // carried update writes x4 directly
+        assert!(!words.contains(&0xaa08_03e5)); // induction-derived update writes x5 directly
         assert!(!words.contains(&0xf900_0408)); // no loop STR x8, [x0, #8]
         assert!(!words.contains(&0xf900_0c08)); // no loop STR x8, [x0, #24]
 
@@ -996,10 +996,10 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(
             words.iter().filter(|&&word| word == 0xaa08_03e4).count(),
-            2,
-            "both selected definitions must reach the same x4 merge register"
+            0,
+            "both selected definitions must write the x4 merge register directly"
         );
-        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8 for folded
+        assert!(!words.contains(&0xaa08_03e5)); // folded writes x5 directly
         assert!(!words.contains(&0xf900_0408)); // no loop STR x8, selected
         assert!(!words.contains(&0xf900_0808)); // no loop STR x8, folded
         assert!(words.contains(&0xf900_0404)); // exit STR x4, selected
@@ -1032,5 +1032,122 @@ mod tests {
         assert_eq!(slots[0], 10_000);
         assert_eq!((slots[1], slots[2]), (49_993, 149_990));
         assert_eq!(&slots[6..=11], &[606, 607, 608, 609, 610, 611]);
+    }
+
+    #[test]
+    fn structured_direct_result_preserves_immediate_temporary_alias() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(100)),
+            false_target: 1,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 2,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(2),
+            rhs: QuickLongOperand::Const(3),
+            result: 3,
+            destination: 4,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10),
+            operations,
+            operation_count: 3,
+            post_result: None,
+        };
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+            config,
+            1_024,
+            (1u64 << 1) | (1u64 << 4),
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(words.contains(&0xaa08_03e4)); // preserve result/temp alias in x8
+        assert!(!words.contains(&0xaa08_03e5)); // final folded result writes x5 directly
+        assert!(!words.contains(&0xf900_0808)); // no temporary slot 2 store
+
+        let interrupt = AtomicBool::new(false);
+        let mut slots = [0i64; 64];
+        slots[2] = 222;
+        slots[3] = 333;
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10, interrupt.as_ptr() as *const bool, 10)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!((slots[0], slots[1], slots[4]), (10, 14, 42));
+        assert_eq!((slots[2], slots[3]), (222, 333));
+    }
+
+    #[test]
+    fn structured_publication_register_overflow_keeps_shadow_fallback() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(100)),
+            false_target: 1,
+        };
+        for (index, constant) in [3, 5, 7, 11].into_iter().enumerate() {
+            operations[index + 1] = NativeStraightLongOperation::BinaryAssign {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: QuickLongOperand::Slot(0),
+                rhs: QuickLongOperand::Const(constant),
+                result: 2 + index as u16,
+                destination: 10 + index as u16,
+            };
+        }
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10),
+            operations,
+            operation_count: 5,
+            post_result: None,
+        };
+        let publication_mask =
+            (1u64 << 10) | (1u64 << 11) | (1u64 << 12) | (1u64 << 13);
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+            config,
+            1_024,
+            publication_mask,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(!words.contains(&0xaa08_03e4)); // first three write fixed registers directly
+        assert!(!words.contains(&0xaa08_03e5));
+        assert!(!words.contains(&0xaa08_03eb));
+        assert!(words.contains(&0xf900_3408)); // fourth value: STR x8, [x0, #104]
+
+        let interrupt = AtomicBool::new(false);
+        let mut slots = [0i64; 64];
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10, interrupt.as_ptr() as *const bool, 10)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(&slots[10..14], &[27, 45, 63, 99]);
     }
 }

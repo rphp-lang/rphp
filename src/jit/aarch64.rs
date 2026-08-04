@@ -2190,8 +2190,8 @@ mod conditional_range_proof_tests;
 mod straight_liveness;
 use straight_liveness::{
     straight_long_linear_final_publication_masks, straight_long_linear_live_after,
-    straight_long_linear_shadow_store_mask, straight_long_structured_block_starts,
-    straight_long_structured_definitely_written,
+    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
+    straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
 
@@ -2844,6 +2844,31 @@ impl CompiledQuickLongStraightLoop {
             } else {
                 operation.shadow_output_mask()
             };
+            let structured_direct_result_register =
+                keeps_structured_scalar_temporaries_resident.then(|| {
+                    let definition_bit = 1u64 << index;
+                    let resident_index = (1..resident_values.len()).find(|&resident_index| {
+                        structured_definition_operations_by_register[resident_index]
+                            & definition_bit
+                            != 0
+                    })?;
+                    let untracked_outputs = operation.output_mask()
+                        & !structured_publication_masks_by_register[resident_index];
+                    let immediate_local_inputs = if index + 1 < config.operation_count as usize
+                        && !structured_block_starts[index + 1]
+                    {
+                        straight_long_operation_input_mask(config.operations[index + 1])
+                    } else {
+                        0
+                    };
+                    (untracked_outputs & immediate_local_inputs == 0)
+                        .then_some(resident_values[resident_index].1)
+                })
+                .flatten();
+            // When every immediately consumed alias is represented by the
+            // fixed group, generate the scalar result in its final register.
+            // Otherwise x8 remains the path-local forwarding register.
+            let result = structured_direct_result_register.unwrap_or(result);
             match operation {
                 NativeStraightLongOperation::Unused => {
                     unreachable!("validated straight operation cannot be unused")
@@ -3227,16 +3252,19 @@ impl CompiledQuickLongStraightLoop {
                         final_publication_masks[index];
                 }
             } else if keeps_structured_scalar_temporaries_resident {
-                resident_values[0].0 = operation.output_mask();
+                resident_values[0].0 = if result == resident_values[0].1 {
+                    operation.output_mask()
+                } else {
+                    0
+                };
                 for resident_index in 1..resident_values.len() {
                     if structured_definition_operations_by_register[resident_index]
                         & (1u64 << index)
                         != 0
                     {
-                        assembler.move_register(
-                            resident_values[resident_index].1,
-                            result,
-                        );
+                        if resident_values[resident_index].1 != result {
+                            assembler.move_register(resident_values[resident_index].1, result);
+                        }
                         resident_values[resident_index].0 =
                             structured_publication_masks_by_register[resident_index];
                     }
