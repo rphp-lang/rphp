@@ -653,6 +653,74 @@ pub struct CompiledQuickLongAccumulateLoop {
     code: Box<[u8]>,
 }
 
+struct NativePollingBackedge {
+    completed_branch: usize,
+    interrupt_branch: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_native_polling_backedge(
+    assembler: &mut Arm64Assembler,
+    loop_word: usize,
+    induction: Arm64Register,
+    overall_end: Arm64Register,
+    chunk_end: Arm64Register,
+    interval: Arm64Register,
+    remaining: Arm64Register,
+    interrupt_pointer: Arm64Register,
+    interrupt_value: Arm64Register,
+) -> Result<NativePollingBackedge, QuickLongAccumulateJitError> {
+    assembler.compare_registers(induction, chunk_end);
+    let inner_loop_branch =
+        assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+    // Completion has the same priority as in the VM: a final partial or full
+    // chunk does not service an interrupt after the loop has ended.
+    assembler.compare_registers(induction, overall_end);
+    let completed_branch =
+        assembler.conditional_branch_placeholder(Arm64Condition::Equal);
+
+    // AtomicBool's relaxed load is a byte load on ARM64. Generated code only
+    // observes the flag; Rust clears it and translates timeout state.
+    assembler.load_u8(interrupt_value, interrupt_pointer, 0);
+    assembler.compare_with_zero(interrupt_value);
+    let interrupt_branch =
+        assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+    // Pick min(remaining iterations, interval) without signed-overflow
+    // assumptions. end-induction is the exact unsigned distance even when the
+    // range crosses zero.
+    assembler.subtract_register(remaining, overall_end, induction);
+    assembler.compare_registers(remaining, interval);
+    let final_chunk_branch =
+        assembler.conditional_branch_placeholder(Arm64Condition::LowerOrSame);
+    assembler.add_register(chunk_end, induction, interval);
+    let next_chunk_branch = assembler.branch_placeholder();
+
+    let final_chunk_word = assembler.word_count();
+    assembler.move_register(chunk_end, overall_end);
+    let final_next_chunk_branch = assembler.branch_placeholder();
+
+    for (branch, target) in [
+        (inner_loop_branch, loop_word),
+        (final_chunk_branch, final_chunk_word),
+    ] {
+        if !assembler.patch_conditional_branch(branch, target) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+    }
+    for branch in [next_chunk_branch, final_next_chunk_branch] {
+        if !assembler.patch_branch(branch, loop_word) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+    }
+
+    Ok(NativePollingBackedge {
+        completed_branch,
+        interrupt_branch,
+    })
+}
+
 impl CompiledQuickLongAccumulateLoop {
     pub fn compile() -> Result<Self, QuickLongAccumulateJitError> {
         Self::compile_term(None, true)
@@ -712,37 +780,17 @@ impl CompiledQuickLongAccumulateLoop {
         };
         assembler.add_register(accumulator, accumulator, term);
         assembler.add_immediate(induction, induction, 1);
-        assembler.compare_registers(induction, chunk_end);
-        let inner_loop_branch =
-            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
-
-        // Completion has the same priority as in the VM: a final partial or
-        // full chunk does not service an interrupt after the loop has ended.
-        assembler.compare_registers(induction, Arm64Register::X1);
-        let completed_branch =
-            assembler.conditional_branch_placeholder(Arm64Condition::Equal);
-
-        // AtomicBool's relaxed load is a byte load on ARM64. The generated
-        // region only observes the flag; Rust remains responsible for clearing
-        // it and translating timeout state into a VM error.
-        assembler.load_u8(interrupt_value, interrupt_pointer, 0);
-        assembler.compare_with_zero(interrupt_value);
-        let interrupt_branch =
-            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
-
-        // Pick min(remaining iterations, interval) without signed-overflow
-        // assumptions. end-induction is the exact unsigned distance even when
-        // the range crosses zero.
-        assembler.subtract_register(remaining, Arm64Register::X1, induction);
-        assembler.compare_registers(remaining, interval);
-        let final_chunk_branch =
-            assembler.conditional_branch_placeholder(Arm64Condition::LowerOrSame);
-        assembler.add_register(chunk_end, induction, interval);
-        let next_chunk_branch = assembler.branch_placeholder();
-
-        let final_chunk_word = assembler.word_count();
-        assembler.move_register(chunk_end, Arm64Register::X1);
-        let final_next_chunk_branch = assembler.branch_placeholder();
+        let backedge = emit_native_polling_backedge(
+            &mut assembler,
+            loop_word,
+            induction,
+            Arm64Register::X1,
+            chunk_end,
+            interval,
+            remaining,
+            interrupt_pointer,
+            interrupt_value,
+        )?;
 
         let chunk_exhausted_word = assembler.word_count();
         emit_long_accumulate_state(&mut assembler, induction, accumulator);
@@ -761,21 +809,13 @@ impl CompiledQuickLongAccumulateLoop {
         assembler.ret();
 
         for (branch, target) in [
-            (inner_loop_branch, loop_word),
-            (completed_branch, completed_word),
-            (interrupt_branch, chunk_exhausted_word),
-            (final_chunk_branch, final_chunk_word),
+            (backedge.completed_branch, completed_word),
+            (backedge.interrupt_branch, chunk_exhausted_word),
         ] {
             if !assembler.patch_conditional_branch(branch, target) {
                 return Err(QuickLongAccumulateJitError::BranchOutOfRange);
             }
         }
-        for branch in [next_chunk_branch, final_next_chunk_branch] {
-            if !assembler.patch_branch(branch, loop_word) {
-                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
-            }
-        }
-
         let code = assembler.finish().into_boxed_slice();
         let memory = ExecutableMemory::from_code(&code)?;
         Ok(Self { memory, code })
@@ -1551,54 +1591,16 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         let completed_branch = assembler
             .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
 
-        let mut condition_side_exit_branches = Vec::new();
-        let skip_add_branch = match config.condition {
-            NativeConditionalLongLoopCondition::LessThan { .. } => {
-                assembler.compare_registers(induction, condition_operand);
-                Some(assembler.conditional_branch_placeholder(Arm64Condition::GreaterOrEqual))
-            }
-            NativeConditionalLongLoopCondition::ModuloEqual { divisor: 0, .. } => {
-                // The header must win for an empty loop. Once the body is
-                // reached, replay the canonical Mod instruction so PHP emits
-                // its normal division-by-zero error.
-                assembler.compare_registers(induction, induction);
-                condition_side_exit_branches
-                    .push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
-                None
-            }
-            NativeConditionalLongLoopCondition::ModuloEqual {
-                divisor,
-                rhs: QuickLongOperand::Const(0),
-            } if signed_power_of_two_remainder_mask(divisor).is_some() => {
-                // For either sign of a power-of-two divisor, the remainder is
-                // zero exactly when all masked dividend bits are zero. This
-                // avoids both SDIV and the signed-remainder correction.
-                assembler.test_registers(induction, condition_operand);
-                Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
-            }
-            NativeConditionalLongLoopCondition::ModuloEqual { divisor, .. } => {
-                if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
-                    emit_signed_power_of_two_remainder(
-                        &mut assembler,
-                        induction,
-                        mask,
-                        remainder,
-                        condition_operand,
-                        quotient,
-                    );
-                } else {
-                    assembler.signed_divide(quotient, induction, condition_operand);
-                    assembler.multiply_subtract(
-                        remainder,
-                        quotient,
-                        condition_operand,
-                        induction,
-                    );
-                }
-                assembler.compare_registers(remainder, condition_rhs);
-                Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
-            }
-        };
+        let (skip_add_branch, condition_side_exit_branches) =
+            emit_conditional_long_condition(
+                &mut assembler,
+                config.condition,
+                induction,
+                condition_operand,
+                condition_rhs,
+                quotient,
+                remainder,
+            );
         assembler.add_register_checked(checked_result, accumulator, induction);
         let sum_overflow_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
@@ -1729,6 +1731,172 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         })
     }
 
+    fn compile_range_proven_polling(
+        config: NativeConditionalLongLoopConfig,
+        safepoint_interval: u16,
+    ) -> Result<Self, QuickLongAccumulateJitError> {
+        validate_conditional_long_loop_config(config)?;
+        if safepoint_interval == 0 || safepoint_interval >= 4_096 {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "native polling interval must fit a non-zero ARM64 immediate",
+            ));
+        }
+
+        let mut assembler = Arm64Assembler::new();
+        let induction = Arm64Register::from_code(5);
+        let condition_operand = Arm64Register::from_code(6);
+        let accumulator = Arm64Register::from_code(7);
+        let interval = Arm64Register::from_code(8);
+        let condition_rhs = Arm64Register::from_code(9);
+        let quotient = Arm64Register::from_code(10);
+        let remainder = Arm64Register::from_code(11);
+        let addition_executed = Arm64Register::from_code(12);
+        let control = Arm64Register::from_code(13);
+        let interrupt_pointer = Arm64Register::from_code(14);
+        let chunk_end = Arm64Register::from_code(15);
+        let remaining = Arm64Register::from_code(16);
+        let interrupt_value = Arm64Register::from_code(17);
+
+        // Preserve ABI arguments before their registers are reused by the
+        // complete native activation. x1 remains the overall exclusive end.
+        assembler.move_register(control, Arm64Register::X2);
+        assembler.move_register(interrupt_pointer, Arm64Register::from_code(3));
+        assembler.move_register(chunk_end, Arm64Register::from_code(4));
+        assembler.load_u64(
+            induction,
+            Arm64Register::X0,
+            long_slot_offset(config.induction_slot),
+        );
+        match config.condition {
+            NativeConditionalLongLoopCondition::LessThan { rhs } => {
+                emit_native_long_operand(&mut assembler, rhs, condition_operand);
+            }
+            NativeConditionalLongLoopCondition::ModuloEqual { divisor, rhs } => {
+                assembler.move_immediate(
+                    condition_operand,
+                    signed_power_of_two_remainder_mask(divisor).unwrap_or(divisor),
+                );
+                emit_native_long_operand(&mut assembler, rhs, condition_rhs);
+            }
+        }
+        assembler.load_u64(
+            accumulator,
+            Arm64Register::X0,
+            long_slot_offset(config.accumulator_slot),
+        );
+        assembler.move_immediate(interval, i64::from(safepoint_interval));
+        assembler.move_immediate(addition_executed, 0);
+
+        // The dispatcher only enters this program for a non-empty region whose
+        // complete accumulator range and induction increment have been proven.
+        let loop_word = assembler.word_count();
+        let (skip_add_branch, condition_side_exit_branches) =
+            emit_conditional_long_condition(
+                &mut assembler,
+                config.condition,
+                induction,
+                condition_operand,
+                condition_rhs,
+                quotient,
+                remainder,
+            );
+        assembler.add_register(accumulator, accumulator, induction);
+        assembler.move_immediate(addition_executed, 1);
+
+        let increment_word = assembler.word_count();
+        assembler.add_immediate(induction, induction, 1);
+        let backedge = emit_native_polling_backedge(
+            &mut assembler,
+            loop_word,
+            induction,
+            Arm64Register::X1,
+            chunk_end,
+            interval,
+            remaining,
+            interrupt_pointer,
+            interrupt_value,
+        )?;
+
+        let chunk_exhausted_word = assembler.word_count();
+        emit_conditional_long_loop_state(
+            &mut assembler,
+            config,
+            induction,
+            accumulator,
+            control,
+            addition_executed,
+        );
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED),
+        );
+        assembler.ret();
+
+        let completed_word = assembler.word_count();
+        emit_conditional_long_loop_state(
+            &mut assembler,
+            config,
+            induction,
+            accumulator,
+            control,
+            addition_executed,
+        );
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
+        );
+        assembler.ret();
+
+        let condition_side_exit_word = if condition_side_exit_branches.is_empty() {
+            None
+        } else {
+            let word = assembler.word_count();
+            emit_conditional_long_loop_state(
+                &mut assembler,
+                config,
+                induction,
+                accumulator,
+                control,
+                addition_executed,
+            );
+            assembler.move_immediate(
+                Arm64Register::X0,
+                i64::from(NATIVE_LONG_ACCUMULATE_CONDITION_SIDE_EXIT),
+            );
+            assembler.ret();
+            Some(word)
+        };
+
+        for (branch, target) in [
+            (backedge.completed_branch, completed_word),
+            (backedge.interrupt_branch, chunk_exhausted_word),
+        ] {
+            if !assembler.patch_conditional_branch(branch, target) {
+                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+        }
+        if let Some(branch) = skip_add_branch
+            && !assembler.patch_conditional_branch(branch, increment_word)
+        {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+        }
+        if let Some(target) = condition_side_exit_word {
+            for branch in condition_side_exit_branches {
+                if !assembler.patch_conditional_branch(branch, target) {
+                    return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+                }
+            }
+        }
+
+        let code = assembler.finish().into_boxed_slice();
+        let memory = ExecutableMemory::from_code(&code)?;
+        Ok(Self {
+            memory,
+            code,
+            config,
+        })
+    }
+
     pub fn call(
         &self,
         slots: &mut [i64; 64],
@@ -1745,6 +1913,43 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
         let mut control = NativeConditionalLongLoopControl::default();
         let status = unsafe { function(slots.as_mut_ptr(), iteration_budget, &mut control) };
+        Self::decode_result(status, control)
+    }
+
+    fn call_range_proven_polling(
+        &self,
+        slots: &mut [i64; 64],
+        exclusive_induction_end: i64,
+        interrupt_flag: *const bool,
+        first_chunk_end: i64,
+    ) -> Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError> {
+        debug_assert!(slots[self.config.induction_slot as usize] < first_chunk_end);
+        debug_assert!(first_chunk_end <= exclusive_induction_end);
+        type NativeFunction = unsafe extern "C" fn(
+            *mut i64,
+            u64,
+            *mut NativeConditionalLongLoopControl,
+            *const bool,
+            u64,
+        ) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
+        let mut control = NativeConditionalLongLoopControl::default();
+        let status = unsafe {
+            function(
+                slots.as_mut_ptr(),
+                exclusive_induction_end as u64,
+                &mut control,
+                interrupt_flag,
+                first_chunk_end as u64,
+            )
+        };
+        Self::decode_result(status, control)
+    }
+
+    fn decode_result(
+        status: u32,
+        control: NativeConditionalLongLoopControl,
+    ) -> Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError> {
         let outcome = match status {
             NATIVE_LONG_ACCUMULATE_COMPLETED => QuickLongAccumulateJitOutcome::Completed,
             NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
@@ -1829,6 +2034,65 @@ fn emit_native_long_operand(
     }
 }
 
+fn emit_conditional_long_condition(
+    assembler: &mut Arm64Assembler,
+    condition: NativeConditionalLongLoopCondition,
+    induction: Arm64Register,
+    condition_operand: Arm64Register,
+    condition_rhs: Arm64Register,
+    quotient: Arm64Register,
+    remainder: Arm64Register,
+) -> (Option<usize>, Vec<usize>) {
+    let mut condition_side_exit_branches = Vec::new();
+    let skip_add_branch = match condition {
+        NativeConditionalLongLoopCondition::LessThan { .. } => {
+            assembler.compare_registers(induction, condition_operand);
+            Some(assembler.conditional_branch_placeholder(Arm64Condition::GreaterOrEqual))
+        }
+        NativeConditionalLongLoopCondition::ModuloEqual { divisor: 0, .. } => {
+            // The loop header must win for an empty loop. Once the body is
+            // reached, replay the canonical Mod instruction so PHP emits its
+            // normal division-by-zero error.
+            assembler.compare_registers(induction, induction);
+            condition_side_exit_branches
+                .push(assembler.conditional_branch_placeholder(Arm64Condition::Equal));
+            None
+        }
+        NativeConditionalLongLoopCondition::ModuloEqual {
+            divisor,
+            rhs: QuickLongOperand::Const(0),
+        } if signed_power_of_two_remainder_mask(divisor).is_some() => {
+            // For either sign of a power-of-two divisor, the remainder is zero
+            // exactly when all masked dividend bits are zero.
+            assembler.test_registers(induction, condition_operand);
+            Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
+        }
+        NativeConditionalLongLoopCondition::ModuloEqual { divisor, .. } => {
+            if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
+                emit_signed_power_of_two_remainder(
+                    assembler,
+                    induction,
+                    mask,
+                    remainder,
+                    condition_operand,
+                    quotient,
+                );
+            } else {
+                assembler.signed_divide(quotient, induction, condition_operand);
+                assembler.multiply_subtract(
+                    remainder,
+                    quotient,
+                    condition_operand,
+                    induction,
+                );
+            }
+            assembler.compare_registers(remainder, condition_rhs);
+            Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
+        }
+    };
+    (skip_add_branch, condition_side_exit_branches)
+}
+
 fn emit_conditional_long_loop_state(
     assembler: &mut Arm64Assembler,
     config: NativeConditionalLongLoopConfig,
@@ -1849,6 +2113,78 @@ fn emit_conditional_long_loop_state(
     );
     assembler.store_u64(addition_executed, control, 0);
 }
+
+#[inline]
+fn native_long_operand_value(slots: &[i64; 64], operand: QuickLongOperand) -> i64 {
+    match operand {
+        QuickLongOperand::Slot(slot) => slots[slot as usize],
+        QuickLongOperand::Const(value) => value,
+    }
+}
+
+/// Proves accumulator safety for every subset of induction values that a
+/// conditional loop can select. All negative candidates precede all positive
+/// candidates, so selecting every negative value is the lowest possible
+/// prefix and selecting every positive value is the highest possible prefix.
+/// This deliberately does not depend on the particular condition lowering.
+fn conditional_long_remaining_range_is_proven(
+    config: NativeConditionalLongLoopConfig,
+    slots: &[i64; 64],
+) -> bool {
+    let induction = slots[config.induction_slot as usize];
+    let bound = native_long_operand_value(slots, config.bound);
+    if induction >= bound {
+        return false;
+    }
+    let iterations = (bound as u64).wrapping_sub(induction as u64);
+    let first_term = i128::from(induction);
+    let negative_terms = if induction < 0 {
+        iterations.min(u64::try_from(-first_term).unwrap_or(u64::MAX))
+    } else {
+        0
+    };
+    let positive_terms = iterations - negative_terms;
+    let Some(negative_sum) = arithmetic_long_prefix_sum(first_term, negative_terms) else {
+        return false;
+    };
+    let first_positive = first_term + i128::from(negative_terms);
+    let Some(positive_sum) = arithmetic_long_prefix_sum(first_positive, positive_terms) else {
+        return false;
+    };
+    debug_assert!(negative_sum <= 0);
+    debug_assert!(positive_sum >= 0);
+
+    let accumulator = i128::from(slots[config.accumulator_slot as usize]);
+    accumulator
+        .checked_add(negative_sum)
+        .is_some_and(|value| value >= i128::from(i64::MIN))
+        && accumulator
+            .checked_add(positive_sum)
+            .is_some_and(|value| value <= i128::from(i64::MAX))
+}
+
+fn conditional_long_nonempty_chunk_end(
+    config: NativeConditionalLongLoopConfig,
+    slots: &[i64; 64],
+    iteration_budget: u64,
+) -> Option<(i64, i64)> {
+    if iteration_budget == 0 {
+        return None;
+    }
+    let induction = slots[config.induction_slot as usize];
+    let bound = native_long_operand_value(slots, config.bound);
+    if induction >= bound {
+        return None;
+    }
+    let distance = (bound as u64).wrapping_sub(induction as u64);
+    let iterations = distance.min(iteration_budget);
+    let exclusive_end = (induction as u64).wrapping_add(iterations) as i64;
+    Some((bound, exclusive_end))
+}
+
+#[cfg(test)]
+#[path = "aarch64_conditional_range_tests.rs"]
+mod conditional_range_proof_tests;
 
 /// Upper bound for one closed native scalar/mixed region. The byte-sized
 /// branch ABI still leaves ample headroom; 48 admits application-shaped
@@ -3175,9 +3511,14 @@ fn emit_straight_long_induction(
 
 pub struct QuickLongOpsJitCache {
     conditional_compiled: OnceCell<Option<CompiledQuickLongConditionalAccumulateLoop>>,
+    conditional_range_proven_polling_compiled:
+        OnceCell<Option<CompiledQuickLongConditionalAccumulateLoop>>,
     straight_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
     native_entries: Cell<u64>,
+    native_calls: Cell<u64>,
     native_chunks: Cell<u64>,
+    range_proven_chunks: Cell<u64>,
+    range_proof_evaluations: Cell<u64>,
     side_exits: Cell<u64>,
 }
 
@@ -3185,11 +3526,85 @@ impl QuickLongOpsJitCache {
     pub const fn new() -> Self {
         Self {
             conditional_compiled: OnceCell::new(),
+            conditional_range_proven_polling_compiled: OnceCell::new(),
             straight_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
+            native_calls: Cell::new(0),
             native_chunks: Cell::new(0),
+            range_proven_chunks: Cell::new(0),
+            range_proof_evaluations: Cell::new(0),
             side_exits: Cell::new(0),
         }
+    }
+
+    pub(crate) fn prove_conditional_remaining_range(
+        &self,
+        config: NativeConditionalLongLoopConfig,
+        slots: &[i64; 64],
+    ) -> bool {
+        self.range_proof_evaluations
+            .set(self.range_proof_evaluations.get().saturating_add(1));
+        conditional_long_remaining_range_is_proven(config, slots)
+    }
+
+    pub(crate) fn dispatch_proven_conditional_remaining(
+        &self,
+        config: NativeConditionalLongLoopConfig,
+        slots: &mut [i64; 64],
+        interrupt_flag: *const bool,
+        safepoint_interval: u16,
+    ) -> Option<Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError>> {
+        let (bound, first_chunk_end) = conditional_long_nonempty_chunk_end(
+            config,
+            slots,
+            u64::from(safepoint_interval),
+        )?;
+        let program = self
+            .conditional_range_proven_polling_compiled
+            .get_or_init(|| {
+                CompiledQuickLongConditionalAccumulateLoop::compile_range_proven_polling(
+                    config,
+                    safepoint_interval,
+                )
+                .ok()
+            })
+            .as_ref()?;
+        debug_assert_eq!(program.config(), config);
+
+        let before_induction = slots[config.induction_slot as usize];
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
+        let outcome = program.call_range_proven_polling(
+            slots,
+            bound,
+            interrupt_flag,
+            first_chunk_end,
+        );
+        let completed_iterations = (slots[config.induction_slot as usize] as u64)
+            .wrapping_sub(before_induction as u64);
+        let completed_chunks = completed_iterations
+            .div_ceil(u64::from(safepoint_interval))
+            .max(1);
+        self.native_chunks.set(
+            self.native_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        self.range_proven_chunks.set(
+            self.range_proven_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        if matches!(
+            outcome,
+            Ok(NativeConditionalLongLoopResult {
+                outcome: QuickLongAccumulateJitOutcome::ConditionSideExit,
+                ..
+            }) | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        Some(outcome)
     }
 
     pub fn dispatch_chunk(
@@ -3210,6 +3625,8 @@ impl QuickLongOpsJitCache {
             ));
         };
         debug_assert_eq!(program.config(), config);
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call(slots, iteration_budget);
@@ -3247,6 +3664,8 @@ impl QuickLongOpsJitCache {
         slots: &mut [i64; 64],
         iteration_budget: u64,
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call(slots, iteration_budget);
@@ -3270,6 +3689,8 @@ impl QuickLongOpsJitCache {
         iteration_budget: u64,
         entry_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call_with_context(slots, iteration_budget, entry_pointers);
@@ -3297,6 +3718,10 @@ impl QuickLongOpsJitCache {
 
     pub fn is_conditional_compiled(&self) -> bool {
         matches!(self.conditional_compiled.get(), Some(Some(_)))
+            || matches!(
+                self.conditional_range_proven_polling_compiled.get(),
+                Some(Some(_))
+            )
     }
 
     pub fn is_straight_compiled(&self) -> bool {
@@ -3309,6 +3734,18 @@ impl QuickLongOpsJitCache {
 
     pub fn native_chunks(&self) -> u64 {
         self.native_chunks.get()
+    }
+
+    pub fn native_calls(&self) -> u64 {
+        self.native_calls.get()
+    }
+
+    pub fn range_proven_chunks(&self) -> u64 {
+        self.range_proven_chunks.get()
+    }
+
+    pub fn range_proof_evaluations(&self) -> u64 {
+        self.range_proof_evaluations.get()
     }
 
     pub fn side_exits(&self) -> u64 {
@@ -3334,7 +3771,10 @@ impl fmt::Debug for QuickLongOpsJitCache {
             .debug_struct("QuickLongOpsJitCache")
             .field("compiled", &self.is_compiled())
             .field("native_entries", &self.native_entries())
+            .field("native_calls", &self.native_calls())
             .field("native_chunks", &self.native_chunks())
+            .field("range_proven_chunks", &self.range_proven_chunks())
+            .field("range_proof_evaluations", &self.range_proof_evaluations())
             .field("side_exits", &self.side_exits())
             .finish()
     }

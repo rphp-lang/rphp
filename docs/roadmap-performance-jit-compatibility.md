@@ -1806,6 +1806,39 @@ not justify weaker interrupt latency or larger generated code; the reusable
 next step is to bring internal safepoint polling and range reasoning to wider
 typed loop IR where measurements show a material application benefit.
 
+Conditional typed-loop range checkpoint (2026-08-04): the same complete-range
+proof and in-native safepoint contract now covers the general conditional Long
+accumulator IR used by both less-than branches and modulo-equality filters. The
+proof is deliberately independent of the predicate: over the complete ordered
+induction range it sums every possible negative contribution and every possible
+positive contribution separately. If the initial accumulator remains inside
+`i64` at both conservative extremes, every prefix of every predicate-selected
+subset is safe. A failed proof keeps the original checked ARM64 program and its
+exact PHP overflow resume instruction.
+
+The proven program removes per-iteration sum and induction overflow branches,
+keeps the condition itself unchanged, and polls the VM interrupt flag every
+1,024 iterations without returning to Rust when the flag is clear. The simple
+accumulator and conditional compiler share one ARM64 polling-backedge emitter,
+so completion priority, unsigned signed-zero-crossing distance, and interrupt
+publication are now one backend invariant rather than two handwritten copies.
+Instrumentation verifies one range-proof evaluation and one native call for a
+100,000-iteration activation while retaining roughly 98 virtual safepoint
+chunks. Unsafe branch and modulo overflow cases prove nothing, use zero proven
+chunks, and retain their precise checked side exit.
+
+Four direct proof/ABI tests include 20,000 deterministic arbitrary-subset
+states, interrupt at the exact first safepoint, resume to the identical final
+state, and modulo selection. All 70 ARM64 JIT integration tests pass. In 101
+order-rotated `max-perf` A/B pairs against the preceding binary, the branch
+loop moves from 10.189 ms to 6.817 ms (paired median -33.61 percent) and the
+modulo branch from 7.480 ms to 4.987 ms (paired median -33.30 percent), with
+identical outputs. Absolute clock rates varied between batches, but an earlier
+61-pair run showed the same -33.7-percent relative result. In a separate
+31-run comparison, RPHP recorded 4.174 ms versus PHP tracing JIT's 13.777 ms
+for the branch loop (3.30x faster), and 4.467 ms versus 13.253 ms for modulo
+(2.97x faster), again with identical outputs.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -2885,7 +2885,13 @@ fn real_php_branch_loop_enters_general_native_ir_region() {
         .expect("compiler should select the general Long loop IR");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -2916,7 +2922,13 @@ fn real_php_modulo_branch_loop_enters_general_native_ir_region() {
         .expect("compiler should select the modulo Long loop IR");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -3167,6 +3179,8 @@ fn general_native_ir_sum_overflow_resumes_canonical_add() {
         })
         .expect("conditionalOverflow should use general Long loop IR");
     assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(plan.native_jit().range_proven_chunks(), 0);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
@@ -3207,5 +3221,7 @@ fn general_native_modulo_ir_sum_overflow_resumes_canonical_add() {
         })
         .expect("moduloOverflow should use general Long loop IR");
     assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(plan.native_jit().range_proven_chunks(), 0);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }

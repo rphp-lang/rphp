@@ -390,6 +390,8 @@ unsafe fn run_native_quick_long_conditional_kernel(
     };
     let bound = quick_long_operand(slots, config.bound);
     let cache = plan.native_jit();
+    let remaining_range_proven = cache.prove_conditional_remaining_range(config, slots);
+    let interrupt_flag = eg.vm_interrupt.as_ptr() as *const bool;
     let mut iterations = 0u64;
     let mut dirty_long_mask = 0u64;
     let mut dirty_bool_mask = 0u64;
@@ -399,11 +401,19 @@ unsafe fn run_native_quick_long_conditional_kernel(
     loop {
         let before_induction = slots[config.induction_slot as usize];
         let before_accumulator = slots[config.accumulator_slot as usize];
-        let native_result = cache.dispatch_chunk(
-            config,
-            slots,
-            NATIVE_LONG_SAFEPOINT_INTERVAL,
-        );
+        let native_result = if remaining_range_proven {
+            let Some(result) = cache.dispatch_proven_conditional_remaining(
+                config,
+                slots,
+                interrupt_flag,
+                NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
+            ) else {
+                return Ok(None);
+            };
+            result
+        } else {
+            cache.dispatch_chunk(config, slots, NATIVE_LONG_SAFEPOINT_INTERVAL)
+        };
         let (mut outcome, chunk_addition_executed) = match native_result {
             Ok(result) => {
                 if !entered_native {
@@ -522,7 +532,11 @@ unsafe fn run_native_quick_long_conditional_kernel(
                 return Ok(Some(QuickLoopOutcome::Completed));
             }
             QuickLongAccumulateJitOutcome::ChunkExhausted => {
-                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_SAFEPOINT_INTERVAL);
+                debug_assert_ne!(completed_in_chunk, 0);
+                debug_assert_eq!(
+                    completed_in_chunk % NATIVE_LONG_SAFEPOINT_INTERVAL,
+                    0
+                );
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
                     commit_quick_long_ops_slots(
                         slot_base,
