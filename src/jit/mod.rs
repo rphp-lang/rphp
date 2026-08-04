@@ -18,7 +18,9 @@ mod x86_64;
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub use x86_64::{
-    CompiledX86AddMultiply, CompiledX86StraightLongLoop, X86_64Assembler, X86_64Register,
+    CompiledScalarLongProgram, CompiledX86AddMultiply, CompiledX86StraightLongLoop,
+    SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError,
+    ScalarLongJitOutcome, X86_64Assembler, X86_64Register,
     X86QuickLongOpsJitCache as QuickLongAccumulateJitCache,
     X86QuickLongOpsJitCache as QuickLongOpsJitCache, X86StraightLongLoopError,
 };

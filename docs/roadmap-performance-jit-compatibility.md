@@ -2777,10 +2777,29 @@ without JIT and 11.234999 ms with tracing JIT on the same workload, making the
 final RPHP result about 1.56x faster than PHP tracing JIT. x86-64 now passes 147
 library tests, four real-PHP JIT integration tests and the four-test corpus.
 
+The standalone scalar-function checkpoint then enables the same typed
+`ScalarLongFunctionPlan` cache on x86-64 as on ARM64. After the shared 64-call
+hotness threshold, straight and conditional function/method leaves lower all
+six scalar operations, all four comparisons and bitmask predicates. The SysV
+entry receives guarded input, output and private eight-word temporary pointers;
+checked failures return before writing output, so the caller can resume the
+canonical PHP call transactionally. A real conditional PHP function confirms
+the cache enters native code on call 64 and keeps its side-exit counters exact.
+
+On the pre-existing 10M `bench_scalar_call_branch_standalone.php`, 101 pinned,
+order-rotated pairs reduce the previous x86 path from 179.379702 ms median
+(178.663254/183.989286 ms p10/p90) to 125.528336 ms
+(124.723196/128.692627 ms), a 30.02 percent reduction or 1.43x speedup. PHP
+8.5.9 records 180.901051 ms without JIT and 63.658953 ms with tracing JIT. The
+remaining roughly 1.97x tracing-JIT advantage is therefore at the callsite:
+RPHP still crosses Rust/native ABI once per standalone call, while a tracing
+compiler can inline the selected leaf into its caller. x86-64 now passes 150
+library tests, five real-PHP JIT integration tests and the four-test corpus.
+
 This is still not full ARM64 feature parity. x86-64 conservatively rejects
-call/property/array/string context operations and scalar-function native
-programs. Those forms continue through the existing typed or canonical
-executor and define the next parity steps.
+inlined scalar call trees plus property/array/string context operations. Those
+forms continue through the existing typed or canonical executor and define the
+next parity steps.
 
 The frozen workstream is:
 

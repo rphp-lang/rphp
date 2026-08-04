@@ -9,11 +9,15 @@ use super::straight::{
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
     straight_long_remaining_range_proof,
 };
-use crate::vm::function::{ScalarLongConditionKind, ScalarLongOpKind};
+use crate::vm::function::{
+    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
+    ScalarLongOpKind, ScalarLongSource,
+};
 use crate::vm::quick::QuickLongOperand;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::io;
+use std::mem::MaybeUninit;
 
 const X86_STRAIGHT_COMPLETED: u32 = 0;
 const X86_STRAIGHT_CHUNK_EXHAUSTED: u32 = 1;
@@ -1414,10 +1418,545 @@ impl CompiledX86AddMultiply {
     }
 }
 
+const X86_SCALAR_STATUS_SUCCESS: u32 = 0;
+const X86_SCALAR_STATUS_SIDE_EXIT: u32 = 1;
+const MAX_SCALAR_LONG_INPUTS: usize = 8;
+const MAX_SCALAR_LONG_OPERATIONS: usize = 8;
+
+pub const SCALAR_LONG_JIT_HOT_THRESHOLD: u16 = 64;
+
+#[derive(Debug)]
+pub enum ScalarLongJitError {
+    InvalidProgram(&'static str),
+    InputCount { expected: usize, actual: usize },
+    InvalidNativeStatus(u32),
+    Memory(io::Error),
+}
+
+impl fmt::Display for ScalarLongJitError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::InvalidProgram(message) => formatter.write_str(message),
+            Self::InputCount { expected, actual } => {
+                write!(
+                    formatter,
+                    "expected {expected} scalar inputs, received {actual}"
+                )
+            }
+            Self::InvalidNativeStatus(status) => {
+                write!(formatter, "x86 scalar JIT returned unknown status {status}")
+            }
+            Self::Memory(error) => write!(formatter, "executable memory error: {error}"),
+        }
+    }
+}
+
+impl std::error::Error for ScalarLongJitError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Memory(error) => Some(error),
+            _ => None,
+        }
+    }
+}
+
+impl From<io::Error> for ScalarLongJitError {
+    fn from(error: io::Error) -> Self {
+        Self::Memory(error)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongJitOutcome {
+    Value(i64),
+    SideExit,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarLongJitDispatch {
+    Interpret,
+    Value(i64),
+    SideExit,
+}
+
+/// Lazy per-plan standalone scalar cache. The same target-neutral plan and
+/// hotness contract are used by the ARM64 backend.
+pub struct ScalarLongJitCache {
+    calls: Cell<u16>,
+    compiled: OnceCell<Option<CompiledScalarLongProgram>>,
+    native_entries: Cell<u64>,
+    side_exits: Cell<u64>,
+}
+
+impl ScalarLongJitCache {
+    pub const fn new() -> Self {
+        Self {
+            calls: Cell::new(0),
+            compiled: OnceCell::new(),
+            native_entries: Cell::new(0),
+            side_exits: Cell::new(0),
+        }
+    }
+
+    pub fn dispatch(
+        &self,
+        plan: &ScalarLongFunctionPlan,
+        arguments: &[i64; MAX_SCALAR_LONG_INPUTS],
+    ) -> ScalarLongJitDispatch {
+        if plan.select.is_none() && plan.program.operations.len() < 2 {
+            return ScalarLongJitDispatch::Interpret;
+        }
+
+        if self.compiled.get().is_none() {
+            let calls = self.calls.get().saturating_add(1);
+            self.calls.set(calls);
+            if calls < SCALAR_LONG_JIT_HOT_THRESHOLD {
+                return ScalarLongJitDispatch::Interpret;
+            }
+            let _ = self
+                .compiled
+                .set(CompiledScalarLongProgram::compile(plan).ok());
+        }
+
+        let Some(program) = self.compiled.get().and_then(Option::as_ref) else {
+            return ScalarLongJitDispatch::Interpret;
+        };
+        self.native_entries
+            .set(self.native_entries.get().saturating_add(1));
+        match program.call(&arguments[..plan.public_args as usize]) {
+            Ok(ScalarLongJitOutcome::Value(value)) => ScalarLongJitDispatch::Value(value),
+            Ok(ScalarLongJitOutcome::SideExit) | Err(_) => {
+                self.side_exits.set(self.side_exits.get().saturating_add(1));
+                ScalarLongJitDispatch::SideExit
+            }
+        }
+    }
+
+    pub fn is_compiled(&self) -> bool {
+        matches!(self.compiled.get(), Some(Some(_)))
+    }
+
+    pub fn native_entries(&self) -> u64 {
+        self.native_entries.get()
+    }
+
+    pub fn side_exits(&self) -> u64 {
+        self.side_exits.get()
+    }
+}
+
+impl Default for ScalarLongJitCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Memory-backed lowering of a typed scalar function or method leaf.
+///
+/// SysV ABI: RDI points to inputs, RSI to the output word and RDX to eight
+/// private temporary words. EAX returns zero on success or one for an exact
+/// checked-arithmetic side exit. The output word is written only on success.
+pub struct CompiledScalarLongProgram {
+    memory: ExecutableMemory,
+    code: Box<[u8]>,
+    input_count: usize,
+}
+
+impl CompiledScalarLongProgram {
+    pub fn compile(plan: &ScalarLongFunctionPlan) -> Result<Self, ScalarLongJitError> {
+        validate_x86_scalar_long_plan(plan)?;
+        let mut assembler = X86_64Assembler::new();
+        let temporaries = X86_64Register::R10;
+        assembler.move_register(temporaries, X86_64Register::RDX);
+        let mut side_exit_jumps = Vec::new();
+        let mut selected_true_join = None;
+
+        if let Some(select) = plan.select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end + select.when_true_operation_count as usize;
+            emit_x86_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                0,
+                shared_end,
+                &mut side_exit_jumps,
+            );
+            emit_x86_scalar_condition_operand(
+                &mut assembler,
+                select.lhs,
+                X86_64Register::RAX,
+                X86_64Register::R9,
+            );
+            emit_x86_scalar_condition_operand(
+                &mut assembler,
+                select.rhs,
+                X86_64Register::R8,
+                X86_64Register::R9,
+            );
+            assembler.compare_register(X86_64Register::RAX, X86_64Register::R8);
+            let selected_false = emit_false_condition_jump(&mut assembler, select.kind);
+
+            emit_x86_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                shared_end,
+                true_end,
+                &mut side_exit_jumps,
+            );
+            emit_x86_scalar_output(&mut assembler, select.when_true);
+            selected_true_join = Some(assembler.jump_rel32());
+
+            let false_offset = assembler.bytes.len();
+            assembler.patch_rel32(selected_false, false_offset);
+            emit_x86_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                true_end,
+                plan.program.operations.len(),
+                &mut side_exit_jumps,
+            );
+            emit_x86_scalar_output(&mut assembler, select.when_false);
+        } else {
+            emit_x86_scalar_operations(
+                &mut assembler,
+                &plan.program.operations,
+                0,
+                plan.program.operations.len(),
+                &mut side_exit_jumps,
+            );
+            emit_x86_scalar_output(&mut assembler, plan.program.outputs[0]);
+        }
+
+        let success = assembler.bytes.len();
+        if let Some(join) = selected_true_join {
+            assembler.patch_rel32(join, success);
+        }
+        assembler.move_immediate32_eax(X86_SCALAR_STATUS_SUCCESS);
+        assembler.return_near();
+
+        let side_exit = assembler.bytes.len();
+        assembler.move_immediate32_eax(X86_SCALAR_STATUS_SIDE_EXIT);
+        assembler.return_near();
+        for jump in side_exit_jumps {
+            assembler.patch_rel32(jump, side_exit);
+        }
+
+        let code = assembler.finish();
+        let memory = ExecutableMemory::from_code(&code)?;
+        Ok(Self {
+            memory,
+            code,
+            input_count: plan.public_args as usize,
+        })
+    }
+
+    pub fn call(&self, inputs: &[i64]) -> Result<ScalarLongJitOutcome, ScalarLongJitError> {
+        if inputs.len() != self.input_count {
+            return Err(ScalarLongJitError::InputCount {
+                expected: self.input_count,
+                actual: inputs.len(),
+            });
+        }
+        type NativeFunction = unsafe extern "C" fn(*const i64, *mut i64, *mut i64) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
+        let mut output = MaybeUninit::<i64>::uninit();
+        let mut temporaries = [0_i64; MAX_SCALAR_LONG_OPERATIONS];
+        let status = unsafe {
+            function(
+                inputs.as_ptr(),
+                output.as_mut_ptr(),
+                temporaries.as_mut_ptr(),
+            )
+        };
+        match status {
+            X86_SCALAR_STATUS_SUCCESS => {
+                Ok(ScalarLongJitOutcome::Value(unsafe { output.assume_init() }))
+            }
+            X86_SCALAR_STATUS_SIDE_EXIT => Ok(ScalarLongJitOutcome::SideExit),
+            status => Err(ScalarLongJitError::InvalidNativeStatus(status)),
+        }
+    }
+
+    pub fn code(&self) -> &[u8] {
+        &self.code
+    }
+}
+
+fn emit_x86_scalar_operations(
+    assembler: &mut X86_64Assembler,
+    operations: &[ScalarLongOp],
+    start: usize,
+    end: usize,
+    side_exit_jumps: &mut Vec<usize>,
+) {
+    for (relative_index, operation) in operations[start..end].iter().copied().enumerate() {
+        emit_x86_scalar_operation(
+            assembler,
+            start + relative_index,
+            operation,
+            side_exit_jumps,
+        );
+    }
+}
+
+fn emit_x86_scalar_operation(
+    assembler: &mut X86_64Assembler,
+    index: usize,
+    operation: ScalarLongOp,
+    side_exit_jumps: &mut Vec<usize>,
+) {
+    let lhs = X86_64Register::RAX;
+    let rhs = X86_64Register::R8;
+    let auxiliary = X86_64Register::R9;
+    emit_x86_scalar_source(assembler, operation.lhs, lhs);
+    emit_x86_scalar_source(assembler, operation.rhs, rhs);
+
+    match operation.kind {
+        ScalarLongOpKind::Add => {
+            assembler.add_register(lhs, rhs);
+            side_exit_jumps.push(assembler.jump_overflow_rel32());
+        }
+        ScalarLongOpKind::Subtract => {
+            assembler.subtract_register(lhs, rhs);
+            side_exit_jumps.push(assembler.jump_overflow_rel32());
+        }
+        ScalarLongOpKind::Multiply => {
+            assembler.multiply_register(lhs, rhs);
+            side_exit_jumps.push(assembler.jump_overflow_rel32());
+        }
+        ScalarLongOpKind::BitwiseXor => assembler.xor_register(lhs, rhs),
+        ScalarLongOpKind::Modulo if matches!(operation.rhs, ScalarLongSource::Constant(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
+        {
+            let ScalarLongSource::Constant(divisor) = operation.rhs else {
+                unreachable!();
+            };
+            let mask = signed_power_of_two_remainder_mask(divisor).unwrap();
+            assembler.move_register(auxiliary, lhs);
+            assembler.arithmetic_shift_right_immediate8(auxiliary, 63);
+            assembler.move_immediate64(rhs, mask);
+            assembler.and_register(auxiliary, rhs);
+            assembler.add_register(lhs, auxiliary);
+            assembler.and_register(lhs, rhs);
+            assembler.subtract_register(lhs, auxiliary);
+        }
+        ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
+            emit_x86_scalar_division_guards(assembler, lhs, rhs, auxiliary, side_exit_jumps);
+            assembler.sign_extend_rax_into_rdx();
+            assembler.signed_divide(rhs);
+            if operation.kind == ScalarLongOpKind::Modulo {
+                assembler.move_register(lhs, X86_64Register::RDX);
+            }
+        }
+    }
+    assembler.move_to_base_disp32(X86_64Register::R10, lhs, i32::try_from(index * 8).unwrap());
+}
+
+fn emit_x86_scalar_division_guards(
+    assembler: &mut X86_64Assembler,
+    lhs: X86_64Register,
+    rhs: X86_64Register,
+    auxiliary: X86_64Register,
+    side_exit_jumps: &mut Vec<usize>,
+) {
+    assembler.compare_immediate8(rhs, 0);
+    side_exit_jumps.push(assembler.jump_equal_rel32());
+    assembler.compare_immediate8(rhs, -1);
+    let safe_divisor = assembler.jump_not_equal_rel32();
+    assembler.move_immediate64(auxiliary, i64::MIN);
+    assembler.compare_register(lhs, auxiliary);
+    side_exit_jumps.push(assembler.jump_equal_rel32());
+    let divide = assembler.bytes.len();
+    assembler.patch_rel32(safe_divisor, divide);
+}
+
+fn emit_x86_scalar_source(
+    assembler: &mut X86_64Assembler,
+    source: ScalarLongSource,
+    destination: X86_64Register,
+) {
+    match source {
+        ScalarLongSource::Input(index) => {
+            assembler.move_from_base_disp32(destination, X86_64Register::RDI, i32::from(index) * 8)
+        }
+        ScalarLongSource::Constant(value) => assembler.move_immediate64(destination, value),
+        ScalarLongSource::Temporary(index) => {
+            assembler.move_from_base_disp32(destination, X86_64Register::R10, i32::from(index) * 8)
+        }
+    }
+}
+
+fn emit_x86_scalar_condition_operand(
+    assembler: &mut X86_64Assembler,
+    operand: ScalarLongConditionOperand,
+    destination: X86_64Register,
+    scratch: X86_64Register,
+) {
+    match operand {
+        ScalarLongConditionOperand::Source(source) => {
+            emit_x86_scalar_source(assembler, source, destination);
+        }
+        ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            emit_x86_scalar_source(assembler, lhs, destination);
+            emit_x86_scalar_source(assembler, rhs, scratch);
+            assembler.and_register(destination, scratch);
+        }
+    }
+}
+
+fn emit_x86_scalar_output(assembler: &mut X86_64Assembler, source: ScalarLongSource) {
+    emit_x86_scalar_source(assembler, source, X86_64Register::RAX);
+    assembler.move_to_base_disp32(X86_64Register::RSI, X86_64Register::RAX, 0);
+}
+
+fn validate_x86_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), ScalarLongJitError> {
+    if plan.public_args as usize > MAX_SCALAR_LONG_INPUTS {
+        return Err(ScalarLongJitError::InvalidProgram(
+            "too many public inputs for the x86 scalar ABI",
+        ));
+    }
+    if plan.program.operations.len() > MAX_SCALAR_LONG_OPERATIONS {
+        return Err(ScalarLongJitError::InvalidProgram(
+            "too many operations for the x86 scalar temporary ABI",
+        ));
+    }
+    if plan.program.output_count != 1 {
+        return Err(ScalarLongJitError::InvalidProgram(
+            "the scalar leaf must expose exactly one output",
+        ));
+    }
+
+    if let Some(select) = plan.select {
+        validate_x86_scalar_select(plan, select)
+    } else {
+        for (index, operation) in plan.program.operations.iter().enumerate() {
+            validate_x86_scalar_source(operation.lhs, index, plan.public_args)?;
+            validate_x86_scalar_source(operation.rhs, index, plan.public_args)?;
+        }
+        validate_x86_scalar_source(
+            plan.program.outputs[0],
+            plan.program.operations.len(),
+            plan.public_args,
+        )
+    }
+}
+
+fn validate_x86_scalar_select(
+    plan: &ScalarLongFunctionPlan,
+    select: crate::vm::function::ScalarLongSelect,
+) -> Result<(), ScalarLongJitError> {
+    let operation_count = plan.program.operations.len();
+    let shared_end = select.shared_operation_count as usize;
+    let true_end = shared_end
+        .checked_add(select.when_true_operation_count as usize)
+        .ok_or(ScalarLongJitError::InvalidProgram(
+            "conditional operation ranges overflow",
+        ))?;
+    if shared_end > operation_count || true_end > operation_count {
+        return Err(ScalarLongJitError::InvalidProgram(
+            "conditional operation range is outside the program",
+        ));
+    }
+    for (index, operation) in plan.program.operations[..shared_end].iter().enumerate() {
+        validate_x86_scalar_source(operation.lhs, index, plan.public_args)?;
+        validate_x86_scalar_source(operation.rhs, index, plan.public_args)?;
+    }
+    validate_x86_scalar_condition_operand(select.lhs, shared_end, plan.public_args)?;
+    validate_x86_scalar_condition_operand(select.rhs, shared_end, plan.public_args)?;
+
+    for (index, operation) in plan.program.operations[shared_end..true_end]
+        .iter()
+        .enumerate()
+    {
+        let absolute_index = shared_end + index;
+        validate_x86_scalar_source(operation.lhs, absolute_index, plan.public_args)?;
+        validate_x86_scalar_source(operation.rhs, absolute_index, plan.public_args)?;
+    }
+    validate_x86_scalar_source(select.when_true, true_end, plan.public_args)?;
+
+    for (index, operation) in plan.program.operations[true_end..].iter().enumerate() {
+        let absolute_index = true_end + index;
+        validate_x86_false_edge_source(
+            operation.lhs,
+            shared_end,
+            true_end,
+            absolute_index,
+            plan.public_args,
+        )?;
+        validate_x86_false_edge_source(
+            operation.rhs,
+            shared_end,
+            true_end,
+            absolute_index,
+            plan.public_args,
+        )?;
+    }
+    validate_x86_false_edge_source(
+        select.when_false,
+        shared_end,
+        true_end,
+        operation_count,
+        plan.public_args,
+    )
+}
+
+fn validate_x86_scalar_condition_operand(
+    operand: ScalarLongConditionOperand,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), ScalarLongJitError> {
+    match operand {
+        ScalarLongConditionOperand::Source(source) => {
+            validate_x86_scalar_source(source, available_temporaries, input_count)
+        }
+        ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            validate_x86_scalar_source(lhs, available_temporaries, input_count)?;
+            validate_x86_scalar_source(rhs, available_temporaries, input_count)
+        }
+    }
+}
+
+fn validate_x86_false_edge_source(
+    source: ScalarLongSource,
+    shared_end: usize,
+    false_start: usize,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), ScalarLongJitError> {
+    match source {
+        ScalarLongSource::Temporary(index)
+            if !((index as usize) < shared_end
+                || ((index as usize) >= false_start
+                    && (index as usize) < available_temporaries)) =>
+        {
+            Err(ScalarLongJitError::InvalidProgram(
+                "false edge references a true-edge temporary",
+            ))
+        }
+        _ => validate_x86_scalar_source(source, available_temporaries, input_count),
+    }
+}
+
+fn validate_x86_scalar_source(
+    source: ScalarLongSource,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), ScalarLongJitError> {
+    match source {
+        ScalarLongSource::Input(index) if index >= u16::from(input_count) => Err(
+            ScalarLongJitError::InvalidProgram("input index is outside the public ABI"),
+        ),
+        ScalarLongSource::Temporary(index) if index as usize >= available_temporaries => Err(
+            ScalarLongJitError::InvalidProgram("temporary is used before it is defined"),
+        ),
+        _ => Ok(()),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::jit::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS;
+    use crate::vm::function::{ScalarLongProgram, ScalarLongSelect};
 
     fn additive_recurrence(bound: i64, reversed: bool) -> NativeStraightLongLoopConfig {
         let mut operations =
@@ -1508,6 +2047,38 @@ mod tests {
         }
     }
 
+    fn scalar_plan(
+        public_args: u8,
+        operations: Vec<ScalarLongOp>,
+        output: ScalarLongSource,
+    ) -> ScalarLongFunctionPlan {
+        ScalarLongFunctionPlan::new(
+            public_args,
+            ScalarLongProgram {
+                operations: operations.into_boxed_slice(),
+                outputs: [output],
+                output_count: 1,
+            },
+            None,
+        )
+    }
+
+    fn conditional_scalar_plan(
+        public_args: u8,
+        operations: Vec<ScalarLongOp>,
+        select: ScalarLongSelect,
+    ) -> ScalarLongFunctionPlan {
+        ScalarLongFunctionPlan::new(
+            public_args,
+            ScalarLongProgram {
+                operations: operations.into_boxed_slice(),
+                outputs: [select.when_true],
+                output_count: 1,
+            },
+            Some(select),
+        )
+    }
+
     #[test]
     fn encoder_produces_exact_sysv_add_multiply_bytes() {
         let program = CompiledX86AddMultiply::compile().unwrap();
@@ -1527,6 +2098,104 @@ mod tests {
         let program = CompiledX86AddMultiply::compile().unwrap();
         assert_eq!(program.call(12, -5, 9), 63);
         assert_eq!(program.call(-8, 3, -4), 20);
+    }
+
+    #[test]
+    fn standalone_scalar_program_executes_and_side_exits_on_overflow() {
+        let plan = scalar_plan(
+            3,
+            vec![
+                ScalarLongOp {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Input(1),
+                },
+                ScalarLongOp {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: ScalarLongSource::Temporary(0),
+                    rhs: ScalarLongSource::Input(2),
+                },
+            ],
+            ScalarLongSource::Temporary(1),
+        );
+        let program = CompiledScalarLongProgram::compile(&plan).unwrap();
+        assert_eq!(
+            program.call(&[7, 5, 3]).unwrap(),
+            ScalarLongJitOutcome::Value(36)
+        );
+        assert_eq!(
+            program.call(&[i64::MAX, 1, 3]).unwrap(),
+            ScalarLongJitOutcome::SideExit
+        );
+    }
+
+    #[test]
+    fn standalone_conditional_scalar_program_executes_only_selected_edge() {
+        let plan = conditional_scalar_plan(
+            1,
+            vec![
+                ScalarLongOp {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Constant(3),
+                },
+                ScalarLongOp {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Constant(5),
+                },
+            ],
+            ScalarLongSelect {
+                kind: ScalarLongConditionKind::Equal,
+                lhs: ScalarLongConditionOperand::BitwiseAnd {
+                    lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Constant(1),
+                },
+                rhs: ScalarLongConditionOperand::Source(ScalarLongSource::Constant(0)),
+                shared_operation_count: 0,
+                when_true_operation_count: 1,
+                when_true: ScalarLongSource::Temporary(0),
+                when_false: ScalarLongSource::Temporary(1),
+            },
+        );
+        let program = CompiledScalarLongProgram::compile(&plan).unwrap();
+        assert_eq!(program.call(&[4]).unwrap(), ScalarLongJitOutcome::Value(12));
+        assert_eq!(program.call(&[5]).unwrap(), ScalarLongJitOutcome::Value(25));
+    }
+
+    #[test]
+    fn standalone_scalar_cache_compiles_at_shared_hotness_threshold() {
+        let plan = scalar_plan(
+            2,
+            vec![
+                ScalarLongOp {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: ScalarLongSource::Input(0),
+                    rhs: ScalarLongSource::Input(1),
+                },
+                ScalarLongOp {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: ScalarLongSource::Temporary(0),
+                    rhs: ScalarLongSource::Constant(3),
+                },
+            ],
+            ScalarLongSource::Temporary(1),
+        );
+        let mut arguments = [0_i64; MAX_SCALAR_LONG_INPUTS];
+        arguments[0] = 7;
+        arguments[1] = 5;
+        for _ in 1..SCALAR_LONG_JIT_HOT_THRESHOLD {
+            assert_eq!(
+                plan.native_jit().dispatch(&plan, &arguments),
+                ScalarLongJitDispatch::Interpret
+            );
+        }
+        assert_eq!(
+            plan.native_jit().dispatch(&plan, &arguments),
+            ScalarLongJitDispatch::Value(36)
+        );
+        assert!(plan.native_jit().is_compiled());
+        assert_eq!(plan.native_jit().native_entries(), 1);
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::vm::stats;
 use crate::jit::{
     NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
+    ScalarLongJitDispatch,
 };
 #[cfg(all(
     feature = "jit-prototype",
@@ -26,7 +27,7 @@ use crate::jit::{
 use crate::jit::{
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
     NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig, NativeLongAccumulateState,
-    QuickLongAccumulateJitOutcome, ScalarLongJitDispatch,
+    QuickLongAccumulateJitOutcome,
 };
 use super::opcode::OpCode;
 use super::instruction::{
@@ -1328,8 +1329,10 @@ fn evaluate_scalar_long_plan(
     }
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     match plan.native_jit().dispatch(plan, arguments) {
         ScalarLongJitDispatch::Interpret => {}

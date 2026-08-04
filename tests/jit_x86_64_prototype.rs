@@ -4,9 +4,11 @@ mod common;
 
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
+use rphp::jit::SCALAR_LONG_JIT_HOT_THRESHOLD;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::execute;
+use rphp::vm::function::FunctionCommon;
 use rphp::vm::planner::BlockPlan;
 
 #[test]
@@ -148,5 +150,51 @@ fn real_php_modulo_branch_uses_native_arithmetic_and_control_flow() {
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().native_calls(), 1);
     assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn real_php_conditional_calls_enter_standalone_scalar_jit() {
+    let call_count = usize::from(SCALAR_LONG_JIT_HOT_THRESHOLD) + 8;
+    let mut source = String::from(
+        "<?php function route(int $value): int { if (($value & 1) == 0) { return ($value * 3) + 1; } return ($value * 5) - 2; } $total = 0;",
+    );
+    for index in 0..call_count {
+        source.push_str(if index & 1 == 0 {
+            "$total = $total + route(4);"
+        } else {
+            "$total = $total + route(5);"
+        });
+    }
+    source.push_str("echo $total;");
+
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "1296"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("route"))
+        .map(|(_, function)| function)
+        .expect("compiled route function");
+    let plan = function.scalar_long_plan.as_deref().expect("scalar plan");
+    assert!(plan.select.is_some());
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 9);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }

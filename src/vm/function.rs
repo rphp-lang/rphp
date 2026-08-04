@@ -193,8 +193,10 @@ pub struct ScalarLongFunctionPlan {
     pub select: Option<ScalarLongSelect>,
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     native_jit: crate::jit::ScalarLongJitCache,
 }
@@ -211,8 +213,10 @@ impl ScalarLongFunctionPlan {
             select,
             #[cfg(all(
                 feature = "jit-prototype",
-                target_arch = "aarch64",
-                target_os = "macos"
+                any(
+                    all(target_arch = "aarch64", target_os = "macos"),
+                    all(target_arch = "x86_64", target_os = "linux")
+                )
             ))]
             native_jit: crate::jit::ScalarLongJitCache::new(),
         }
@@ -220,8 +224,10 @@ impl ScalarLongFunctionPlan {
 
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     #[inline(always)]
     pub fn native_jit(&self) -> &crate::jit::ScalarLongJitCache {
