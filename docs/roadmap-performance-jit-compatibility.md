@@ -3131,6 +3131,32 @@ fifteen JIT integration tests, the four-test corpus and
 `cargo check --all-features`. The next x86 optimization boundary is structured
 basic-block placement/alignment.
 
+The guarded simple-accumulate parity checkpoint removes a front-end length
+heuristic that admitted `$sum += $i` and invariant-addend terms only when the
+loop body ended immediately after the assignment. Detection is now structural:
+the same accumulate region may end in a strict comparison whose unlikely edge
+contains arbitrary canonical PHP. A target-neutral straight kernel executes
+the term, checked sum and trace guard on both ARM64 and x86-64. Guard failure
+publishes every completed value and resumes the original comparison before the
+cold block; the older ARM-only accumulator explicitly rejects guarded plans.
+
+Complete-range analysis now proves `Equal`, `NotEqual`, `LessThan` and
+`LessThanOrEqual` guards when operand intervals force the expected edge. A
+proven cold guard therefore retains loop-carried values and safepoint polling
+inside one native call; an overlapping interval keeps the checked exact
+side-exit. ARM's accumulate cache now exposes the same straight and
+range-proven program contract already used by x86 instead of labeling every
+general program as a call kernel.
+
+The permanent 10M guarded-accumulate benchmark preserves
+`10000000:49999995000000`. Across 101 alternating native-CPU `max-perf` runs,
+ARM64 falls from 8.278375 to 4.529959 ms (-45.28 percent) and x86-64 from
+8.989553 to 5.276967 ms (-41.30 percent). An additional same-host ARM64 matrix
+records 5.289583 ms for RPHP, 51.840375 ms for PHP 8.5.9 tracing JIT and
+80.354250 ms for PHP without JIT. ARM64 passes 152 library tests, 86 JIT
+integration tests and the four-test corpus; x86-64 passes 170 library tests,
+18 JIT integration tests, the corpus and `cargo check --all-features`.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

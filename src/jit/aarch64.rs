@@ -1136,7 +1136,7 @@ mod accumulate_range_proof_tests;
 /// Lazy native cache attached to one already-hot quick-loop plan. Cloning a
 /// compiler plan intentionally starts with an empty cache; executable mappings
 /// and profile counters are runtime state rather than compiler metadata.
-struct CachedQuickLongCallLoop {
+struct CachedQuickLongStraightLoop {
     target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
     target_count: u8,
     program: CompiledQuickLongStraightLoop,
@@ -1146,7 +1146,9 @@ pub struct QuickLongAccumulateJitCache {
     compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
     range_proven_compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
     range_proven_polling_compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
-    call_compiled: OnceCell<Option<CachedQuickLongCallLoop>>,
+    straight_compiled: OnceCell<Option<CachedQuickLongStraightLoop>>,
+    straight_range_proven_polling_compiled:
+        OnceCell<Option<CompiledQuickLongStraightLoop>>,
     native_entries: Cell<u64>,
     native_calls: Cell<u64>,
     native_chunks: Cell<u64>,
@@ -1161,7 +1163,8 @@ impl QuickLongAccumulateJitCache {
             compiled: OnceCell::new(),
             range_proven_compiled: OnceCell::new(),
             range_proven_polling_compiled: OnceCell::new(),
-            call_compiled: OnceCell::new(),
+            straight_compiled: OnceCell::new(),
+            straight_range_proven_polling_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
             native_calls: Cell::new(0),
             native_chunks: Cell::new(0),
@@ -1304,18 +1307,18 @@ impl QuickLongAccumulateJitCache {
         Some(outcome)
     }
 
-    pub fn prepare_call_program(
+    fn prepare_straight_program_with_targets(
         &self,
         target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
         target_count: u8,
         config: NativeStraightLongLoopConfig,
     ) -> Option<&CompiledQuickLongStraightLoop> {
         let cached = self
-            .call_compiled
+            .straight_compiled
             .get_or_init(|| {
                 CompiledQuickLongStraightLoop::compile(config)
                     .ok()
-                    .map(|program| CachedQuickLongCallLoop {
+                    .map(|program| CachedQuickLongStraightLoop {
                         target_identities,
                         target_count,
                         program,
@@ -1329,6 +1332,114 @@ impl QuickLongAccumulateJitCache {
             return None;
         }
         Some(&cached.program)
+    }
+
+    pub fn prepare_straight_program(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+    ) -> Option<&CompiledQuickLongStraightLoop> {
+        self.prepare_straight_program_with_targets(
+            [0; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+            0,
+            *config,
+        )
+    }
+
+    pub(crate) fn prove_straight_remaining_range(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+        slots: &[i64; 64],
+    ) -> Option<StraightLongRangeProof> {
+        self.range_proof_evaluations
+            .set(self.range_proof_evaluations.get().saturating_add(1));
+        straight_long_remaining_range_proof(config, slots)
+    }
+
+    pub(crate) fn prepare_range_proven_straight_program(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+        safepoint_interval: u16,
+        publication_mask: u64,
+        carried_mask: u64,
+    ) -> Option<&CompiledQuickLongStraightLoop> {
+        let program = self
+            .straight_range_proven_polling_compiled
+            .get_or_init(|| {
+                CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+                    *config,
+                    safepoint_interval,
+                    publication_mask,
+                    carried_mask,
+                )
+                .ok()
+            })
+            .as_ref()?;
+        (program.config() == *config
+            && program.publication_mask() == publication_mask
+            && program.carried_mask() == carried_mask)
+        .then_some(program)
+    }
+
+    pub(crate) fn dispatch_prepared_proven_straight_remaining(
+        &self,
+        program: &CompiledQuickLongStraightLoop,
+        config: &NativeStraightLongLoopConfig,
+        slots: &mut [i64; 64],
+        interrupt_flag: *const bool,
+        safepoint_interval: u16,
+    ) -> Option<Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError>> {
+        let induction = slots[config.induction_slot as usize];
+        let bound = native_long_operand_value(slots, config.bound);
+        if induction >= bound {
+            return None;
+        }
+        let distance = (bound as u64).wrapping_sub(induction as u64);
+        let first_iterations = distance.min(u64::from(safepoint_interval));
+        let first_chunk_end = (induction as u64).wrapping_add(first_iterations) as i64;
+
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
+        let outcome = program.call_range_proven_polling(
+            slots,
+            bound,
+            interrupt_flag,
+            first_chunk_end,
+        );
+        let completed_iterations = (slots[config.induction_slot as usize] as u64)
+            .wrapping_sub(induction as u64);
+        let completed_chunks = completed_iterations
+            .div_ceil(u64::from(safepoint_interval))
+            .max(1);
+        self.native_chunks.set(
+            self.native_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        self.range_proven_chunks.set(
+            self.range_proven_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        if matches!(
+            outcome,
+            Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit
+                    | NativeStraightLongLoopOutcome::IncrementOverflow,
+                ..
+            }) | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        Some(outcome)
+    }
+
+    pub fn prepare_call_program(
+        &self,
+        target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
+        target_count: u8,
+        config: NativeStraightLongLoopConfig,
+    ) -> Option<&CompiledQuickLongStraightLoop> {
+        self.prepare_straight_program_with_targets(target_identities, target_count, config)
     }
 
     pub fn dispatch_prepared_call_chunk(
@@ -1355,6 +1466,15 @@ impl QuickLongAccumulateJitCache {
         outcome
     }
 
+    pub fn dispatch_prepared_straight_chunk(
+        &self,
+        program: &CompiledQuickLongStraightLoop,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
+        self.dispatch_prepared_call_chunk(program, slots, iteration_budget)
+    }
+
     pub fn record_region_entry(&self) {
         self.native_entries
             .set(self.native_entries.get().saturating_add(1));
@@ -1364,11 +1484,21 @@ impl QuickLongAccumulateJitCache {
         matches!(self.compiled.get(), Some(Some(_)))
             || matches!(self.range_proven_compiled.get(), Some(Some(_)))
             || matches!(self.range_proven_polling_compiled.get(), Some(Some(_)))
-            || self.is_call_compiled()
+            || self.is_straight_compiled()
+    }
+
+    pub fn is_straight_compiled(&self) -> bool {
+        matches!(self.straight_compiled.get(), Some(Some(_)))
+            || matches!(
+                self.straight_range_proven_polling_compiled.get(),
+                Some(Some(_))
+            )
     }
 
     pub fn is_call_compiled(&self) -> bool {
-        matches!(self.call_compiled.get(), Some(Some(_)))
+        self.straight_compiled
+            .get()
+            .is_some_and(|cached| cached.as_ref().is_some_and(|cached| cached.target_count != 0))
     }
 
     pub fn native_entries(&self) -> u64 {
@@ -1413,6 +1543,7 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
         formatter
             .debug_struct("QuickLongAccumulateJitCache")
             .field("compiled", &self.is_compiled())
+            .field("straight_compiled", &self.is_straight_compiled())
             .field("call_compiled", &self.is_call_compiled())
             .field("native_entries", &self.native_entries())
             .field("native_calls", &self.native_calls())
@@ -2277,6 +2408,7 @@ impl CompiledQuickLongStraightLoop {
                             | NativeStraightLongOperation::Move { .. }
                             | NativeStraightLongOperation::Binary { .. }
                             | NativeStraightLongOperation::BinaryAssign { .. }
+                            | NativeStraightLongOperation::Guard { .. }
                     )
                 });
         // Forward branches invalidate the linear temporary cache because an
@@ -2298,6 +2430,7 @@ impl CompiledQuickLongStraightLoop {
                             | NativeStraightLongOperation::Move { .. }
                             | NativeStraightLongOperation::Binary { .. }
                             | NativeStraightLongOperation::BinaryAssign { .. }
+                            | NativeStraightLongOperation::Guard { .. }
                             | NativeStraightLongOperation::BranchUnless { .. }
                             | NativeStraightLongOperation::Jump { .. }
                     )

@@ -1,6 +1,7 @@
 use super::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
-    QuickLongOperand, ScalarLongOpKind, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    QuickLongOperand, ScalarLongConditionKind, ScalarLongOpKind,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     straight_long_operation_input_mask,
 };
 
@@ -241,12 +242,37 @@ pub(crate) fn straight_long_remaining_range_proof(
                 merge_range_state(&mut states[target], state);
                 continue;
             }
+            NativeStraightLongOperation::Guard {
+                kind,
+                lhs,
+                rhs,
+                expected,
+            } => {
+                let lhs = condition_operand_range(
+                    lhs,
+                    &state,
+                    config.induction_slot,
+                    induction_range,
+                    output_mask,
+                    recurrence.carried_mask,
+                )?;
+                let rhs = condition_operand_range(
+                    rhs,
+                    &state,
+                    config.induction_slot,
+                    induction_range,
+                    output_mask,
+                    recurrence.carried_mask,
+                )?;
+                if interval_condition(kind, lhs, rhs)? != expected {
+                    return None;
+                }
+            }
             NativeStraightLongOperation::Unused
             | NativeStraightLongOperation::StringToken { .. }
             | NativeStraightLongOperation::StringLength { .. }
             | NativeStraightLongOperation::HashLoad { .. }
-            | NativeStraightLongOperation::HashStore { .. }
-            | NativeStraightLongOperation::Guard { .. } => return None,
+            | NativeStraightLongOperation::HashStore { .. } => return None,
         }
         merge_range_state(&mut states[operation_index + 1], state);
     }
@@ -588,6 +614,78 @@ fn condition_operand_is_available(
     }
 }
 
+fn condition_operand_range(
+    operand: NativeStraightLongConditionOperand,
+    state: &StraightRangeState,
+    induction_slot: u16,
+    induction_range: LongInterval,
+    output_mask: u64,
+    carried_mask: u64,
+) -> Option<LongInterval> {
+    let range = |operand| {
+        operand_range(
+            operand,
+            &state.ranges,
+            induction_slot,
+            induction_range,
+            output_mask,
+            state.definitely_written,
+            carried_mask,
+        )
+    };
+    match operand {
+        NativeStraightLongConditionOperand::Source(source) => range(source),
+        NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            let lhs = range(lhs)?;
+            let rhs = range(rhs)?;
+            (lhs.minimum == lhs.maximum && rhs.minimum == rhs.maximum).then(|| {
+                LongInterval::exact((lhs.minimum as i64) & (rhs.minimum as i64))
+            })
+        }
+    }
+}
+
+fn interval_condition(
+    kind: ScalarLongConditionKind,
+    lhs: LongInterval,
+    rhs: LongInterval,
+) -> Option<bool> {
+    match kind {
+        ScalarLongConditionKind::Equal | ScalarLongConditionKind::NotEqual => {
+            let equal = if lhs.maximum < rhs.minimum || rhs.maximum < lhs.minimum {
+                false
+            } else if lhs.minimum == lhs.maximum && lhs == rhs {
+                true
+            } else {
+                return None;
+            };
+            Some(if kind == ScalarLongConditionKind::Equal {
+                equal
+            } else {
+                !equal
+            })
+        }
+        ScalarLongConditionKind::LessThan => {
+            if lhs.maximum < rhs.minimum {
+                Some(true)
+            } else if lhs.minimum >= rhs.maximum {
+                Some(false)
+            } else {
+                None
+            }
+        }
+        ScalarLongConditionKind::LessThanOrEqual => {
+            if lhs.maximum <= rhs.minimum {
+                Some(true)
+            } else if lhs.minimum > rhs.maximum {
+                Some(false)
+            } else {
+                None
+            }
+        }
+    }
+}
+
 fn operand_value(slots: &[i64; 64], operand: QuickLongOperand) -> i64 {
     match operand {
         QuickLongOperand::Slot(slot) => slots[slot as usize],
@@ -854,6 +952,41 @@ mod tests {
             operation_count: operations.len() as u8,
             post_result: None,
         }
+    }
+
+    #[test]
+    fn proves_only_guards_whose_expected_edge_covers_the_complete_range() {
+        let guarded = |needle| {
+            config(
+                &[
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(1),
+                        rhs: QuickLongOperand::Slot(0),
+                        result: 2,
+                        destination: 1,
+                    },
+                    NativeStraightLongOperation::Guard {
+                        kind: ScalarLongConditionKind::Equal,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(0),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Const(needle),
+                        ),
+                        expected: false,
+                    },
+                ],
+                100,
+            )
+        };
+        let slots = [0_i64; 64];
+
+        let proof = straight_long_remaining_range_proof(&guarded(-1), &slots)
+            .expect("disjoint guard should be valid over the complete range");
+        assert_eq!(proof.carried_mask, 1u64 << 1);
+        assert!(straight_long_remaining_range_proof(&guarded(100), &slots).is_some());
+        assert!(straight_long_remaining_range_proof(&guarded(73), &slots).is_none());
     }
 
     #[test]

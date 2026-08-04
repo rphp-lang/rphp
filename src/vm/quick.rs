@@ -1922,13 +1922,24 @@ pub fn detect_long_accumulate_loop(
     };
     let (accumulator_cv, term, sum_tmp, sum_ip, assign_ip) = if let Some(shape) = scalar_call_shape {
         shape
-    } else if backedge_ip == header_ip + 5 {
-        if first_body.opcode != OpCode::Add
-            || first_body.op1_type != OpType::Cv
-            || first_body.op2_type != OpType::Cv
-            || first_body.op2 != induction_cv
-            || first_body.result_type != OpType::Tmp
-        {
+    } else if first_body.opcode == OpCode::Add
+        && first_body.op1_type == OpType::Cv
+        && first_body.op2_type == OpType::Cv
+        && first_body.op2 == induction_cv
+        && first_body.result_type == OpType::Tmp
+        && op_array
+            .instructions
+            .get(header_ip + 3)
+            .is_some_and(|assign| {
+                assign.opcode == OpCode::AssignCv
+                    && assign.op1_type == OpType::Cv
+                    && assign.op1 == first_body.op1
+                    && assign.op2_type == OpType::Tmp
+                    && assign.op2 == first_body.result
+                    && assign.result_type == OpType::Unused
+            })
+    {
+        if backedge_ip < header_ip + 5 {
             return None;
         }
         (
@@ -1938,15 +1949,20 @@ pub fn detect_long_accumulate_loop(
             header_ip + 2,
             header_ip + 3,
         )
-    } else if backedge_ip == header_ip + 6 {
+    } else if backedge_ip >= header_ip + 6
+        && op_array
+            .instructions
+            .get(header_ip + 3)
+            .is_some_and(|sum| {
+                sum.opcode == OpCode::Add_CvTmp
+                    && sum.op1_type == OpType::Cv
+                    && sum.op2_type == OpType::Tmp
+                    && sum.op2 == first_body.result
+                    && sum.result_type == OpType::Tmp
+            })
+    {
         let sum = op_array.instructions[header_ip + 3];
-        if first_body.result_type != OpType::Tmp
-            || sum.opcode != OpCode::Add_CvTmp
-            || sum.op1_type != OpType::Cv
-            || sum.op2_type != OpType::Tmp
-            || sum.op2 != first_body.result
-            || sum.result_type != OpType::Tmp
-        {
+        if first_body.result_type != OpType::Tmp {
             return None;
         }
         let term = match (first_body.opcode, first_body.op1_type, first_body.op2_type) {

@@ -452,6 +452,7 @@ fn supports_linear_scalar_residency(config: &NativeStraightLongLoopConfig) -> bo
                     | NativeStraightLongOperation::Move { .. }
                     | NativeStraightLongOperation::Binary { .. }
                     | NativeStraightLongOperation::BinaryAssign { .. }
+                    | NativeStraightLongOperation::Guard { .. }
             )
         })
 }
@@ -467,6 +468,7 @@ fn supports_structured_scalar_residency(config: &NativeStraightLongLoopConfig) -
                     | NativeStraightLongOperation::Move { .. }
                     | NativeStraightLongOperation::Binary { .. }
                     | NativeStraightLongOperation::BinaryAssign { .. }
+                    | NativeStraightLongOperation::Guard { .. }
                     | NativeStraightLongOperation::BranchUnless { .. }
                     | NativeStraightLongOperation::Jump { .. }
             )

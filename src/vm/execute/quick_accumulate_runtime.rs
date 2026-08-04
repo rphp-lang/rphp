@@ -212,6 +212,33 @@ unsafe fn run_quick_long_accumulate_loop(
             all(target_arch = "x86_64", target_os = "linux")
         )
     ))]
+    if plan.tail_guard.is_some()
+        && let Some(outcome) = run_native_guarded_long_accumulate_loop(
+            eg,
+            frame,
+            op_array,
+            plan,
+            induction_ptr,
+            accumulator_ptr,
+            condition_ptr,
+            tail_condition_ptr,
+            term_ptr,
+            sum_ptr,
+            increment_ptr,
+            induction,
+            accumulator,
+            bound,
+        )?
+    {
+        return Ok(outcome);
+    }
+    #[cfg(all(
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
     if let Some(outcome) = run_native_long_accumulate_loop(
         eg,
         frame,
