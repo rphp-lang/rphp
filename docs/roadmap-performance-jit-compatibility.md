@@ -2472,6 +2472,36 @@ dependency next to an independent shifted multiply. The checkpoint passes 144
 library tests, 81 ARM64/JIT integration tests, all four application corpus
 tests, and `cargo check --all-features`.
 
+Invariant scalar operand checkpoint (2026-08-04): the range-proven straight
+loop now identifies body inputs that are neither the induction variable nor
+written anywhere in the native body. It counts their static uses, selects the
+most frequently read slot with deterministic tie-breaking, loads it once into
+`x10` before the native backedge target and resolves every later operand use
+directly to that register. The checked lowering is unchanged because its
+overflow and division guards still own `x10`.
+
+The invariant register is deliberately outside the fixed publication pool.
+Consequently the existing three-register capacity for carried values and
+structured merge results remains unchanged, the invariant is never published
+at an exit, and per-operation temporary liveness cannot evict it. A direct
+generated-code test requires exactly one `LDR x10` before the loop, rejects the
+former repeated `x6`/`x7` slot loads, executes both structured paths, verifies
+the exact published result and proves that shadow TMP slots remain untouched.
+
+Longer native-CPU `max-perf` A/B runs against `51fbd02` show the intended
+shape rather than a universal benchmark win. In 301 order-rotated pairs, the
+structured branch expression moves from 4.329 ms to 4.166 ms (paired median
+-3.92 percent) and conditional composed recurrence from 4.080 ms to 3.979 ms
+(-2.32 percent). Linear composed recurrence is neutral at 2.758 versus 2.761
+ms. A separate 501-pair run of the smallest conditional recurrence records
+3.675 versus 3.682 ms (+1.61 percent). A 16-byte loop-alignment experiment was
+neutral relative to the invariant build (+0.05 percent) and was rejected.
+This remaining small-body holdout should be handled by a general native
+register-pressure/profitability model, not a benchmark-name exception.
+
+The checkpoint passes 145 library tests, 81 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

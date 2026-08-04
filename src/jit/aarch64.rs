@@ -2221,10 +2221,10 @@ mod conditional_range_proof_tests;
 #[path = "aarch64_straight_liveness.rs"]
 mod straight_liveness;
 use straight_liveness::{
-    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
-    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
-    straight_long_operation_input_mask, straight_long_structured_block_starts,
-    straight_long_structured_definitely_written,
+    straight_long_best_invariant_slot_mask, straight_long_carried_dependency_operations,
+    straight_long_linear_final_publication_masks, straight_long_linear_live_after,
+    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
+    straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
 
@@ -2634,11 +2634,21 @@ impl CompiledQuickLongStraightLoop {
             };
         let carried_dependency_operations =
             straight_long_carried_dependency_operations(&config, carried_mask);
+        let invariant_slot_mask = if keeps_linear_scalar_values_resident
+            || keeps_structured_scalar_temporaries_resident
+        {
+            straight_long_best_invariant_slot_mask(&config)
+        } else {
+            0
+        };
+        const PUBLICATION_RESIDENT_COUNT: usize = 4;
+        const INVARIANT_RESIDENT_INDEX: usize = 4;
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
             (0u64, one),
             (0u64, failed_operation),
+            (invariant_slot_mask, guard),
         ];
         let final_publication_masks = if keeps_carried_values_resident {
             straight_long_linear_final_publication_masks(&config, publication_mask)
@@ -2650,10 +2660,11 @@ impl CompiledQuickLongStraightLoop {
         let mut deferred_exit_values = [(0u64, result); 4];
         let mut deferred_exit_value_count = 0usize;
         let mut deferred_exit_publication_mask = 0u64;
-        let mut reserved_resident_registers = [false; 4];
-        let mut initial_carried_masks = [0u64; 4];
-        let mut structured_definition_operations_by_register = [0u64; 4];
-        let mut structured_publication_masks_by_register = [0u64; 4];
+        let mut reserved_resident_registers = [false; 5];
+        reserved_resident_registers[INVARIANT_RESIDENT_INDEX] = invariant_slot_mask != 0;
+        let mut initial_carried_masks = [0u64; 5];
+        let mut structured_definition_operations_by_register = [0u64; 5];
+        let mut structured_publication_masks_by_register = [0u64; 5];
         let mut next_publication_cache = 1usize;
         if keeps_carried_values_resident {
             for (index, slot_mask) in final_publication_masks
@@ -2667,7 +2678,7 @@ impl CompiledQuickLongStraightLoop {
                     continue;
                 }
                 if operation_carried_mask.count_ones() != 1
-                    || next_publication_cache >= resident_values.len()
+                    || next_publication_cache >= PUBLICATION_RESIDENT_COUNT
                 {
                     return Err(QuickLongAccumulateJitError::InvalidProgram(
                         "straight-loop carried state cannot be assigned to a fixed register",
@@ -2723,7 +2734,7 @@ impl CompiledQuickLongStraightLoop {
                 });
                 let resident_index = if let Some(resident_index) = existing_register {
                     resident_index
-                } else if next_publication_cache < resident_values.len() {
+                } else if next_publication_cache < PUBLICATION_RESIDENT_COUNT {
                     let resident_index = next_publication_cache;
                     next_publication_cache += 1;
                     structured_definition_operations_by_register[resident_index] =
@@ -2764,7 +2775,7 @@ impl CompiledQuickLongStraightLoop {
                 }
                 let resident_index = if index + 1 == config.operation_count as usize {
                     Some(0)
-                } else if next_publication_cache < resident_values.len() {
+                } else if next_publication_cache < PUBLICATION_RESIDENT_COUNT {
                     let index = next_publication_cache;
                     next_publication_cache += 1;
                     Some(index)
@@ -2782,13 +2793,13 @@ impl CompiledQuickLongStraightLoop {
                 reserved_resident_registers[resident_index] = resident_index != 0;
             }
         }
-        let mut active_exit_masks = [0u64; 4];
+        let mut active_exit_masks = [0u64; 5];
         if carried_mask != 0 && !keeps_carried_values_resident {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
                 "straight-loop carried state requires range-proven scalar lowering",
             ));
         }
-        for resident_index in 1..resident_values.len() {
+        for resident_index in 1..PUBLICATION_RESIDENT_COUNT {
             let carried_slots = initial_carried_masks[resident_index];
             if carried_slots == 0 {
                 continue;
@@ -2809,7 +2820,14 @@ impl CompiledQuickLongStraightLoop {
                 })
                 .unwrap_or(0);
         }
-        if polling_interval.is_some() && carried_mask != 0 {
+        if invariant_slot_mask != 0 {
+            assembler.load_u64(
+                resident_values[INVARIANT_RESIDENT_INDEX].1,
+                Arm64Register::X0,
+                long_slot_offset(invariant_slot_mask.trailing_zeros() as u16),
+            );
+        }
+        if polling_interval.is_some() && (carried_mask != 0 || invariant_slot_mask != 0) {
             loop_word = assembler.word_count();
         }
         for (index, operation) in config
@@ -2829,6 +2847,10 @@ impl CompiledQuickLongStraightLoop {
                 for (resident_index, (slot_mask, _)) in
                     resident_values.iter_mut().enumerate()
                 {
+                    if resident_index == INVARIANT_RESIDENT_INDEX {
+                        *slot_mask = invariant_slot_mask;
+                        continue;
+                    }
                     *slot_mask &= live_before | active_exit_masks[resident_index];
                 }
 
@@ -2836,7 +2858,7 @@ impl CompiledQuickLongStraightLoop {
                     & linear_live_after[index]
                     & !operation.output_mask();
                 if latest_survives_output != 0
-                    && let Some(cache_index) = (1..resident_values.len()).find(|&index| {
+                    && let Some(cache_index) = (1..PUBLICATION_RESIDENT_COUNT).find(|&index| {
                         !reserved_resident_registers[index]
                             && resident_values[index].0 == 0
                     })
@@ -2850,6 +2872,10 @@ impl CompiledQuickLongStraightLoop {
                     resident_values[0].0 = 0;
                 }
                 for resident_index in 1..resident_values.len() {
+                    if resident_index == INVARIANT_RESIDENT_INDEX {
+                        resident_values[resident_index].0 = invariant_slot_mask;
+                        continue;
+                    }
                     let carried_slots = initial_carried_masks[resident_index];
                     let publication_slots =
                         structured_publication_masks_by_register[resident_index];
@@ -2882,11 +2908,12 @@ impl CompiledQuickLongStraightLoop {
             let structured_direct_result_register =
                 keeps_structured_scalar_temporaries_resident.then(|| {
                     let definition_bit = 1u64 << index;
-                    let resident_index = (1..resident_values.len()).find(|&resident_index| {
-                        structured_definition_operations_by_register[resident_index]
-                            & definition_bit
-                            != 0
-                    })?;
+                    let resident_index =
+                        (1..PUBLICATION_RESIDENT_COUNT).find(|&resident_index| {
+                            structured_definition_operations_by_register[resident_index]
+                                & definition_bit
+                                != 0
+                        })?;
                     let untracked_outputs = operation.output_mask()
                         & !structured_publication_masks_by_register[resident_index];
                     let immediate_local_inputs = if index + 1 < config.operation_count as usize
@@ -3330,7 +3357,7 @@ impl CompiledQuickLongStraightLoop {
                 } else {
                     0
                 };
-                for resident_index in 1..resident_values.len() {
+                for resident_index in 1..PUBLICATION_RESIDENT_COUNT {
                     if structured_definition_operations_by_register[resident_index]
                         & (1u64 << index)
                         != 0
