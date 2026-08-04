@@ -1498,6 +1498,11 @@ fn emit_scalar_straight_loop(
                 rhs: condition_rhs,
                 false_target,
             } => {
+                if false_target as usize == operation_index + 1 {
+                    // Both outcomes enter the same physical successor. The
+                    // predicate has no materialized PHP result in this IR.
+                    continue;
+                }
                 emit_linear_condition_compare(
                     &mut assembler,
                     condition_lhs,
@@ -1516,6 +1521,9 @@ fn emit_scalar_straight_loop(
                 continue;
             }
             NativeStraightLongOperation::Jump { target } => {
+                if target as usize == operation_index + 1 {
+                    continue;
+                }
                 structured_jumps.push((assembler.jump_rel32(), target));
                 continue;
             }
@@ -1751,13 +1759,51 @@ fn emit_scalar_straight_loop(
     assembler.clear_eax();
     emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
 
-    for (side_exit_jump, operation_index) in operation_side_exit_jumps {
+    operation_side_exit_jumps.sort_unstable_by_key(|(_, operation)| *operation);
+    let unique_side_exit_count = operation_side_exit_jumps
+        .iter()
+        .map(|(_, operation)| *operation)
+        .fold((0usize, None), |(count, previous), operation| {
+            (
+                count + usize::from(previous != Some(operation)),
+                Some(operation),
+            )
+        })
+        .0;
+    if unique_side_exit_count == 1 {
         let side_exit = assembler.bytes.len();
-        assembler.patch_rel32(side_exit_jump, side_exit);
+        let operation_index = operation_side_exit_jumps[0].1;
+        for (jump, operation) in operation_side_exit_jumps {
+            debug_assert_eq!(operation, operation_index);
+            assembler.patch_rel32(jump, side_exit);
+        }
         assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
         emit_x86_resident_publications(&mut assembler, &deferred_publication_values);
         let status = X86_STRAIGHT_OPERATION_SIDE_EXIT | (u32::from(operation_index) << 8);
         assembler.move_immediate32_eax(status);
+        emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
+    } else if unique_side_exit_count > 1 {
+        let mut common_epilogue_jumps = Vec::with_capacity(unique_side_exit_count);
+        let mut cursor = 0;
+        while cursor < operation_side_exit_jumps.len() {
+            let operation_index = operation_side_exit_jumps[cursor].1;
+            let selector = assembler.bytes.len();
+            while cursor < operation_side_exit_jumps.len()
+                && operation_side_exit_jumps[cursor].1 == operation_index
+            {
+                assembler.patch_rel32(operation_side_exit_jumps[cursor].0, selector);
+                cursor += 1;
+            }
+            let status = X86_STRAIGHT_OPERATION_SIDE_EXIT | (u32::from(operation_index) << 8);
+            assembler.move_immediate32_eax(status);
+            common_epilogue_jumps.push(assembler.jump_rel32());
+        }
+        let common_epilogue = assembler.bytes.len();
+        for jump in common_epilogue_jumps {
+            assembler.patch_rel32(jump, common_epilogue);
+        }
+        assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
+        emit_x86_resident_publications(&mut assembler, &deferred_publication_values);
         emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
     }
 
@@ -4591,6 +4637,41 @@ mod tests {
     }
 
     #[test]
+    fn structured_lowering_elides_control_flow_to_the_immediate_successor() {
+        let mut config = composed_add_recurrence(4);
+        config.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(-1)),
+            false_target: 1,
+        };
+        config.operations[1] = NativeStraightLongOperation::Jump { target: 2 };
+        config.operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+            destination: 1,
+        };
+        config.operation_count = 3;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[4, 6, 6]);
+
+        let fast_code = &program.code()[..program.checked_entry_offset];
+        assert!(
+            !fast_code.windows(2).any(|window| window == [0x0f, 0x85]),
+            "a predicate whose false edge is fallthrough should not be emitted"
+        );
+        assert!(
+            !fast_code.contains(&0xe9),
+            "an unconditional jump to fallthrough should not be emitted"
+        );
+    }
+
+    #[test]
     fn structured_bitwise_condition_executes_in_private_shadow() {
         let mut config = structured_recurrence(4);
         config.operations[0] = NativeStraightLongOperation::BranchUnless {
@@ -4695,6 +4776,64 @@ mod tests {
         );
         assert_eq!(slots[0], 0);
         assert_eq!(slots[4], 91);
+    }
+
+    #[test]
+    fn checked_operations_share_cold_side_exit_publication() {
+        let mut config = composed_add_recurrence(1);
+        config.operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::IntDivide,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Slot(7),
+            result: 4,
+        };
+        config.operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(1),
+            result: 2,
+            destination: 1,
+        };
+        config.operation_count = 2;
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+
+        let mut divide_by_zero = [0_i64; 64];
+        divide_by_zero[7] = 0;
+        assert_eq!(
+            program.call(&mut divide_by_zero).unwrap(),
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(0),
+            }
+        );
+        let mut sum_overflow = [0_i64; 64];
+        sum_overflow[1] = i64::MAX;
+        sum_overflow[7] = 1;
+        assert_eq!(
+            program.call(&mut sum_overflow).unwrap(),
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(1),
+            }
+        );
+
+        let checked_code =
+            &program.code()[program.checked_entry_offset..program.chunk_entry_offset];
+        for selector in [
+            [0xb8, 0x06, 0x00, 0x00, 0x00, 0xe9],
+            [0xb8, 0x06, 0x01, 0x00, 0x00, 0xe9],
+        ]
+        {
+            assert_eq!(
+                checked_code
+                    .windows(selector.len())
+                    .filter(|window| *window == selector)
+                    .count(),
+                1,
+                "each failed operation should select one shared cold epilogue"
+            );
+        }
     }
 
     #[test]

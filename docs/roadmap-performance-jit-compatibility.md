@@ -3179,6 +3179,37 @@ corpora remain within +0.01, -0.17 and -0.20 percent. x86-64 continues to pass
 hot jumps and coalesce cold side-exit stubs without changing this loop-header
 boundary.
 
+The x86 structured-control-flow compaction checkpoint completes that slice.
+A conditional branch is omitted when its false edge is already the immediate
+physical successor, because the true edge falls through to the same operation
+and the predicate has no materialized PHP value. An unconditional jump to the
+immediately following operation is omitted for the same reason. These are CFG
+identities in the target-neutral operation stream rather than source-pattern
+or benchmark rules.
+
+Checked arithmetic exits are now grouped by failed operation. Multiple native
+failure conditions belonging to one operation, such as the zero-divisor and
+signed-division-overflow checks, target one status stub. Regions with multiple
+checked operations retain one small status selector per operation and share
+the induction publication, resident-value publication, register restoration
+and return epilogue. The exact failed-operation index is therefore preserved
+while cold machine code is no longer duplicated. Execution tests cover both a
+divide-by-zero exit from operation zero and an overflow exit from operation
+one; generated-code tests require one selector per operation and no emitted
+control transfer for the immediate-successor cases.
+
+Across 201 order-alternated, fixed-CPU `max-perf` A/B pairs against `09999df`,
+branch loop, branch expression, modulo branch, carried condition and order
+corpus improve between 0.03 and 0.12 percent; conditional composed recurrence
+is within a 0.03 percent regression. Ledger improves 0.29 percent and the
+routing holdout improves 1.47 percent. This checkpoint is retained primarily
+for its smaller hot/cold footprint and canonical control flow rather than a
+claimed broad timing win. x86-64 passes 172 library tests, 18 JIT integration
+tests, the four-test corpus and `cargo check --all-features`; ARM64 passes 152
+library tests, the corpus and `cargo check --all-features`. The next placement
+candidate is measured short-branch relaxation and physical ordering of small
+structured diamonds, without moving the proven 64-byte loop-header boundary.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
