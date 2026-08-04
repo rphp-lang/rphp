@@ -2273,6 +2273,32 @@ controls are both flat at +0.02 percent. The checkpoint passes 136 library
 tests, 81 ARM64/JIT integration tests, all four application corpus tests, and
 `cargo check --all-features`.
 
+Branch-local temporary residency checkpoint (2026-08-04): structured
+range-proven scalar bodies now retain the latest operation result in `x8`
+inside one basic block. Fallthroughs after a conditional branch, jump
+successors and every explicit branch target start a new block and clear only
+the compile-time `x8` mapping; fixed carried registers remain valid on every
+path. This admits immediate expression chains without claiming that a
+temporary is live across a CFG merge.
+
+Shadow publication uses an equally bounded rule. A non-published,
+non-carried output store is omitted only when that version is dead or every
+read before its next definition occurs in the immediately following operation
+inside the same block. A consumer at a branch target or any later consumer
+forces the store to remain. Direct generated-code tests require the two
+resident `MOV` instructions, reject four former TMP stores and preserve all
+TMP sentinels across an interrupt and final completion.
+
+In 101 order-rotated `max-perf` runs against the dominated-delta checkpoint,
+the conditional composed recurrence falls from 6.034 ms to 5.247 ms (paired
+median -12.78 percent). PHP tracing JIT records 38.393 ms, making RPHP 7.32x
+faster. The simple carried-condition recurrence improves from 5.209 ms to
+4.294 ms (paired median -17.79 percent, 6.79x faster than PHP tracing JIT).
+The linear composed recurrence is flat at +0.00 percent and the structured
+non-recurrence expression control at +0.24 percent. The checkpoint passes 138
+library tests, 81 ARM64/JIT integration tests, all four application corpus
+tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

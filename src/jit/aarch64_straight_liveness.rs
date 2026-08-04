@@ -46,6 +46,67 @@ pub(super) fn straight_long_linear_final_publication_masks(
     final_masks
 }
 
+pub(super) fn straight_long_structured_block_starts(
+    config: &NativeStraightLongLoopConfig,
+) -> [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1] {
+    let mut starts = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    starts[0] = true;
+    let operation_count = config.operation_count as usize;
+    for (index, operation) in config.operations[..operation_count]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        match operation {
+            NativeStraightLongOperation::BranchUnless { false_target, .. } => {
+                starts[index + 1] = true;
+                starts[false_target as usize] = true;
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                starts[index + 1] = true;
+                starts[target as usize] = true;
+            }
+            _ => {}
+        }
+    }
+    starts
+}
+
+pub(super) fn straight_long_structured_local_resident_output_masks(
+    config: &NativeStraightLongLoopConfig,
+    publication_mask: u64,
+    carried_mask: u64,
+    block_starts: &[bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1],
+) -> [u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS] {
+    let operation_count = config.operation_count as usize;
+    let mut resident_masks = [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    for producer in 0..operation_count {
+        let mut candidates = config.operations[producer].shadow_output_mask()
+            & !publication_mask
+            & !carried_mask;
+        while candidates != 0 {
+            let slot_mask = 1u64 << candidates.trailing_zeros();
+            candidates &= candidates - 1;
+            let mut local = true;
+            for consumer in producer + 1..operation_count {
+                if straight_long_operation_input_mask(config.operations[consumer]) & slot_mask != 0
+                    && (consumer != producer + 1 || block_starts[consumer])
+                {
+                    local = false;
+                    break;
+                }
+                if config.operations[consumer].output_mask() & slot_mask != 0 {
+                    break;
+                }
+            }
+            if local {
+                resident_masks[producer] |= slot_mask;
+            }
+        }
+    }
+    resident_masks
+}
+
 pub(super) fn straight_long_operation_input_mask(operation: NativeStraightLongOperation) -> u64 {
     match operation {
         NativeStraightLongOperation::Unused
@@ -147,6 +208,85 @@ mod tests {
         assert_eq!(final_publications[0], 0);
         assert_eq!(final_publications[2], 1u64 << 2);
         assert_eq!(final_publications[3], 1u64 << 4);
+    }
+
+    #[test]
+    fn structured_local_residency_stops_at_branch_boundaries() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 6,
+        };
+        operations[2] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Const(7),
+            result: 7,
+        };
+        operations[3] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(7),
+            result: 2,
+            destination: 1,
+        };
+        operations[4] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 3,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(100),
+            operations,
+            operation_count: 5,
+            post_result: None,
+        };
+        let block_starts = straight_long_structured_block_starts(&config);
+        assert!(block_starts[0]);
+        assert!(block_starts[1]);
+        assert!(block_starts[4]);
+        assert!(!block_starts[2]);
+        assert!(!block_starts[3]);
+
+        let publication_mask = (1u64 << 1) | (1u64 << 3);
+        let resident_masks = straight_long_structured_local_resident_output_masks(
+            &config,
+            publication_mask,
+            publication_mask,
+            &block_starts,
+        );
+        assert_eq!(resident_masks[1], 1u64 << 6);
+        assert_eq!(resident_masks[2], 1u64 << 7);
+        assert_eq!(resident_masks[3], 1u64 << 2);
+        assert_eq!(resident_masks[4], 1u64 << 4);
+
+        let mut bypassed = config;
+        bypassed.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 2,
+        };
+        let bypassed_starts = straight_long_structured_block_starts(&bypassed);
+        let bypassed_masks = straight_long_structured_local_resident_output_masks(
+            &bypassed,
+            publication_mask,
+            publication_mask,
+            &bypassed_starts,
+        );
+        assert_eq!(bypassed_masks[1], 0);
     }
 
     #[test]
@@ -551,5 +691,106 @@ mod tests {
         assert_eq!(never_slots[1], 10);
         assert_eq!(never_slots[2], 777, "skipped result alias must remain untouched");
         assert_eq!(never_slots[3], 95);
+    }
+
+    #[test]
+    fn structured_local_temporary_chain_stays_in_x8_until_recurrence() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(45)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 6,
+        };
+        operations[2] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Const(7),
+            result: 7,
+        };
+        operations[3] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(7),
+            result: 2,
+            destination: 1,
+        };
+        operations[4] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 3,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10_000),
+            operations,
+            operation_count: 5,
+            post_result: None,
+        };
+        let publication_mask = (1u64 << 1) | (1u64 << 3);
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+            config,
+            1_024,
+            publication_mask,
+            publication_mask,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(words.contains(&0xaa08_03e6)); // MOV x6, x8
+        assert!(words.contains(&0xaa08_03e7)); // MOV x7, x8
+        for omitted_store in [
+            0xf900_0808, // STR x8, [x0, #16] result TMP 2
+            0xf900_1008, // STR x8, [x0, #32] result TMP 4
+            0xf900_1808, // STR x8, [x0, #48] expression TMP 6
+            0xf900_1c08, // STR x8, [x0, #56] expression TMP 7
+        ] {
+            assert!(!words.contains(&omitted_store));
+        }
+
+        let interrupt = AtomicBool::new(true);
+        let mut slots = [0i64; 64];
+        slots[1] = 10;
+        slots[2] = 222;
+        slots[3] = -5;
+        slots[4] = 444;
+        slots[6] = 666;
+        slots[7] = 777;
+        let interrupted = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 1_024)
+            .unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            super::super::NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(slots[0], 1_024);
+        assert_eq!(slots[1], 4_035);
+        assert_eq!(slots[3], 1_019);
+        assert_eq!((slots[2], slots[4], slots[6], slots[7]), (222, 444, 666, 777));
+
+        interrupt.store(false, Ordering::Relaxed);
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 2_048)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[0], 10_000);
+        assert_eq!(slots[1], 4_035);
+        assert_eq!(slots[3], 9_995);
+        assert_eq!((slots[2], slots[4], slots[6], slots[7]), (222, 444, 666, 777));
     }
 }

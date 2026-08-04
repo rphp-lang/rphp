@@ -2190,7 +2190,8 @@ mod conditional_range_proof_tests;
 mod straight_liveness;
 use straight_liveness::{
     straight_long_linear_final_publication_masks, straight_long_linear_live_after,
-    straight_long_linear_shadow_store_mask,
+    straight_long_linear_shadow_store_mask, straight_long_structured_block_starts,
+    straight_long_structured_local_resident_output_masks,
 };
 
 #[path = "aarch64_straight_range.rs"]
@@ -2574,6 +2575,22 @@ impl CompiledQuickLongStraightLoop {
         let mut structured_jumps = Vec::new();
         let mut operation_words = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
         let linear_live_after = straight_long_linear_live_after(&config);
+        let structured_block_starts = if keeps_structured_carried_values_resident {
+            straight_long_structured_block_starts(&config)
+        } else {
+            [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1]
+        };
+        let structured_local_resident_output_masks =
+            if keeps_structured_carried_values_resident {
+                straight_long_structured_local_resident_output_masks(
+                    &config,
+                    publication_mask,
+                    carried_mask,
+                    &structured_block_starts,
+                )
+            } else {
+                [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
+            };
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
@@ -2723,6 +2740,10 @@ impl CompiledQuickLongStraightLoop {
                     resident_values[cache_index].0 = resident_values[0].0;
                     resident_values[0].0 = 0;
                 }
+            } else if keeps_structured_carried_values_resident
+                && structured_block_starts[index]
+            {
+                resident_values[0].0 = 0;
             }
             let shadow_store_mask = if keeps_linear_scalar_values_resident {
                 straight_long_linear_shadow_store_mask(
@@ -2732,7 +2753,9 @@ impl CompiledQuickLongStraightLoop {
                     &linear_live_after,
                 ) & !deferred_exit_publication_mask
             } else if keeps_structured_carried_values_resident {
-                operation.shadow_output_mask() & !deferred_exit_publication_mask
+                operation.shadow_output_mask()
+                    & !deferred_exit_publication_mask
+                    & !structured_local_resident_output_masks[index]
             } else {
                 operation.shadow_output_mask()
             };
@@ -3119,6 +3142,7 @@ impl CompiledQuickLongStraightLoop {
                         final_publication_masks[index];
                 }
             } else if keeps_structured_carried_values_resident {
+                resident_values[0].0 = operation.output_mask();
                 let deferred_register = deferred_register_by_operation[index];
                 if deferred_register != usize::MAX {
                     debug_assert_ne!(deferred_register, 0);
