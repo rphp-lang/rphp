@@ -2604,6 +2604,18 @@ lowering is added. ARM64 passes 150 library tests, all 83 focused JIT tests and
 the four-test corpus; x86-64 passes 127 library tests and a warning-free
 `cargo check --all-features`.
 
+The first x86-64 straight-IR vertical slice consumes the shared
+`NativeStraightLongLoopConfig` and complete-range proof for a single additive
+`BinaryAssign` recurrence. The generated SysV code loads induction and carried
+state from the 64-Long shadow, runs the complete proven range, and publishes
+the induction, destination and distinct result slots exactly once. Empty
+ranges stay in Rust, while an unproven overflow case is rejected before native
+entry and leaves every slot unchanged. Physical x86-64 tests cover canonical
+and reversed operands, signed induction ranges, exact branch displacements and
+publication stores. x86-64 now passes 130 library tests. This slice is not yet
+wired into VM dispatch and deliberately has no safepoint polling; the next
+increment adds precise checked side exits before production integration.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
