@@ -2530,6 +2530,32 @@ percent). Four existing one-or-zero-invariant controls remain within -0.04 to
 The checkpoint passes 146 library tests, 82 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Commutative constant normalization checkpoint (2026-08-04): ARM64 lowering
+now canonicalizes `Const + Slot` and `Const * Slot` to put the constant on the
+right before selecting instructions. This makes the existing signed `ADD`/
+`SUB` immediate and carried-aware multiply strength-reduction paths available
+to ordinary PHP expressions regardless of source operand order. Subtraction,
+division and modulo retain their exact original order; checked addition uses
+the same overflow side exit after swapping mathematically commutative inputs.
+
+Helper tests fix the permitted and forbidden swaps. A generated-code test then
+requires exact `ADD x8, x3, #7` and `ADD x8, x8, x8, LSL #1` words for
+`7 + i` followed by `3 * result`, executes the program and proves that both
+temporary shadow slots remain untouched. A real reversed-expression PHP test
+confirms the compiler still selects one range-proven native region with no
+side exits. The permanent `bench_reversed_commutative_loop.php` keeps this
+source-order holdout visible.
+
+In 301 order-rotated native-CPU `max-perf` pairs against `6ef9d01`, the unseen
+reversed benchmark preserves `49999993,149999990` output and falls from 5.519
+ms to 4.750 ms (paired median -13.48 percent). The already canonical original
+is neutral at -0.05 percent. A separate 101-pair run records 6.183 ms for RPHP
+and 47.588 ms for PHP tracing JIT, making RPHP 7.74x faster on the reversed
+form.
+
+The checkpoint passes 147 library tests, 83 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

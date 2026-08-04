@@ -811,6 +811,31 @@ mod tests {
         assert_eq!(super::super::straight_multiply_shift_add(1), None);
         assert_eq!(super::super::straight_multiply_shift_add(7), None);
         assert_eq!(super::super::straight_multiply_shift_add(-3), None);
+
+        assert_eq!(
+            super::super::straight_binary_lowering_operands(
+                Add,
+                QuickLongOperand::Const(11),
+                QuickLongOperand::Slot(2),
+            ),
+            (QuickLongOperand::Slot(2), QuickLongOperand::Const(11))
+        );
+        assert_eq!(
+            super::super::straight_binary_lowering_operands(
+                Multiply,
+                QuickLongOperand::Const(3),
+                QuickLongOperand::Slot(2),
+            ),
+            (QuickLongOperand::Slot(2), QuickLongOperand::Const(3))
+        );
+        assert_eq!(
+            super::super::straight_binary_lowering_operands(
+                Subtract,
+                QuickLongOperand::Const(11),
+                QuickLongOperand::Slot(2),
+            ),
+            (QuickLongOperand::Const(11), QuickLongOperand::Slot(2))
+        );
     }
 
     fn config(

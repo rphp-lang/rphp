@@ -1287,6 +1287,59 @@ mod tests {
     }
 
     #[test]
+    fn commutative_left_constants_use_immediate_native_lowering() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Const(7),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Const(3),
+            rhs: QuickLongOperand::Slot(2),
+            result: 3,
+            destination: 1,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(100),
+            operations,
+            operation_count: 2,
+            post_result: None,
+        };
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+            config,
+            1_024,
+            1u64 << 1,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(words.contains(&0x9100_1c68)); // ADD x8, x3, #7
+        assert!(words.contains(&0x8b08_0508)); // ADD x8, x8, x8, LSL #1
+
+        let interrupt = AtomicBool::new(false);
+        let mut slots = [0i64; 64];
+        slots[2] = 222;
+        slots[3] = 333;
+        let completed = program
+            .call_range_proven_polling(&mut slots, 100, interrupt.as_ptr() as *const bool, 100)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!((slots[0], slots[1]), (100, 318));
+        assert_eq!((slots[2], slots[3]), (222, 333));
+    }
+
+    #[test]
     fn structured_invariant_operands_are_loaded_once_before_native_loop() {
         let mut operations =
             [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];

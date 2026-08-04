@@ -3149,10 +3149,15 @@ impl CompiledQuickLongStraightLoop {
                 }
                 NativeStraightLongOperation::Binary {
                     kind,
-                    lhs: lhs_operand,
-                    rhs: rhs_operand,
+                    lhs: original_lhs_operand,
+                    rhs: original_rhs_operand,
                     result: result_slot,
                 } => {
+                    let (lhs_operand, rhs_operand) = straight_binary_lowering_operands(
+                        kind,
+                        original_lhs_operand,
+                        original_rhs_operand,
+                    );
                     let allow_multiply_strength_reduction = polling_interval.is_some()
                         && carried_dependency_operations & (1u64 << index) == 0;
                     let rhs_constant = match rhs_operand {
@@ -3210,11 +3215,16 @@ impl CompiledQuickLongStraightLoop {
                 }
                 NativeStraightLongOperation::BinaryAssign {
                     kind,
-                    lhs: lhs_operand,
-                    rhs: rhs_operand,
+                    lhs: original_lhs_operand,
+                    rhs: original_rhs_operand,
                     result: result_slot,
                     destination,
                 } => {
+                    let (lhs_operand, rhs_operand) = straight_binary_lowering_operands(
+                        kind,
+                        original_lhs_operand,
+                        original_rhs_operand,
+                    );
                     let allow_multiply_strength_reduction = polling_interval.is_some()
                         && carried_dependency_operations & (1u64 << index) == 0;
                     let rhs_constant = match rhs_operand {
@@ -3956,6 +3966,21 @@ fn straight_binary_embeds_rhs(
         || (allow_multiply_strength_reduction
             && kind == ScalarLongOpKind::Multiply
             && straight_multiply_shift_add(constant).is_some())
+}
+
+fn straight_binary_lowering_operands(
+    kind: ScalarLongOpKind,
+    lhs: QuickLongOperand,
+    rhs: QuickLongOperand,
+) -> (QuickLongOperand, QuickLongOperand) {
+    if matches!(kind, ScalarLongOpKind::Add | ScalarLongOpKind::Multiply)
+        && matches!(lhs, QuickLongOperand::Const(_))
+        && matches!(rhs, QuickLongOperand::Slot(_))
+    {
+        (rhs, lhs)
+    } else {
+        (lhs, rhs)
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
