@@ -1905,6 +1905,31 @@ control is likewise flat in a separate 31-run batch. The checkpoint passes
 124 library, 72 ARM64/JIT, and all four application-corpus tests, including a
 partially-written branch that must retain checked native chunking.
 
+Rejected recurrence-proof experiment (2026-08-04): a closed-form `i128`
+prototype safely proved direct additive loop-carried values, including multiple
+independent recurrences and induction-dependent deltas. Randomized checked
+execution and deliberate overflow side exits confirmed the proof itself. It
+was not retained because the current slot-based native body could not turn the
+removed guards and Rust/native crossings into higher throughput.
+
+On the two-recurrence composed benchmark, 101 order-rotated runs measured
+19.067 ms for the proof-enabled endpoint-polling program versus 11.567 ms for
+the existing checked chunks (paired +62.32 percent). A separate countdown
+backedge improved the prototype only to 18.152 ms versus 11.324 ms (paired
++59.38 percent). Keeping checked arithmetic inside the polling program and
+lowering small constants directly as ARM64 immediates also failed the
+profitability gate; the immediate experiment was neutral on the binary body
+and regressed the expression chain by 3.79 percent. All prototype code and
+benchmarks were removed before commit.
+
+The result changes the next recurrence prerequisite. General scalar liveness
+must first stop publishing dead temporary slots on every iteration, keep
+eligible loop-carried values in registers across the backedge, and publish
+only at safepoints or exact side exits. Range proof should then be reapplied to
+that register-resident IR. Until those representation changes demonstrate a
+measured win, direct recurrences deliberately retain the already faster
+transactional checked path.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
