@@ -2518,6 +2518,12 @@ impl CompiledQuickLongStraightLoop {
         let mut structured_jumps = Vec::new();
         let mut operation_words = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
         let linear_live_after = straight_long_linear_live_after(&config);
+        let deferred_exit_publication_mask = if keeps_linear_scalar_values_resident {
+            config.operations[config.operation_count as usize - 1].output_mask()
+                & publication_mask
+        } else {
+            0
+        };
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
@@ -2558,7 +2564,7 @@ impl CompiledQuickLongStraightLoop {
                 straight_long_linear_shadow_store_mask(
                     &config,
                     index,
-                    publication_mask,
+                    publication_mask & !deferred_exit_publication_mask,
                     &linear_live_after,
                 )
             } else {
@@ -2979,6 +2985,11 @@ impl CompiledQuickLongStraightLoop {
             };
 
         let chunk_exhausted_word = assembler.word_count();
+        emit_straight_long_slots(
+            &mut assembler,
+            deferred_exit_publication_mask,
+            result,
+        );
         emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,
@@ -2987,6 +2998,11 @@ impl CompiledQuickLongStraightLoop {
         assembler.ret();
 
         let completed_word = assembler.word_count();
+        emit_straight_long_slots(
+            &mut assembler,
+            deferred_exit_publication_mask,
+            result,
+        );
         emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,
@@ -3793,6 +3809,18 @@ fn emit_straight_long_induction(
         Arm64Register::X0,
         long_slot_offset(config.induction_slot),
     );
+}
+
+fn emit_straight_long_slots(
+    assembler: &mut Arm64Assembler,
+    mut slot_mask: u64,
+    source: Arm64Register,
+) {
+    while slot_mask != 0 {
+        let slot = slot_mask.trailing_zeros() as u16;
+        slot_mask &= slot_mask - 1;
+        assembler.store_u64(source, Arm64Register::X0, long_slot_offset(slot));
+    }
 }
 
 pub struct QuickLongOpsJitCache {

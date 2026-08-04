@@ -2035,6 +2035,23 @@ percent). Against PHP tracing JIT, RPHP is respectively 7.59x, 5.77x, and
 10.32x faster. Typed order is flat at +0.02 percent and typed ledger at -0.20
 percent, again with identical business outputs.
 
+Last-result safepoint publication checkpoint (2026-08-04): the visible CV
+aliases produced by the final scalar operation now remain in ARM64 `x8` across
+the polling backedge. Generated code writes them to shadow state only in the
+completion and interrupt exit blocks. The backedge does not clobber `x8`, and
+every admitted native activation executes at least one iteration, so the exit
+always observes the exact final body value. All earlier CVs, induction, and
+post-result state retain their prior publication rules.
+
+The existing dead-TMP interrupt test now also exercises this deferred visible
+result: it interrupts exactly after 1,024 iterations, validates the published
+CV while the excluded TMP remains untouched, resumes, and validates final
+completion. Across 101 A/B pairs against immediate-consumer publication,
+expression chain is -0.65 percent, binary assign -2.94 percent, and overlapping
+lifetimes -4.63 percent. Typed order is flat at -0.05 percent and typed ledger
+at +0.43 percent. This establishes the exit-publication mechanism; the larger
+payoff requires assigning earlier final CV values to dedicated registers.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
