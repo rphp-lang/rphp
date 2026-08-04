@@ -3259,6 +3259,47 @@ hint were removed. Source-order diamonds remain authoritative; a future retry
 requires hardware branch-profile evidence and must test branchless selection
 or duplication separately instead of assuming fewer dynamic branches wins.
 
+The second physical-diamond experiment is also deliberately rejected after
+testing the non-inverted form. An exact remaining-range proof marked true
+edges covering at least 75 percent of the induction range. Post-emission
+relocation then preserved the hot true arm as the not-taken fallthrough,
+moved the cold false arm out of line and repatched every affected `rel32` and
+eligible `rel8`. Both control-flow edges, backward cold joins, polling returns
+and a checked overflow side exit retained exact state in native execution.
+
+Moving the cold arm after all return stubs nevertheless changed an unseen
+90/10 diamond from 5.876541 to 6.826162 ms (-16.16 percent). Warming the same
+function before measurement made the steady-state loss clearer: 5.888700 to
+7.119656 ms (-20.90 percent). A third placement kept the false target close by
+putting it after every polling backedge but before the epilogues; `CMP/JGE`
+remained the original short, macro-fusible condition and normal iterations
+could not fall into the cold arm. It produced the same regression, disproving
+the long-conditional hypothesis.
+
+An in-process native-only A/B isolated the actual boundary. With production
+CV publication, source order took 5.809603 ms and outlining 7.128304 ms
+(+22.70 percent). When internal temporary outputs were artificially included
+in the publication mask, the same transformation improved 6.188633 to
+5.872635 ms (-5.11 percent). Disassembly showed that real deferred publication
+keeps selected values in fixed R13/R14 registers and the source-order join
+jump separates a dependent `ADD -> IMUL` chain. On the Ryzen 9 7950X, the
+narrow real holdout retired about 8.0 million fewer instructions and 8.1
+million fewer branches after outlining, but cycles rose from 37.78 to 44.99
+million because IPC fell from 4.39 to 3.51. Branch misses moved only from 0.29
+to 0.43 percent and cannot explain the loss.
+
+A final 32-byte op-cache-phase gate rejected the known 19-byte counterexample
+and restored 5.896807 versus 5.898952 ms (-0.04 percent). It did not generalize:
+an admitted 36-byte cold span still regressed from 6.589651 to 7.344246 ms
+(-11.45 percent), again retiring roughly 8.1 million fewer instructions and
+branches while IPC fell from 3.95 to 3.57. The phase gate, range hint,
+relocation pass and backend plumbing were therefore removed rather than
+leaving dormant complexity in the core. The three warmed/skewed workloads are
+retained as holdouts. A future retry must be dependency- and register-bank
+aware, or driven by measured hardware profiles; the nearer opportunity is
+instruction scheduling around deferred fixed-register publications rather
+than physical cold-arm outlining by itself.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
