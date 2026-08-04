@@ -2556,6 +2556,39 @@ form.
 The checkpoint passes 147 library tests, 83 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+### Cross-architecture JIT freeze
+
+ARM64 performance development is frozen at commit `1aa361e` while the native
+architecture is split into target-neutral planning and target-specific
+lowering. Bug fixes, correctness work and measurements remain allowed, but no
+new general optimization may depend directly on ARM64 register names,
+instruction encodings or its physical register count.
+
+The initial x86-64 Linux builder uses the same Rust 1.93.1 toolchain as the
+ARM64 development machine. The unmodified source already passes a native
+`max-perf --all-features` build, 109 target-independent library tests, all four
+application corpus tests and `cargo check --all-features` there. The remaining
+38 library tests and all 83 focused JIT integration tests are currently hidden
+behind the `aarch64 + macOS` platform gate; making their planning and semantic
+parts target-independent is the first parity metric.
+
+The frozen workstream is:
+
+1. move native loop IR, range proof, liveness, carried-dependency analysis,
+   invariant discovery and publication planning out of the ARM64 module;
+2. define a backend contract for physical registers, clobbers, instruction
+   selection, executable memory and ABI entry/exit;
+3. implement an x86-64 SysV vertical slice covering a range-proven scalar loop,
+   branches, exact publication and precise side exit;
+4. run one shared semantic and planning matrix against both ARM64 and x86-64,
+   with separate generated-instruction assertions per backend;
+5. reopen performance development only after new shared optimizations can be
+   lowered or conservatively rejected by both backends.
+
+x86-64 performance claims require native hardware. Emulation may validate
+encoding and semantics but is not accepted for benchmark comparisons. Windows
+x86-64 remains a later ABI backend rather than part of this first parity slice.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
