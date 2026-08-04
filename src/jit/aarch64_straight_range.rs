@@ -1,7 +1,7 @@
-use super::straight_liveness::straight_long_operation_input_mask;
 use super::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
     QuickLongOperand, ScalarLongOpKind, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    straight_long_operation_input_mask,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

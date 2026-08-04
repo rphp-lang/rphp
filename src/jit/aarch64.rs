@@ -3,6 +3,12 @@ use crate::vm::function::{
     ScalarLongOpKind, ScalarLongSource,
 };
 use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
+use super::straight::{
+    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
+    NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
+    straight_long_best_invariant_slot_masks, straight_long_operation_input_mask,
+};
 use std::cell::{Cell, OnceCell};
 use std::ffi::{c_int, c_void};
 use std::fmt;
@@ -1228,9 +1234,6 @@ mod accumulate_range_proof_tests;
 /// compiler plan intentionally starts with an empty cache; executable mappings
 /// and profile counters are runtime state rather than compiler metadata.
 pub const NATIVE_QUICK_LONG_MAX_CALL_TARGETS: usize = 8;
-/// Runtime entry pointers address the payload word of already validated Long
-/// hash values. They are activation state and are never embedded in code.
-pub const NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES: usize = 16;
 
 struct CachedQuickLongCallLoop {
     target_identities: [usize; NATIVE_QUICK_LONG_MAX_CALL_TARGETS],
@@ -2221,9 +2224,8 @@ mod conditional_range_proof_tests;
 #[path = "aarch64_straight_liveness.rs"]
 mod straight_liveness;
 use straight_liveness::{
-    straight_long_best_invariant_slot_masks, straight_long_carried_dependency_operations,
-    straight_long_linear_final_publication_masks, straight_long_linear_live_after,
-    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
+    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
+    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
@@ -2233,169 +2235,6 @@ mod straight_range;
 use straight_range::{
     StraightLongRangeProof, straight_long_remaining_range_proof,
 };
-
-/// Upper bound for one closed native scalar/mixed region. The byte-sized
-/// branch ABI still leaves ample headroom; 48 admits application-shaped
-/// regions with multiple inlined typed calls without making the shadow slot
-/// namespace or compile-time validation dynamic.
-pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 48;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeStraightLongConditionOperand {
-    Source(QuickLongOperand),
-    BitwiseAnd {
-        lhs: QuickLongOperand,
-        rhs: QuickLongOperand,
-    },
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeStraightLongOperation {
-    Unused,
-    Modulo {
-        value: QuickLongOperand,
-        divisor: i64,
-        result: u16,
-    },
-    Move {
-        source: QuickLongOperand,
-        result: u16,
-    },
-    /// Store a finite-state String token in the private shadow. The VM maps it
-    /// back to the guarded immutable String value when native execution exits.
-    StringToken {
-        token: u8,
-        result: u16,
-    },
-    /// Resolve the byte length of a finite-state String without dereferencing
-    /// Rust's heap representation from generated code.
-    StringLength {
-        source: u16,
-        lengths: [i64; 4],
-        token_count: u8,
-        result: u16,
-    },
-    /// Load an existing, entry-guarded Long hash value selected by a String
-    /// token. Entry pointers are supplied through the per-dispatch context.
-    HashLoad {
-        key: u16,
-        entry_base: u8,
-        token_count: u8,
-        result: u16,
-        destination: Option<u16>,
-    },
-    /// Store a Long payload through the same prevalidated contextual entry
-    /// table. Structural array writes remain outside this native operation.
-    HashStore {
-        key: u16,
-        entry_base: u8,
-        token_count: u8,
-        source: QuickLongOperand,
-    },
-    Binary {
-        kind: ScalarLongOpKind,
-        lhs: QuickLongOperand,
-        rhs: QuickLongOperand,
-        result: u16,
-    },
-    BinaryAssign {
-        kind: ScalarLongOpKind,
-        lhs: QuickLongOperand,
-        rhs: QuickLongOperand,
-        result: u16,
-        destination: u16,
-    },
-    /// Exit before an uncommon control-flow edge while leaving all prior
-    /// operation outputs committed in the native shadow state.
-    Guard {
-        kind: ScalarLongConditionKind,
-        lhs: NativeStraightLongConditionOperand,
-        rhs: NativeStraightLongConditionOperand,
-        expected: bool,
-    },
-    BranchUnless {
-        kind: ScalarLongConditionKind,
-        lhs: NativeStraightLongConditionOperand,
-        rhs: NativeStraightLongConditionOperand,
-        false_target: u8,
-    },
-    Jump {
-        target: u8,
-    },
-}
-
-impl NativeStraightLongOperation {
-    pub fn output_mask(self) -> u64 {
-        match self {
-            Self::Unused => 0,
-            Self::Modulo { result, .. } => 1u64 << result,
-            Self::Move { result, .. } => 1u64 << result,
-            Self::StringToken { .. } => 0,
-            Self::StringLength { result, .. } => 1u64 << result,
-            Self::HashLoad {
-                result,
-                destination,
-                ..
-            } => (1u64 << result) | destination.map_or(0, |slot| 1u64 << slot),
-            Self::HashStore { .. } => 0,
-            Self::Binary { result, .. } => 1u64 << result,
-            Self::BinaryAssign {
-                result,
-                destination,
-                ..
-            } => (1u64 << result) | (1u64 << destination),
-            Self::Guard { .. } | Self::BranchUnless { .. } | Self::Jump { .. } => 0,
-        }
-    }
-
-    pub fn shadow_output_mask(self) -> u64 {
-        match self {
-            Self::StringToken { result, .. } => 1u64 << result,
-            _ => self.output_mask(),
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeStraightLongLoopConfig {
-    pub induction_slot: u16,
-    pub bound: QuickLongOperand,
-    pub operations: [NativeStraightLongOperation; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
-    pub operation_count: u8,
-    pub post_result: Option<u16>,
-}
-
-impl NativeStraightLongLoopConfig {
-    pub fn body_output_mask(&self) -> u64 {
-        self.operations
-            .iter()
-            .copied()
-            .take(self.operation_count as usize)
-            .fold(0, |mask, operation| mask | operation.output_mask())
-    }
-
-    pub fn output_mask_before(&self, operation_index: u8) -> u64 {
-        self.operations
-            .iter()
-            .copied()
-            .take(operation_index as usize)
-            .fold(0, |mask, operation| mask | operation.output_mask())
-    }
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum NativeStraightLongLoopOutcome {
-    Completed,
-    ChunkExhausted,
-    OperationSideExit,
-    IncrementOverflow,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeStraightLongLoopResult {
-    pub outcome: NativeStraightLongLoopOutcome,
-    pub failed_operation: Option<u8>,
-}
 
 #[derive(Debug)]
 #[repr(C)]

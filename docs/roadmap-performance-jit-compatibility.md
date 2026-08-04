@@ -2572,6 +2572,19 @@ application corpus tests and `cargo check --all-features` there. The remaining
 behind the `aarch64 + macOS` platform gate; making their planning and semantic
 parts target-independent is the first parity metric.
 
+The first extraction checkpoint moves the fixed-capacity straight-loop IR,
+operation input/output masks and invariant-slot ranking into `jit::straight`.
+The shared module contains no register names, instruction words, executable
+memory or platform ABI state. ARM64 consumes the same definitions and analyses
+without a code-generation change, while native x86-64 compiles and exercises
+their target-independent tests before its encoder exists. The checkpoint
+passes 149 ARM64 library tests, all 83 ARM64/JIT integration tests, all four
+application corpus tests and `cargo check --all-features`; x86-64 passes 111
+library tests, a native `max-perf --all-features` build and
+`cargo check --all-features`. The next extraction boundary is the remaining
+range, liveness, carried-dependency and publication planning currently nested
+under the ARM64 backend.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

@@ -5,6 +5,14 @@
 //! calls it through the platform ABI. It is feature-gated and is not connected
 //! to PHP execution until typed guards and exact side exits can be preserved.
 
+mod straight;
+
+pub use straight::{
+    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
+    NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
+};
+
 #[cfg(all(
     feature = "jit-prototype",
     target_arch = "aarch64",
@@ -24,11 +32,7 @@ pub use aarch64::{
     NativeConditionalLongLoopCondition,
     NativeConditionalLongLoopConfig, NativeConditionalLongLoopResult,
     NativeLongAccumulateState, QuickLongAccumulateJitCache, QuickLongAccumulateJitError,
-    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
-    NativeStraightLongConditionOperand, NativeStraightLongLoopResult,
-    NativeStraightLongOperation,
-    NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_QUICK_LONG_MAX_CALL_TARGETS,
     QuickLongAccumulateJitOutcome,
     QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache,
     ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,

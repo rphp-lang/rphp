@@ -1,6 +1,7 @@
 use super::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
     QuickLongOperand, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    straight_long_best_invariant_slot_masks, straight_long_operation_input_mask,
 };
 
 pub(super) fn straight_long_linear_live_after(
@@ -161,52 +162,6 @@ pub(super) fn straight_long_carried_dependency_operations(
     }
 }
 
-/// Pick the two most frequently read slots that the native body never writes.
-/// Ties are deterministic and favor the lower shadow-slot index.
-pub(super) fn straight_long_best_invariant_slot_masks(
-    config: &NativeStraightLongLoopConfig,
-) -> [u64; 2] {
-    let excluded = config.body_output_mask() | (1u64 << config.induction_slot);
-    let mut uses = [0u8; 64];
-    for operation in config.operations[..config.operation_count as usize]
-        .iter()
-        .copied()
-    {
-        let mut inputs = straight_long_operation_input_mask(operation) & !excluded;
-        while inputs != 0 {
-            let slot = inputs.trailing_zeros() as usize;
-            inputs &= inputs - 1;
-            uses[slot] = uses[slot].saturating_add(1);
-        }
-    }
-    let mut best_slots = [usize::MAX; 2];
-    for slot in 0..uses.len() {
-        if uses[slot] == 0 {
-            continue;
-        }
-        let insertion = if best_slots[0] == usize::MAX
-            || uses[slot] > uses[best_slots[0]]
-        {
-            0
-        } else if best_slots[1] == usize::MAX || uses[slot] > uses[best_slots[1]] {
-            1
-        } else {
-            continue;
-        };
-        if insertion == 0 {
-            best_slots[1] = best_slots[0];
-        }
-        best_slots[insertion] = slot;
-    }
-    best_slots.map(|slot| {
-        if slot == usize::MAX {
-            0
-        } else {
-            1u64 << slot
-        }
-    })
-}
-
 pub(super) fn straight_long_structured_local_resident_output_masks(
     config: &NativeStraightLongLoopConfig,
     publication_mask: u64,
@@ -240,45 +195,6 @@ pub(super) fn straight_long_structured_local_resident_output_masks(
         }
     }
     resident_masks
-}
-
-pub(super) fn straight_long_operation_input_mask(operation: NativeStraightLongOperation) -> u64 {
-    match operation {
-        NativeStraightLongOperation::Unused
-        | NativeStraightLongOperation::StringToken { .. }
-        | NativeStraightLongOperation::Jump { .. } => 0,
-        NativeStraightLongOperation::Modulo { value, .. } => operand_mask(value),
-        NativeStraightLongOperation::Move { source, .. } => operand_mask(source),
-        NativeStraightLongOperation::StringLength { source, .. }
-        | NativeStraightLongOperation::HashLoad { key: source, .. } => 1u64 << source,
-        NativeStraightLongOperation::HashStore { key, source, .. } => {
-            (1u64 << key) | operand_mask(source)
-        }
-        NativeStraightLongOperation::Binary { lhs, rhs, .. }
-        | NativeStraightLongOperation::BinaryAssign { lhs, rhs, .. } => {
-            operand_mask(lhs) | operand_mask(rhs)
-        }
-        NativeStraightLongOperation::Guard { lhs, rhs, .. }
-        | NativeStraightLongOperation::BranchUnless { lhs, rhs, .. } => {
-            condition_operand_mask(lhs) | condition_operand_mask(rhs)
-        }
-    }
-}
-
-fn condition_operand_mask(operand: NativeStraightLongConditionOperand) -> u64 {
-    match operand {
-        NativeStraightLongConditionOperand::Source(source) => operand_mask(source),
-        NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
-            operand_mask(lhs) | operand_mask(rhs)
-        }
-    }
-}
-
-fn operand_mask(operand: QuickLongOperand) -> u64 {
-    match operand {
-        QuickLongOperand::Slot(slot) => 1u64 << slot,
-        QuickLongOperand::Const(_) => 0,
-    }
 }
 
 #[cfg(test)]
