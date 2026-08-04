@@ -62,6 +62,7 @@ enum Arm64Condition {
     Equal = 0,
     NotEqual = 1,
     Overflow = 6,
+    LowerOrSame = 9,
     GreaterOrEqual = 10,
     LessThan = 11,
     GreaterThan = 12,
@@ -292,6 +293,16 @@ impl Arm64Assembler {
         debug_assert!(scaled_offset < 4096);
         let instruction =
             0xf940_0000 | (scaled_offset << 10) | (base.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `LDRB Wt, [Xn, #imm12]` for a byte-sized runtime flag.
+    fn load_u8(&mut self, destination: Arm64Register, base: Arm64Register, offset: u16) {
+        debug_assert!(offset < 4_096);
+        let instruction = 0x3940_0000
+            | (u32::from(offset) << 10)
+            | (base.bits() << 5)
+            | destination.bits();
         self.words.push(instruction);
     }
 
@@ -661,6 +672,115 @@ impl CompiledQuickLongAccumulateLoop {
         Self::compile_term((addend != 0).then_some(addend), false)
     }
 
+    fn compile_range_proven_polling(
+        addend: Option<i64>,
+        safepoint_interval: u16,
+    ) -> Result<Self, QuickLongAccumulateJitError> {
+        if safepoint_interval == 0 || safepoint_interval >= 4_096 {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "native polling interval must fit a non-zero ARM64 immediate",
+            ));
+        }
+
+        let mut assembler = Arm64Assembler::new();
+        let induction = Arm64Register::from_code(2);
+        // x3 enters as the exclusive end of the first safepoint chunk.
+        let chunk_end = Arm64Register::from_code(3);
+        let accumulator = Arm64Register::from_code(4);
+        let interval = Arm64Register::from_code(5);
+        let addend_register = Arm64Register::from_code(6);
+        let computed_term = Arm64Register::from_code(7);
+        let remaining = Arm64Register::from_code(8);
+        let interrupt_pointer = Arm64Register::from_code(9);
+        let interrupt_value = Arm64Register::from_code(10);
+
+        // Preserve the third ABI argument before x2 becomes the induction.
+        assembler.move_register(interrupt_pointer, Arm64Register::X2);
+        assembler.load_u64(induction, Arm64Register::X0, 0);
+        assembler.load_u64(accumulator, Arm64Register::X0, 16);
+        assembler.move_immediate(interval, i64::from(safepoint_interval));
+        if let Some(addend) = addend {
+            assembler.move_immediate(addend_register, addend);
+        }
+
+        let loop_word = assembler.word_count();
+        let term = if addend.is_some() {
+            assembler.add_register(computed_term, induction, addend_register);
+            computed_term
+        } else {
+            induction
+        };
+        assembler.add_register(accumulator, accumulator, term);
+        assembler.add_immediate(induction, induction, 1);
+        assembler.compare_registers(induction, chunk_end);
+        let inner_loop_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+        // Completion has the same priority as in the VM: a final partial or
+        // full chunk does not service an interrupt after the loop has ended.
+        assembler.compare_registers(induction, Arm64Register::X1);
+        let completed_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::Equal);
+
+        // AtomicBool's relaxed load is a byte load on ARM64. The generated
+        // region only observes the flag; Rust remains responsible for clearing
+        // it and translating timeout state into a VM error.
+        assembler.load_u8(interrupt_value, interrupt_pointer, 0);
+        assembler.compare_with_zero(interrupt_value);
+        let interrupt_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+
+        // Pick min(remaining iterations, interval) without signed-overflow
+        // assumptions. end-induction is the exact unsigned distance even when
+        // the range crosses zero.
+        assembler.subtract_register(remaining, Arm64Register::X1, induction);
+        assembler.compare_registers(remaining, interval);
+        let final_chunk_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::LowerOrSame);
+        assembler.add_register(chunk_end, induction, interval);
+        let next_chunk_branch = assembler.branch_placeholder();
+
+        let final_chunk_word = assembler.word_count();
+        assembler.move_register(chunk_end, Arm64Register::X1);
+        let final_next_chunk_branch = assembler.branch_placeholder();
+
+        let chunk_exhausted_word = assembler.word_count();
+        emit_long_accumulate_state(&mut assembler, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED),
+        );
+        assembler.ret();
+
+        let completed_word = assembler.word_count();
+        emit_long_accumulate_state(&mut assembler, induction, accumulator);
+        assembler.move_immediate(
+            Arm64Register::X0,
+            i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
+        );
+        assembler.ret();
+
+        for (branch, target) in [
+            (inner_loop_branch, loop_word),
+            (completed_branch, completed_word),
+            (interrupt_branch, chunk_exhausted_word),
+            (final_chunk_branch, final_chunk_word),
+        ] {
+            if !assembler.patch_conditional_branch(branch, target) {
+                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+        }
+        for branch in [next_chunk_branch, final_next_chunk_branch] {
+            if !assembler.patch_branch(branch, loop_word) {
+                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
+            }
+        }
+
+        let code = assembler.finish().into_boxed_slice();
+        let memory = ExecutableMemory::from_code(&code)?;
+        Ok(Self { memory, code })
+    }
+
     fn compile_term(
         addend: Option<i64>,
         check_overflow: bool,
@@ -834,6 +954,33 @@ impl CompiledQuickLongAccumulateLoop {
         self.call_with_argument(state, exclusive_induction_end as u64)
     }
 
+    fn call_range_proven_polling(
+        &self,
+        state: &mut NativeLongAccumulateState,
+        exclusive_induction_end: i64,
+        interrupt_flag: *const bool,
+        first_chunk_end: i64,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+        debug_assert!(state.induction < first_chunk_end);
+        debug_assert!(first_chunk_end <= exclusive_induction_end);
+        type NativeFunction = unsafe extern "C" fn(
+            *mut NativeLongAccumulateState,
+            u64,
+            *const bool,
+            u64,
+        ) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
+        let status = unsafe {
+            function(
+                state,
+                exclusive_induction_end as u64,
+                interrupt_flag,
+                first_chunk_end as u64,
+            )
+        };
+        Self::decode_status(status)
+    }
+
     fn call_with_argument(
         &self,
         state: &mut NativeLongAccumulateState,
@@ -843,6 +990,12 @@ impl CompiledQuickLongAccumulateLoop {
             unsafe extern "C" fn(*mut NativeLongAccumulateState, u64) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
         let status = unsafe { function(state, argument) };
+        Self::decode_status(status)
+    }
+
+    fn decode_status(
+        status: u32,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
         match status {
             NATIVE_LONG_ACCUMULATE_COMPLETED => {
                 Ok(QuickLongAccumulateJitOutcome::Completed)
@@ -1016,8 +1169,10 @@ struct CachedQuickLongCallLoop {
 pub struct QuickLongAccumulateJitCache {
     compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
     range_proven_compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
+    range_proven_polling_compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
     call_compiled: OnceCell<Option<CachedQuickLongCallLoop>>,
     native_entries: Cell<u64>,
+    native_calls: Cell<u64>,
     native_chunks: Cell<u64>,
     range_proven_chunks: Cell<u64>,
     range_proof_evaluations: Cell<u64>,
@@ -1029,8 +1184,10 @@ impl QuickLongAccumulateJitCache {
         Self {
             compiled: OnceCell::new(),
             range_proven_compiled: OnceCell::new(),
+            range_proven_polling_compiled: OnceCell::new(),
             call_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
+            native_calls: Cell::new(0),
             native_chunks: Cell::new(0),
             range_proven_chunks: Cell::new(0),
             range_proof_evaluations: Cell::new(0),
@@ -1089,6 +1246,8 @@ impl QuickLongAccumulateJitCache {
                 })
                 .as_ref()?
         };
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         if range_proven_end.is_some() {
@@ -1108,6 +1267,62 @@ impl QuickLongAccumulateJitCache {
                 | Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
                 | Err(_)
         ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+        Some(outcome)
+    }
+
+    pub(crate) fn dispatch_proven_remaining(
+        &self,
+        plan: &QuickLongAccumulateLoop,
+        state: &mut NativeLongAccumulateState,
+        interrupt_flag: *const bool,
+        safepoint_interval: u16,
+    ) -> Option<Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError>> {
+        let first_chunk_end =
+            long_accumulate_nonempty_chunk_end(*state, u64::from(safepoint_interval))?;
+        let program = self
+            .range_proven_polling_compiled
+            .get_or_init(|| {
+                let addend = match plan.term {
+                    QuickLongTerm::Induction => None,
+                    QuickLongTerm::InductionPlusConst { addend, .. } => {
+                        (addend != 0).then_some(addend)
+                    }
+                    _ => return None,
+                };
+                CompiledQuickLongAccumulateLoop::compile_range_proven_polling(
+                    addend,
+                    safepoint_interval,
+                )
+                .ok()
+            })
+            .as_ref()?;
+
+        let before_induction = state.induction;
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
+        let outcome = program.call_range_proven_polling(
+            state,
+            state.bound,
+            interrupt_flag,
+            first_chunk_end,
+        );
+        let completed_iterations = (state.induction as u64)
+            .wrapping_sub(before_induction as u64);
+        let completed_chunks = completed_iterations
+            .div_ceil(u64::from(safepoint_interval));
+        self.native_chunks.set(
+            self.native_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        self.range_proven_chunks.set(
+            self.range_proven_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        if outcome.is_err() {
             self.side_exits.set(self.side_exits.get().saturating_add(1));
         }
         Some(outcome)
@@ -1146,6 +1361,8 @@ impl QuickLongAccumulateJitCache {
         slots: &mut [i64; 64],
         iteration_budget: u64,
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
         let outcome = program.call(slots, iteration_budget);
@@ -1170,6 +1387,7 @@ impl QuickLongAccumulateJitCache {
     pub fn is_compiled(&self) -> bool {
         matches!(self.compiled.get(), Some(Some(_)))
             || matches!(self.range_proven_compiled.get(), Some(Some(_)))
+            || matches!(self.range_proven_polling_compiled.get(), Some(Some(_)))
             || self.is_call_compiled()
     }
 
@@ -1183,6 +1401,10 @@ impl QuickLongAccumulateJitCache {
 
     pub fn native_chunks(&self) -> u64 {
         self.native_chunks.get()
+    }
+
+    pub fn native_calls(&self) -> u64 {
+        self.native_calls.get()
     }
 
     pub fn range_proven_chunks(&self) -> u64 {
@@ -1217,6 +1439,7 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
             .field("compiled", &self.is_compiled())
             .field("call_compiled", &self.is_call_compiled())
             .field("native_entries", &self.native_entries())
+            .field("native_calls", &self.native_calls())
             .field("native_chunks", &self.native_chunks())
             .field("range_proven_chunks", &self.range_proven_chunks())
             .field("range_proof_evaluations", &self.range_proof_evaluations())

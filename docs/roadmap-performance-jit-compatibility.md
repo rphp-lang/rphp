@@ -1776,6 +1776,36 @@ per-iteration arithmetic. The next focused experiment is therefore an in-native
 interrupt poll that keeps the same safepoint interval without returning to Rust
 when no interrupt is pending.
 
+In-native accumulate safepoint checkpoint (2026-08-04): the full-range-proven
+program now receives the runtime `AtomicBool` interrupt address and keeps the
+1,024-iteration polling contract inside generated ARM64. Its inner chunk still
+has the same four instructions as scalar C. At a chunk end it first honors
+semantic loop completion, otherwise performs the relaxed byte-sized atomic
+load; only a set flag publishes state and returns `ChunkExhausted` to Rust. An
+unset flag selects the next bounded chunk using the unsigned induction distance
+and continues natively. This handles ranges crossing signed zero without an
+overflow assumption.
+
+Direct ABI tests cover uninterrupted completion, a flag already set at entry,
+the exact 1,024-iteration published boundary, clearing the flag, and resuming
+to an identical final state. VM accounting derives the number of passed
+safepoints from the native induction delta, so the existing roughly 98-chunk
+integration assertions and interrupt observability remain meaningful even
+though the common activation uses one Rust/native call.
+
+Across 201 order-rotated pairs, the prove-once program returning at every
+safepoint records 2.391 ms and the in-native poll 2.322 ms; the paired median is
+-2.57 percent. The same-run forced-scalar C median is 2.256 ms versus 2.321 ms
+for RPHP: approximately 97.2 percent of C throughput and only 2.9 percent more
+elapsed time. A 100-million-iteration holdout gives 22.571 ms C and 23.213 ms
+RPHP, the same 2.85-percent separation. The 50-million constant-term loop is
+essentially flat within variance (paired -0.37 percent), as expected for its
+longer dependency chain. The simple induction loop is therefore close enough
+to the scalar hardware ceiling that further benchmark-specific unrolling would
+not justify weaker interrupt latency or larger generated code; the reusable
+next step is to bring internal safepoint polling and range reasoning to wider
+typed loop IR where measurements show a material application benefit.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

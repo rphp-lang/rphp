@@ -953,16 +953,27 @@ unsafe fn run_native_long_accumulate_loop(
     let mut iterations = 0u64;
     let cache = plan.native_jit();
     let remaining_range_proven = cache.prove_remaining_range(plan, state);
+    let interrupt_flag = eg.vm_interrupt.as_ptr() as *const bool;
     let mut entered_native = false;
 
     loop {
         let before = state;
-        let Some(native_result) = cache.dispatch_chunk(
-            plan,
-            &mut state,
-            NATIVE_LONG_SAFEPOINT_INTERVAL,
-            remaining_range_proven,
-        ) else {
+        let native_result = if remaining_range_proven {
+            cache.dispatch_proven_remaining(
+                plan,
+                &mut state,
+                interrupt_flag,
+                NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
+            )
+        } else {
+            cache.dispatch_chunk(
+                plan,
+                &mut state,
+                NATIVE_LONG_SAFEPOINT_INTERVAL,
+                false,
+            )
+        };
+        let Some(native_result) = native_result else {
             return Ok(None);
         };
         if !entered_native {
@@ -1045,7 +1056,11 @@ unsafe fn run_native_long_accumulate_loop(
                 return Ok(Some(QuickLoopOutcome::Completed));
             }
             QuickLongAccumulateJitOutcome::ChunkExhausted => {
-                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_SAFEPOINT_INTERVAL);
+                debug_assert_ne!(completed_in_chunk, 0);
+                debug_assert_eq!(
+                    completed_in_chunk % NATIVE_LONG_SAFEPOINT_INTERVAL,
+                    0
+                );
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
                     Value::write_long(induction_ptr, state.induction);
                     Value::write_long(accumulator_ptr, state.accumulator);

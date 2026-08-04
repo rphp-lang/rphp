@@ -2,6 +2,7 @@ use super::{
     CompiledQuickLongAccumulateLoop, NativeLongAccumulateState,
     QuickLongAccumulateJitOutcome, arithmetic_long_chunk_is_range_proven,
 };
+use std::sync::atomic::AtomicBool;
 
 #[test]
 fn proves_common_positive_and_negative_chunks() {
@@ -83,6 +84,66 @@ fn range_proven_program_has_no_checked_overflow_stubs() {
     );
     assert_eq!(state.induction, 4);
     assert_eq!(state.accumulator, 0);
+}
+
+#[test]
+fn range_proven_program_polls_interrupt_without_rust_chunk_returns() {
+    let program =
+        CompiledQuickLongAccumulateLoop::compile_range_proven_polling(None, 1_024)
+            .unwrap();
+    let interrupt = AtomicBool::new(false);
+    let mut completed = NativeLongAccumulateState {
+        induction: 0,
+        bound: 5_000,
+        accumulator: 0,
+    };
+    assert_eq!(
+        program
+            .call_range_proven_polling(
+                &mut completed,
+                5_000,
+                interrupt.as_ptr() as *const bool,
+                1_024,
+            )
+            .unwrap(),
+        QuickLongAccumulateJitOutcome::Completed
+    );
+    assert_eq!(completed.induction, 5_000);
+    assert_eq!(completed.accumulator, 12_497_500);
+
+    interrupt.store(true, std::sync::atomic::Ordering::Relaxed);
+    let mut interrupted = NativeLongAccumulateState {
+        induction: 0,
+        bound: 5_000,
+        accumulator: 0,
+    };
+    assert_eq!(
+        program
+            .call_range_proven_polling(
+                &mut interrupted,
+                5_000,
+                interrupt.as_ptr() as *const bool,
+                1_024,
+            )
+            .unwrap(),
+        QuickLongAccumulateJitOutcome::ChunkExhausted
+    );
+    assert_eq!(interrupted.induction, 1_024);
+    assert_eq!(interrupted.accumulator, 523_776);
+
+    interrupt.store(false, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        program
+            .call_range_proven_polling(
+                &mut interrupted,
+                5_000,
+                interrupt.as_ptr() as *const bool,
+                2_048,
+            )
+            .unwrap(),
+        QuickLongAccumulateJitOutcome::Completed
+    );
+    assert_eq!(interrupted, completed);
 }
 
 #[test]

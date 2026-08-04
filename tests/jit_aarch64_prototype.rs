@@ -892,6 +892,7 @@ fn real_php_accumulate_loop_enters_native_region() {
         .expect("compiler should select an accumulate quick loop");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
     assert_eq!(
         plan.native_jit().range_proven_chunks(),
@@ -927,6 +928,7 @@ fn negative_accumulate_loop_uses_range_proven_native_chunks() {
         })
         .expect("compiler should select a negative accumulate quick loop");
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert_eq!(
         plan.native_jit().range_proven_chunks(),
         plan.native_jit().native_chunks()
@@ -1951,6 +1953,7 @@ fn real_php_constant_term_loop_enters_specialized_native_region() {
         .expect("compiler should select a constant-term accumulate loop");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(
         plan.native_jit().range_proven_chunks(),
@@ -1997,6 +2000,7 @@ fn native_loop_sum_overflow_resumes_canonical_php_instruction() {
         })
         .expect("overflow function should have an accumulate plan");
     assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert_eq!(plan.native_jit().range_proven_chunks(), 0);
     assert_eq!(plan.native_jit().range_proof_evaluations(), 2);
     assert_eq!(plan.native_jit().side_exits(), 1);
@@ -2040,6 +2044,7 @@ fn native_constant_term_overflow_resumes_canonical_term_instruction() {
         .expect("plusTwo should have a constant-term accumulate plan");
     assert!(plan.native_jit().is_compiled());
     assert!(plan.native_jit().native_entries() >= 2);
+    assert_eq!(plan.native_jit().native_calls(), 2);
     assert!(plan.native_jit().range_proven_chunks() >= 1);
     assert!(
         plan.native_jit().range_proven_chunks()
