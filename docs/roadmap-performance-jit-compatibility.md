@@ -2837,14 +2837,27 @@ records 38.563013 ms without JIT and 12.542009 ms with tracing JIT on the same
 source, making RPHP about 4.53x faster than PHP tracing JIT for this shape. A
 second real-PHP test takes a cold edge after a hash store and proves canonical
 replay neither loses nor duplicates that update. x86-64 passes 152 library
-tests, eleven real-PHP JIT integration tests and the four-test corpus; ARM64
+tests, fourteen real-PHP JIT integration tests and the four-test corpus; ARM64
 continues to pass 150 library tests, 83 JIT integration tests and the corpus.
 
-This is still not full ARM64 feature parity. Finite guarded String/hash
-contexts now share the backend contract, but arbitrary dynamic String domains,
-structural array writes and the remaining ARM-specific publication/register
-optimizations continue through the typed or canonical executor and define the
-next parity steps.
+The same checkpoint also admits the existing composed property, virtual-object
+and multi-method builders without another x86-specific runtime path. Three ARM
+application holdouts now enter one native x86 region. Across 31 pinned,
+order-rotated runs, order/virtual-object processing falls from 88.551044 to
+4.112244 ms (21.53x) versus 51.054955 ms for PHP tracing JIT; the stateful
+property ledger falls from 24.779081 to 2.021313 ms (12.26x) versus 8.662939 ms
+for PHP tracing JIT; and the multi-method routing pipeline falls from 79.590082
+to 7.739544 ms (10.28x) versus 26.085854 ms for PHP tracing JIT. Every result
+matches across all modes. This validates multiplicative backend reuse: the
+ARM-side typed region descriptions required only the common builder gate and
+the four contextual IR lowerings, not benchmark- or corpus-specific machine
+code.
+
+This is still not full ARM64 feature parity. Finite guarded String/hash,
+property and virtual-object contexts now share the backend contract, but
+arbitrary dynamic String domains, structural array writes and the remaining
+ARM-specific publication/register optimizations continue through the typed or
+canonical executor and define the next parity steps.
 
 The frozen workstream is:
 
