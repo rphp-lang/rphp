@@ -2879,6 +2879,36 @@ benchmark remains flat at 2.778292 versus 2.783298 ms (paired +0.21 percent,
 with overlapping p10/p90 ranges). x86-64 passes 154 library tests, fourteen JIT
 integration tests and the four-test corpus.
 
+The next x86 residency checkpoint gives the remaining-range program its own
+cache entry and consumes the shared `publication_mask` and `carried_mask`
+contract instead of silently discarding both. For a proven linear scalar body,
+up to three loop-carried CVs live in callee-saved `R13-R15`: they are loaded
+once, updated in registers and published only on completion or the 1,024-step
+interrupt boundary. Any unused resident register continues to cache a ranked
+invariant, so carried and invariant allocation are one capacity decision rather
+than mutually exclusive modes. Checked, budgeted and side-exit entries retain
+their original exact shadow behavior.
+
+The same polling lowering now consumes the shared linear liveness plan. The
+latest path-local scalar result is forwarded through caller-saved `RDX`, and a
+dead compiler temporary is not written merely to be read by the immediately
+following operation. A dedicated three-recurrence test covers completion,
+interrupt publication and resume; the private temporary slots deliberately
+remain unpublished. Forward-structured bodies still compile through the
+range-proven cache, but conservatively set the backend's effective carried mask
+to zero. This preserves all prior structured JIT admission while fixed-register
+phi values remain the next x86 parity step.
+
+Across 201 pinned, order-rotated A/B pairs against the preceding x86 binary,
+the two-state scalar recurrence falls from 7.725480 to 4.156590 ms (paired
+-46.19 percent), the composed recurrence from 7.847550 to 5.091430 ms (paired
+-35.15 percent), the dependent recurrence from 7.761480 to 4.154440 ms (paired
+-46.48 percent), and the scalar expression chain from 13.404600 to 8.076910 ms
+(paired -39.75 percent). Independent 201-run PHP 8.5 tracing-JIT medians on the
+same pinned CPU are respectively 39.147100, 48.911100, 38.472900 and 56.242000
+ms. The checkpoint passes 155 x86 library tests, all fourteen x86 JIT
+integration tests and the four-test corpus.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
