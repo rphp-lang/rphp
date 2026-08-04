@@ -23,6 +23,9 @@ use std::fmt;
 use std::io;
 use std::mem::MaybeUninit;
 
+#[path = "x86_64_branch.rs"]
+mod branch;
+
 const X86_STRAIGHT_COMPLETED: u32 = 0;
 const X86_STRAIGHT_CHUNK_EXHAUSTED: u32 = 1;
 const X86_STRAIGHT_OPERATION_SIDE_EXIT: u32 = 6;
@@ -61,9 +64,27 @@ impl X86_64Register {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+struct X86BranchFixup {
+    instruction: usize,
+    displacement: usize,
+    target: Option<usize>,
+    short_opcode: u8,
+    near_length: usize,
+    relaxable: bool,
+}
+
+impl X86BranchFixup {
+    #[inline]
+    const fn saved_bytes(self) -> usize {
+        self.near_length - 2
+    }
+}
+
 #[derive(Debug, Default)]
 pub struct X86_64Assembler {
     bytes: Vec<u8>,
+    branches: Vec<X86BranchFixup>,
 }
 
 impl X86_64Assembler {
@@ -299,16 +320,34 @@ impl X86_64Assembler {
     }
 
     fn jump_rel32(&mut self) -> usize {
+        let instruction = self.bytes.len();
         self.bytes.push(0xe9);
         let displacement = self.bytes.len();
         self.bytes.extend_from_slice(&0i32.to_le_bytes());
+        self.branches.push(X86BranchFixup {
+            instruction,
+            displacement,
+            target: None,
+            short_opcode: 0xeb,
+            near_length: 5,
+            relaxable: false,
+        });
         displacement
     }
 
     fn emit_conditional_jump_rel32(&mut self, opcode: u8) -> usize {
+        let instruction = self.bytes.len();
         self.bytes.extend_from_slice(&[0x0f, opcode]);
         let displacement = self.bytes.len();
         self.bytes.extend_from_slice(&0i32.to_le_bytes());
+        self.branches.push(X86BranchFixup {
+            instruction,
+            displacement,
+            target: None,
+            short_opcode: 0x70 | (opcode & 0x0f),
+            near_length: 6,
+            relaxable: false,
+        });
         displacement
     }
 
@@ -317,6 +356,19 @@ impl X86_64Assembler {
         let relative = i64::try_from(target).unwrap() - i64::try_from(next_instruction).unwrap();
         let relative = i32::try_from(relative).expect("x86 prototype branch exceeds rel32 range");
         self.bytes[displacement..next_instruction].copy_from_slice(&relative.to_le_bytes());
+        self.branches
+            .iter_mut()
+            .find(|branch| branch.displacement == displacement)
+            .expect("x86 rel32 patch does not belong to an emitted branch")
+            .target = Some(target);
+    }
+
+    fn allow_short_branch(&mut self, displacement: usize) {
+        self.branches
+            .iter_mut()
+            .find(|branch| branch.displacement == displacement)
+            .expect("x86 short-branch candidate was not emitted by this assembler")
+            .relaxable = true;
     }
 
     fn align_with_nops(&mut self, code_base_offset: usize, alignment: usize) {
@@ -339,7 +391,8 @@ impl X86_64Assembler {
         self.bytes.push(0xc3);
     }
 
-    pub fn finish(self) -> Box<[u8]> {
+    pub fn finish(mut self) -> Box<[u8]> {
+        branch::relax_short_branches(&mut self.bytes, &self.branches);
         self.bytes.into_boxed_slice()
     }
 
@@ -1514,17 +1567,18 @@ fn emit_scalar_straight_loop(
                     induction,
                     &active_resident_values,
                 );
-                structured_conditional_jumps.push((
-                    emit_false_condition_jump(&mut assembler, kind),
-                    false_target,
-                ));
+                let branch = emit_false_condition_jump(&mut assembler, kind);
+                assembler.allow_short_branch(branch);
+                structured_conditional_jumps.push((branch, false_target));
                 continue;
             }
             NativeStraightLongOperation::Jump { target } => {
                 if target as usize == operation_index + 1 {
                     continue;
                 }
-                structured_jumps.push((assembler.jump_rel32(), target));
+                let branch = assembler.jump_rel32();
+                assembler.allow_short_branch(branch);
+                structured_jumps.push((branch, target));
                 continue;
             }
             _ => {
@@ -3774,6 +3828,32 @@ mod tests {
     }
 
     #[test]
+    fn encoder_relaxes_forward_branches_and_repatches_remaining_rel32() {
+        let mut assembler = X86_64Assembler::new();
+        let first = assembler.jump_not_equal_rel32();
+        assembler.allow_short_branch(first);
+        assembler.bytes.resize(124, 0x90);
+        let second = assembler.jump_rel32();
+        assembler.allow_short_branch(second);
+        assembler.bytes.resize(134, 0x90);
+        assembler.patch_rel32(first, 134);
+        assembler.patch_rel32(second, 134);
+        let backward = assembler.jump_rel32();
+        assembler.patch_rel32(backward, 0);
+        let far = assembler.jump_equal_rel32();
+        assembler.allow_short_branch(far);
+        assembler.bytes.resize(273, 0x90);
+        assembler.patch_rel32(far, 273);
+
+        let code = assembler.finish();
+        assert_eq!(code.len(), 266);
+        assert_eq!(&code[..2], &[0x75, 0x7d]);
+        assert_eq!(&code[120..122], &[0xeb, 0x05]);
+        assert_eq!(&code[127..132], &[0xe9, 0x7c, 0xff, 0xff, 0xff]);
+        assert_eq!(&code[132..138], &[0x0f, 0x84, 0x80, 0x00, 0x00, 0x00]);
+    }
+
+    #[test]
     fn encoder_uses_the_shortest_exact_signed_immediate_forms() {
         let mut assembler = X86_64Assembler::new();
         assert!(assembler.add_immediate(X86_64Register::R13, 127));
@@ -4634,6 +4714,21 @@ mod tests {
         let result = program.call(&mut slots).unwrap();
         assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!(&slots[..3], &[4, 224, 224]);
+
+        assert_eq!(
+            program
+                .code()
+                .windows(5)
+                .filter(|window| *window == [0x49, 0x83, 0xfb, 0x02, 0x7d])
+                .count(),
+            5,
+            "each ABI entry should use short JGE for the structured false edge"
+        );
+        assert_eq!(
+            program.code().iter().filter(|byte| **byte == 0xeb).count(),
+            5,
+            "each ABI entry should use a short unconditional join jump"
+        );
     }
 
     #[test]
@@ -4823,8 +4918,7 @@ mod tests {
         for selector in [
             [0xb8, 0x06, 0x00, 0x00, 0x00, 0xe9],
             [0xb8, 0x06, 0x01, 0x00, 0x00, 0xe9],
-        ]
-        {
+        ] {
             assert_eq!(
                 checked_code
                     .windows(selector.len())
