@@ -53,6 +53,13 @@ fn contains_signed_divide(code: &[u8]) -> bool {
     })
 }
 
+fn assert_amortized_safepoint_chunks(chunks: u64) {
+    assert!(
+        (90..=100).contains(&chunks),
+        "100,000 native iterations should use roughly 1,024-iteration safepoint chunks, got {chunks}"
+    );
+}
+
 fn conditional_scalar_plan(
     public_args: u8,
     operations: Vec<ScalarLongOp>,
@@ -883,7 +890,7 @@ fn real_php_accumulate_loop_enters_native_region() {
         .expect("compiler should select an accumulate quick loop");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
-    assert!(plan.native_jit().native_chunks() > 1);
+    assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -918,7 +925,7 @@ fn real_php_guarded_scalar_method_enters_native_accumulate_region() {
         .expect("compiler should select a scalar-method accumulate loop");
     assert!(plan.native_jit().is_call_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
-    assert!(plan.native_jit().native_chunks() > 1);
+    assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -953,7 +960,7 @@ fn real_php_finite_string_method_and_hash_update_enter_one_native_region() {
         .expect("compiler should select a mixed typed loop");
     assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
-    assert!(plan.native_jit().native_chunks() > 1);
+    assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -2850,7 +2857,7 @@ fn real_php_modulo_branch_loop_enters_general_native_ir_region() {
         .expect("compiler should select the modulo Long loop IR");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
-    assert!(plan.native_jit().native_chunks() > 1);
+    assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -2925,7 +2932,7 @@ fn real_php_straight_binary_body_enters_general_native_ir_region() {
         .expect("compiler should select the straight Long loop IR");
     assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
-    assert!(plan.native_jit().native_chunks() > 1);
+    assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 

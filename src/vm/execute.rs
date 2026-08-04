@@ -5245,7 +5245,7 @@ unsafe fn run_native_quick_long_straight_kernel(
         let native_result = cache.dispatch_prepared_straight_chunk(
             program,
             slots,
-            NATIVE_LONG_ACCUMULATE_CHUNK,
+            NATIVE_LONG_SAFEPOINT_INTERVAL,
         );
         let mut result = match native_result {
             Ok(result) => {
@@ -5326,7 +5326,7 @@ unsafe fn run_native_quick_long_straight_kernel(
                 return Ok(Some(QuickLoopOutcome::Completed));
             }
             NativeStraightLongLoopOutcome::ChunkExhausted => {
-                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_ACCUMULATE_CHUNK);
+                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_SAFEPOINT_INTERVAL);
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
                     publish_native_quick_long_trace_guards(
                         kernel,

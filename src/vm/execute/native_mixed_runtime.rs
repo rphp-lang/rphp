@@ -255,7 +255,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
         let native_result = cache.dispatch_prepared_straight_chunk_with_context(
             program,
             slots,
-            NATIVE_LONG_ACCUMULATE_CHUNK,
+            NATIVE_LONG_SAFEPOINT_INTERVAL,
             &entry_pointers,
         );
         let mut result = match native_result {

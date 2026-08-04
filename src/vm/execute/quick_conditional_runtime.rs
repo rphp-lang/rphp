@@ -402,7 +402,7 @@ unsafe fn run_native_quick_long_conditional_kernel(
         let native_result = cache.dispatch_chunk(
             config,
             slots,
-            NATIVE_LONG_ACCUMULATE_CHUNK,
+            NATIVE_LONG_SAFEPOINT_INTERVAL,
         );
         let (mut outcome, chunk_addition_executed) = match native_result {
             Ok(result) => {
@@ -522,7 +522,7 @@ unsafe fn run_native_quick_long_conditional_kernel(
                 return Ok(Some(QuickLoopOutcome::Completed));
             }
             QuickLongAccumulateJitOutcome::ChunkExhausted => {
-                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_ACCUMULATE_CHUNK);
+                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_SAFEPOINT_INTERVAL);
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
                     commit_quick_long_ops_slots(
                         slot_base,

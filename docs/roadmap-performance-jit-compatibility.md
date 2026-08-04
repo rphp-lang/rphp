@@ -1687,6 +1687,37 @@ and safely amortize that chunk boundary. Constant-remainder lowering remains
 valuable general code quality and removes a division bottleneck once larger
 regions keep execution native for longer.
 
+Native safepoint amortization checkpoint (2026-08-04): the shared native-loop
+budget is now named for its actual contract and increases from 32 to 1,024
+iterations between VM interrupt checks. All admitted native regions are
+non-blocking and contain at most 48 bounded operations per iteration. The VM
+still publishes exact state and checks `vm_interrupt` after every exhausted
+budget; overflow, guards and other side exits remain instruction-precise and
+do not wait for the budget boundary.
+
+The value comes from a 21-run randomized matrix over 32, 64, 128, 256, 512 and
+1,024 iterations, followed by 2,048 and 4,096 holdouts. Moving from 32 to
+1,024 reduces the medians of sum, branch, modulo, straight binary, scalar-call
+and expression-chain loops by 7.6, 21.5, 20.5, 19.1, 14.3 and 18.0 percent.
+Untyped order, ledger and independent routing application workloads improve
+7.7, 9.3 and 7.6 percent. Every output is identical. The larger 2,048 and
+4,096 variants provide no consistent additional benefit, establishing 1,024
+as the conservative plateau rather than a benchmark-specific maximum.
+
+At 1,024 iterations the slowest measured application region remains below
+9 microseconds between safepoints; the experimental 4,096 build remains below
+36 microseconds. Focused integration checks now require roughly 98 native
+chunks for 100,000 iterations in simple accumulate, scalar-call, conditional,
+straight and mixed regions, preventing a silent return to high-frequency
+runtime crossings while retaining multiple interrupt boundaries.
+
+A final 51-run six-mode comparison records 4.819 ms for the sum loop and
+5.449 ms for modulo on RPHP JIT, versus 2.308/2.340 ms for forced-scalar C and
+8.906/11.320 ms for PHP tracing JIT. RPHP therefore reaches about 48 percent
+and 43 percent of scalar-C throughput while running these workloads 1.85x and
+2.08x faster than PHP tracing JIT. The prior 32-iteration RPHP binary records
+5.265/6.884 ms in the same batch.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
