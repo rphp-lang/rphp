@@ -3157,6 +3157,28 @@ records 5.289583 ms for RPHP, 51.840375 ms for PHP 8.5.9 tracing JIT and
 integration tests and the four-test corpus; x86-64 passes 170 library tests,
 18 JIT integration tests, the corpus and `cargo check --all-features`.
 
+The x86 structured-loop alignment checkpoint isolates instruction placement
+from PHP and IR semantics. Range-proven bodies with forward control flow now
+start on a 64-byte L1-I cache-line boundary; linear loops remain unpadded. The
+one-time entry guard and padding execute once, while the aligned body is fetched
+on every native iteration. A generated-code assertion derives the loop start
+after the empty-range guard and requires the backend alignment constant rather
+than a benchmark-specific address.
+
+The boundary was selected experimentally rather than assumed. Across 201
+alternating fixed-CPU pairs, reducing the previous 32-byte alignment to 16
+bytes regresses the half-range branch by 41.76 percent and conditional composed
+recurrence by 20.10 percent, so 16 bytes is rejected. The 64-byte candidate is
+then repeated for 301 pairs: conditional composed recurrence falls from
+4.030228 to 3.883839 ms (-3.63 percent) and the carried-condition recurrence
+from 4.788876 to 3.489971 ms (-27.12 percent), with separated p10/p90 ranges.
+Linear controls remain within +0.23 and -0.08 percent; order, ledger and routing
+corpora remain within +0.01, -0.17 and -0.20 percent. x86-64 continues to pass
+170 library tests, 18 JIT integration tests, the four-test corpus and
+`cargo check --all-features`. The next placement slice should remove redundant
+hot jumps and coalesce cold side-exit stubs without changing this loop-header
+boundary.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

@@ -27,6 +27,10 @@ const X86_STRAIGHT_COMPLETED: u32 = 0;
 const X86_STRAIGHT_CHUNK_EXHAUSTED: u32 = 1;
 const X86_STRAIGHT_OPERATION_SIDE_EXIT: u32 = 6;
 const X86_STRAIGHT_SAFEPOINT_INTERVAL: u16 = 1024;
+// Keep the hot structured body inside a fresh L1-I cache line when possible.
+// The entry guard executes once; the aligned body is revisited on every
+// iteration. Linear bodies remain compact and do not pay this padding.
+const X86_STRUCTURED_LOOP_ALIGNMENT: usize = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct X86_64Register(u8);
@@ -1244,7 +1248,7 @@ fn emit_scalar_straight_loop(
     emit_x86_loop_bound_compare(&mut assembler, induction, bound, embedded_bound);
     let completed_jump = assembler.jump_greater_or_equal_rel32();
     if polling_interval.is_some() && keeps_structured_scalar_values_resident {
-        assembler.align_with_nops(code_base_offset, 32);
+        assembler.align_with_nops(code_base_offset, X86_STRUCTURED_LOOP_ALIGNMENT);
     }
     let loop_start = assembler.bytes.len();
     let mut operation_side_exit_jumps = Vec::new();
@@ -4420,9 +4424,9 @@ mod tests {
             loop_offset += 1;
         }
         assert_eq!(
-            (program.polling_entry_offset + loop_offset) % 32,
+            (program.polling_entry_offset + loop_offset) % X86_STRUCTURED_LOOP_ALIGNMENT,
             0,
-            "structured polling loop should start on a 32-byte boundary"
+            "structured polling loop should start on its cache-line boundary"
         );
         assert!(
             polling_code
