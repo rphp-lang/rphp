@@ -131,6 +131,36 @@ pub(super) fn straight_long_structured_definitely_written(
     (before, exit)
 }
 
+/// Conservatively mark operations whose result transitively contributes to a
+/// loop-carried slot. Keeping the dependent slot set monotonic admits all
+/// branch definitions and intentionally over-approximates reused shadow slots.
+pub(super) fn straight_long_carried_dependency_operations(
+    config: &NativeStraightLongLoopConfig,
+    carried_mask: u64,
+) -> u64 {
+    let mut dependent_slots = carried_mask;
+    let mut dependent_operations = 0u64;
+    loop {
+        let before_slots = dependent_slots;
+        let before_operations = dependent_operations;
+        for (index, operation) in config.operations[..config.operation_count as usize]
+            .iter()
+            .copied()
+            .enumerate()
+            .rev()
+        {
+            if operation.output_mask() & dependent_slots == 0 {
+                continue;
+            }
+            dependent_operations |= 1u64 << index;
+            dependent_slots |= straight_long_operation_input_mask(operation);
+        }
+        if dependent_slots == before_slots && dependent_operations == before_operations {
+            return dependent_operations;
+        }
+    }
+}
+
 pub(super) fn straight_long_structured_local_resident_output_masks(
     config: &NativeStraightLongLoopConfig,
     publication_mask: u64,
@@ -419,6 +449,59 @@ mod tests {
         assert_eq!(partial_before[6] & (1u64 << 1), 0);
         assert_eq!(partial_exit & (1u64 << 1), 0);
         assert_ne!(partial_exit & (1u64 << 2), 0);
+    }
+
+    #[test]
+    fn carried_dependency_marks_only_transitive_recurrence_chain() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 6,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(6),
+            result: 7,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 8,
+            destination: 2,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(100),
+            operations,
+            operation_count: 3,
+            post_result: None,
+        };
+
+        assert_eq!(
+            straight_long_carried_dependency_operations(&config, 1u64 << 1),
+            (1u64 << 0) | (1u64 << 1)
+        );
+
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+            config,
+            1_024,
+            (1u64 << 1) | (1u64 << 2),
+            1u64 << 1,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(words.contains(&0x9b07_7c68)); // recurrence chain keeps MUL x8, x3, x7
+        assert!(words.contains(&0x8b03_0868)); // independent i * 5 uses shifted ADD
     }
 
     #[test]
@@ -1003,6 +1086,9 @@ mod tests {
         assert!(words.contains(&0x9100_0504)); // ADD x4, x8, #1
         assert!(words.contains(&0xd100_0904)); // SUB x4, x8, #2
         assert!(words.contains(&0x9100_2d05)); // ADD x5, x8, #11
+        assert!(words.contains(&0x8b03_0468)); // ADD x8, x3, x3, LSL #1: i * 3
+        assert!(words.contains(&0x8b03_0868)); // ADD x8, x3, x3, LSL #2: i * 5
+        assert!(words.contains(&0x8b04_0488)); // ADD x8, x4, x4, LSL #1: selected * 3
         assert!(!words.contains(&0xf900_0408)); // no loop STR x8, selected
         assert!(!words.contains(&0xf900_0808)); // no loop STR x8, folded
         assert!(words.contains(&0xf900_0404)); // exit STR x4, selected

@@ -803,6 +803,14 @@ mod tests {
         assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 4_096), None);
         assert_eq!(super::super::straight_binary_add_sub_immediate(Add, i64::MIN), None);
         assert_eq!(super::super::straight_binary_add_sub_immediate(Multiply, 11), None);
+
+        assert_eq!(super::super::straight_multiply_shift_add(3), Some(1));
+        assert_eq!(super::super::straight_multiply_shift_add(5), Some(2));
+        assert_eq!(super::super::straight_multiply_shift_add(9), Some(3));
+        assert_eq!(super::super::straight_multiply_shift_add(17), Some(4));
+        assert_eq!(super::super::straight_multiply_shift_add(1), None);
+        assert_eq!(super::super::straight_multiply_shift_add(7), None);
+        assert_eq!(super::super::straight_multiply_shift_add(-3), None);
     }
 
     fn config(

@@ -2436,6 +2436,42 @@ multiplication still needs a register.
 The checkpoint passes 143 library tests, 81 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Carried-aware multiply strength-reduction checkpoint (2026-08-04): positive
+constants of the form `1 + 2^shift` can lower range-proven multiplication to a
+single `ADD Xd, Xn, Xn, LSL #shift`. Thus `x * 3`, `x * 5`, `x * 9` and the
+same bounded family no longer require constant materialization plus `MUL` when
+the result is outside the loop-carried critical dependency chain. Checked code
+always retains `MUL + SMULH` and its exact overflow side exit.
+
+The profitability guard is data-flow based. Starting from the carried CV mask,
+the compiler computes the conservative transitive closure of operations whose
+outputs feed those slots. A dependent multiply keeps `MUL`; an independent
+multiply in the same native body may use shifted `ADD`. The fixed-point slot
+set stays monotonic so multiple branch definitions and reused shadow slots can
+only make the classification more conservative.
+
+This distinction is measured rather than theoretical. Applying shifted `ADD`
+to every range-proven multiply improved the branch expression by 11.52 percent
+but regressed conditional composed recurrence by 3.02 percent and linear
+composed recurrence by 8.64 percent. That global variant was rejected. The
+carried-aware variant retains the branch gain while restoring the recurrence
+controls: in 101 order-rotated `max-perf` A/B pairs against `d258f88`, the
+branch expression improves from 4.944 ms to 4.364 ms (-11.44 percent), while
+the three recurrence controls range from -0.51 to +0.04 percent.
+
+Across the whole sequence since `fdf66e0`, fresh 101-run A/B pairs record
+-31.94 percent for the structured branch expression, -18.13 percent for
+conditional composed recurrence, -10.40 percent for simple conditional
+recurrence and -9.79 percent for linear composed recurrence. The current
+branch result is 4.437 ms versus 33.804 ms for PHP tracing JIT, or 7.62x
+faster, with identical output.
+
+Generated-code tests require shifted `ADD` for all three acyclic branch
+multiplications and simultaneously require a normal `MUL` for a recurrence
+dependency next to an independent shifted multiply. The checkpoint passes 144
+library tests, 81 ARM64/JIT integration tests, all four application corpus
+tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

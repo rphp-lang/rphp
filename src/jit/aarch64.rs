@@ -92,6 +92,23 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `ADD Xd, Xn, Xm, LSL #shift`.
+    fn add_shifted_register(
+        &mut self,
+        destination: Arm64Register,
+        lhs: Arm64Register,
+        rhs: Arm64Register,
+        shift: u8,
+    ) {
+        debug_assert!(shift < 64);
+        let instruction = 0x8b00_0000
+            | (rhs.bits() << 16)
+            | (u32::from(shift) << 10)
+            | (lhs.bits() << 5)
+            | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode `ADD Xd, Xn, #imm12` (64-bit, unshifted immediate form).
     pub fn add_immediate(
         &mut self,
@@ -2204,9 +2221,10 @@ mod conditional_range_proof_tests;
 #[path = "aarch64_straight_liveness.rs"]
 mod straight_liveness;
 use straight_liveness::{
-    straight_long_linear_final_publication_masks, straight_long_linear_live_after,
-    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
-    straight_long_structured_block_starts, straight_long_structured_definitely_written,
+    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
+    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
+    straight_long_operation_input_mask, straight_long_structured_block_starts,
+    straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
 
@@ -2614,6 +2632,8 @@ impl CompiledQuickLongStraightLoop {
             } else {
                 ([0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS], 0)
             };
+        let carried_dependency_operations =
+            straight_long_carried_dependency_operations(&config, carried_mask);
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
@@ -3072,6 +3092,8 @@ impl CompiledQuickLongStraightLoop {
                     rhs: rhs_operand,
                     result: result_slot,
                 } => {
+                    let allow_multiply_strength_reduction = polling_interval.is_some()
+                        && carried_dependency_operations & (1u64 << index) == 0;
                     let rhs_constant = match rhs_operand {
                         QuickLongOperand::Const(value) => Some(value),
                         QuickLongOperand::Slot(_) => None,
@@ -3084,10 +3106,14 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    let rhs_register = if rhs_constant
-                        .and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
-                        .is_some()
-                    {
+                    let embeds_rhs = rhs_constant.is_some_and(|constant| {
+                        straight_binary_embeds_rhs(
+                            kind,
+                            allow_multiply_strength_reduction,
+                            constant,
+                        )
+                    });
+                    let rhs_register = if embeds_rhs {
                         rhs
                     } else {
                         emit_straight_long_operand_with_resident(
@@ -3103,6 +3129,7 @@ impl CompiledQuickLongStraightLoop {
                         &mut assembler,
                         kind,
                         polling_interval.is_none(),
+                        allow_multiply_strength_reduction,
                         rhs_constant,
                         lhs_register,
                         rhs_register,
@@ -3127,6 +3154,8 @@ impl CompiledQuickLongStraightLoop {
                     result: result_slot,
                     destination,
                 } => {
+                    let allow_multiply_strength_reduction = polling_interval.is_some()
+                        && carried_dependency_operations & (1u64 << index) == 0;
                     let rhs_constant = match rhs_operand {
                         QuickLongOperand::Const(value) => Some(value),
                         QuickLongOperand::Slot(_) => None,
@@ -3139,10 +3168,14 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    let rhs_register = if rhs_constant
-                        .and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
-                        .is_some()
-                    {
+                    let embeds_rhs = rhs_constant.is_some_and(|constant| {
+                        straight_binary_embeds_rhs(
+                            kind,
+                            allow_multiply_strength_reduction,
+                            constant,
+                        )
+                    });
+                    let rhs_register = if embeds_rhs {
                         rhs
                     } else {
                         emit_straight_long_operand_with_resident(
@@ -3158,6 +3191,7 @@ impl CompiledQuickLongStraightLoop {
                         &mut assembler,
                         kind,
                         polling_interval.is_none(),
+                        allow_multiply_strength_reduction,
                         rhs_constant,
                         lhs_register,
                         rhs_register,
@@ -3840,11 +3874,35 @@ fn straight_binary_add_sub_immediate(
     Some((add, magnitude as u16))
 }
 
+/// Return the shift for `x * (1 + 2^shift)`, which ARM64 can encode as one
+/// shifted-register ADD in range-proven code.
+fn straight_multiply_shift_add(constant: i64) -> Option<u8> {
+    if constant <= 1 {
+        return None;
+    }
+    let shifted = constant as u64 - 1;
+    shifted
+        .is_power_of_two()
+        .then_some(shifted.trailing_zeros() as u8)
+}
+
+fn straight_binary_embeds_rhs(
+    kind: ScalarLongOpKind,
+    allow_multiply_strength_reduction: bool,
+    constant: i64,
+) -> bool {
+    straight_binary_add_sub_immediate(kind, constant).is_some()
+        || (allow_multiply_strength_reduction
+            && kind == ScalarLongOpKind::Multiply
+            && straight_multiply_shift_add(constant).is_some())
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_straight_binary(
     assembler: &mut Arm64Assembler,
     kind: ScalarLongOpKind,
     check_side_exits: bool,
+    allow_multiply_strength_reduction: bool,
     rhs_constant: Option<i64>,
     lhs: Arm64Register,
     rhs: Arm64Register,
@@ -3872,6 +3930,13 @@ fn emit_straight_binary(
         } else {
             assembler.subtract_immediate(result, lhs, immediate);
         }
+        return Ok(());
+    }
+    if allow_multiply_strength_reduction
+        && kind == ScalarLongOpKind::Multiply
+        && let Some(shift) = rhs_constant.and_then(straight_multiply_shift_add)
+    {
+        assembler.add_shifted_register(result, lhs, lhs, shift);
         return Ok(());
     }
     match kind {
