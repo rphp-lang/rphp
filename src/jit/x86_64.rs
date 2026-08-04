@@ -10,12 +10,14 @@ use super::straight::{
 };
 use crate::vm::function::ScalarLongOpKind;
 use crate::vm::quick::QuickLongOperand;
+use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::io;
 
 const X86_STRAIGHT_COMPLETED: u32 = 0;
 const X86_STRAIGHT_CHUNK_EXHAUSTED: u32 = 1;
 const X86_STRAIGHT_OPERATION_SIDE_EXIT: u32 = 6;
+const X86_STRAIGHT_SAFEPOINT_INTERVAL: u16 = 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct X86_64Register(u8);
@@ -125,6 +127,16 @@ impl X86_64Assembler {
         self.emit_register_modrm(lhs, rhs);
     }
 
+    fn compare_byte_base_immediate8(&mut self, base: X86_64Register, immediate: u8) {
+        debug_assert!(!matches!(base.low_bits(), 4 | 5));
+        if base.extension() != 0 {
+            self.bytes.push(0x41);
+        }
+        self.bytes.push(0x80);
+        self.bytes.push((7 << 3) | base.low_bits());
+        self.bytes.push(immediate);
+    }
+
     fn jump_greater_or_equal_rel32(&mut self) -> usize {
         self.emit_conditional_jump_rel32(0x8d)
     }
@@ -139,6 +151,13 @@ impl X86_64Assembler {
 
     fn jump_overflow_rel32(&mut self) -> usize {
         self.emit_conditional_jump_rel32(0x80)
+    }
+
+    fn jump_rel32(&mut self) -> usize {
+        self.bytes.push(0xe9);
+        let displacement = self.bytes.len();
+        self.bytes.extend_from_slice(&0i32.to_le_bytes());
+        displacement
     }
 
     fn emit_conditional_jump_rel32(&mut self, opcode: u8) -> usize {
@@ -218,10 +237,10 @@ pub struct CompiledX86StraightLongLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
     config: NativeStraightLongLoopConfig,
-    bound: i64,
     checked_entry_offset: usize,
     chunk_entry_offset: usize,
     checked_chunk_entry_offset: usize,
+    polling_entry_offset: usize,
 }
 
 fn emit_additive_recurrence_loop(
@@ -229,10 +248,12 @@ fn emit_additive_recurrence_loop(
     accumulator: u16,
     result: u16,
     destination: u16,
-    bound: i64,
+    bound: QuickLongOperand,
     checked: bool,
     budgeted: bool,
+    polling_interval: Option<u16>,
 ) -> Box<[u8]> {
+    debug_assert!(!(budgeted && polling_interval.is_some()));
     let mut assembler = X86_64Assembler::new();
     let slots = X86_64Register::RDI;
     let induction_register = X86_64Register::RAX;
@@ -241,6 +262,8 @@ fn emit_additive_recurrence_loop(
     let candidate_register = X86_64Register::R8;
     let previous_result_register = X86_64Register::R9;
     let remaining_register = X86_64Register::RSI;
+    let polling_remaining_register = X86_64Register::R8;
+    let interrupt_pointer_register = X86_64Register::RSI;
     let displacement = |slot: u16| i32::from(slot) * 8;
 
     assembler.move_from_base_disp32(induction_register, slots, displacement(induction));
@@ -248,7 +271,15 @@ fn emit_additive_recurrence_loop(
     if checked && result != destination {
         assembler.move_from_base_disp32(previous_result_register, slots, displacement(result));
     }
-    assembler.move_immediate64(bound_register, bound);
+    match bound {
+        QuickLongOperand::Slot(slot) => {
+            assembler.move_from_base_disp32(bound_register, slots, displacement(slot));
+        }
+        QuickLongOperand::Const(bound) => assembler.move_immediate64(bound_register, bound),
+    }
+    if let Some(interval) = polling_interval {
+        assembler.move_immediate64(polling_remaining_register, i64::from(interval));
+    }
     assembler.compare_register(induction_register, bound_register);
     let completed_jump = assembler.jump_greater_or_equal_rel32();
     let loop_start = assembler.bytes.len();
@@ -267,15 +298,31 @@ fn emit_additive_recurrence_loop(
     };
     assembler.add_immediate8(induction_register, 1);
     assembler.compare_register(induction_register, bound_register);
-    let completed_after_iteration_jump = budgeted.then(|| assembler.jump_greater_or_equal_rel32());
-    let loop_jump = if budgeted {
+    let completed_after_iteration_jump =
+        (budgeted || polling_interval.is_some()).then(|| assembler.jump_greater_or_equal_rel32());
+    let mut loop_jumps = Vec::with_capacity(2);
+    let interrupt_jump = if budgeted {
         assembler.subtract_immediate8(remaining_register, 1);
-        assembler.jump_not_equal_rel32()
+        loop_jumps.push(assembler.jump_not_equal_rel32());
+        None
+    } else if let Some(interval) = polling_interval {
+        assembler.subtract_immediate8(polling_remaining_register, 1);
+        loop_jumps.push(assembler.jump_not_equal_rel32());
+        assembler.compare_byte_base_immediate8(interrupt_pointer_register, 0);
+        let interrupt_jump = assembler.jump_not_equal_rel32();
+        assembler.move_immediate64(polling_remaining_register, i64::from(interval));
+        loop_jumps.push(assembler.jump_rel32());
+        Some(interrupt_jump)
     } else {
-        assembler.jump_less_than_rel32()
+        loop_jumps.push(assembler.jump_less_than_rel32());
+        None
     };
 
-    if budgeted {
+    if budgeted || polling_interval.is_some() {
+        let chunk_exhausted = assembler.bytes.len();
+        if let Some(interrupt_jump) = interrupt_jump {
+            assembler.patch_rel32(interrupt_jump, chunk_exhausted);
+        }
         assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
         assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
         if result != destination {
@@ -290,7 +337,9 @@ fn emit_additive_recurrence_loop(
     if let Some(completed_after_iteration_jump) = completed_after_iteration_jump {
         assembler.patch_rel32(completed_after_iteration_jump, completed);
     }
-    assembler.patch_rel32(loop_jump, loop_start);
+    for loop_jump in loop_jumps {
+        assembler.patch_rel32(loop_jump, loop_start);
+    }
     assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
     assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
     if result != destination {
@@ -321,11 +370,7 @@ impl CompiledX86StraightLongLoop {
                 "x86 straight-loop prototype requires exactly one operation",
             ));
         }
-        let QuickLongOperand::Const(bound) = config.bound else {
-            return Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 straight-loop prototype requires a constant bound",
-            ));
-        };
+        let bound = config.bound;
         let NativeStraightLongOperation::BinaryAssign {
             kind: ScalarLongOpKind::Add,
             lhs: QuickLongOperand::Slot(lhs),
@@ -348,7 +393,24 @@ impl CompiledX86StraightLongLoop {
                 "x86 straight-loop prototype requires destination plus induction",
             ));
         };
-        for slot in [induction, accumulator, result, destination] {
+        let bound_slot = match bound {
+            QuickLongOperand::Slot(slot) => Some(slot),
+            QuickLongOperand::Const(_) => None,
+        };
+        if bound_slot.is_some_and(|slot| slot >= 64) {
+            return Err(X86StraightLongLoopError::UnsupportedConfig(
+                "x86 straight-loop slot exceeds the fixed shadow",
+            ));
+        }
+        if bound_slot.is_some_and(|slot| config.body_output_mask() & (1u64 << slot) != 0) {
+            return Err(X86StraightLongLoopError::UnsupportedConfig(
+                "x86 straight-loop bound cannot be written by the loop body",
+            ));
+        }
+        for slot in [induction, accumulator, result, destination]
+            .into_iter()
+            .chain(bound_slot)
+        {
             if slot >= 64 {
                 return Err(X86StraightLongLoopError::UnsupportedConfig(
                     "x86 straight-loop slot exceeds the fixed shadow",
@@ -364,6 +426,7 @@ impl CompiledX86StraightLongLoop {
             bound,
             false,
             false,
+            None,
         );
         let checked_entry_offset = fast_code.len();
         let checked_code = emit_additive_recurrence_loop(
@@ -374,6 +437,7 @@ impl CompiledX86StraightLongLoop {
             bound,
             true,
             false,
+            None,
         );
         let mut code = fast_code.into_vec();
         code.extend_from_slice(&checked_code);
@@ -386,6 +450,7 @@ impl CompiledX86StraightLongLoop {
             bound,
             false,
             true,
+            None,
         );
         code.extend_from_slice(&chunk_code);
         let checked_chunk_entry_offset = code.len();
@@ -397,18 +462,31 @@ impl CompiledX86StraightLongLoop {
             bound,
             true,
             true,
+            None,
         );
         code.extend_from_slice(&checked_chunk_code);
+        let polling_entry_offset = code.len();
+        let polling_code = emit_additive_recurrence_loop(
+            induction,
+            accumulator,
+            result,
+            destination,
+            bound,
+            false,
+            false,
+            Some(X86_STRAIGHT_SAFEPOINT_INTERVAL),
+        );
+        code.extend_from_slice(&polling_code);
         let code = code.into_boxed_slice();
         let memory = ExecutableMemory::from_code(&code)?;
         Ok(Self {
             memory,
             code,
             config,
-            bound,
             checked_entry_offset,
             chunk_entry_offset,
             checked_chunk_entry_offset,
+            polling_entry_offset,
         })
     }
 
@@ -416,7 +494,7 @@ impl CompiledX86StraightLongLoop {
         &self,
         slots: &mut [i64; 64],
     ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
-        if slots[self.config.induction_slot as usize] >= self.bound {
+        if slots[self.config.induction_slot as usize] >= self.bound_value(slots) {
             return Ok(NativeStraightLongLoopResult {
                 outcome: NativeStraightLongLoopOutcome::Completed,
                 failed_operation: None,
@@ -444,7 +522,7 @@ impl CompiledX86StraightLongLoop {
         if iteration_budget == 0 {
             return Err(X86StraightLongLoopError::ZeroIterationBudget);
         }
-        if slots[self.config.induction_slot as usize] >= self.bound {
+        if slots[self.config.induction_slot as usize] >= self.bound_value(slots) {
             return Ok(NativeStraightLongLoopResult {
                 outcome: NativeStraightLongLoopOutcome::Completed,
                 failed_operation: None,
@@ -455,6 +533,33 @@ impl CompiledX86StraightLongLoop {
         } else {
             self.checked_chunk_entry_offset
         };
+        self.call_chunk_entry(slots, iteration_budget, entry_offset)
+    }
+
+    fn call_proven_polling(
+        &self,
+        slots: &mut [i64; 64],
+        interrupt_flag: *const bool,
+    ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
+        if slots[self.config.induction_slot as usize] >= self.bound_value(slots) {
+            return Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::Completed,
+                failed_operation: None,
+            });
+        }
+        let entry = unsafe { self.memory.entry().add(self.polling_entry_offset) };
+        type NativeFunction = unsafe extern "C" fn(*mut i64, *const bool) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(entry) };
+        let status = unsafe { function(slots.as_mut_ptr(), interrupt_flag) };
+        self.decode_status(status)
+    }
+
+    fn call_chunk_entry(
+        &self,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+        entry_offset: usize,
+    ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
         let entry = unsafe { self.memory.entry().add(entry_offset) };
         type NativeFunction = unsafe extern "C" fn(*mut i64, u64) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(entry) };
@@ -485,6 +590,197 @@ impl CompiledX86StraightLongLoop {
 
     pub fn code(&self) -> &[u8] {
         &self.code
+    }
+
+    pub fn config(&self) -> NativeStraightLongLoopConfig {
+        self.config
+    }
+
+    fn bound_value(&self, slots: &[i64; 64]) -> i64 {
+        match self.config.bound {
+            QuickLongOperand::Slot(slot) => slots[slot as usize],
+            QuickLongOperand::Const(bound) => bound,
+        }
+    }
+}
+
+/// Per-quick-region x86 cache. Unsupported shared IR stays uncompiled and the
+/// caller continues through the canonical typed executor.
+pub struct X86QuickLongOpsJitCache {
+    straight_compiled: OnceCell<Option<CompiledX86StraightLongLoop>>,
+    native_entries: Cell<u64>,
+    native_calls: Cell<u64>,
+    native_chunks: Cell<u64>,
+    range_proven_chunks: Cell<u64>,
+    range_proof_evaluations: Cell<u64>,
+    side_exits: Cell<u64>,
+}
+
+impl X86QuickLongOpsJitCache {
+    pub const fn new() -> Self {
+        Self {
+            straight_compiled: OnceCell::new(),
+            native_entries: Cell::new(0),
+            native_calls: Cell::new(0),
+            native_chunks: Cell::new(0),
+            range_proven_chunks: Cell::new(0),
+            range_proof_evaluations: Cell::new(0),
+            side_exits: Cell::new(0),
+        }
+    }
+
+    pub(crate) fn prove_straight_remaining_range(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+        slots: &[i64; 64],
+    ) -> Option<super::straight::StraightLongRangeProof> {
+        self.range_proof_evaluations
+            .set(self.range_proof_evaluations.get().saturating_add(1));
+        straight_long_remaining_range_proof(config, slots)
+    }
+
+    pub fn prepare_straight_program(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+    ) -> Option<&CompiledX86StraightLongLoop> {
+        let program = self
+            .straight_compiled
+            .get_or_init(|| CompiledX86StraightLongLoop::compile(*config).ok())
+            .as_ref()?;
+        (program.config() == *config).then_some(program)
+    }
+
+    pub(crate) fn prepare_range_proven_straight_program(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+        _safepoint_interval: u16,
+        _publication_mask: u64,
+        _carried_mask: u64,
+    ) -> Option<&CompiledX86StraightLongLoop> {
+        self.prepare_straight_program(config)
+    }
+
+    pub(crate) fn dispatch_prepared_proven_straight_remaining(
+        &self,
+        program: &CompiledX86StraightLongLoop,
+        config: &NativeStraightLongLoopConfig,
+        slots: &mut [i64; 64],
+        _interrupt_flag: *const bool,
+        safepoint_interval: u16,
+    ) -> Option<Result<NativeStraightLongLoopResult, X86StraightLongLoopError>> {
+        if safepoint_interval != X86_STRAIGHT_SAFEPOINT_INTERVAL {
+            return None;
+        }
+        if slots[config.induction_slot as usize] >= program.bound_value(slots) {
+            return None;
+        }
+        let before_induction = slots[config.induction_slot as usize];
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
+        let outcome = program.call_proven_polling(slots, _interrupt_flag);
+        let completed_iterations =
+            (slots[config.induction_slot as usize] as u64).wrapping_sub(before_induction as u64);
+        let completed_chunks = completed_iterations
+            .div_ceil(u64::from(safepoint_interval))
+            .max(1);
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(completed_chunks));
+        self.range_proven_chunks.set(
+            self.range_proven_chunks
+                .get()
+                .saturating_add(completed_chunks),
+        );
+        self.record_side_exit(&outcome);
+        Some(outcome)
+    }
+
+    pub fn dispatch_prepared_straight_chunk(
+        &self,
+        program: &CompiledX86StraightLongLoop,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
+        self.native_calls
+            .set(self.native_calls.get().saturating_add(1));
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(1));
+        let outcome = program.call_chunk(slots, iteration_budget);
+        self.record_side_exit(&outcome);
+        outcome
+    }
+
+    fn record_side_exit(
+        &self,
+        outcome: &Result<NativeStraightLongLoopResult, X86StraightLongLoopError>,
+    ) {
+        if matches!(
+            outcome,
+            Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit
+                    | NativeStraightLongLoopOutcome::IncrementOverflow,
+                ..
+            }) | Err(_)
+        ) {
+            self.side_exits.set(self.side_exits.get().saturating_add(1));
+        }
+    }
+
+    pub fn record_region_entry(&self) {
+        self.native_entries
+            .set(self.native_entries.get().saturating_add(1));
+    }
+
+    pub fn is_straight_compiled(&self) -> bool {
+        matches!(self.straight_compiled.get(), Some(Some(_)))
+    }
+
+    pub fn native_entries(&self) -> u64 {
+        self.native_entries.get()
+    }
+
+    pub fn native_calls(&self) -> u64 {
+        self.native_calls.get()
+    }
+
+    pub fn native_chunks(&self) -> u64 {
+        self.native_chunks.get()
+    }
+
+    pub fn range_proven_chunks(&self) -> u64 {
+        self.range_proven_chunks.get()
+    }
+
+    pub fn range_proof_evaluations(&self) -> u64 {
+        self.range_proof_evaluations.get()
+    }
+
+    pub fn side_exits(&self) -> u64 {
+        self.side_exits.get()
+    }
+}
+
+impl Default for X86QuickLongOpsJitCache {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for X86QuickLongOpsJitCache {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl fmt::Debug for X86QuickLongOpsJitCache {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("X86QuickLongOpsJitCache")
+            .field("compiled", &self.is_straight_compiled())
+            .field("native_entries", &self.native_entries())
+            .field("native_calls", &self.native_calls())
+            .field("native_chunks", &self.native_chunks())
+            .field("side_exits", &self.side_exits())
+            .finish()
     }
 }
 
@@ -610,6 +906,25 @@ mod tests {
     }
 
     #[test]
+    fn dynamic_bound_is_loaded_from_shadow_on_every_native_entry() {
+        let mut config = additive_recurrence(0, false);
+        config.bound = QuickLongOperand::Slot(3);
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+
+        let mut first = [0_i64; 64];
+        first[1] = 10;
+        first[3] = 4;
+        program.call(&mut first).unwrap();
+        assert_eq!(&first[..4], &[4, 16, 16, 4]);
+
+        let mut second = [0_i64; 64];
+        second[1] = 1;
+        second[3] = 6;
+        program.call(&mut second).unwrap();
+        assert_eq!(&second[..4], &[6, 16, 16, 6]);
+    }
+
+    #[test]
     fn chunk_entry_publishes_exact_safepoint_and_resumes_to_completion() {
         let program = CompiledX86StraightLongLoop::compile(additive_recurrence(10, false)).unwrap();
         let mut slots = [0_i64; 64];
@@ -666,6 +981,41 @@ mod tests {
             }
         );
         assert_eq!(&slots[..3], &[1, i64::MAX, 77]);
+    }
+
+    #[test]
+    fn polling_entry_stays_native_until_interrupt_or_completion() {
+        let program =
+            CompiledX86StraightLongLoop::compile(additive_recurrence(5_000, false)).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 5;
+        let interrupt = true;
+        let interrupted = program.call_proven_polling(&mut slots, &interrupt).unwrap();
+        assert_eq!(
+            interrupted,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::ChunkExhausted,
+                failed_operation: None,
+            }
+        );
+        assert_eq!(&slots[..3], &[1_024, 523_781, 523_781]);
+
+        let interrupt = false;
+        let completed = program.call_proven_polling(&mut slots, &interrupt).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[5_000, 12_497_505, 12_497_505]);
+    }
+
+    #[test]
+    fn polling_entry_gives_completion_priority_over_pending_interrupt() {
+        let program =
+            CompiledX86StraightLongLoop::compile(additive_recurrence(100, false)).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 5;
+        let interrupt = true;
+        let result = program.call_proven_polling(&mut slots, &interrupt).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[100, 4_955, 4_955]);
     }
 
     #[test]

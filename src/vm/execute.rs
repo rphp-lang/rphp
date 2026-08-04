@@ -9,18 +9,24 @@ use crate::parser::Visibility;
 use crate::vm::stats;
 #[cfg(all(
     feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+use crate::jit::{
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
+};
+#[cfg(all(
+    feature = "jit-prototype",
     target_arch = "aarch64",
     target_os = "macos"
 ))]
 use crate::jit::{
-    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
-    NativeLongAccumulateState, NativeStraightLongConditionOperand,
-    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome,
-    NativeStraightLongOperation,
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
-    QuickLongAccumulateJitOutcome,
-    ScalarLongJitDispatch,
+    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig, NativeLongAccumulateState,
+    QuickLongAccumulateJitOutcome, ScalarLongJitDispatch,
 };
 use super::opcode::OpCode;
 use super::instruction::{
@@ -4856,8 +4862,18 @@ include!("execute/native_mixed_kernel.rs");
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    target_arch = "x86_64",
+    target_os = "linux"
+))]
+const NATIVE_LONG_SAFEPOINT_INTERVAL: u64 = 1024;
+
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 fn native_quick_long_straight_kernel(
     plan: &QuickLongOpsLoop,
@@ -5339,8 +5355,10 @@ fn native_quick_long_straight_kernel(
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 fn publish_native_quick_long_trace_guards(
     kernel: &NativeQuickLongStraightKernel,
@@ -5364,8 +5382,10 @@ fn publish_native_quick_long_trace_guards(
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
-    target_arch = "aarch64",
-    target_os = "macos"
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
 ))]
 unsafe fn run_native_quick_long_straight_kernel(
     eg: &ExecutorGlobals,

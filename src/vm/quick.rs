@@ -194,8 +194,10 @@ pub struct QuickLongAccumulateLoop {
     pub increment_ip: usize,
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     native_jit: crate::jit::QuickLongAccumulateJitCache,
 }
@@ -203,8 +205,10 @@ pub struct QuickLongAccumulateLoop {
 impl QuickLongAccumulateLoop {
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     #[inline(always)]
     pub fn native_jit(&self) -> &crate::jit::QuickLongAccumulateJitCache {
@@ -677,8 +681,10 @@ pub struct QuickLongOpsLoop {
     pub straight_array_kernel: Option<QuickStraightArrayRegionKernel>,
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     native_jit: crate::jit::QuickLongOpsJitCache,
 }
@@ -694,8 +700,10 @@ impl QuickLongOpsLoop {
 
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     #[inline(always)]
     pub fn native_jit(&self) -> &crate::jit::QuickLongOpsJitCache {
@@ -2255,8 +2263,10 @@ pub fn detect_long_accumulate_loop(
         increment_ip,
         #[cfg(all(
             feature = "jit-prototype",
-            target_arch = "aarch64",
-            target_os = "macos"
+            any(
+                all(target_arch = "aarch64", target_os = "macos"),
+                all(target_arch = "x86_64", target_os = "linux")
+            )
         ))]
         native_jit: crate::jit::QuickLongAccumulateJitCache::new(),
     })
@@ -4163,8 +4173,10 @@ fn detect_long_ops_region_inner(
         straight_array_kernel: None,
         #[cfg(all(
             feature = "jit-prototype",
-            target_arch = "aarch64",
-            target_os = "macos"
+            any(
+                all(target_arch = "aarch64", target_os = "macos"),
+                all(target_arch = "x86_64", target_os = "linux")
+            )
         ))]
         native_jit: crate::jit::QuickLongOpsJitCache::new(),
     };

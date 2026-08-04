@@ -207,8 +207,10 @@ unsafe fn run_quick_long_accumulate_loop(
     };
     #[cfg(all(
         feature = "jit-prototype",
-        target_arch = "aarch64",
-        target_os = "macos"
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
     ))]
     if let Some(outcome) = run_native_long_accumulate_loop(
         eg,
@@ -893,4 +895,3 @@ unsafe fn run_quick_long_accumulate_loop(
         }
     }
 }
-

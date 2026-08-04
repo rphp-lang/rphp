@@ -666,6 +666,233 @@ unsafe fn native_quick_long_call_accumulate_kernel(
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
+    target_arch = "x86_64",
+    target_os = "linux"
+))]
+unsafe fn run_native_long_accumulate_loop(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongAccumulateLoop,
+    induction_ptr: *mut Value,
+    accumulator_ptr: *mut Value,
+    condition_ptr: Option<*mut Value>,
+    term_ptr: Option<*mut Value>,
+    sum_ptr: *mut Value,
+    increment_ptr: Option<*mut Value>,
+    induction: i64,
+    accumulator: i64,
+    bound: i64,
+) -> Result<Option<QuickLoopOutcome>, VmError> {
+    if !matches!(plan.term, QuickLongTerm::Induction)
+        || plan.tail_guard.is_some()
+    {
+        return Ok(None);
+    }
+
+    const INDUCTION_SLOT: u16 = 0;
+    const ACCUMULATOR_SLOT: u16 = 1;
+    const SUM_SLOT: u16 = 2;
+    const BOUND_SLOT: u16 = 3;
+    let mut operations =
+        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations[0] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(ACCUMULATOR_SLOT),
+        rhs: QuickLongOperand::Slot(INDUCTION_SLOT),
+        result: SUM_SLOT,
+        destination: ACCUMULATOR_SLOT,
+    };
+    let config = NativeStraightLongLoopConfig {
+        induction_slot: INDUCTION_SLOT,
+        bound: match plan.bound {
+            QuickLongBound::Cv(_) => QuickLongOperand::Slot(BOUND_SLOT),
+            QuickLongBound::Const(bound) => QuickLongOperand::Const(bound),
+        },
+        operations,
+        operation_count: 1,
+        post_result: None,
+    };
+    let mut slots = [0i64; 64];
+    slots[INDUCTION_SLOT as usize] = induction;
+    slots[ACCUMULATOR_SLOT as usize] = accumulator;
+    slots[SUM_SLOT as usize] = (*sum_ptr).raw_long();
+    slots[BOUND_SLOT as usize] = bound;
+
+    let cache = plan.native_jit();
+    let remaining_range_proven = cache
+        .prove_straight_remaining_range(&config, &slots)
+        .is_some();
+    let Some(program) = cache.prepare_straight_program(&config) else {
+        return Ok(None);
+    };
+    let interrupt_flag = eg.vm_interrupt.as_ptr() as *const bool;
+    let mut iterations = 0u64;
+    let mut entered_native = false;
+
+    loop {
+        let before = slots;
+        let native_result = if remaining_range_proven {
+            let Some(result) = cache.dispatch_prepared_proven_straight_remaining(
+                program,
+                &config,
+                &mut slots,
+                interrupt_flag,
+                NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
+            ) else {
+                return Ok(None);
+            };
+            result
+        } else {
+            cache.dispatch_prepared_straight_chunk(
+                program,
+                &mut slots,
+                NATIVE_LONG_SAFEPOINT_INTERVAL,
+            )
+        };
+        if !entered_native {
+            cache.record_region_entry();
+            entered_native = true;
+        }
+
+        let completed_in_chunk = (slots[INDUCTION_SLOT as usize] as u64)
+            .wrapping_sub(before[INDUCTION_SLOT as usize] as u64);
+        let result = match native_result {
+            Ok(result) => result,
+            Err(_) => {
+                slots = before;
+                Value::write_long(induction_ptr, slots[INDUCTION_SLOT as usize]);
+                Value::write_long(accumulator_ptr, slots[ACCUMULATOR_SLOT as usize]);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if iterations != 0 {
+                    let last_induction = slots[INDUCTION_SLOT as usize] - 1;
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_induction);
+                    }
+                    Value::write_long(sum_ptr, slots[ACCUMULATOR_SLOT as usize]);
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => slots[INDUCTION_SLOT as usize],
+                                QuickIncrementKind::Post => last_induction,
+                            },
+                        );
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        };
+        iterations = iterations.saturating_add(completed_in_chunk);
+
+        match result.outcome {
+            NativeStraightLongLoopOutcome::Completed => {
+                let induction = slots[INDUCTION_SLOT as usize];
+                let accumulator = slots[ACCUMULATOR_SLOT as usize];
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, false);
+                }
+                if iterations != 0 {
+                    let last_induction = induction - 1;
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_induction);
+                    }
+                    Value::write_long(sum_ptr, accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => induction,
+                                QuickIncrementKind::Post => last_induction,
+                            },
+                        );
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
+                stats::inc_quick_loop_completed(iterations);
+                return Ok(Some(QuickLoopOutcome::Completed));
+            }
+            NativeStraightLongLoopOutcome::ChunkExhausted => {
+                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_SAFEPOINT_INTERVAL);
+                if eg.vm_interrupt.load(Ordering::Relaxed) {
+                    let induction = slots[INDUCTION_SLOT as usize];
+                    let accumulator = slots[ACCUMULATOR_SLOT as usize];
+                    let last_induction = induction - 1;
+                    Value::write_long(induction_ptr, induction);
+                    Value::write_long(accumulator_ptr, accumulator);
+                    if let Some(ptr) = condition_ptr {
+                        Value::write_bool(ptr, true);
+                    }
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_induction);
+                    }
+                    Value::write_long(sum_ptr, accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => induction,
+                                QuickIncrementKind::Post => last_induction,
+                            },
+                        );
+                    }
+                    (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                    handle_interrupt(eg)?;
+                }
+            }
+            NativeStraightLongLoopOutcome::OperationSideExit => {
+                debug_assert_eq!(result.failed_operation, Some(0));
+                let induction = slots[INDUCTION_SLOT as usize];
+                let accumulator = slots[ACCUMULATOR_SLOT as usize];
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if iterations != 0 {
+                    let last_induction = induction - 1;
+                    if let Some(ptr) = term_ptr {
+                        Value::write_long(ptr, last_induction);
+                    }
+                    Value::write_long(sum_ptr, accumulator);
+                    if let Some(ptr) = increment_ptr {
+                        Value::write_long(
+                            ptr,
+                            match plan.increment_kind {
+                                QuickIncrementKind::Pre => induction,
+                                QuickIncrementKind::Post => last_induction,
+                            },
+                        );
+                    }
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+            NativeStraightLongLoopOutcome::IncrementOverflow => {
+                Value::write_long(induction_ptr, slots[INDUCTION_SLOT as usize]);
+                Value::write_long(accumulator_ptr, slots[ACCUMULATOR_SLOT as usize]);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.increment_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(Some(QuickLoopOutcome::Deoptimized));
+            }
+        }
+    }
+}
+
+#[inline(never)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
     target_arch = "aarch64",
     target_os = "macos"
 ))]

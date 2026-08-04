@@ -2683,6 +2683,40 @@ slower in this kernel; repeated VM chunk returns remain a separate dispatch
 cost to measure after integration. Emitting all four entries raises median
 code creation to 4.290 microseconds, still reported outside execution time.
 
+The first end-to-end x86-64 VM checkpoint (2026-08-04) connects the backend to
+ordinary `QuickLongAccumulateLoop` and conservatively to compatible
+`QuickLongOpsLoop` plans. Bounds may now be constants or guarded Long shadow
+slots; the generated entry loads a dynamic bound on every invocation and
+rejects a bound written by the loop body. This covers the common PHP form
+`$n = ...; for ($i = 0; $i < $n; $i++)` without constant propagation or a
+benchmark-specific recognizer.
+
+Range-proven execution enters native code once. An internal x86 countdown
+checks the VM's byte interrupt flag every 1,024 iterations and returns
+`ChunkExhausted` only for a real pending interrupt; loop completion has
+priority at the same boundary. Checked, unproven execution retains resumable
+chunk entries and precise overflow side exits. A dedicated Linux integration
+test requires a dynamic-bound PHP loop to compile, make exactly one native
+call, account for approximately 98 logical safepoint chunks, and produce the
+canonical result. The physical target passes 136 library tests, that x86 JIT
+integration test and all four application corpus tests.
+
+On the pinned Ryzen 9 7950X, 101 end-to-end samples of the existing
+10-million-iteration PHP source record 3.818989 ms median
+(3.798008/3.839970 ms p10/p90), down 67.53 percent or 3.08x from the prior
+11.761427 ms RPHP CLI checkpoint. The same source is now 8.88x faster than PHP
+8.3.6 without JIT, 3.40x faster than PHP 8.3.6 tracing JIT, 8.40x faster than
+PHP 8.5.9 without JIT and 5.88x faster than the measured PHP 8.5.9 tracing JIT
+build. The remaining 1.932 ms above the 1.887 ms direct kernel includes warmup,
+range proof, native-code creation, VM publication and the benchmark's timing
+calls; it is no longer repeated Rust/native chunk dispatch.
+
+This is production dispatch for one general recurrence, not full ARM64
+feature parity. x86-64 still conservatively rejects multiple operations,
+structured branches, non-add arithmetic, call/property/array/string context
+operations and scalar-function native programs. Those forms continue through
+the existing typed or canonical executor and define the next parity steps.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
