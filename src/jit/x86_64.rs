@@ -69,6 +69,9 @@ impl X86_64Assembler {
 
     /// Encode `MOV destination, source` using the register-direct r64/rm64 form.
     pub fn move_register(&mut self, destination: X86_64Register, source: X86_64Register) {
+        if destination == source {
+            return;
+        }
         self.emit_rex_w(destination, source);
         self.bytes.push(0x8b);
         self.emit_register_modrm(destination, source);
@@ -679,6 +682,54 @@ fn emit_x86_resident_output(
     }
 }
 
+fn x86_direct_resident_result_register(
+    operation: NativeStraightLongOperation,
+    resident_values: &[(u64, X86_64Register)],
+) -> Option<X86_64Register> {
+    let can_write_directly = match operation {
+        NativeStraightLongOperation::Move { .. }
+        | NativeStraightLongOperation::Binary {
+            kind:
+                ScalarLongOpKind::Add
+                | ScalarLongOpKind::Subtract
+                | ScalarLongOpKind::Multiply
+                | ScalarLongOpKind::BitwiseXor,
+            ..
+        }
+        | NativeStraightLongOperation::BinaryAssign {
+            kind:
+                ScalarLongOpKind::Add
+                | ScalarLongOpKind::Subtract
+                | ScalarLongOpKind::Multiply
+                | ScalarLongOpKind::BitwiseXor,
+            ..
+        } => true,
+        NativeStraightLongOperation::Modulo { divisor, .. } => {
+            signed_power_of_two_remainder_mask(divisor).is_some()
+        }
+        NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Modulo,
+            rhs: QuickLongOperand::Const(divisor),
+            ..
+        }
+        | NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Modulo,
+            rhs: QuickLongOperand::Const(divisor),
+            ..
+        } => signed_power_of_two_remainder_mask(divisor).is_some(),
+        _ => false,
+    };
+    if !can_write_directly {
+        return None;
+    }
+
+    let output_mask = operation.output_mask();
+    resident_values
+        .iter()
+        .copied()
+        .find_map(|(slot_mask, register)| (slot_mask & output_mask != 0).then_some(register))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_token_immediate_select(
     assembler: &mut X86_64Assembler,
@@ -1018,12 +1069,24 @@ fn emit_scalar_straight_loop(
         } else {
             operation.shadow_output_mask() & !deferred_publication_mask
         };
+        let direct_result_register = (!checked && polling_interval.is_some())
+            .then(|| x86_direct_resident_result_register(operation, &deferred_publication_values))
+            .flatten();
+        let direct_result_needs_local_forwarding = direct_result_register.is_some()
+            && operation_index + 1 < config.operation_count as usize
+            && (!keeps_structured_scalar_values_resident
+                || !structured_block_starts[operation_index + 1])
+            && straight_long_operation_input_mask(config.operations[operation_index + 1])
+                & operation.output_mask()
+                & !deferred_publication_mask
+                != 0;
         let (kind, left, right, result, destination) = match operation {
             NativeStraightLongOperation::Move { source, result } => {
+                let result_register = direct_result_register.unwrap_or(lhs);
                 emit_linear_operand(
                     &mut assembler,
                     source,
-                    lhs,
+                    result_register,
                     config.induction_slot,
                     induction,
                     &active_resident_values,
@@ -1031,15 +1094,19 @@ fn emit_scalar_straight_loop(
                 emit_x86_resident_output(
                     &mut assembler,
                     1u64 << result,
-                    lhs,
+                    result_register,
                     &deferred_publication_values,
                 );
                 if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
-                    assembler.move_register(X86_64Register::RDX, lhs);
-                    latest_output_mask = 1u64 << result;
+                    if direct_result_register.is_none() || direct_result_needs_local_forwarding {
+                        assembler.move_register(X86_64Register::RDX, result_register);
+                        latest_output_mask = 1u64 << result;
+                    } else {
+                        latest_output_mask = 0;
+                    }
                 }
                 if shadow_store_mask & (1u64 << result) != 0 {
-                    assembler.move_to_base_disp32(slots, lhs, displacement(result));
+                    assembler.move_to_base_disp32(slots, result_register, displacement(result));
                 }
                 continue;
             }
@@ -1227,27 +1294,50 @@ fn emit_scalar_straight_loop(
                 ));
             }
         };
-        emit_linear_operand(
-            &mut assembler,
-            left,
-            lhs,
-            config.induction_slot,
-            induction,
-            &active_resident_values,
-        );
-        emit_linear_operand(
-            &mut assembler,
-            right,
-            rhs,
-            config.induction_slot,
-            induction,
-            &active_resident_values,
-        );
+        let result_register = direct_result_register.unwrap_or(lhs);
+        if result_register == lhs {
+            emit_linear_operand(
+                &mut assembler,
+                left,
+                lhs,
+                config.induction_slot,
+                induction,
+                &active_resident_values,
+            );
+            emit_linear_operand(
+                &mut assembler,
+                right,
+                rhs,
+                config.induction_slot,
+                induction,
+                &active_resident_values,
+            );
+        } else {
+            // Preserve a previous value owned by the destination register when
+            // it is also the right operand before overwriting that register
+            // with the left operand.
+            emit_linear_operand(
+                &mut assembler,
+                right,
+                rhs,
+                config.induction_slot,
+                induction,
+                &active_resident_values,
+            );
+            emit_linear_operand(
+                &mut assembler,
+                left,
+                result_register,
+                config.induction_slot,
+                induction,
+                &active_resident_values,
+            );
+        }
         match kind {
-            ScalarLongOpKind::Add => assembler.add_register(lhs, rhs),
-            ScalarLongOpKind::Subtract => assembler.subtract_register(lhs, rhs),
-            ScalarLongOpKind::Multiply => assembler.multiply_register(lhs, rhs),
-            ScalarLongOpKind::BitwiseXor => assembler.xor_register(lhs, rhs),
+            ScalarLongOpKind::Add => assembler.add_register(result_register, rhs),
+            ScalarLongOpKind::Subtract => assembler.subtract_register(result_register, rhs),
+            ScalarLongOpKind::Multiply => assembler.multiply_register(result_register, rhs),
+            ScalarLongOpKind::BitwiseXor => assembler.xor_register(result_register, rhs),
             ScalarLongOpKind::Modulo if matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
             {
                 let QuickLongOperand::Const(divisor) = right else {
@@ -1256,15 +1346,16 @@ fn emit_scalar_straight_loop(
                 let mask = signed_power_of_two_remainder_mask(divisor).unwrap();
                 // Truncating signed remainder by 2^k without IDIV:
                 // bias = sign(lhs) & mask; ((lhs + bias) & mask) - bias.
-                assembler.move_register(auxiliary, lhs);
+                assembler.move_register(auxiliary, result_register);
                 assembler.arithmetic_shift_right_immediate8(auxiliary, 63);
                 assembler.move_immediate64(rhs, mask);
                 assembler.and_register(auxiliary, rhs);
-                assembler.add_register(lhs, auxiliary);
-                assembler.and_register(lhs, rhs);
-                assembler.subtract_register(lhs, auxiliary);
+                assembler.add_register(result_register, auxiliary);
+                assembler.and_register(result_register, rhs);
+                assembler.subtract_register(result_register, auxiliary);
             }
             ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
+                debug_assert_eq!(result_register, lhs);
                 if checked {
                     assembler.compare_immediate8(rhs, 0);
                     operation_side_exit_jumps
@@ -1297,21 +1388,25 @@ fn emit_scalar_straight_loop(
         emit_x86_resident_output(
             &mut assembler,
             operation.output_mask(),
-            lhs,
+            result_register,
             &deferred_publication_values,
         );
         if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
-            assembler.move_register(X86_64Register::RDX, lhs);
-            latest_output_mask = operation.output_mask();
+            if direct_result_register.is_none() || direct_result_needs_local_forwarding {
+                assembler.move_register(X86_64Register::RDX, result_register);
+                latest_output_mask = operation.output_mask();
+            } else {
+                latest_output_mask = 0;
+            }
         }
         if shadow_store_mask & (1u64 << result) != 0 {
-            assembler.move_to_base_disp32(slots, lhs, displacement(result));
+            assembler.move_to_base_disp32(slots, result_register, displacement(result));
         }
         if let Some(destination) = destination
             && destination != result
             && shadow_store_mask & (1u64 << destination) != 0
         {
-            assembler.move_to_base_disp32(slots, lhs, displacement(destination));
+            assembler.move_to_base_disp32(slots, result_register, displacement(destination));
         }
     }
     operation_offsets[config.operation_count as usize] = assembler.bytes.len();
@@ -3625,6 +3720,30 @@ mod tests {
         );
 
         let polling_code = &program.code()[program.polling_entry_offset..];
+        for eliminated_copy in [[0x4c, 0x8b, 0xe8], [0x4c, 0x8b, 0xf0]] {
+            assert!(
+                !polling_code
+                    .windows(eliminated_copy.len())
+                    .any(|window| window == eliminated_copy),
+                "structured result should be generated directly in its fixed register"
+            );
+        }
+        for eliminated_forward in [[0x49, 0x8b, 0xd5], [0x49, 0x8b, 0xd6]] {
+            assert!(
+                !polling_code
+                    .windows(eliminated_forward.len())
+                    .any(|window| window == eliminated_forward),
+                "fully represented fixed result should not be copied to RDX"
+            );
+        }
+        for direct_arithmetic in [[0x4d, 0x03, 0xe8], [0x4d, 0x2b, 0xe8], [0x4d, 0x03, 0xf0]] {
+            assert!(
+                polling_code
+                    .windows(direct_arithmetic.len())
+                    .any(|window| window == direct_arithmetic),
+                "expected arithmetic with a fixed publication destination"
+            );
+        }
         for slot in [1_i32, 2_i32, 3_i32, 4_i32] {
             let mut rax_store = vec![0x48, 0x89, 0x87];
             rax_store.extend_from_slice(&(slot * 8).to_le_bytes());
@@ -3640,6 +3759,101 @@ mod tests {
         let empty = program.call_proven_polling(&mut slots, &false).unwrap();
         assert_eq!(empty.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!(&slots[1..=4], &[101, 102, 103, 104]);
+    }
+
+    #[test]
+    fn range_proven_direct_result_preserves_old_right_resident() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Slot(1),
+            result: 2,
+            destination: 1,
+        };
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 1,
+                    post_result: None,
+                },
+                (1u64 << 1) | (1u64 << 2),
+                1u64 << 1,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 1;
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[2]), (4, 3, 3));
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        assert!(
+            polling_code
+                .windows(3)
+                .any(|window| window == [0x4d, 0x2b, 0xe8]),
+            "subtract should write directly to R13"
+        );
+        assert!(
+            !polling_code
+                .windows(3)
+                .any(|window| window == [0x4c, 0x8b, 0xe8]),
+            "direct subtract should not copy RAX into R13"
+        );
+        assert!(
+            !polling_code
+                .windows(3)
+                .any(|window| window == [0x49, 0x8b, 0xd5]),
+            "dead local result should not be forwarded from R13 to RDX"
+        );
+    }
+
+    #[test]
+    fn range_proven_direct_result_forwards_untracked_immediate_alias() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+            destination: 1,
+        };
+        operations[1] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Slot(2),
+            result: 3,
+        };
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 2,
+                    post_result: None,
+                },
+                (1u64 << 1) | (1u64 << 2) | (1u64 << 3),
+                1u64 << 1,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 1;
+        slots[2] = 99;
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[2], slots[3]), (4, 7, 7, 7));
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        assert!(
+            polling_code
+                .windows(3)
+                .any(|window| window == [0x49, 0x8b, 0xd5]),
+            "untracked result alias should be forwarded from R13 to RDX"
+        );
     }
 
     #[test]

@@ -2970,6 +2970,37 @@ order corpus and ledger corpus controls remain within +0.16, +0.27, +0.16 and
 median is 41.789100 ms, making the new x86 path 5.34x faster. x86-64 passes 159
 library tests, all fourteen JIT integration tests and the four-test corpus.
 
+The x86 direct structured-result checkpoint makes fixed publication registers
+the actual arithmetic destination instead of computing in `RAX` and copying
+afterwards. Range-proven polling entries lower move, add, subtract, multiply,
+XOR and power-of-two signed remainder directly into `R13`-`R15`. Checked and
+budgeted entries retain the old temporary result so an overflow side exit can
+only publish the last successful state; general `IDIV` also remains on its
+architectural `RAX:RDX` pair.
+
+x86 two-operand arithmetic needs one target-specific rule that ARM64 does not:
+the right operand is captured in `R8` before the fixed destination is
+overwritten by the left operand. This preserves a carried value when the same
+register is also the expression's right source. A same-register `MOV` is now a
+code-generation no-op. After a direct definition, `RDX` path-local forwarding
+is emitted only when the immediately following operation in the same basic
+block consumes an output alias not represented by any fixed publication
+register. Generated-instruction tests require the direct `ADD/SUB` encodings,
+forbid the former `RAX` copies and dead `RDX` forwarding, and retain `RDX` for a
+live immediate TMP alias.
+
+Across 201 order-alternated, CPU-pinned A/B samples against `e77dcee`, the
+simple conditional recurrence falls from 5.426884 to 3.852129 ms (-29.02
+percent), conditional composed from 7.696867 to 6.784201 ms (-11.86 percent),
+carried condition from 5.426884 to 4.793882 ms (-11.66 percent), and structured
+branch expression from 7.889509 to 7.645130 ms (-3.10 percent). Expression
+chain is flat at -0.01 percent and general modulo at +0.06 percent. Routing,
+order corpus and ledger corpus controls remain within -0.26, -0.05 and -0.11
+percent, respectively. The previously recorded same-host PHP 8.5 tracing-JIT
+medians make the new simple conditional path 8.54x faster and branch expression
+5.47x faster. x86-64 passes 161 library tests, all fourteen JIT integration
+tests, the four-test corpus and `cargo check --all-features`.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
