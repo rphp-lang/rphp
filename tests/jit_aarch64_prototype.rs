@@ -891,6 +891,43 @@ fn real_php_accumulate_loop_enters_native_region() {
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn negative_accumulate_loop_uses_range_proven_native_chunks() {
+    let source = "<?php $sum = 0; for ($i = -1000; $i < 1000; $i++) { $sum += $i; } echo $i . ':' . $sum;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "1000:-1000"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a negative accumulate quick loop");
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -1911,6 +1948,10 @@ fn real_php_constant_term_loop_enters_specialized_native_region() {
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -1951,6 +1992,7 @@ fn native_loop_sum_overflow_resumes_canonical_php_instruction() {
         })
         .expect("overflow function should have an accumulate plan");
     assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().range_proven_chunks(), 0);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
@@ -1992,6 +2034,11 @@ fn native_constant_term_overflow_resumes_canonical_term_instruction() {
         .expect("plusTwo should have a constant-term accumulate plan");
     assert!(plan.native_jit().is_compiled());
     assert!(plan.native_jit().native_entries() >= 2);
+    assert!(plan.native_jit().range_proven_chunks() >= 1);
+    assert!(
+        plan.native_jit().range_proven_chunks()
+            < plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 

@@ -1718,6 +1718,35 @@ and 43 percent of scalar-C throughput while running these workloads 1.85x and
 2.08x faster than PHP tracing JIT. The prior 32-iteration RPHP binary records
 5.265/6.884 ms in the same batch.
 
+Native accumulate range-proof checkpoint (2026-08-04): simple induction and
+induction-plus-constant accumulation now has separate checked and range-proven
+native programs in the per-plan cache. Before each 1,024-iteration chunk, the
+dispatcher derives the exact executed length and evaluates the arithmetic
+progression in `i128`. It checks both term endpoints and the extrema of every
+accumulator prefix sum; because those prefix sums are convex, the only required
+points are the two endpoints and the transition after the final negative term.
+This covers negative-to-positive loops as well as ordinary positive loops
+without replaying the chunk in Rust.
+
+When the proof succeeds, the hot native body uses ordinary ARM64 additions and
+contains no term, sum, or increment overflow branches or overflow stubs. If it
+fails, the same cache lazily compiles and calls the previous transactional
+checked program, preserving the exact canonical PHP resume instruction. The
+choice is per chunk rather than per function, so one activation can safely use
+both variants. Edge matrices plus 100,000 deterministic randomized states
+match an iterative checked reference, real negative accumulation takes only
+range-proven chunks, and real sum and term overflow still produce one precise
+side exit. The full all-feature suite passes.
+
+On the native-CPU `max-perf` build, a 201-run median for the 10-million-iteration
+sum loop is 2.412 ms, down 49.9 percent from the preceding 4.819 ms checkpoint,
+with identical `49999995000000` output. Against the earlier same-machine
+forced-scalar C median of 2.308 ms, this is approximately 95.7 percent of C
+throughput and only 4.5 percent more elapsed time; it is about 3.69x faster than
+the earlier PHP tracing-JIT median of 8.906 ms. Separate 51-run batches at
+2.641 and 2.434 ms show the expected short-run frequency variance while
+preserving the structural gain.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
