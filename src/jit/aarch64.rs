@@ -2188,7 +2188,9 @@ mod conditional_range_proof_tests;
 
 #[path = "aarch64_straight_liveness.rs"]
 mod straight_liveness;
-use straight_liveness::straight_long_linear_live_after;
+use straight_liveness::{
+    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
+};
 
 #[path = "aarch64_straight_range.rs"]
 mod straight_range;
@@ -2553,7 +2555,12 @@ impl CompiledQuickLongStraightLoop {
                 }
             }
             let shadow_store_mask = if keeps_linear_scalar_values_resident {
-                operation.output_mask() & (publication_mask | linear_live_after[index])
+                straight_long_linear_shadow_store_mask(
+                    &config,
+                    index,
+                    publication_mask,
+                    &linear_live_after,
+                )
             } else {
                 operation.shadow_output_mask()
             };

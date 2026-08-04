@@ -2012,6 +2012,29 @@ without a result change. This confirms that per-iteration publication, rather
 than arithmetic throughput, was the dominant remaining cost in these scalar
 regions.
 
+Immediate-consumer temporary checkpoint (2026-08-04): the publication pass now
+also recognizes a non-visible TMP value whose final use is in the immediately
+following operation. The producer result is guaranteed to remain in `x8`
+until that consumer has loaded both operands, even when every auxiliary cache
+register is occupied. The store can therefore be omitted without relying on a
+successful register-allocation decision. If the value remains live beyond the
+consumer, its shadow store is retained conservatively.
+
+Version handling is explicit: a next operation that rewrites the same slot
+kills the old value only after consuming its operands, while liveness after
+that operation refers to the new version. Structural execution tests verify
+that both the producer TMP and final assignment TMP stores disappear, the CV
+destination store remains, and stale TMP sentinels cannot affect the result.
+Interrupt/resume and the full checked fallback contract remain those of the
+preceding publication checkpoint.
+
+In 101 order-rotated A/B pairs against that checkpoint, expression chain falls
+from 6.412 ms to 5.132 ms (-19.91 percent), binary assign from 5.894 ms to 5.656
+ms (-3.96 percent), and overlapping lifetimes from 6.310 ms to 6.086 ms (-3.54
+percent). Against PHP tracing JIT, RPHP is respectively 7.59x, 5.77x, and
+10.32x faster. Typed order is flat at +0.02 percent and typed ledger at -0.20
+percent, again with identical business outputs.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
