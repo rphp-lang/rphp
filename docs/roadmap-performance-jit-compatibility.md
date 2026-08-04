@@ -3001,6 +3001,47 @@ medians make the new simple conditional path 8.54x faster and branch expression
 5.47x faster. x86-64 passes 161 library tests, all fourteen JIT integration
 tests, the four-test corpus and `cargo check --all-features`.
 
+The x86 direct resident-operand checkpoint changes operand selection from
+"always copy into `RAX`/`R8`" to "return the register that owns the value".
+Induction, fixed carried/publication values and the path-local `RDX` result can
+therefore feed arithmetic, moves and structured conditions directly. Memory
+and constants still materialize in a scratch register, and the destructive
+left operand is copied only when it does not already own the result register.
+If a latest result in `RDX` becomes an `IDIV` divisor, it is explicitly moved
+to `R8` before `CQO` claims the architectural dividend pair.
+
+The x86 cost model deliberately retains one apparent copy. Arithmetic from one
+long-lived fixed publication register into another is re-banked through `R8`;
+on the native Zen 4 host, direct fixed-to-fixed dependent recurrence was 24.5
+percent slower despite identical results. Scratch-result arithmetic and
+comparisons still consume fixed registers directly. Generated-code tests cover
+direct `CMP R13,R14`, direct `ADD RAX,R13`, the fixed-to-fixed `R14` to `R8`
+re-bank, and the required `RDX` divisor evacuation before `CQO`.
+
+Variable-length code exposed a separate front-end contract. Removing one
+three-byte move shifted a structured polling loop and initially regressed the
+simple conditional workload by 24.7 percent. Its hot loop now starts at an
+absolute 32-byte boundary computed from the final executable-code offset.
+This alignment is CFG-gated to structured polling regions: applying it to
+linear regions instead moved dependent recurrence onto a slower layout by
+24.6 percent. A machine-code test derives the loop start after the empty-range
+branch and requires its final offset modulo 32 to be zero.
+
+Across 201 order-alternated, CPU-pinned A/B samples against direct-result
+checkpoint `68ae3f9`, conditional composed falls from 6.753206 to 4.834890 ms
+(-28.41 percent), carried condition from 4.834414 to 3.593445 ms (-25.67
+percent), general modulo branch from 6.716967 to 5.767822 ms (-14.13 percent),
+two invariants from 7.681370 to 6.988764 ms (-9.02 percent), linear composed
+from 4.176617 to 3.868580 ms (-7.38 percent), simple conditional from 3.843784
+to 3.608227 ms (-6.13 percent), and expression chain from 8.086443 to 7.697344
+ms (-4.81 percent). Dependent recurrence and branch expression remain within
+-0.05 and -0.04 percent; routing and order corpus improve 0.05 and 0.06 percent,
+while ledger corpus is within -0.12 percent. Previously recorded same-host PHP
+8.5 tracing-JIT medians make conditional composed 10.13x and carried condition
+9.50x slower than the new RPHP paths. x86-64 passes 164 library tests, all
+fourteen JIT integration tests, the four-test corpus and
+`cargo check --all-features`.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

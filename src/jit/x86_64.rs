@@ -263,6 +263,13 @@ impl X86_64Assembler {
         self.bytes[displacement..next_instruction].copy_from_slice(&relative.to_le_bytes());
     }
 
+    fn align_with_nops(&mut self, code_base_offset: usize, alignment: usize) {
+        debug_assert!(alignment.is_power_of_two());
+        let address_offset = code_base_offset + self.bytes.len();
+        let padding = address_offset.wrapping_neg() & (alignment - 1);
+        self.bytes.resize(self.bytes.len() + padding, 0x90);
+    }
+
     fn clear_eax(&mut self) {
         self.bytes.extend_from_slice(&[0x31, 0xc0]);
     }
@@ -533,6 +540,35 @@ fn emit_additive_recurrence_loop(
     assembler.finish()
 }
 
+fn emit_linear_operand_with_resident(
+    assembler: &mut X86_64Assembler,
+    operand: QuickLongOperand,
+    scratch: X86_64Register,
+    induction_slot: u16,
+    induction_register: X86_64Register,
+    resident_values: &[(u64, X86_64Register)],
+) -> X86_64Register {
+    match operand {
+        QuickLongOperand::Slot(slot) if slot == induction_slot => induction_register,
+        QuickLongOperand::Slot(slot) => {
+            let slot_mask = 1u64 << slot;
+            if let Some((_, register)) = resident_values
+                .iter()
+                .find(|(mask, _)| *mask & slot_mask != 0)
+            {
+                *register
+            } else {
+                assembler.move_from_base_disp32(scratch, X86_64Register::RDI, i32::from(slot) * 8);
+                scratch
+            }
+        }
+        QuickLongOperand::Const(value) => {
+            assembler.move_immediate64(scratch, value);
+            scratch
+        }
+    }
+}
+
 fn emit_linear_operand(
     assembler: &mut X86_64Assembler,
     operand: QuickLongOperand,
@@ -541,27 +577,15 @@ fn emit_linear_operand(
     induction_register: X86_64Register,
     resident_values: &[(u64, X86_64Register)],
 ) {
-    match operand {
-        QuickLongOperand::Slot(slot) if slot == induction_slot => {
-            assembler.move_register(destination, induction_register)
-        }
-        QuickLongOperand::Slot(slot) => {
-            let slot_mask = 1u64 << slot;
-            if let Some((_, register)) = resident_values
-                .iter()
-                .find(|(mask, _)| *mask & slot_mask != 0)
-            {
-                assembler.move_register(destination, *register);
-            } else {
-                assembler.move_from_base_disp32(
-                    destination,
-                    X86_64Register::RDI,
-                    i32::from(slot) * 8,
-                );
-            }
-        }
-        QuickLongOperand::Const(value) => assembler.move_immediate64(destination, value),
-    }
+    let source = emit_linear_operand_with_resident(
+        assembler,
+        operand,
+        destination,
+        induction_slot,
+        induction_register,
+        resident_values,
+    );
+    assembler.move_register(destination, source);
 }
 
 fn emit_linear_condition_operand(
@@ -572,28 +596,18 @@ fn emit_linear_condition_operand(
     induction_slot: u16,
     induction_register: X86_64Register,
     resident_values: &[(u64, X86_64Register)],
-) {
+) -> X86_64Register {
     match operand {
-        NativeStraightLongConditionOperand::Source(source) => {
-            emit_linear_operand(
-                assembler,
-                source,
-                destination,
-                induction_slot,
-                induction_register,
-                resident_values,
-            );
-        }
+        NativeStraightLongConditionOperand::Source(source) => emit_linear_operand_with_resident(
+            assembler,
+            source,
+            destination,
+            induction_slot,
+            induction_register,
+            resident_values,
+        ),
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
-            emit_linear_operand(
-                assembler,
-                lhs,
-                destination,
-                induction_slot,
-                induction_register,
-                resident_values,
-            );
-            emit_linear_operand(
+            let rhs_register = emit_linear_operand_with_resident(
                 assembler,
                 rhs,
                 scratch,
@@ -601,7 +615,17 @@ fn emit_linear_condition_operand(
                 induction_register,
                 resident_values,
             );
-            assembler.and_register(destination, scratch);
+            let lhs_register = emit_linear_operand_with_resident(
+                assembler,
+                lhs,
+                destination,
+                induction_slot,
+                induction_register,
+                resident_values,
+            );
+            assembler.move_register(destination, lhs_register);
+            assembler.and_register(destination, rhs_register);
+            destination
         }
     }
 }
@@ -821,6 +845,7 @@ fn emit_scalar_straight_loop(
     publication_mask: u64,
     carried_mask: u64,
     defer_visible_phi: bool,
+    code_base_offset: usize,
 ) -> Result<Box<[u8]>, X86StraightLongLoopError> {
     debug_assert!(!(budgeted && polling_interval.is_some()));
     let mut assembler = X86_64Assembler::new();
@@ -1010,6 +1035,9 @@ fn emit_scalar_straight_loop(
     }
     assembler.compare_register(induction, bound);
     let completed_jump = assembler.jump_greater_or_equal_rel32();
+    if polling_interval.is_some() && keeps_structured_scalar_values_resident {
+        assembler.align_with_nops(code_base_offset, 32);
+    }
     let loop_start = assembler.bytes.len();
     let mut operation_side_exit_jumps = Vec::new();
     let mut structured_conditional_jumps = Vec::new();
@@ -1082,15 +1110,21 @@ fn emit_scalar_straight_loop(
                 != 0;
         let (kind, left, right, result, destination) = match operation {
             NativeStraightLongOperation::Move { source, result } => {
-                let result_register = direct_result_register.unwrap_or(lhs);
-                emit_linear_operand(
+                let result_scratch = direct_result_register.unwrap_or(lhs);
+                let source_register = emit_linear_operand_with_resident(
                     &mut assembler,
                     source,
-                    result_register,
+                    result_scratch,
                     config.induction_slot,
                     induction,
                     &active_resident_values,
                 );
+                let result_register = if let Some(direct_result_register) = direct_result_register {
+                    assembler.move_register(direct_result_register, source_register);
+                    direct_result_register
+                } else {
+                    source_register
+                };
                 emit_x86_resident_output(
                     &mut assembler,
                     1u64 << result,
@@ -1228,7 +1262,7 @@ fn emit_scalar_straight_loop(
                 rhs: condition_rhs,
                 expected,
             } => {
-                emit_linear_condition_operand(
+                let condition_lhs_register = emit_linear_condition_operand(
                     &mut assembler,
                     condition_lhs,
                     lhs,
@@ -1237,7 +1271,7 @@ fn emit_scalar_straight_loop(
                     induction,
                     &resident_values,
                 );
-                emit_linear_condition_operand(
+                let condition_rhs_register = emit_linear_condition_operand(
                     &mut assembler,
                     condition_rhs,
                     rhs,
@@ -1246,7 +1280,7 @@ fn emit_scalar_straight_loop(
                     induction,
                     &resident_values,
                 );
-                assembler.compare_register(lhs, rhs);
+                assembler.compare_register(condition_lhs_register, condition_rhs_register);
                 operation_side_exit_jumps.push((
                     emit_guard_mismatch_jump(&mut assembler, kind, expected),
                     operation_index as u8,
@@ -1259,7 +1293,7 @@ fn emit_scalar_straight_loop(
                 rhs: condition_rhs,
                 false_target,
             } => {
-                emit_linear_condition_operand(
+                let condition_lhs_register = emit_linear_condition_operand(
                     &mut assembler,
                     condition_lhs,
                     lhs,
@@ -1268,7 +1302,7 @@ fn emit_scalar_straight_loop(
                     induction,
                     &active_resident_values,
                 );
-                emit_linear_condition_operand(
+                let condition_rhs_register = emit_linear_condition_operand(
                     &mut assembler,
                     condition_rhs,
                     rhs,
@@ -1277,7 +1311,7 @@ fn emit_scalar_straight_loop(
                     induction,
                     &active_resident_values,
                 );
-                assembler.compare_register(lhs, rhs);
+                assembler.compare_register(condition_lhs_register, condition_rhs_register);
                 structured_conditional_jumps.push((
                     emit_false_condition_jump(&mut assembler, kind),
                     false_target,
@@ -1295,49 +1329,60 @@ fn emit_scalar_straight_loop(
             }
         };
         let result_register = direct_result_register.unwrap_or(lhs);
-        if result_register == lhs {
-            emit_linear_operand(
-                &mut assembler,
-                left,
-                lhs,
-                config.induction_slot,
-                induction,
-                &active_resident_values,
-            );
-            emit_linear_operand(
-                &mut assembler,
-                right,
-                rhs,
-                config.induction_slot,
-                induction,
-                &active_resident_values,
-            );
-        } else {
-            // Preserve a previous value owned by the destination register when
-            // it is also the right operand before overwriting that register
-            // with the left operand.
-            emit_linear_operand(
-                &mut assembler,
-                right,
-                rhs,
-                config.induction_slot,
-                induction,
-                &active_resident_values,
-            );
-            emit_linear_operand(
-                &mut assembler,
-                left,
-                result_register,
-                config.induction_slot,
-                induction,
-                &active_resident_values,
-            );
+        let mut right_register = emit_linear_operand_with_resident(
+            &mut assembler,
+            right,
+            rhs,
+            config.induction_slot,
+            induction,
+            &active_resident_values,
+        );
+        if right_register == result_register && result_register != lhs {
+            // x86 arithmetic overwrites its left operand. Preserve an old
+            // right-side value before reusing its fixed register as the
+            // result destination.
+            assembler.move_register(rhs, right_register);
+            right_register = rhs;
+        } else if result_register != lhs
+            && matches!(
+                right_register,
+                X86_64Register::R13 | X86_64Register::R14 | X86_64Register::R15
+            )
+        {
+            // On Zen-family cores, two long-lived publication operands can
+            // repeatedly collide in the banked integer register file. A
+            // short-lived copy re-banks the right operand and is measurably
+            // faster for dependent fixed-to-fixed recurrences.
+            assembler.move_register(rhs, right_register);
+            right_register = rhs;
+        }
+        let left_register = emit_linear_operand_with_resident(
+            &mut assembler,
+            left,
+            result_register,
+            config.induction_slot,
+            induction,
+            &active_resident_values,
+        );
+        assembler.move_register(result_register, left_register);
+        if matches!(kind, ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo)
+            && !matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some())
+            && right_register == X86_64Register::RDX
+        {
+            // CQO owns RDX, so a resident divisor must leave the architectural
+            // dividend pair before sign extension.
+            assembler.move_register(rhs, right_register);
+            right_register = rhs;
         }
         match kind {
-            ScalarLongOpKind::Add => assembler.add_register(result_register, rhs),
-            ScalarLongOpKind::Subtract => assembler.subtract_register(result_register, rhs),
-            ScalarLongOpKind::Multiply => assembler.multiply_register(result_register, rhs),
-            ScalarLongOpKind::BitwiseXor => assembler.xor_register(result_register, rhs),
+            ScalarLongOpKind::Add => assembler.add_register(result_register, right_register),
+            ScalarLongOpKind::Subtract => {
+                assembler.subtract_register(result_register, right_register)
+            }
+            ScalarLongOpKind::Multiply => {
+                assembler.multiply_register(result_register, right_register)
+            }
+            ScalarLongOpKind::BitwiseXor => assembler.xor_register(result_register, right_register),
             ScalarLongOpKind::Modulo if matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
             {
                 let QuickLongOperand::Const(divisor) = right else {
@@ -1357,10 +1402,10 @@ fn emit_scalar_straight_loop(
             ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
                 debug_assert_eq!(result_register, lhs);
                 if checked {
-                    assembler.compare_immediate8(rhs, 0);
+                    assembler.compare_immediate8(right_register, 0);
                     operation_side_exit_jumps
                         .push((assembler.jump_equal_rel32(), operation_index as u8));
-                    assembler.compare_immediate8(rhs, -1);
+                    assembler.compare_immediate8(right_register, -1);
                     let safe_divisor = assembler.jump_not_equal_rel32();
                     assembler.move_immediate64(auxiliary, i64::MIN);
                     assembler.compare_register(lhs, auxiliary);
@@ -1370,7 +1415,7 @@ fn emit_scalar_straight_loop(
                     assembler.patch_rel32(safe_divisor, divide);
                 }
                 assembler.sign_extend_rax_into_rdx();
-                assembler.signed_divide(rhs);
+                assembler.signed_divide(right_register);
                 if kind == ScalarLongOpKind::Modulo {
                     assembler.move_register(lhs, X86_64Register::RDX);
                 }
@@ -1850,18 +1895,20 @@ impl CompiledX86StraightLongLoop {
                 .is_some_and(|slot| carried_mask & (1u64 << slot) != 0))
         .then_some(carried_mask)
         .unwrap_or(0);
-        let fast_code = emit_scalar_straight_loop(&config, false, false, None, u64::MAX, 0, false)?;
+        let fast_code =
+            emit_scalar_straight_loop(&config, false, false, None, u64::MAX, 0, false, 0)?;
         let checked_entry_offset = fast_code.len();
         let checked_code =
-            emit_scalar_straight_loop(&config, true, false, None, u64::MAX, 0, false)?;
+            emit_scalar_straight_loop(&config, true, false, None, u64::MAX, 0, false, 0)?;
         let mut code = fast_code.into_vec();
         code.extend_from_slice(&checked_code);
         let chunk_entry_offset = code.len();
-        let chunk_code = emit_scalar_straight_loop(&config, false, true, None, u64::MAX, 0, false)?;
+        let chunk_code =
+            emit_scalar_straight_loop(&config, false, true, None, u64::MAX, 0, false, 0)?;
         code.extend_from_slice(&chunk_code);
         let checked_chunk_entry_offset = code.len();
         let checked_chunk_code =
-            emit_scalar_straight_loop(&config, true, true, None, u64::MAX, 0, false)?;
+            emit_scalar_straight_loop(&config, true, true, None, u64::MAX, 0, false, 0)?;
         code.extend_from_slice(&checked_chunk_code);
         let polling_entry_offset = code.len();
         let polling_code = emit_scalar_straight_loop(
@@ -1872,6 +1919,7 @@ impl CompiledX86StraightLongLoop {
             publication_mask,
             polling_carried_mask,
             defer_visible_phi,
+            polling_entry_offset,
         )?;
         code.extend_from_slice(&polling_code);
         let code = code.into_boxed_slice();
@@ -3853,6 +3901,172 @@ mod tests {
                 .windows(3)
                 .any(|window| window == [0x49, 0x8b, 0xd5]),
             "untracked result alias should be forwarded from R13 to RDX"
+        );
+    }
+
+    #[test]
+    fn range_proven_resident_operands_feed_branch_and_rebank_fixed_arithmetic() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(1)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(2)),
+            false_target: 2,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(2),
+            result: 3,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(2),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 2,
+        };
+        let publication_mask = (1u64 << 1) | (1u64 << 2);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 3,
+                    post_result: None,
+                },
+                publication_mask,
+                publication_mask,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 1;
+        slots[2] = 2;
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[2]), (4, 7, 6));
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        let initial_jge = polling_code
+            .windows(2)
+            .position(|window| window == [0x0f, 0x8d])
+            .expect("polling entry should reject an empty range");
+        let mut loop_offset = initial_jge + 6;
+        while polling_code.get(loop_offset) == Some(&0x90) {
+            loop_offset += 1;
+        }
+        assert_eq!(
+            (program.polling_entry_offset + loop_offset) % 32,
+            0,
+            "structured polling loop should start on a 32-byte boundary"
+        );
+        assert!(
+            polling_code
+                .windows(3)
+                .any(|window| window == [0x4d, 0x3b, 0xee]),
+            "branch should compare R13 and R14 directly"
+        );
+        assert!(
+            polling_code
+                .windows(3)
+                .any(|window| window == [0x4d, 0x8b, 0xc6]),
+            "fixed-to-fixed arithmetic should re-bank R14 through R8"
+        );
+        assert!(
+            polling_code
+                .windows(3)
+                .any(|window| window == [0x4d, 0x03, 0xe8]),
+            "re-banked add should write R13 from R8"
+        );
+    }
+
+    #[test]
+    fn range_proven_resident_rhs_feeds_scratch_result_directly() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Slot(1),
+            result: 2,
+        };
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 1,
+                    post_result: None,
+                },
+                (1u64 << 1) | (1u64 << 2),
+                1u64 << 1,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 5;
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[2]), (4, 5, 8));
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        assert!(
+            polling_code
+                .windows(3)
+                .any(|window| window == [0x49, 0x03, 0xc5]),
+            "scratch result should consume resident R13 directly"
+        );
+        assert!(
+            !polling_code
+                .windows(3)
+                .any(|window| window == [0x4d, 0x8b, 0xc5]),
+            "resident R13 should not be copied into R8 for an RAX result"
+        );
+    }
+
+    #[test]
+    fn range_proven_division_moves_latest_rdx_divisor_before_cqo() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(1),
+            result: 2,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::IntDivide,
+            lhs: QuickLongOperand::Const(100),
+            rhs: QuickLongOperand::Slot(2),
+            result: 3,
+        };
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 2,
+                    post_result: None,
+                },
+                1u64 << 3,
+                0,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[3]), (4, 25));
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        assert!(
+            polling_code
+                .windows(5)
+                .any(|window| window == [0x4c, 0x8b, 0xc2, 0x48, 0x99]),
+            "RDX divisor must move to R8 immediately before CQO"
         );
     }
 
