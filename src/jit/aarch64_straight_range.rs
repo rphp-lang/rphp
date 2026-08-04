@@ -69,8 +69,8 @@ impl StraightRangeState {
 
 /// Conservatively proves every checked arithmetic result over the complete
 /// remaining induction range. Linear additive and subtractive loop-carried
-/// values may consume acyclic scalar expressions and earlier updated
-/// recurrences. Cyclic or reverse dependencies retain the checked path.
+/// values may consume acyclic scalar expressions and other proven recurrences.
+/// Dependencies are solved topologically; cycles retain the checked path.
 pub(super) fn straight_long_remaining_range_proof(
     config: &NativeStraightLongLoopConfig,
     slots: &[i64; 64],
@@ -300,6 +300,8 @@ fn linear_recurrence_proof(
     }
 
     let mut carried_slots_by_operation = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut recurrence_kinds = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut recurrence_deltas = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut remaining = carried_mask;
     while remaining != 0 {
         let slot = remaining.trailing_zeros() as u16;
@@ -312,85 +314,108 @@ fn linear_recurrence_proof(
         {
             return None;
         }
+        let (kind, delta) = recurrence_update(config.operations[operation_index], slot)?;
+        recurrence_kinds[operation_index] = Some(kind);
+        recurrence_deltas[operation_index] = Some(delta);
     }
 
     let mut operation_ranges = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut carried_ranges = [None; 64];
-    for (operation_index, carried_slot) in carried_slots_by_operation
-        .iter()
-        .copied()
-        .take(config.operation_count as usize)
-        .enumerate()
-    {
-        let Some(slot) = carried_slot else {
-            continue;
-        };
-        let (kind, delta) = match config.operations[operation_index] {
-            NativeStraightLongOperation::BinaryAssign {
-                kind: ScalarLongOpKind::Add,
-                lhs: QuickLongOperand::Slot(lhs),
-                rhs,
-                destination,
-                ..
-            } if lhs == slot && destination == slot => (ScalarLongOpKind::Add, rhs),
-            NativeStraightLongOperation::BinaryAssign {
-                kind: ScalarLongOpKind::Add,
-                lhs,
-                rhs: QuickLongOperand::Slot(rhs),
-                destination,
-                ..
-            } if rhs == slot && destination == slot => (ScalarLongOpKind::Add, lhs),
-            NativeStraightLongOperation::BinaryAssign {
-                kind: ScalarLongOpKind::Subtract,
-                lhs: QuickLongOperand::Slot(lhs),
-                rhs,
-                destination,
-                ..
-            } if lhs == slot && destination == slot => (ScalarLongOpKind::Subtract, rhs),
-            _ => return None,
-        };
-        let delta = recurrence_expression_operand_range(
-            config,
-            slots,
-            delta,
-            operation_index,
-            induction_range,
-            output_mask,
-            carried_mask,
-            &carried_ranges,
-        )?;
-        let contribution = match kind {
-            ScalarLongOpKind::Add => delta,
-            ScalarLongOpKind::Subtract => LongInterval {
-                minimum: -delta.maximum,
-                maximum: -delta.minimum,
-            },
-            _ => unreachable!("linear recurrence admits only add or subtract"),
-        };
-        let count = i128::from(iterations);
-        let minimum_delta = if contribution.minimum < 0 {
-            contribution.minimum.checked_mul(count)?
-        } else {
-            0
-        };
-        let maximum_delta = if contribution.maximum > 0 {
-            contribution.maximum.checked_mul(count)?
-        } else {
-            0
-        };
-        let initial = i128::from(slots[slot as usize]);
-        let range = LongInterval::new(
-            initial.checked_add(minimum_delta)?,
-            initial.checked_add(maximum_delta)?,
-        )?;
-        operation_ranges[operation_index] = Some(range);
-        carried_ranges[slot as usize] = Some(range);
+    let recurrence_count = carried_mask.count_ones() as usize;
+    let mut proven_count = 0usize;
+    while proven_count < recurrence_count {
+        let before_count = proven_count;
+        for (operation_index, carried_slot) in carried_slots_by_operation
+            .iter()
+            .copied()
+            .take(config.operation_count as usize)
+            .enumerate()
+        {
+            let Some(slot) = carried_slot else {
+                continue;
+            };
+            if operation_ranges[operation_index].is_some() {
+                continue;
+            }
+            let Some(delta) = recurrence_expression_operand_range(
+                config,
+                slots,
+                recurrence_deltas[operation_index]?,
+                operation_index,
+                induction_range,
+                output_mask,
+                carried_mask,
+                &carried_ranges,
+            ) else {
+                continue;
+            };
+            let contribution = match recurrence_kinds[operation_index]? {
+                ScalarLongOpKind::Add => delta,
+                ScalarLongOpKind::Subtract => LongInterval {
+                    minimum: -delta.maximum,
+                    maximum: -delta.minimum,
+                },
+                _ => unreachable!("linear recurrence admits only add or subtract"),
+            };
+            let count = i128::from(iterations);
+            let minimum_delta = if contribution.minimum < 0 {
+                contribution.minimum.checked_mul(count)?
+            } else {
+                0
+            };
+            let maximum_delta = if contribution.maximum > 0 {
+                contribution.maximum.checked_mul(count)?
+            } else {
+                0
+            };
+            let initial = i128::from(slots[slot as usize]);
+            let range = LongInterval::new(
+                initial.checked_add(minimum_delta)?,
+                initial.checked_add(maximum_delta)?,
+            )?;
+            operation_ranges[operation_index] = Some(range);
+            carried_ranges[slot as usize] = Some(range);
+            proven_count += 1;
+        }
+        if proven_count == before_count {
+            return None;
+        }
     }
 
     Some(LinearRecurrenceProof {
         operation_ranges,
         carried_mask,
     })
+}
+
+fn recurrence_update(
+    operation: NativeStraightLongOperation,
+    slot: u16,
+) -> Option<(ScalarLongOpKind, QuickLongOperand)> {
+    match operation {
+        NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(lhs),
+            rhs,
+            destination,
+            ..
+        } if lhs == slot && destination == slot => Some((ScalarLongOpKind::Add, rhs)),
+        NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs,
+            rhs: QuickLongOperand::Slot(rhs),
+            destination,
+            ..
+        } if rhs == slot && destination == slot => Some((ScalarLongOpKind::Add, lhs)),
+        NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(lhs),
+            rhs,
+            destination,
+            ..
+        } if lhs == slot && destination == slot => Some((ScalarLongOpKind::Subtract, rhs)),
+        _ => None,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -962,47 +987,59 @@ mod tests {
             for initial_first in [i64::MIN + 1_000, -100, 0, 100, i64::MAX - 1_000] {
                 for initial_second in [i64::MIN + 1_000, -100, 0, 100, i64::MAX - 1_000] {
                     for step in [-13_i64, -1, 0, 1, 11] {
-                        let config = config(
-                            &[
-                                NativeStraightLongOperation::BinaryAssign {
-                                    kind: ScalarLongOpKind::Add,
-                                    lhs: QuickLongOperand::Slot(1),
-                                    rhs: QuickLongOperand::Slot(5),
-                                    result: 2,
-                                    destination: 1,
-                                },
-                                NativeStraightLongOperation::BinaryAssign {
-                                    kind: ScalarLongOpKind::Add,
-                                    lhs: QuickLongOperand::Slot(3),
-                                    rhs: QuickLongOperand::Slot(1),
-                                    result: 4,
-                                    destination: 3,
-                                },
-                            ],
-                            distance,
-                        );
-                        let mut slots = [0_i64; 64];
-                        slots[1] = initial_first;
-                        slots[3] = initial_second;
-                        slots[5] = step;
+                        for reverse_order in [false, true] {
+                            let update_first = NativeStraightLongOperation::BinaryAssign {
+                                kind: ScalarLongOpKind::Add,
+                                lhs: QuickLongOperand::Slot(1),
+                                rhs: QuickLongOperand::Slot(5),
+                                result: 2,
+                                destination: 1,
+                            };
+                            let update_second = NativeStraightLongOperation::BinaryAssign {
+                                kind: ScalarLongOpKind::Add,
+                                lhs: QuickLongOperand::Slot(3),
+                                rhs: QuickLongOperand::Slot(1),
+                                result: 4,
+                                destination: 3,
+                            };
+                            let operations = if reverse_order {
+                                [update_second, update_first]
+                            } else {
+                                [update_first, update_second]
+                            };
+                            let config = config(&operations, distance);
+                            let mut slots = [0_i64; 64];
+                            slots[1] = initial_first;
+                            slots[3] = initial_second;
+                            slots[5] = step;
 
-                        let proven = straight_long_remaining_range_proof(&config, &slots);
-                        let mut first = initial_first;
-                        let mut second = initial_second;
-                        let mut safe = true;
-                        for _ in 0..distance {
-                            let Some(next_first) = first.checked_add(step) else {
-                                safe = false;
-                                break;
-                            };
-                            let Some(next_second) = second.checked_add(next_first) else {
-                                safe = false;
-                                break;
-                            };
-                            first = next_first;
-                            second = next_second;
+                            let proven = straight_long_remaining_range_proof(&config, &slots);
+                            let mut first = initial_first;
+                            let mut second = initial_second;
+                            let mut safe = true;
+                            for _ in 0..distance {
+                                if reverse_order {
+                                    let Some(next_second) = second.checked_add(first) else {
+                                        safe = false;
+                                        break;
+                                    };
+                                    second = next_second;
+                                }
+                                let Some(next_first) = first.checked_add(step) else {
+                                    safe = false;
+                                    break;
+                                };
+                                first = next_first;
+                                if !reverse_order {
+                                    let Some(next_second) = second.checked_add(first) else {
+                                        safe = false;
+                                        break;
+                                    };
+                                    second = next_second;
+                                }
+                            }
+                            assert!(proven.is_none() || safe);
                         }
-                        assert!(proven.is_none() || safe);
                     }
                 }
             }
@@ -1010,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn composed_and_forward_dependent_recurrences_are_proven() {
+    fn composed_and_acyclic_dependent_recurrences_are_proven() {
         let composed = config(
             &[
                 NativeStraightLongOperation::Binary {
@@ -1086,7 +1123,30 @@ mod tests {
         assert_eq!(dependent_proof.carried_mask, (1u64 << 1) | (1u64 << 3));
 
         let reverse_dependency = config(&[dependent.operations[1], dependent.operations[0]], 100);
-        assert!(straight_long_remaining_range_proof(&reverse_dependency, &[0_i64; 64]).is_none());
+        let reverse_proof = straight_long_remaining_range_proof(&reverse_dependency, &[0_i64; 64])
+            .expect("acyclic reverse-order dependency should be proven topologically");
+        assert_eq!(reverse_proof.carried_mask, (1u64 << 1) | (1u64 << 3));
+
+        let cyclic = config(
+            &[
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(1),
+                    rhs: QuickLongOperand::Slot(3),
+                    result: 2,
+                    destination: 1,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(3),
+                    rhs: QuickLongOperand::Slot(1),
+                    result: 4,
+                    destination: 3,
+                },
+            ],
+            100,
+        );
+        assert!(straight_long_remaining_range_proof(&cyclic, &[0_i64; 64]).is_none());
     }
 
     #[test]

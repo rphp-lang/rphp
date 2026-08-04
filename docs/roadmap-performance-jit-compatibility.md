@@ -2159,6 +2159,30 @@ percent and the direct recurrence control is flat at -0.38 percent. The
 checkpoint passes 134 library tests, 77 ARM64/JIT integration tests, all four
 application corpus tests, and `cargo check --all-features`.
 
+Topological recurrence proof checkpoint (2026-08-04): physical operation
+order no longer doubles as dependency proof order. Discovery first records
+every recurrence node and delta expression. A bounded solver then repeatedly
+proves any unresolved node whose carried dependencies already have all-prefix
+intervals. With at most three fixed recurrence registers, convergence is
+strictly bounded; no-progress means a cycle, unsafe expression, or unsupported
+shape and retains checked chunking.
+
+This admits reverse-order acyclic PHP such as `$b += $a; $a += 1`. Proof order
+may solve `$a` first, but generated ARM64 remains in source order, so `$b`
+observes the old `$a` exactly as PHP requires. Both the direct ABI
+interrupt/resume test and a real PHP integration test assert this old-value
+semantics. The dependent safety matrix now covers forward and reverse physical
+orders near both `i64` limits, while an explicit two-node cycle remains
+rejected.
+
+In 101 order-rotated `max-perf` runs against the forward-dependent commit, the
+new permanent reverse-dependent holdout improves from 11.371 ms to 2.635 ms
+(paired median -76.79 percent, 4.32x faster). PHP tracing JIT records 30.454
+ms, making RPHP 11.56x faster. The forward-dependent control is flat at +0.04
+percent and the composed recurrence control at -0.16 percent. The checkpoint
+passes 134 library tests, 78 ARM64/JIT integration tests, all four application
+corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

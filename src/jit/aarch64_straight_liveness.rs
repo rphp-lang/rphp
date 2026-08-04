@@ -371,22 +371,22 @@ mod tests {
     }
 
     #[test]
-    fn dependent_loop_carried_values_observe_updated_fixed_registers() {
+    fn reverse_dependent_values_observe_old_fixed_register_state() {
         let mut operations =
             [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
         operations[0] = NativeStraightLongOperation::BinaryAssign {
-            kind: ScalarLongOpKind::Add,
-            lhs: QuickLongOperand::Slot(1),
-            rhs: QuickLongOperand::Slot(0),
-            result: 2,
-            destination: 1,
-        };
-        operations[1] = NativeStraightLongOperation::BinaryAssign {
             kind: ScalarLongOpKind::Add,
             lhs: QuickLongOperand::Slot(3),
             rhs: QuickLongOperand::Slot(1),
             result: 4,
             destination: 3,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+            destination: 1,
         };
         let config = NativeStraightLongLoopConfig {
             induction_slot: 0,
@@ -423,7 +423,7 @@ mod tests {
         );
         assert_eq!(slots[0], 1_024);
         assert_eq!(slots[1], 523_786);
-        assert_eq!(slots[3], 178_967_035);
+        assert_eq!(slots[3], 178_443_259);
 
         interrupt.store(false, Ordering::Relaxed);
         let completed = program
@@ -435,6 +435,6 @@ mod tests {
         );
         assert_eq!(slots[0], 10_000);
         assert_eq!(slots[1], 49_995_010);
-        assert_eq!(slots[3], 166_666_764_995);
+        assert_eq!(slots[3], 166_616_769_995);
     }
 }

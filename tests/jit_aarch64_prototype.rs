@@ -3193,6 +3193,42 @@ fn real_php_forward_dependent_recurrences_stay_in_one_native_region() {
 }
 
 #[test]
+fn real_php_reverse_order_dependency_preserves_old_value_semantics() {
+    let source = "<?php $bound = 100000; $a = 3; $b = -7; for ($i = 0; $i < $bound; $i++) { $b = $b + $a; $a = $a + 1; } echo $i . ':' . $a . ':' . $b;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:100003:5000249993"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the reverse dependency Long loop IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_composed_recurrence_delta_stays_in_range_proven_native_region() {
     let source = "<?php $bound = 100000; $sum = 10; $offset = 7; for ($i = 0; $i < $bound; $i++) { $sum = $sum + (($i * 3) + $offset); } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
