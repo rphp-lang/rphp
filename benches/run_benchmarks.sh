@@ -69,6 +69,7 @@ BENCHMARKS=(
     "bench_modulo_branch_loop.php:Modulo branch loop 10M"
     "bench_binary_assign_loop.php:Binary assign loop 10M"
     "bench_scalar_expression_chain_loop.php:Scalar expression chain 10M"
+    "bench_scalar_overlapping_lifetimes_loop.php:Overlapping scalar lifetimes 10M"
     "bench_packed_array_loop.php:Packed array reads 1M"
     "bench_packed_array_materialized_loop.php:Packed materialized reads 1M"
     "bench_hash_int_array_loop.php:Hash integer-key reads 1M"

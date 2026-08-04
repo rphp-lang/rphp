@@ -3085,6 +3085,42 @@ fn real_php_scalar_expression_chains_enter_general_native_ir_region() {
 }
 
 #[test]
+fn real_php_overlapping_scalar_lifetimes_enter_range_proven_native_region() {
+    let source = "<?php $bound = 100000; $a = 0; $b = 0; $c = 0; $d = 0; for ($i = 0; $i < $bound; $i++) { $a = $i * 3; $b = $a + 7; $c = $a + $b; $d = $a + $b + $c; } echo $i . ':' . $a . ':' . $b . ':' . $c . ':' . $d;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:299997:300004:600001:1200002"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select overlapping scalar lifetimes");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_forward_scalar_branches_use_range_proven_native_region() {
     let source = "<?php $bound = 100000; $cutoff = 50000; $selected = 0; $folded = 0; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $selected = ($i * 3) + 1; } else { $selected = ($i * 5) - 2; } $folded = ($selected * 3) + 11; } echo $i . ':' . $selected . ':' . $folded;";
     let tokens = Lexer::new(source).tokenize().unwrap();

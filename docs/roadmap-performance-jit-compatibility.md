@@ -1958,6 +1958,30 @@ The next profitable step is multi-value residency and liveness-driven dead-TMP
 store elimination, but only after publication requirements are represented
 explicitly in the native IR.
 
+Overlapping scalar residency checkpoint (2026-08-04): a separate backward
+liveness pass now tracks the current value version of each straight Long slot.
+The range-proven linear lowering uses three caller-saved registers that are
+otherwise dead after polling-mode entry to preserve values whose lifetime
+crosses a later operation. Allocation is bounded and failure is harmless: if
+all three cache registers are occupied, the existing shadow load remains.
+Version-killing on every output prevents an older value of the same slot from
+being reused after reassignment.
+
+As in the first forwarding checkpoint, every shadow store remains. Structural
+tests verify both the cache-register `MOV` and the original `STR`, while a real
+PHP integration test confirms that an overlapping four-expression body uses
+one complete-range-proven native entry with exact output. A new permanent
+benchmark covers this previously unseen lifetime shape.
+
+In 101 order-rotated A/B pairs against the one-register checkpoint, overlapping
+lifetimes move from 15.340 ms to 11.236 ms (paired median -26.78 percent), with
+PHP tracing JIT at 62.390 ms and RPHP therefore 5.55x faster. Regions that do
+not need another live register remain flat: expression chain is -0.17 percent
+and binary assign -0.07 percent. Typed order and typed ledger application
+controls are also flat at +0.10 and +0.03 percent with identical results. This
+isolates the next remaining memory cost cleanly: dead temporary stores, not
+reloads of live overlapping values.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

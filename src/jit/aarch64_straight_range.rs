@@ -422,8 +422,7 @@ mod tests {
             super::super::Arm64Register::from_code(6),
             0,
             super::super::Arm64Register::from_code(3),
-            1u64 << 2,
-            super::super::Arm64Register::from_code(8),
+            &[(1u64 << 2, super::super::Arm64Register::from_code(8))],
         );
         assert_eq!(forwarded.finish(), 0xaa08_03e6u32.to_le_bytes());
 
@@ -434,8 +433,7 @@ mod tests {
             super::super::Arm64Register::from_code(8),
             0,
             super::super::Arm64Register::from_code(3),
-            1u64 << 2,
-            super::super::Arm64Register::from_code(8),
+            &[(1u64 << 2, super::super::Arm64Register::from_code(8))],
         );
         assert!(already_in_destination.finish().is_empty());
 
@@ -446,8 +444,7 @@ mod tests {
             super::super::Arm64Register::from_code(6),
             0,
             super::super::Arm64Register::from_code(3),
-            0,
-            super::super::Arm64Register::from_code(8),
+            &[(0, super::super::Arm64Register::from_code(8))],
         );
         assert_eq!(shadow_load.finish(), 0xf940_0806u32.to_le_bytes());
     }
