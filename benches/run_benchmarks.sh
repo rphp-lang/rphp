@@ -72,6 +72,7 @@ BENCHMARKS=(
     "bench_scalar_overlapping_lifetimes_loop.php:Overlapping scalar lifetimes 10M"
     "bench_scalar_recurrence_loop.php:Scalar recurrences 10M"
     "bench_composed_recurrence_loop.php:Composed recurrence 10M"
+    "bench_dependent_recurrence_loop.php:Dependent recurrence 10M"
     "bench_packed_array_loop.php:Packed array reads 1M"
     "bench_packed_array_materialized_loop.php:Packed materialized reads 1M"
     "bench_hash_int_array_loop.php:Hash integer-key reads 1M"

@@ -45,7 +45,7 @@ pub(crate) struct StraightLongRangeProof {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct DirectRecurrenceProof {
+struct LinearRecurrenceProof {
     operation_ranges: [Option<LongInterval>; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
     carried_mask: u64,
 }
@@ -68,9 +68,9 @@ impl StraightRangeState {
 }
 
 /// Conservatively proves every checked arithmetic result over the complete
-/// remaining induction range. Direct additive and subtractive loop-carried
-/// values are admitted when their delta is a constant, the induction value,
-/// or an invariant slot. More general recurrences retain the checked path.
+/// remaining induction range. Linear additive and subtractive loop-carried
+/// values may consume acyclic scalar expressions and earlier updated
+/// recurrences. Cyclic or reverse dependencies retain the checked path.
 pub(super) fn straight_long_remaining_range_proof(
     config: &NativeStraightLongLoopConfig,
     slots: &[i64; 64],
@@ -94,7 +94,7 @@ pub(super) fn straight_long_remaining_range_proof(
     }
     let iterations = (bound as u64).wrapping_sub(induction as u64);
     let recurrence =
-        direct_recurrence_proof(config, slots, induction_range, iterations, output_mask)?;
+        linear_recurrence_proof(config, slots, induction_range, iterations, output_mask)?;
     let mut states = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
     let mut initial_state = StraightRangeState::initial(slots);
     for slot in 0..64 {
@@ -264,13 +264,13 @@ pub(super) fn straight_long_remaining_range_is_proven(
     straight_long_remaining_range_proof(config, slots).is_some()
 }
 
-fn direct_recurrence_proof(
+fn linear_recurrence_proof(
     config: &NativeStraightLongLoopConfig,
     slots: &[i64; 64],
     induction_range: LongInterval,
     iterations: u64,
     output_mask: u64,
-) -> Option<DirectRecurrenceProof> {
+) -> Option<LinearRecurrenceProof> {
     let mut written_mask = 0u64;
     let mut carried_mask = 0u64;
     let mut has_control_flow = false;
@@ -290,7 +290,7 @@ fn direct_recurrence_proof(
     }
     carried_mask &= !(1u64 << config.induction_slot);
     if carried_mask == 0 {
-        return Some(DirectRecurrenceProof {
+        return Some(LinearRecurrenceProof {
             operation_ranges: [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
             carried_mask: 0,
         });
@@ -299,17 +299,32 @@ fn direct_recurrence_proof(
         return None;
     }
 
-    let mut operation_ranges = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut carried_slots_by_operation = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut remaining = carried_mask;
     while remaining != 0 {
         let slot = remaining.trailing_zeros() as u16;
         remaining &= remaining - 1;
         let operation_index = recurrence_operation_for_slot(config, slot)?;
-        if operation_ranges[operation_index].is_some()
+        if carried_slots_by_operation[operation_index]
+            .replace(slot)
+            .is_some()
             || (config.operations[operation_index].output_mask() & carried_mask).count_ones() != 1
         {
             return None;
         }
+    }
+
+    let mut operation_ranges = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut carried_ranges = [None; 64];
+    for (operation_index, carried_slot) in carried_slots_by_operation
+        .iter()
+        .copied()
+        .take(config.operation_count as usize)
+        .enumerate()
+    {
+        let Some(slot) = carried_slot else {
+            continue;
+        };
         let (kind, delta) = match config.operations[operation_index] {
             NativeStraightLongOperation::BinaryAssign {
                 kind: ScalarLongOpKind::Add,
@@ -342,6 +357,7 @@ fn direct_recurrence_proof(
             induction_range,
             output_mask,
             carried_mask,
+            &carried_ranges,
         )?;
         let contribution = match kind {
             ScalarLongOpKind::Add => delta,
@@ -349,7 +365,7 @@ fn direct_recurrence_proof(
                 minimum: -delta.maximum,
                 maximum: -delta.minimum,
             },
-            _ => unreachable!("direct recurrence admits only add or subtract"),
+            _ => unreachable!("linear recurrence admits only add or subtract"),
         };
         let count = i128::from(iterations);
         let minimum_delta = if contribution.minimum < 0 {
@@ -363,13 +379,15 @@ fn direct_recurrence_proof(
             0
         };
         let initial = i128::from(slots[slot as usize]);
-        operation_ranges[operation_index] = LongInterval::new(
+        let range = LongInterval::new(
             initial.checked_add(minimum_delta)?,
             initial.checked_add(maximum_delta)?,
-        );
+        )?;
+        operation_ranges[operation_index] = Some(range);
+        carried_ranges[slot as usize] = Some(range);
     }
 
-    Some(DirectRecurrenceProof {
+    Some(LinearRecurrenceProof {
         operation_ranges,
         carried_mask,
     })
@@ -384,6 +402,7 @@ fn recurrence_expression_operand_range(
     induction_range: LongInterval,
     output_mask: u64,
     carried_mask: u64,
+    carried_ranges: &[Option<LongInterval>; 64],
 ) -> Option<LongInterval> {
     let slot = match operand {
         QuickLongOperand::Const(value) => return Some(LongInterval::exact(value)),
@@ -394,7 +413,7 @@ fn recurrence_expression_operand_range(
     };
     let slot_mask = 1u64 << slot;
     if carried_mask & slot_mask != 0 {
-        return None;
+        return carried_ranges[slot as usize];
     }
     let definition = config.operations[..before_operation]
         .iter()
@@ -414,6 +433,7 @@ fn recurrence_expression_operand_range(
             induction_range,
             output_mask,
             carried_mask,
+            carried_ranges,
         )
     };
     match operation {
@@ -937,7 +957,60 @@ mod tests {
     }
 
     #[test]
-    fn composed_recurrence_delta_is_proven_but_carried_dependency_is_rejected() {
+    fn dependent_recurrence_proof_never_accepts_an_overflowing_prefix() {
+        for distance in [1_i64, 2, 17, 101] {
+            for initial_first in [i64::MIN + 1_000, -100, 0, 100, i64::MAX - 1_000] {
+                for initial_second in [i64::MIN + 1_000, -100, 0, 100, i64::MAX - 1_000] {
+                    for step in [-13_i64, -1, 0, 1, 11] {
+                        let config = config(
+                            &[
+                                NativeStraightLongOperation::BinaryAssign {
+                                    kind: ScalarLongOpKind::Add,
+                                    lhs: QuickLongOperand::Slot(1),
+                                    rhs: QuickLongOperand::Slot(5),
+                                    result: 2,
+                                    destination: 1,
+                                },
+                                NativeStraightLongOperation::BinaryAssign {
+                                    kind: ScalarLongOpKind::Add,
+                                    lhs: QuickLongOperand::Slot(3),
+                                    rhs: QuickLongOperand::Slot(1),
+                                    result: 4,
+                                    destination: 3,
+                                },
+                            ],
+                            distance,
+                        );
+                        let mut slots = [0_i64; 64];
+                        slots[1] = initial_first;
+                        slots[3] = initial_second;
+                        slots[5] = step;
+
+                        let proven = straight_long_remaining_range_proof(&config, &slots);
+                        let mut first = initial_first;
+                        let mut second = initial_second;
+                        let mut safe = true;
+                        for _ in 0..distance {
+                            let Some(next_first) = first.checked_add(step) else {
+                                safe = false;
+                                break;
+                            };
+                            let Some(next_second) = second.checked_add(next_first) else {
+                                safe = false;
+                                break;
+                            };
+                            first = next_first;
+                            second = next_second;
+                        }
+                        assert!(proven.is_none() || safe);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn composed_and_forward_dependent_recurrences_are_proven() {
         let composed = config(
             &[
                 NativeStraightLongOperation::Binary {
@@ -1008,7 +1081,12 @@ mod tests {
             ],
             100,
         );
-        assert!(straight_long_remaining_range_proof(&dependent, &[0_i64; 64]).is_none());
+        let dependent_proof = straight_long_remaining_range_proof(&dependent, &[0_i64; 64])
+            .expect("earlier updated recurrence should be available to a later one");
+        assert_eq!(dependent_proof.carried_mask, (1u64 << 1) | (1u64 << 3));
+
+        let reverse_dependency = config(&[dependent.operations[1], dependent.operations[0]], 100);
+        assert!(straight_long_remaining_range_proof(&reverse_dependency, &[0_i64; 64]).is_none());
     }
 
     #[test]

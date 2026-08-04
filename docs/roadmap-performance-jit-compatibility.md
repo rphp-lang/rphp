@@ -2134,6 +2134,31 @@ is flat at +0.16 percent and the ordinary binary control at +0.04 percent.
 The checkpoint passes 133 library tests, 76 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Forward-dependent recurrence checkpoint (2026-08-04): recurrence discovery is
+now separated from proof order. Every carried CV is first mapped to its unique
+defining operation, then definitions are proven in physical body order. The
+all-prefix interval of an earlier updated CV becomes an available operand for
+a later recurrence or its composed delta DAG. This admits triangular state
+updates such as `$a += 1; $b += $a` while preserving the current-iteration PHP
+ordering semantics.
+
+A carried dependency whose definition is current, later, repeated, branched,
+or cyclic has no previously proven interval and is rejected. The proof remains
+conservative: the later recurrence multiplies the complete earlier prefix
+envelope by the remaining iteration count, so acceptance bounds every possible
+intermediate even when this is wider than the exact polynomial result. A
+matrix around both `i64` limits asserts that no overflowing dependent prefix
+is accepted. The direct ABI interrupt/resume test now also requires the second
+fixed register to consume the first register's newly updated value.
+
+In 101 order-rotated `max-perf` runs against the composed-delta commit, the new
+permanent dependent-recurrence holdout improves from 7.288 ms to 2.659 ms
+(paired median -63.65 percent, 2.74x faster). PHP tracing JIT records 30.863
+ms, making RPHP 11.61x faster. The composed recurrence control improves 0.99
+percent and the direct recurrence control is flat at -0.38 percent. The
+checkpoint passes 134 library tests, 77 ARM64/JIT integration tests, all four
+application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

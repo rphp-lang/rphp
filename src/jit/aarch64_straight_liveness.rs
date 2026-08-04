@@ -371,7 +371,7 @@ mod tests {
     }
 
     #[test]
-    fn two_loop_carried_values_remain_in_fixed_registers_across_backedges() {
+    fn dependent_loop_carried_values_observe_updated_fixed_registers() {
         let mut operations =
             [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
         operations[0] = NativeStraightLongOperation::BinaryAssign {
@@ -384,7 +384,7 @@ mod tests {
         operations[1] = NativeStraightLongOperation::BinaryAssign {
             kind: ScalarLongOpKind::Add,
             lhs: QuickLongOperand::Slot(3),
-            rhs: QuickLongOperand::Const(2),
+            rhs: QuickLongOperand::Slot(1),
             result: 4,
             destination: 3,
         };
@@ -423,7 +423,7 @@ mod tests {
         );
         assert_eq!(slots[0], 1_024);
         assert_eq!(slots[1], 523_786);
-        assert_eq!(slots[3], 2_043);
+        assert_eq!(slots[3], 178_967_035);
 
         interrupt.store(false, Ordering::Relaxed);
         let completed = program
@@ -435,6 +435,6 @@ mod tests {
         );
         assert_eq!(slots[0], 10_000);
         assert_eq!(slots[1], 49_995_010);
-        assert_eq!(slots[3], 19_995);
+        assert_eq!(slots[3], 166_666_764_995);
     }
 }
