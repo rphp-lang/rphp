@@ -1,5 +1,6 @@
 use super::{
-    NativeStraightLongLoopConfig, NativeStraightLongOperation, QuickLongOperand, ScalarLongOpKind,
+    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
+    QuickLongOperand, ScalarLongOpKind, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +32,29 @@ impl LongInterval {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct StraightRangeState {
+    ranges: [LongInterval; 64],
+    definitely_written: u64,
+}
+
+impl StraightRangeState {
+    fn initial(slots: &[i64; 64]) -> Self {
+        Self {
+            ranges: slots.map(LongInterval::exact),
+            definitely_written: 0,
+        }
+    }
+
+    fn merge(&mut self, incoming: Self) {
+        self.definitely_written &= incoming.definitely_written;
+        for (current, incoming) in self.ranges.iter_mut().zip(incoming.ranges) {
+            current.minimum = current.minimum.min(incoming.minimum);
+            current.maximum = current.maximum.max(incoming.maximum);
+        }
+    }
+}
+
 /// Conservatively proves every checked arithmetic result over the complete
 /// remaining induction range. The first domain is deliberately straight and
 /// side-effect free. Reading a body output before it is overwritten means the
@@ -52,15 +76,18 @@ pub(super) fn straight_long_remaining_range_is_proven(
         maximum: i128::from(last_induction),
     };
     let output_mask = config.body_output_mask();
-    let mut written_mask = 0u64;
-    let mut ranges = slots.map(LongInterval::exact);
+    let operation_count = config.operation_count as usize;
+    if operation_count == 0 || operation_count > NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
+        return false;
+    }
+    let mut states = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    states[0] = Some(StraightRangeState::initial(slots));
 
-    for operation in config
-        .operations
-        .iter()
-        .copied()
-        .take(config.operation_count as usize)
-    {
+    for operation_index in 0..operation_count {
+        let Some(mut state) = states[operation_index] else {
+            continue;
+        };
+        let operation = config.operations[operation_index];
         match operation {
             NativeStraightLongOperation::Modulo {
                 value,
@@ -72,30 +99,31 @@ pub(super) fn straight_long_remaining_range_is_proven(
                 }
                 let Some(value) = operand_range(
                     value,
-                    &ranges,
+                    &state.ranges,
                     config.induction_slot,
                     induction_range,
                     output_mask,
-                    written_mask,
+                    state.definitely_written,
                 ) else {
                     return false;
                 };
-                ranges[result as usize] = modulo_interval(value, LongInterval::exact(divisor));
-                written_mask |= 1u64 << result;
+                state.ranges[result as usize] =
+                    modulo_interval(value, LongInterval::exact(divisor));
+                state.definitely_written |= 1u64 << result;
             }
             NativeStraightLongOperation::Move { source, result } => {
                 let Some(value) = operand_range(
                     source,
-                    &ranges,
+                    &state.ranges,
                     config.induction_slot,
                     induction_range,
                     output_mask,
-                    written_mask,
+                    state.definitely_written,
                 ) else {
                     return false;
                 };
-                ranges[result as usize] = value;
-                written_mask |= 1u64 << result;
+                state.ranges[result as usize] = value;
+                state.definitely_written |= 1u64 << result;
             }
             NativeStraightLongOperation::Binary {
                 kind,
@@ -106,19 +134,19 @@ pub(super) fn straight_long_remaining_range_is_proven(
                 let Some((lhs, rhs)) = binary_operand_ranges(
                     lhs,
                     rhs,
-                    &ranges,
+                    &state.ranges,
                     config,
                     induction_range,
                     output_mask,
-                    written_mask,
+                    state.definitely_written,
                 ) else {
                     return false;
                 };
                 let Some(result_range) = binary_interval(kind, lhs, rhs) else {
                     return false;
                 };
-                ranges[result as usize] = result_range;
-                written_mask |= 1u64 << result;
+                state.ranges[result as usize] = result_range;
+                state.definitely_written |= 1u64 << result;
             }
             NativeStraightLongOperation::BinaryAssign {
                 kind,
@@ -130,32 +158,101 @@ pub(super) fn straight_long_remaining_range_is_proven(
                 let Some((lhs, rhs)) = binary_operand_ranges(
                     lhs,
                     rhs,
-                    &ranges,
+                    &state.ranges,
                     config,
                     induction_range,
                     output_mask,
-                    written_mask,
+                    state.definitely_written,
                 ) else {
                     return false;
                 };
                 let Some(result_range) = binary_interval(kind, lhs, rhs) else {
                     return false;
                 };
-                ranges[result as usize] = result_range;
-                ranges[destination as usize] = result_range;
-                written_mask |= (1u64 << result) | (1u64 << destination);
+                state.ranges[result as usize] = result_range;
+                state.ranges[destination as usize] = result_range;
+                state.definitely_written |= (1u64 << result) | (1u64 << destination);
+            }
+            NativeStraightLongOperation::BranchUnless {
+                lhs,
+                rhs,
+                false_target,
+                ..
+            } => {
+                if !condition_operand_is_available(
+                    lhs,
+                    &state,
+                    config.induction_slot,
+                    induction_range,
+                    output_mask,
+                ) || !condition_operand_is_available(
+                    rhs,
+                    &state,
+                    config.induction_slot,
+                    induction_range,
+                    output_mask,
+                ) {
+                    return false;
+                }
+                let false_target = false_target as usize;
+                if false_target <= operation_index || false_target > operation_count {
+                    return false;
+                }
+                merge_range_state(&mut states[operation_index + 1], state);
+                merge_range_state(&mut states[false_target], state);
+                continue;
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                let target = target as usize;
+                if target <= operation_index || target > operation_count {
+                    return false;
+                }
+                merge_range_state(&mut states[target], state);
+                continue;
             }
             NativeStraightLongOperation::Unused
             | NativeStraightLongOperation::StringToken { .. }
             | NativeStraightLongOperation::StringLength { .. }
             | NativeStraightLongOperation::HashLoad { .. }
             | NativeStraightLongOperation::HashStore { .. }
-            | NativeStraightLongOperation::Guard { .. }
-            | NativeStraightLongOperation::BranchUnless { .. }
-            | NativeStraightLongOperation::Jump { .. } => return false,
+            | NativeStraightLongOperation::Guard { .. } => return false,
+        }
+        merge_range_state(&mut states[operation_index + 1], state);
+    }
+    states[operation_count].is_some()
+}
+
+fn merge_range_state(target: &mut Option<StraightRangeState>, incoming: StraightRangeState) {
+    match target {
+        Some(current) => current.merge(incoming),
+        None => *target = Some(incoming),
+    }
+}
+
+fn condition_operand_is_available(
+    operand: NativeStraightLongConditionOperand,
+    state: &StraightRangeState,
+    induction_slot: u16,
+    induction_range: LongInterval,
+    output_mask: u64,
+) -> bool {
+    let available = |operand| {
+        operand_range(
+            operand,
+            &state.ranges,
+            induction_slot,
+            induction_range,
+            output_mask,
+            state.definitely_written,
+        )
+        .is_some()
+    };
+    match operand {
+        NativeStraightLongConditionOperand::Source(source) => available(source),
+        NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            available(lhs) && available(rhs)
         }
     }
-    true
 }
 
 fn operand_value(slots: &[i64; 64], operand: QuickLongOperand) -> i64 {
@@ -362,6 +459,45 @@ mod tests {
     }
 
     #[test]
+    fn proves_forward_branches_and_merges_definitely_written_ranges() {
+        let config = config(
+            &[
+                NativeStraightLongOperation::BranchUnless {
+                    kind: super::super::ScalarLongConditionKind::LessThan,
+                    lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+                    rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(4)),
+                    false_target: 3,
+                },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(3),
+                    result: 2,
+                },
+                NativeStraightLongOperation::Jump { target: 4 },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(7),
+                    result: 2,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(2),
+                    rhs: QuickLongOperand::Const(2),
+                    result: 3,
+                    destination: 4,
+                },
+            ],
+            10,
+        );
+        assert!(straight_long_remaining_range_is_proven(
+            &config,
+            &[0_i64; 64]
+        ));
+    }
+
+    #[test]
     fn rejects_overflow_division_guards_and_loop_carried_values() {
         let multiply = config(
             &[NativeStraightLongOperation::Binary {
@@ -405,6 +541,87 @@ mod tests {
             &carried,
             &[0_i64; 64]
         ));
+
+        let partially_written = config(
+            &[
+                NativeStraightLongOperation::BranchUnless {
+                    kind: super::super::ScalarLongConditionKind::LessThan,
+                    lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+                    rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+                    false_target: 2,
+                },
+                NativeStraightLongOperation::Move {
+                    source: QuickLongOperand::Slot(0),
+                    result: 2,
+                },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(2),
+                    rhs: QuickLongOperand::Const(1),
+                    result: 3,
+                },
+            ],
+            100,
+        );
+        assert!(!straight_long_remaining_range_is_proven(
+            &partially_written,
+            &[0_i64; 64]
+        ));
+    }
+
+    #[test]
+    fn proven_structured_program_polls_and_completes_exactly() {
+        let config = config(
+            &[
+                NativeStraightLongOperation::BranchUnless {
+                    kind: super::super::ScalarLongConditionKind::Equal,
+                    lhs: NativeStraightLongConditionOperand::BitwiseAnd {
+                        lhs: QuickLongOperand::Slot(0),
+                        rhs: QuickLongOperand::Const(1),
+                    },
+                    rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+                    false_target: 3,
+                },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(3),
+                    result: 2,
+                },
+                NativeStraightLongOperation::Jump { target: 4 },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(7),
+                    result: 2,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(2),
+                    rhs: QuickLongOperand::Const(2),
+                    result: 3,
+                    destination: 4,
+                },
+            ],
+            10_000,
+        );
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling(
+            config, 1_024,
+        )
+        .unwrap();
+        let interrupt = AtomicBool::new(false);
+        let mut slots = [0_i64; 64];
+
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 1_024)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[0], 10_000);
+        assert_eq!(slots[2], 10_006);
+        assert_eq!(slots[4], 20_012);
     }
 
     #[test]

@@ -4939,22 +4939,103 @@ fn native_quick_long_straight_kernel(
     let mut trace_guard_condition_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_expected = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_count = 0usize;
-    let mut operation_count = 0usize;
+    let operation_count = std::cell::Cell::new(0usize);
     let mut has_materialized_arithmetic = false;
+    let mut plan_to_native = vec![u8::MAX; plan.ops.len()];
+    let mut pending_branches = Vec::new();
+    let mut pending_jumps = Vec::new();
     let mut append_operation =
         |operation: NativeStraightLongOperation, resume_ip: usize| -> Option<u8> {
-            if operation_count == NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
+            let index = operation_count.get();
+            if index == NATIVE_STRAIGHT_LONG_MAX_OPERATIONS {
                 return None;
             }
-            let index = operation_count as u8;
-            operations[operation_count] = operation;
-            operation_resume_ips[operation_count] = resume_ip;
-            operation_count += 1;
-            Some(index)
+            operations[index] = operation;
+            operation_resume_ips[index] = resume_ip;
+            operation_count.set(index + 1);
+            Some(index as u8)
         };
-    for (body_index, operation) in plan.ops[1..body_end].iter().copied().enumerate() {
-        let plan_index = body_index + 1;
+    let mut plan_index = 1usize;
+    while plan_index < body_end {
+        plan_to_native[plan_index] = u8::try_from(operation_count.get()).ok()?;
+        let operation = plan.ops[plan_index];
         let next_target = match operation {
+            QuickLongOp::BranchUnlessLt {
+                lhs,
+                rhs,
+                false_target,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                let target = false_target.op_index()?;
+                let native_index = append_operation(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::LessThan,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(lhs),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    resume_ip,
+                )?;
+                pending_branches.push((native_index, target));
+                next_target
+            }
+            QuickLongOp::BranchUnlessEq {
+                lhs,
+                rhs,
+                false_target,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                let target = false_target.op_index()?;
+                let native_index = append_operation(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::Equal,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(lhs),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    resume_ip,
+                )?;
+                pending_branches.push((native_index, target));
+                next_target
+            }
+            QuickLongOp::BranchUnlessLe {
+                lhs,
+                rhs,
+                false_target,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                let target = false_target.op_index()?;
+                let native_index = append_operation(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind: ScalarLongConditionKind::LessThanOrEqual,
+                        lhs: NativeStraightLongConditionOperand::Source(lhs),
+                        rhs: NativeStraightLongConditionOperand::Source(rhs),
+                        false_target: 0,
+                    },
+                    resume_ip,
+                )?;
+                pending_branches.push((native_index, target));
+                next_target
+            }
+            QuickLongOp::Jump { target } => {
+                let native_index = append_operation(
+                    NativeStraightLongOperation::Jump { target: 0 },
+                    plan.target_ip(target)?,
+                )?;
+                pending_jumps.push((native_index, target.op_index()?));
+                plan_index += 1;
+                continue;
+            }
             QuickLongOp::ModConst {
                 value,
                 divisor,
@@ -5132,12 +5213,38 @@ fn native_quick_long_straight_kernel(
         if next_target.op_index() != Some(plan_index + 1) {
             return None;
         }
+        plan_index += 1;
+    }
+    plan_to_native[body_end] = u8::try_from(operation_count.get()).ok()?;
+    for (native_index, target_plan) in pending_branches {
+        let false_target = *plan_to_native.get(target_plan)?;
+        if false_target == u8::MAX {
+            return None;
+        }
+        let NativeStraightLongOperation::BranchUnless { kind, lhs, rhs, .. } =
+            operations[native_index as usize]
+        else {
+            return None;
+        };
+        operations[native_index as usize] = NativeStraightLongOperation::BranchUnless {
+            kind,
+            lhs,
+            rhs,
+            false_target,
+        };
+    }
+    for (native_index, target_plan) in pending_jumps {
+        let target = *plan_to_native.get(target_plan)?;
+        if target == u8::MAX {
+            return None;
+        }
+        operations[native_index as usize] = NativeStraightLongOperation::Jump { target };
     }
     if !has_materialized_arithmetic {
         return None;
     }
 
-    let operation_count = operation_count as u8;
+    let operation_count = operation_count.get() as u8;
     let config = NativeStraightLongLoopConfig {
         induction_slot: post_value,
         bound: header_rhs,

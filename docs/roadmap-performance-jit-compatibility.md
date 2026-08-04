@@ -1877,6 +1877,34 @@ chain (3.92x faster). The small binary-body gain is expected because its modulo
 and slot traffic dominate; the composed chain demonstrates the reusable value
 of proving multiple checked intermediates once outside the loop.
 
+Forward scalar-control-flow checkpoint (2026-08-04): the straight-loop planner
+now maps ordinary typed `if`/`else` edges and forward jumps into the same native
+IR instead of requiring a physically linear PHP body. The interval analyzer is
+a small forward dataflow pass: each program point carries the range of every
+Long slot plus a definitely-written mask. Branch joins take the interval hull
+and intersect that mask, allowing a value written on every incoming edge to
+feed later composed arithmetic.
+
+This also defines the safety boundary without guessing. If any incoming edge
+can reach a read before writing that iteration's value, the slot is
+loop-carried and the complete-range proof is rejected. The already-compiled
+transactional ARM64 region then runs with its checked 1,024-iteration chunks.
+Only forward branches are admitted, so the dataflow converges in one ordered
+pass; backedges remain exclusively the validated outer loop. String/hash
+state, trace guards, and general recurrences continue to use their established
+paths.
+
+A new previously unseen benchmark assigns a scalar expression in both arms and
+feeds the joined value to another composed expression. Across 101
+order-rotated `max-perf` runs, identical `49999993,149999990` output moves from
+145.845 ms on the preceding RPHP binary to 9.621 ms, a 15.16x speedup (paired
+median -93.39 percent). PHP tracing JIT records 34.110 ms, making the new RPHP
+path 3.55x faster. A 101-run linear binary control remains flat within noise
+at 11.368 versus 11.328 ms (paired -0.44 percent), and the expression-chain
+control is likewise flat in a separate 31-run batch. The checkpoint passes
+124 library, 72 ARM64/JIT, and all four application-corpus tests, including a
+partially-written branch that must retain checked native chunking.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
