@@ -2110,6 +2110,30 @@ slot-based recurrence prototype's roughly 60-percent regression and confirms
 that range proof became profitable only after register residency and exit-only
 publication were established.
 
+Composed recurrence delta checkpoint (2026-08-04): direct recurrence proof no
+longer requires a single constant, induction, or invariant operand. When the
+delta is a temporary, a bounded backward definition walk reconstructs its
+acyclic scalar expression from earlier move, modulo, binary, and binary-assign
+operations. Each intermediate receives the same conservative `i128` interval
+transfer used by the straight-body proof before the resulting delta interval
+is folded into the all-prefix recurrence envelope.
+
+The walk is definition-order based rather than syntax based, so ordinary PHP
+such as `$sum = $sum + (($i * 3) + $offset)` benefits without a dedicated
+benchmark pattern. It deliberately refuses a dependency on any loop-carried
+CV, later definition, control-flow merge, unsupported operation, or unsafe
+intermediate. A real overflow case keeps its sum at zero while a nested
+multiply eventually overflows; the proof rejects it and the checked native
+program side-exits at the exact operation after reaching hotness.
+
+In 101 order-rotated `max-perf` runs against the direct-recurrence commit, the
+new permanent composed-recurrence holdout improves from 8.648 ms to 3.149 ms
+(paired median -63.80 percent, 2.75x faster). PHP tracing JIT records 35.865
+ms, making RPHP 11.39x faster. The already optimized direct-recurrence control
+is flat at +0.16 percent and the ordinary binary control at +0.04 percent.
+The checkpoint passes 133 library tests, 76 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

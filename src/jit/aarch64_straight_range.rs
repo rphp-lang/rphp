@@ -334,16 +334,15 @@ fn direct_recurrence_proof(
             } if lhs == slot && destination == slot => (ScalarLongOpKind::Subtract, rhs),
             _ => return None,
         };
-        let delta = match delta {
-            QuickLongOperand::Const(value) => LongInterval::exact(value),
-            QuickLongOperand::Slot(delta_slot) if delta_slot == config.induction_slot => {
-                induction_range
-            }
-            QuickLongOperand::Slot(delta_slot) if output_mask & (1u64 << delta_slot) == 0 => {
-                LongInterval::exact(slots[delta_slot as usize])
-            }
-            QuickLongOperand::Slot(_) => return None,
-        };
+        let delta = recurrence_expression_operand_range(
+            config,
+            slots,
+            delta,
+            operation_index,
+            induction_range,
+            output_mask,
+            carried_mask,
+        )?;
         let contribution = match kind {
             ScalarLongOpKind::Add => delta,
             ScalarLongOpKind::Subtract => LongInterval {
@@ -374,6 +373,74 @@ fn direct_recurrence_proof(
         operation_ranges,
         carried_mask,
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recurrence_expression_operand_range(
+    config: &NativeStraightLongLoopConfig,
+    slots: &[i64; 64],
+    operand: QuickLongOperand,
+    before_operation: usize,
+    induction_range: LongInterval,
+    output_mask: u64,
+    carried_mask: u64,
+) -> Option<LongInterval> {
+    let slot = match operand {
+        QuickLongOperand::Const(value) => return Some(LongInterval::exact(value)),
+        QuickLongOperand::Slot(slot) if slot == config.induction_slot => {
+            return Some(induction_range);
+        }
+        QuickLongOperand::Slot(slot) => slot,
+    };
+    let slot_mask = 1u64 << slot;
+    if carried_mask & slot_mask != 0 {
+        return None;
+    }
+    let definition = config.operations[..before_operation]
+        .iter()
+        .copied()
+        .enumerate()
+        .rev()
+        .find(|(_, operation)| operation.output_mask() & slot_mask != 0);
+    let Some((definition_index, operation)) = definition else {
+        return (output_mask & slot_mask == 0).then(|| LongInterval::exact(slots[slot as usize]));
+    };
+    let operand_range = |operand| {
+        recurrence_expression_operand_range(
+            config,
+            slots,
+            operand,
+            definition_index,
+            induction_range,
+            output_mask,
+            carried_mask,
+        )
+    };
+    match operation {
+        NativeStraightLongOperation::Modulo { value, divisor, .. } => {
+            if divisor == 0 {
+                None
+            } else {
+                Some(modulo_interval(
+                    operand_range(value)?,
+                    LongInterval::exact(divisor),
+                ))
+            }
+        }
+        NativeStraightLongOperation::Move { source, .. } => operand_range(source),
+        NativeStraightLongOperation::Binary { kind, lhs, rhs, .. }
+        | NativeStraightLongOperation::BinaryAssign { kind, lhs, rhs, .. } => {
+            binary_interval(kind, operand_range(lhs)?, operand_range(rhs)?)
+        }
+        NativeStraightLongOperation::Unused
+        | NativeStraightLongOperation::StringToken { .. }
+        | NativeStraightLongOperation::StringLength { .. }
+        | NativeStraightLongOperation::HashLoad { .. }
+        | NativeStraightLongOperation::HashStore { .. }
+        | NativeStraightLongOperation::Guard { .. }
+        | NativeStraightLongOperation::BranchUnless { .. }
+        | NativeStraightLongOperation::Jump { .. } => None,
+    }
 }
 
 fn recurrence_operation_for_slot(
@@ -867,6 +934,81 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn composed_recurrence_delta_is_proven_but_carried_dependency_is_rejected() {
+        let composed = config(
+            &[
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(3),
+                    result: 6,
+                },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(6),
+                    rhs: QuickLongOperand::Slot(5),
+                    result: 7,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(1),
+                    rhs: QuickLongOperand::Slot(7),
+                    result: 2,
+                    destination: 1,
+                },
+            ],
+            100,
+        );
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        slots[5] = 7;
+        let proof = straight_long_remaining_range_proof(&composed, &slots)
+            .expect("acyclic scalar delta should be proven");
+        assert_eq!(proof.carried_mask, 1u64 << 1);
+
+        let overflowing_delta = config(
+            &[
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(i64::MAX),
+                    result: 6,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(1),
+                    rhs: QuickLongOperand::Slot(6),
+                    result: 2,
+                    destination: 1,
+                },
+            ],
+            3,
+        );
+        assert!(straight_long_remaining_range_proof(&overflowing_delta, &[0_i64; 64]).is_none());
+
+        let dependent = config(
+            &[
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(1),
+                    rhs: QuickLongOperand::Slot(0),
+                    result: 2,
+                    destination: 1,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(3),
+                    rhs: QuickLongOperand::Slot(1),
+                    result: 4,
+                    destination: 3,
+                },
+            ],
+            100,
+        );
+        assert!(straight_long_remaining_range_proof(&dependent, &[0_i64; 64]).is_none());
     }
 
     #[test]
