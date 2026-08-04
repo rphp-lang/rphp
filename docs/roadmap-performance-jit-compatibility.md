@@ -2411,6 +2411,31 @@ versus 35.429 ms on linear composition (12.67x faster), with identical output.
 The checkpoint passes 142 library tests, 81 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Signed small-immediate checkpoint (2026-08-04): `Add` and `Subtract` with a
+right-hand constant whose magnitude fits ARM64 imm12 no longer materialize the
+constant in a register. Positive and negative PHP constants select the exact
+`ADD` or `SUB` opcode (`x + -N` becomes `SUB #N`, `x - -N` becomes `ADD #N`).
+The same selection uses `ADDS`/`SUBS` in checked code, preserving the overflow
+flag and exact canonical side exit. Constants outside `0..=4095`, including
+`i64::MIN`, retain register materialization.
+
+Unit coverage fixes the signed selection at both limits and rejects unrelated
+operations. Generated-code checks require exact `ADD x4, x8, #1`,
+`SUB x4, x8, #2` and `ADD x5, x8, #11` words in the structured branch body.
+The existing real-PHP overflow replay test exercises the new checked immediate
+path and still resumes the precise source operation.
+
+In 101 order-rotated native-CPU `max-perf` A/B pairs against resident-operand
+checkpoint `baf799f`, conditional composed recurrence improves by 1.95
+percent, simple conditional recurrence by 2.66 percent, linear composed
+recurrence by 0.29 percent and the structured branch expression by 0.25
+percent. The modest but consistent result matches the bounded change: one
+instruction disappears only for each eligible add or subtract, while constant
+multiplication still needs a register.
+
+The checkpoint passes 143 library tests, 81 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

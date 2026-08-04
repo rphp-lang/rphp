@@ -183,6 +183,21 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `SUB Xd, Xn, #imm12` (64-bit, unshifted immediate form).
+    fn subtract_immediate(
+        &mut self,
+        destination: Arm64Register,
+        source: Arm64Register,
+        immediate: u16,
+    ) {
+        debug_assert!(immediate < 4_096);
+        let instruction = 0xd100_0000
+            | (u32::from(immediate) << 10)
+            | (source.bits() << 5)
+            | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode `EOR Xd, Xn, Xm`.
     fn exclusive_or_register(
         &mut self,
@@ -3057,6 +3072,10 @@ impl CompiledQuickLongStraightLoop {
                     rhs: rhs_operand,
                     result: result_slot,
                 } => {
+                    let rhs_constant = match rhs_operand {
+                        QuickLongOperand::Const(value) => Some(value),
+                        QuickLongOperand::Slot(_) => None,
+                    };
                     let lhs_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         lhs_operand,
@@ -3065,22 +3084,26 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    let rhs_register = emit_straight_long_operand_with_resident(
-                        &mut assembler,
-                        rhs_operand,
-                        rhs,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
+                    let rhs_register = if rhs_constant
+                        .and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
+                        .is_some()
+                    {
+                        rhs
+                    } else {
+                        emit_straight_long_operand_with_resident(
+                            &mut assembler,
+                            rhs_operand,
+                            rhs,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        )
+                    };
                     emit_straight_binary(
                         &mut assembler,
                         kind,
                         polling_interval.is_none(),
-                        match rhs_operand {
-                            QuickLongOperand::Const(value) => Some(value),
-                            QuickLongOperand::Slot(_) => None,
-                        },
+                        rhs_constant,
                         lhs_register,
                         rhs_register,
                         result,
@@ -3104,6 +3127,10 @@ impl CompiledQuickLongStraightLoop {
                     result: result_slot,
                     destination,
                 } => {
+                    let rhs_constant = match rhs_operand {
+                        QuickLongOperand::Const(value) => Some(value),
+                        QuickLongOperand::Slot(_) => None,
+                    };
                     let lhs_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         lhs_operand,
@@ -3112,22 +3139,26 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    let rhs_register = emit_straight_long_operand_with_resident(
-                        &mut assembler,
-                        rhs_operand,
-                        rhs,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
+                    let rhs_register = if rhs_constant
+                        .and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
+                        .is_some()
+                    {
+                        rhs
+                    } else {
+                        emit_straight_long_operand_with_resident(
+                            &mut assembler,
+                            rhs_operand,
+                            rhs,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        )
+                    };
                     emit_straight_binary(
                         &mut assembler,
                         kind,
                         polling_interval.is_none(),
-                        match rhs_operand {
-                            QuickLongOperand::Const(value) => Some(value),
-                            QuickLongOperand::Slot(_) => None,
-                        },
+                        rhs_constant,
                         lhs_register,
                         rhs_register,
                         result,
@@ -3791,6 +3822,24 @@ fn validate_straight_long_binary(
     validate_straight_long_operand(rhs)
 }
 
+/// Select an ARM64 imm12 add/sub form, folding the PHP constant's sign into
+/// the opcode. The returned boolean is true for ADD and false for SUB.
+fn straight_binary_add_sub_immediate(
+    kind: ScalarLongOpKind,
+    constant: i64,
+) -> Option<(bool, u16)> {
+    let magnitude = constant.unsigned_abs();
+    if magnitude >= 4_096 {
+        return None;
+    }
+    let add = match kind {
+        ScalarLongOpKind::Add => constant >= 0,
+        ScalarLongOpKind::Subtract => constant < 0,
+        _ => return None,
+    };
+    Some((add, magnitude as u16))
+}
+
 #[allow(clippy::too_many_arguments)]
 fn emit_straight_binary(
     assembler: &mut Arm64Assembler,
@@ -3805,6 +3854,26 @@ fn emit_straight_binary(
     operation_index: u8,
     side_exit_branches: &mut Vec<(usize, u8)>,
 ) -> Result<(), QuickLongAccumulateJitError> {
+    if let Some((add, immediate)) = rhs_constant
+        .and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
+    {
+        if check_side_exits {
+            if add {
+                assembler.add_immediate_checked(result, lhs, immediate);
+            } else {
+                assembler.subtract_immediate_checked(result, lhs, immediate);
+            }
+            side_exit_branches.push((
+                assembler.conditional_branch_placeholder(Arm64Condition::Overflow),
+                operation_index,
+            ));
+        } else if add {
+            assembler.add_immediate(result, lhs, immediate);
+        } else {
+            assembler.subtract_immediate(result, lhs, immediate);
+        }
+        return Ok(());
+    }
     match kind {
         ScalarLongOpKind::Add => {
             if check_side_exits {

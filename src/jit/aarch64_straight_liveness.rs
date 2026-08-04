@@ -1000,6 +1000,9 @@ mod tests {
             "both selected definitions must write the x4 merge register directly"
         );
         assert!(!words.contains(&0xaa08_03e5)); // folded writes x5 directly
+        assert!(words.contains(&0x9100_0504)); // ADD x4, x8, #1
+        assert!(words.contains(&0xd100_0904)); // SUB x4, x8, #2
+        assert!(words.contains(&0x9100_2d05)); // ADD x5, x8, #11
         assert!(!words.contains(&0xf900_0408)); // no loop STR x8, selected
         assert!(!words.contains(&0xf900_0808)); // no loop STR x8, folded
         assert!(words.contains(&0xf900_0404)); // exit STR x4, selected

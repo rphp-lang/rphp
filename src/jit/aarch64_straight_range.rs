@@ -791,6 +791,20 @@ mod tests {
         assert_eq!(shadow_load.finish(), 0xf940_0806u32.to_le_bytes());
     }
 
+    #[test]
+    fn signed_small_constants_select_exact_add_sub_immediate_forms() {
+        use crate::vm::function::ScalarLongOpKind::{Add, Multiply, Subtract};
+
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 11), Some((true, 11)));
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, -11), Some((false, 11)));
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Subtract, 11), Some((false, 11)));
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Subtract, -11), Some((true, 11)));
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 4_095), Some((true, 4_095)));
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 4_096), None);
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, i64::MIN), None);
+        assert_eq!(super::super::straight_binary_add_sub_immediate(Multiply, 11), None);
+    }
+
     fn config(
         operations: &[NativeStraightLongOperation],
         bound: i64,
