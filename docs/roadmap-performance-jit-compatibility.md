@@ -3236,7 +3236,28 @@ overlapping p10/p90 ranges. The checkpoint is therefore a general code-density
 and relocation capability, not a claimed scalar-throughput win. x86-64 passes
 173 library tests, 18 JIT integration tests, the four-test corpus and
 `cargo check --all-features`; ARM64 passes 152 library tests, the corpus and
-the same check. Physical diamond ordering remains a separate measured step.
+the same check. Physical diamond ordering is measured separately below.
+
+The first physical-diamond ordering candidate is deliberately rejected. A
+range-derived layout hint identified simple induction comparisons whose true
+edge covered at least 75 percent of the exact remaining iterations. For a
+previously unseen 90/10 `if/else`, the candidate moved the false arm before the
+true arm and inverted the conditional transfer, reducing the likely path from
+a not-taken conditional plus predicted direct jump to one taken conditional.
+Semantics, exact publications and the five ABI entries all passed, but 201
+order-alternated fixed-CPU pairs regressed from 5.887508 to 7.030725 ms
+(+19.42 percent), with fully separated p10/p90 ranges.
+
+The existing 50/50 branch controls remained within -0.08 to +0.05 percent;
+order and ledger corpus moved +0.32 and +0.01 percent, while routing improved
+0.23 percent. This isolates the loss to the changed hot branch shape rather
+than a general runtime regression. The likely explanation is x86 front-end
+redirection cost: on this host, the original macro-fused not-taken condition
+followed by a highly predictable direct jump is materially cheaper than the
+taken conditional into the relocated arm. All candidate code and its layout
+hint were removed. Source-order diamonds remain authoritative; a future retry
+requires hardware branch-profile evidence and must test branchless selection
+or duplication separately instead of assuming fewer dynamic branches wins.
 
 The frozen workstream is:
 
