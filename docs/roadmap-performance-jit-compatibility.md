@@ -3072,6 +3072,37 @@ next x86 front-end investigation is structured block placement/alignment; the
 next instruction-selection slice is immediate comparisons and encodable
 power-of-two remainder masks.
 
+The x86 immediate-condition and remainder-mask checkpoint completes that
+instruction-selection slice. Straight-loop guards/branches and standalone
+scalar selects compare a right-side signed `imm8`/`imm32` constant directly,
+while condition-local bitwise AND embeds an encodable constant from either
+commutative operand. Wider values retain register materialization, so the
+backend never changes a 64-bit mask through x86 sign extension.
+
+The signed power-of-two remainder kernel is now one shared lowering helper for
+both native paths. Recognition suppresses the previously dead `MOVABS` of the
+original divisor. Masks through signed 32-bit range use two immediate `AND`
+instructions; wider masks load exactly one `MOVABS` mask and keep the same
+branchless PHP truncation identity. Generated-code tests require exact `AND`
+and `CMP` bytes, absence of the dead divisor, and the wide-mask fallback;
+execution tests cover negative remainder semantics in both forms.
+
+Across 201 order-alternated, CPU-pinned A/B samples against `a4db596`, the 10M
+modulo branch falls from 5.762339 to 4.827499 ms (-16.22 percent) and the
+standalone bitwise scalar branch from 15.509605 to 15.393257 ms (-0.75
+percent). Structured branch expression, conditional composed recurrence and
+the scalar expression chain remain within +0.04, +0.04 and +0.06 percent.
+Order corpus improves 0.41 percent; ledger and routing controls regress only
+0.13 and 0.20 percent. The previously recorded same-host PHP 8.5.9 tracing-JIT
+modulo median of 11.234999 ms makes the new RPHP path 2.33x faster. x86-64
+passes 167 library tests, all fourteen JIT integration tests, the four-test
+corpus and `cargo check --all-features`.
+
+The next x86 optimization boundary is constant-bound loop register
+specialization followed by structured basic-block placement/alignment. It
+must free or repurpose the bound register rather than merely replace the
+three-byte backedge `CMP` with a longer immediate form.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

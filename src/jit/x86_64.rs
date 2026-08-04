@@ -124,6 +124,12 @@ impl X86_64Assembler {
         self.emit_group1_immediate(destination, 5, immediate)
     }
 
+    /// Encode `AND destination, immediate` when sign extension preserves the
+    /// complete i64 mask.
+    fn and_immediate(&mut self, destination: X86_64Register, immediate: i64) -> bool {
+        self.emit_group1_immediate(destination, 4, immediate)
+    }
+
     /// Encode `XOR destination, immediate` when x86 can sign-extend the
     /// immediate without changing the i64 value.
     fn xor_immediate(&mut self, destination: X86_64Register, immediate: i64) -> bool {
@@ -232,10 +238,12 @@ impl X86_64Assembler {
     }
 
     fn compare_immediate8(&mut self, register: X86_64Register, immediate: i8) {
-        self.bytes.push(0x48 | register.extension());
-        self.bytes.push(0x83);
-        self.bytes.push(0xf8 | register.low_bits());
-        self.bytes.push(immediate as u8);
+        let encoded = self.compare_immediate(register, i64::from(immediate));
+        debug_assert!(encoded);
+    }
+
+    fn compare_immediate(&mut self, register: X86_64Register, immediate: i64) -> bool {
+        self.emit_group1_immediate(register, 7, immediate)
     }
 
     fn sign_extend_rax_into_rdx(&mut self) {
@@ -674,6 +682,29 @@ fn emit_linear_condition_operand(
             resident_values,
         ),
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            let immediate_source = match (lhs, rhs) {
+                (source, QuickLongOperand::Const(value)) if i32::try_from(value).is_ok() => {
+                    Some((source, value))
+                }
+                (QuickLongOperand::Const(value), source) if i32::try_from(value).is_ok() => {
+                    Some((source, value))
+                }
+                _ => None,
+            };
+            if let Some((source, immediate)) = immediate_source {
+                let source_register = emit_linear_operand_with_resident(
+                    assembler,
+                    source,
+                    destination,
+                    induction_slot,
+                    induction_register,
+                    resident_values,
+                );
+                assembler.move_register(destination, source_register);
+                let encoded = assembler.and_immediate(destination, immediate);
+                debug_assert!(encoded);
+                return destination;
+            }
             let rhs_register = emit_linear_operand_with_resident(
                 assembler,
                 rhs,
@@ -695,6 +726,55 @@ fn emit_linear_condition_operand(
             destination
         }
     }
+}
+
+fn emit_linear_condition_compare(
+    assembler: &mut X86_64Assembler,
+    lhs: NativeStraightLongConditionOperand,
+    rhs: NativeStraightLongConditionOperand,
+    lhs_destination: X86_64Register,
+    rhs_destination: X86_64Register,
+    scratch: X86_64Register,
+    induction_slot: u16,
+    induction_register: X86_64Register,
+    resident_values: &[(u64, X86_64Register)],
+) {
+    if let NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(immediate)) = rhs
+        && i32::try_from(immediate).is_ok()
+    {
+        let lhs_register = emit_linear_condition_operand(
+            assembler,
+            lhs,
+            lhs_destination,
+            scratch,
+            induction_slot,
+            induction_register,
+            resident_values,
+        );
+        let encoded = assembler.compare_immediate(lhs_register, immediate);
+        debug_assert!(encoded);
+        return;
+    }
+
+    let lhs_register = emit_linear_condition_operand(
+        assembler,
+        lhs,
+        lhs_destination,
+        scratch,
+        induction_slot,
+        induction_register,
+        resident_values,
+    );
+    let rhs_register = emit_linear_condition_operand(
+        assembler,
+        rhs,
+        rhs_destination,
+        scratch,
+        induction_slot,
+        induction_register,
+        resident_values,
+    );
+    assembler.compare_register(lhs_register, rhs_register);
 }
 
 fn emit_false_condition_jump(
@@ -731,6 +811,30 @@ fn emit_guard_mismatch_jump(
 fn signed_power_of_two_remainder_mask(divisor: i64) -> Option<i64> {
     let magnitude = divisor.unsigned_abs();
     (magnitude >= 2 && magnitude.is_power_of_two()).then(|| (magnitude - 1) as i64)
+}
+
+fn emit_signed_power_of_two_remainder(
+    assembler: &mut X86_64Assembler,
+    result: X86_64Register,
+    mask_scratch: X86_64Register,
+    sign_scratch: X86_64Register,
+    mask: i64,
+) {
+    // PHP's signed remainder truncates division toward zero. For 2^k:
+    // bias = sign(value) & mask; ((value + bias) & mask) - bias.
+    assembler.move_register(sign_scratch, result);
+    assembler.arithmetic_shift_right_immediate8(sign_scratch, 63);
+    if assembler.and_immediate(sign_scratch, mask) {
+        assembler.add_register(result, sign_scratch);
+        let encoded = assembler.and_immediate(result, mask);
+        debug_assert!(encoded);
+    } else {
+        assembler.move_immediate64(mask_scratch, mask);
+        assembler.and_register(sign_scratch, mask_scratch);
+        assembler.add_register(result, sign_scratch);
+        assembler.and_register(result, mask_scratch);
+    }
+    assembler.subtract_register(result, sign_scratch);
 }
 
 fn emit_x86_straight_return(
@@ -1329,25 +1433,17 @@ fn emit_scalar_straight_loop(
                 rhs: condition_rhs,
                 expected,
             } => {
-                let condition_lhs_register = emit_linear_condition_operand(
+                emit_linear_condition_compare(
                     &mut assembler,
                     condition_lhs,
-                    lhs,
-                    auxiliary,
-                    config.induction_slot,
-                    induction,
-                    &resident_values,
-                );
-                let condition_rhs_register = emit_linear_condition_operand(
-                    &mut assembler,
                     condition_rhs,
+                    lhs,
                     rhs,
                     auxiliary,
                     config.induction_slot,
                     induction,
                     &resident_values,
                 );
-                assembler.compare_register(condition_lhs_register, condition_rhs_register);
                 operation_side_exit_jumps.push((
                     emit_guard_mismatch_jump(&mut assembler, kind, expected),
                     operation_index as u8,
@@ -1360,25 +1456,17 @@ fn emit_scalar_straight_loop(
                 rhs: condition_rhs,
                 false_target,
             } => {
-                let condition_lhs_register = emit_linear_condition_operand(
+                emit_linear_condition_compare(
                     &mut assembler,
                     condition_lhs,
-                    lhs,
-                    auxiliary,
-                    config.induction_slot,
-                    induction,
-                    &active_resident_values,
-                );
-                let condition_rhs_register = emit_linear_condition_operand(
-                    &mut assembler,
                     condition_rhs,
+                    lhs,
                     rhs,
                     auxiliary,
                     config.induction_slot,
                     induction,
                     &active_resident_values,
                 );
-                assembler.compare_register(condition_lhs_register, condition_rhs_register);
                 structured_conditional_jumps.push((
                     emit_false_condition_jump(&mut assembler, kind),
                     false_target,
@@ -1406,16 +1494,23 @@ fn emit_scalar_straight_loop(
             ) if i32::try_from(value).is_ok() => Some(value),
             _ => None,
         };
-        let mut right_register = embedded_immediate.is_none().then(|| {
-            emit_linear_operand_with_resident(
-                &mut assembler,
-                right,
-                rhs,
-                config.induction_slot,
-                induction,
-                &active_resident_values,
-            )
-        });
+        let remainder_mask = match (kind, right) {
+            (ScalarLongOpKind::Modulo, QuickLongOperand::Const(divisor)) => {
+                signed_power_of_two_remainder_mask(divisor)
+            }
+            _ => None,
+        };
+        let mut right_register =
+            (embedded_immediate.is_none() && remainder_mask.is_none()).then(|| {
+                emit_linear_operand_with_resident(
+                    &mut assembler,
+                    right,
+                    rhs,
+                    config.induction_slot,
+                    induction,
+                    &active_resident_values,
+                )
+            });
         if right_register == Some(result_register) && result_register != lhs {
             // x86 arithmetic overwrites its left operand. Preserve an old
             // right-side value before reusing its fixed register as the
@@ -1447,7 +1542,7 @@ fn emit_scalar_straight_loop(
             assembler.move_register(result_register, left_register);
         }
         if matches!(kind, ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo)
-            && !matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some())
+            && remainder_mask.is_none()
             && right_register == Some(X86_64Register::RDX)
         {
             // CQO owns RDX, so a resident divisor must leave the architectural
@@ -1487,21 +1582,14 @@ fn emit_scalar_straight_loop(
                 }
                 None => assembler.xor_register(result_register, right_register.unwrap()),
             },
-            ScalarLongOpKind::Modulo if matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
-            {
-                let QuickLongOperand::Const(divisor) = right else {
-                    unreachable!();
-                };
-                let mask = signed_power_of_two_remainder_mask(divisor).unwrap();
-                // Truncating signed remainder by 2^k without IDIV:
-                // bias = sign(lhs) & mask; ((lhs + bias) & mask) - bias.
-                assembler.move_register(auxiliary, result_register);
-                assembler.arithmetic_shift_right_immediate8(auxiliary, 63);
-                assembler.move_immediate64(rhs, mask);
-                assembler.and_register(auxiliary, rhs);
-                assembler.add_register(result_register, auxiliary);
-                assembler.and_register(result_register, rhs);
-                assembler.subtract_register(result_register, auxiliary);
+            ScalarLongOpKind::Modulo if remainder_mask.is_some() => {
+                emit_signed_power_of_two_remainder(
+                    &mut assembler,
+                    result_register,
+                    rhs,
+                    auxiliary,
+                    remainder_mask.unwrap(),
+                );
             }
             ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
                 let right_register = right_register.unwrap();
@@ -2661,19 +2749,7 @@ impl CompiledScalarLongProgram {
                 shared_end,
                 &mut side_exit_jumps,
             );
-            emit_x86_scalar_condition_operand(
-                &mut assembler,
-                select.lhs,
-                X86_64Register::RAX,
-                X86_64Register::R9,
-            );
-            emit_x86_scalar_condition_operand(
-                &mut assembler,
-                select.rhs,
-                X86_64Register::R8,
-                X86_64Register::R9,
-            );
-            assembler.compare_register(X86_64Register::RAX, X86_64Register::R8);
+            emit_x86_scalar_condition_compare(&mut assembler, select.lhs, select.rhs);
             let selected_false = emit_false_condition_jump(&mut assembler, select.kind);
 
             emit_x86_scalar_operations(
@@ -2798,8 +2874,14 @@ fn emit_x86_scalar_operation(
         ) if i32::try_from(value).is_ok() => Some(value),
         _ => None,
     };
+    let remainder_mask = match (operation.kind, operation.rhs) {
+        (ScalarLongOpKind::Modulo, ScalarLongSource::Constant(divisor)) => {
+            signed_power_of_two_remainder_mask(divisor)
+        }
+        _ => None,
+    };
     emit_x86_scalar_source(assembler, operation.lhs, lhs);
-    if embedded_immediate.is_none() {
+    if embedded_immediate.is_none() && remainder_mask.is_none() {
         emit_x86_scalar_source(assembler, operation.rhs, rhs);
     }
 
@@ -2839,19 +2921,14 @@ fn emit_x86_scalar_operation(
                 assembler.xor_register(lhs, rhs);
             }
         }
-        ScalarLongOpKind::Modulo if matches!(operation.rhs, ScalarLongSource::Constant(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
-        {
-            let ScalarLongSource::Constant(divisor) = operation.rhs else {
-                unreachable!();
-            };
-            let mask = signed_power_of_two_remainder_mask(divisor).unwrap();
-            assembler.move_register(auxiliary, lhs);
-            assembler.arithmetic_shift_right_immediate8(auxiliary, 63);
-            assembler.move_immediate64(rhs, mask);
-            assembler.and_register(auxiliary, rhs);
-            assembler.add_register(lhs, auxiliary);
-            assembler.and_register(lhs, rhs);
-            assembler.subtract_register(lhs, auxiliary);
+        ScalarLongOpKind::Modulo if remainder_mask.is_some() => {
+            emit_signed_power_of_two_remainder(
+                assembler,
+                lhs,
+                rhs,
+                auxiliary,
+                remainder_mask.unwrap(),
+            );
         }
         ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
             emit_x86_scalar_division_guards(assembler, lhs, rhs, auxiliary, side_exit_jumps);
@@ -2910,11 +2987,45 @@ fn emit_x86_scalar_condition_operand(
             emit_x86_scalar_source(assembler, source, destination);
         }
         ScalarLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            let immediate_source = match (lhs, rhs) {
+                (source, ScalarLongSource::Constant(value)) if i32::try_from(value).is_ok() => {
+                    Some((source, value))
+                }
+                (ScalarLongSource::Constant(value), source) if i32::try_from(value).is_ok() => {
+                    Some((source, value))
+                }
+                _ => None,
+            };
+            if let Some((source, immediate)) = immediate_source {
+                emit_x86_scalar_source(assembler, source, destination);
+                let encoded = assembler.and_immediate(destination, immediate);
+                debug_assert!(encoded);
+                return;
+            }
             emit_x86_scalar_source(assembler, lhs, destination);
             emit_x86_scalar_source(assembler, rhs, scratch);
             assembler.and_register(destination, scratch);
         }
     }
+}
+
+fn emit_x86_scalar_condition_compare(
+    assembler: &mut X86_64Assembler,
+    lhs: ScalarLongConditionOperand,
+    rhs: ScalarLongConditionOperand,
+) {
+    if let ScalarLongConditionOperand::Source(ScalarLongSource::Constant(immediate)) = rhs
+        && i32::try_from(immediate).is_ok()
+    {
+        emit_x86_scalar_condition_operand(assembler, lhs, X86_64Register::RAX, X86_64Register::R9);
+        let encoded = assembler.compare_immediate(X86_64Register::RAX, immediate);
+        debug_assert!(encoded);
+        return;
+    }
+
+    emit_x86_scalar_condition_operand(assembler, lhs, X86_64Register::RAX, X86_64Register::R9);
+    emit_x86_scalar_condition_operand(assembler, rhs, X86_64Register::R8, X86_64Register::R9);
+    assembler.compare_register(X86_64Register::RAX, X86_64Register::R8);
 }
 
 fn emit_x86_scalar_output(assembler: &mut X86_64Assembler, source: ScalarLongSource) {
@@ -3499,6 +3610,27 @@ mod tests {
         let program = CompiledScalarLongProgram::compile(&plan).unwrap();
         assert_eq!(program.call(&[4]).unwrap(), ScalarLongJitOutcome::Value(12));
         assert_eq!(program.call(&[5]).unwrap(), ScalarLongJitOutcome::Value(25));
+        assert!(
+            program
+                .code()
+                .windows(4)
+                .any(|window| window == [0x48, 0x83, 0xe0, 0x01]),
+            "bitwise condition should encode AND RAX, 1"
+        );
+        assert!(
+            program
+                .code()
+                .windows(4)
+                .any(|window| window == [0x48, 0x83, 0xf8, 0x00]),
+            "condition should encode CMP RAX, 0"
+        );
+        assert!(
+            !program
+                .code()
+                .windows(2)
+                .any(|window| window == [0x49, 0xb8]),
+            "constant condition rhs should not materialize in R8"
+        );
     }
 
     #[test]
@@ -3549,6 +3681,8 @@ mod tests {
         assert!(assembler.add_immediate(X86_64Register::R13, 127));
         assert!(assembler.subtract_immediate(X86_64Register::R14, -129));
         assert!(assembler.xor_immediate(X86_64Register::R15, -1));
+        assert!(assembler.and_immediate(X86_64Register::R12, 127));
+        assert!(assembler.compare_immediate(X86_64Register::R11, -129));
         assert!(assembler.multiply_immediate(X86_64Register::R13, X86_64Register::R11, 3,));
         assert!(assembler.multiply_immediate(X86_64Register::R14, X86_64Register::R13, -129,));
         assert_eq!(
@@ -3557,6 +3691,8 @@ mod tests {
                 0x49, 0x83, 0xc5, 0x7f, // ADD R13, 127 (imm8)
                 0x49, 0x81, 0xee, 0x7f, 0xff, 0xff, 0xff, // SUB R14, -129 (imm32)
                 0x49, 0x83, 0xf7, 0xff, // XOR R15, -1 (imm8)
+                0x49, 0x83, 0xe4, 0x7f, // AND R12, 127 (imm8)
+                0x49, 0x81, 0xfb, 0x7f, 0xff, 0xff, 0xff, // CMP R11, -129 (imm32)
                 0x4d, 0x6b, 0xeb, 0x03, // IMUL R13, R11, 3 (imm8)
                 0x4d, 0x69, 0xf5, 0x7f, 0xff, 0xff, 0xff, // IMUL R14, R13, -129
             ]
@@ -4445,6 +4581,61 @@ mod tests {
         let result = program.call(&mut slots).unwrap();
         assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!(slots[4], -1);
+        assert!(
+            program
+                .code()
+                .windows(4)
+                .any(|window| window == [0x48, 0x83, 0xe0, 0x01]),
+            "small remainder mask should encode directly in AND"
+        );
+        let mut divisor_load = vec![0x49, 0xb8];
+        divisor_load.extend_from_slice(&2_i64.to_le_bytes());
+        assert!(
+            !program
+                .code()
+                .windows(divisor_load.len())
+                .any(|window| window == divisor_load),
+            "power-of-two divisor should not be materialized before mask lowering"
+        );
+    }
+
+    #[test]
+    fn wide_power_of_two_remainder_materializes_only_the_exact_mask() {
+        let divisor = 1_i64 << 40;
+        let mask = divisor - 1;
+        let mut config = composed_add_recurrence(1);
+        config.operations[0] = NativeStraightLongOperation::Modulo {
+            value: QuickLongOperand::Slot(6),
+            divisor,
+            result: 4,
+        };
+        config.operation_count = 1;
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[6] = -(divisor + 5);
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(slots[4], -5);
+
+        let mut mask_load = vec![0x49, 0xb8];
+        mask_load.extend_from_slice(&mask.to_le_bytes());
+        assert!(
+            program
+                .code()
+                .windows(mask_load.len())
+                .any(|window| window == mask_load),
+            "mask outside sign-extended imm32 must retain MOVABS fallback"
+        );
+        let mut divisor_load = vec![0x49, 0xb8];
+        divisor_load.extend_from_slice(&divisor.to_le_bytes());
+        assert!(
+            !program
+                .code()
+                .windows(divisor_load.len())
+                .any(|window| window == divisor_load),
+            "recognized divisor itself is dead even when the mask needs MOVABS"
+        );
     }
 
     #[test]
@@ -4483,6 +4674,15 @@ mod tests {
         assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!(slots[2], 100_000);
         assert_eq!(slots[1], 2_499_950_000);
+        assert!(
+            program.code().windows(4).any(|window| {
+                matches!(window[0], 0x48 | 0x49)
+                    && window[1] == 0x83
+                    && window[2] & 0xf8 == 0xf8
+                    && window[3] == 0
+            }),
+            "comparison against zero should use CMP r64, imm8"
+        );
     }
 
     #[test]
