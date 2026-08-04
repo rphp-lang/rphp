@@ -3103,6 +3103,34 @@ specialization followed by structured basic-block placement/alignment. It
 must free or repurpose the bound register rather than merely replace the
 three-byte backedge `CMP` with a longer immediate form.
 
+The constant-bound register checkpoint specializes only signed `imm8`/`imm32`
+bounds for which `RCX` is actually allocated to a fourth resident value.
+Entry and backedge comparisons then embed the bound, while `RCX` can retain a
+deferred publication or ranked invariant alongside `R13-R15`. If no fourth
+value is profitable, the backend deliberately keeps the constant in `RCX` and
+the shorter register-register backedge; dynamic and wider constant bounds are
+unchanged. This makes the specialization a register-capacity decision rather
+than an instruction-count heuristic.
+
+A permanent previously unseen PHP benchmark combines three independent
+recurrences, a literal 10M loop bound and one shared runtime invariant. In 201
+order-alternated pinned-CPU A/B pairs against `0804427`, its median falls from
+3.927946 ms (3.896952/3.967047 ms p10/p90) to 3.864765 ms
+(3.836393/3.908873 ms), a 1.61 percent reduction. Generated-code tests require
+one `RCX` invariant load, two immediate induction comparisons and direct
+consumption of `RCX` by all three fixed-register recurrences. A real-PHP test
+also requires one range-proof evaluation, one native entry/call and no side
+exit.
+
+The same 201-pair control matrix keeps modulo unchanged, improves conditional
+composed recurrence by 0.02 percent and regresses scalar expression chain by
+0.02 percent. Order corpus improves 0.75 percent, routing improves 0.04 percent
+and ledger regresses 0.14 percent with overlapping p10/p90 ranges. x86-64
+passes 169 library tests,
+fifteen JIT integration tests, the four-test corpus and
+`cargo check --all-features`. The next x86 optimization boundary is structured
+basic-block placement/alignment.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

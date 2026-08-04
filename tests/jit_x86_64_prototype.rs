@@ -54,6 +54,35 @@ fn real_php_dynamic_bound_accumulate_uses_one_polling_native_call() {
 }
 
 #[test]
+fn real_php_constant_bound_keeps_three_recurrences_and_an_invariant_native() {
+    let source = "<?php $offset = 5; $left = 1; $middle = 2; $right = 3; for ($i = 0; $i < 100000; $i++) { $left = $left + $offset; $middle = $middle + $offset; $right = $right + $offset; } echo $i . ':' . $left . ':' . $middle . ':' . $right;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(captured_output(&output), "100000:500001:500002:500003");
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the three-recurrence typed loop");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_finite_string_method_and_hash_update_enter_one_native_region() {
     let source = "<?php class MixedNativeModel { public function score(int $value, string $key): int { return $value + strlen($key); } } $model = new MixedNativeModel(); $values = ['left' => 0, 'right' => 0]; $key = 'left'; $needle = -1; for ($i = 0; $i < 100000; $i++) { if (($i % 2) == 0) { $key = 'right'; } else { $key = 'left'; } $score = $model->score($i, $key); $values[$key] = $values[$key] + $score; if ($i === $needle) { echo 'never'; } } echo $values['left'] . ':' . $values['right'] . ':' . $i;";
     let tokens = Lexer::new(source).tokenize().unwrap();

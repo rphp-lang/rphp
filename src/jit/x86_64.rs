@@ -877,6 +877,27 @@ fn emit_x86_resident_output(
     }
 }
 
+fn x86_embedded_loop_bound(bound: QuickLongOperand) -> Option<i64> {
+    match bound {
+        QuickLongOperand::Const(value) if i32::try_from(value).is_ok() => Some(value),
+        QuickLongOperand::Slot(_) | QuickLongOperand::Const(_) => None,
+    }
+}
+
+fn emit_x86_loop_bound_compare(
+    assembler: &mut X86_64Assembler,
+    induction: X86_64Register,
+    bound: X86_64Register,
+    embedded_bound: Option<i64>,
+) {
+    if let Some(embedded_bound) = embedded_bound {
+        let encoded = assembler.compare_immediate(induction, embedded_bound);
+        debug_assert!(encoded);
+    } else {
+        assembler.compare_register(induction, bound);
+    }
+}
+
 fn x86_direct_resident_result_register(
     operation: NativeStraightLongOperation,
     resident_values: &[(u64, X86_64Register)],
@@ -1025,6 +1046,7 @@ fn emit_scalar_straight_loop(
     // architectural dividend and remainder pair without spilling loop state.
     let induction = X86_64Register::R11;
     let bound = X86_64Register::RCX;
+    let embeddable_bound = x86_embedded_loop_bound(config.bound);
     let lhs = X86_64Register::RAX;
     let rhs = X86_64Register::R8;
     let auxiliary = X86_64Register::R9;
@@ -1071,6 +1093,7 @@ fn emit_scalar_straight_loop(
         (0u64, X86_64Register::R13),
         (0u64, X86_64Register::R14),
         (0u64, X86_64Register::R15),
+        (0u64, X86_64Register::RCX),
     ];
     let mut remaining_carried = carried_mask;
     for resident in &mut carried_values {
@@ -1088,8 +1111,10 @@ fn emit_scalar_straight_loop(
         carried_values[0].0,
         carried_values[1].0,
         carried_values[2].0,
+        0,
     ];
-    let mut structured_definition_operations_by_register = [0u64; 3];
+    let mut structured_definition_operations_by_register = [0u64; 4];
+    let resident_capacity = if embeddable_bound.is_some() { 4 } else { 3 };
     let mut next_resident = carried_count;
     if keeps_structured_scalar_values_resident && defer_visible_phi {
         let mut phi_candidates =
@@ -1122,7 +1147,7 @@ fn emit_scalar_straight_loop(
                     structured_definition_operations_by_register[index] == definition_operations
                 }) {
                 index
-            } else if next_resident < resident_values.len() {
+            } else if next_resident < resident_capacity {
                 let index = next_resident;
                 next_resident += 1;
                 structured_definition_operations_by_register[index] = definition_operations;
@@ -1157,13 +1182,19 @@ fn emit_scalar_straight_loop(
         [0; 2]
     };
     for invariant_slot_mask in invariant_slot_masks {
-        if invariant_slot_mask == 0 || next_resident >= resident_values.len() {
+        if invariant_slot_mask == 0 || next_resident >= resident_capacity {
             continue;
         }
         resident_values[next_resident].0 = invariant_slot_mask;
         resident_initial_load_masks[next_resident] = invariant_slot_mask;
         next_resident += 1;
     }
+    // An immediate compare is one byte longer than CMP r64,r64 for imm8
+    // bounds (and four bytes longer for imm32). Only pay that loop-body cost
+    // when RCX actually carries a fourth resident value; otherwise preserve
+    // the dedicated bound register and the shorter backedge.
+    let embedded_bound =
+        (resident_values[3].0 != 0).then(|| embeddable_bound.expect("resident RCX needs a bound"));
     let mut saved_resident_registers = Vec::with_capacity(3);
     let displacement = |slot: u16| i32::from(slot) * 8;
 
@@ -1180,8 +1211,10 @@ fn emit_scalar_straight_loop(
         if slot_mask == 0 {
             continue;
         }
-        assembler.push_register(register);
-        saved_resident_registers.push(register);
+        if register != X86_64Register::RCX {
+            assembler.push_register(register);
+            saved_resident_registers.push(register);
+        }
         let initial_load_mask = resident_initial_load_masks[index];
         if initial_load_mask != 0 {
             assembler.move_from_base_disp32(
@@ -1193,18 +1226,20 @@ fn emit_scalar_straight_loop(
     }
 
     assembler.move_from_base_disp32(induction, slots, displacement(config.induction_slot));
-    emit_linear_operand(
-        &mut assembler,
-        config.bound,
-        bound,
-        config.induction_slot,
-        induction,
-        &resident_values,
-    );
+    if embedded_bound.is_none() {
+        emit_linear_operand(
+            &mut assembler,
+            config.bound,
+            bound,
+            config.induction_slot,
+            induction,
+            &resident_values,
+        );
+    }
     if let Some(interval) = polling_interval {
         assembler.move_immediate64(polling_remaining, i64::from(interval));
     }
-    assembler.compare_register(induction, bound);
+    emit_x86_loop_bound_compare(&mut assembler, induction, bound, embedded_bound);
     let completed_jump = assembler.jump_greater_or_equal_rel32();
     if polling_interval.is_some() && keeps_structured_scalar_values_resident {
         assembler.align_with_nops(code_base_offset, 32);
@@ -1252,6 +1287,7 @@ fn emit_scalar_straight_loop(
             active_fixed_resident_values[0],
             active_fixed_resident_values[1],
             active_fixed_resident_values[2],
+            active_fixed_resident_values[3],
             (latest_output_mask, X86_64Register::RDX),
         ];
         let shadow_store_mask = if keeps_linear_scalar_values_resident {
@@ -1659,7 +1695,7 @@ fn emit_scalar_straight_loop(
         assembler.move_to_base_disp32(slots, induction, displacement(post_result));
     }
     assembler.add_immediate8(induction, 1);
-    assembler.compare_register(induction, bound);
+    emit_x86_loop_bound_compare(&mut assembler, induction, bound, embedded_bound);
     let completed_after_iteration_jump =
         (budgeted || polling_interval.is_some()).then(|| assembler.jump_greater_or_equal_rel32());
     let mut loop_jumps = Vec::with_capacity(2);
@@ -3242,6 +3278,16 @@ mod tests {
             5,
             "each of the five ABI entries should load invariant slot 4 once"
         );
+        let dedicated_bound_load = [0x48, 0xb9, 0x64, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+        assert_eq!(
+            program
+                .code()
+                .windows(dedicated_bound_load.len())
+                .filter(|window| *window == dedicated_bound_load)
+                .count(),
+            5,
+            "constant bounds should stay in RCX unless a fourth resident value uses it"
+        );
 
         let mut slots = [0i64; 64];
         slots[3] = 50;
@@ -3904,6 +3950,86 @@ mod tests {
         assert_eq!(slots[2], 10_007);
         assert_eq!(slots[3], expected_xor);
         assert_eq!(&slots[4..7], &[0, 0, 0]);
+    }
+
+    #[test]
+    fn constant_bound_frees_rcx_for_a_fourth_resident_value() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        for (index, slot) in [1u16, 2, 3].into_iter().enumerate() {
+            operations[index] = NativeStraightLongOperation::BinaryAssign {
+                kind: ScalarLongOpKind::Add,
+                lhs: QuickLongOperand::Slot(slot),
+                rhs: QuickLongOperand::Slot(7),
+                result: slot + 3,
+                destination: slot,
+            };
+        }
+        let publication_mask = (1u64 << 1) | (1u64 << 2) | (1u64 << 3);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 3,
+                    post_result: None,
+                },
+                publication_mask,
+                publication_mask,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1..=3].copy_from_slice(&[1, 2, 3]);
+        slots[7] = 5;
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..4], &[4, 21, 22, 23]);
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        let slot_7_rcx_load = [0x48, 0x8b, 0x8f, 0x38, 0x00, 0x00, 0x00];
+        assert_eq!(
+            polling_code
+                .windows(slot_7_rcx_load.len())
+                .filter(|window| *window == slot_7_rcx_load)
+                .count(),
+            1,
+            "the freed bound register should cache invariant slot 7 once"
+        );
+        assert_eq!(
+            polling_code
+                .windows(4)
+                .filter(|window| *window == [0x49, 0x83, 0xfb, 0x04])
+                .count(),
+            2,
+            "entry and backedge should compare induction against the embedded bound"
+        );
+        for direct_add in [[0x4c, 0x03, 0xe9], [0x4c, 0x03, 0xf1], [0x4c, 0x03, 0xf9]] {
+            assert!(
+                polling_code
+                    .windows(direct_add.len())
+                    .any(|window| window == direct_add),
+                "each carried recurrence should consume invariant RCX directly"
+            );
+        }
+    }
+
+    #[test]
+    fn wide_constant_bound_keeps_the_dedicated_bound_register() {
+        assert_eq!(
+            x86_embedded_loop_bound(QuickLongOperand::Const(i64::from(i32::MAX) + 1)),
+            None
+        );
+        assert_eq!(
+            x86_embedded_loop_bound(QuickLongOperand::Const(i64::from(i32::MIN) - 1)),
+            None
+        );
+        assert_eq!(
+            x86_embedded_loop_bound(QuickLongOperand::Const(i64::from(i32::MAX))),
+            Some(i64::from(i32::MAX))
+        );
+        assert_eq!(x86_embedded_loop_bound(QuickLongOperand::Slot(1)), None);
     }
 
     #[test]
