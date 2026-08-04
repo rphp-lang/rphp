@@ -3193,6 +3193,42 @@ fn real_php_carried_condition_recurrences_share_one_native_region() {
 }
 
 #[test]
+fn real_php_conditional_composed_recurrence_delta_is_range_proven() {
+    let source = "<?php $bound = 100000; $cutoff = 49995; $offset = 7; $sum = 10; $count = -5; for ($i = 0; $i < $bound; $i++) { if ($count < $cutoff) { $sum = $sum + (($i * 3) + $offset); } $count = $count + 1; } echo $i . ':' . $sum . ':' . $count;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:3750275010:99995"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the conditional composed recurrence IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_forward_dependent_recurrences_stay_in_one_native_region() {
     let source = "<?php $bound = 100000; $a = 3; $b = -7; for ($i = 0; $i < $bound; $i++) { $a = $a + 1; $b = $b + $a; } echo $i . ':' . $a . ':' . $b;";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -3531,7 +3567,7 @@ fn general_native_ir_sum_overflow_resumes_canonical_add() {
 
 #[test]
 fn structured_recurrence_overflow_uses_checked_fallback() {
-    let source = "<?php function structuredOverflow(int $bound, int $cutoff): int { $sum = PHP_INT_MAX - 1000; $count = 0; for ($i = 0; $i < $bound; $i++) { if ($count < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } return $sum; } try { structuredOverflow(60, 60); } catch (TypeError $error) { echo 'caught'; }";
+    let source = "<?php function structuredOverflow(int $bound, int $cutoff): int { $sum = PHP_INT_MAX - 3000; $count = 0; for ($i = 0; $i < $bound; $i++) { if ($count < $cutoff) { $sum = $sum + (($i * 3) + 7); } $count = $count + 1; } return $sum; } try { structuredOverflow(60, 60); } catch (TypeError $error) { echo 'caught'; }";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();

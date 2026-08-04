@@ -345,7 +345,7 @@ fn linear_recurrence_proof(
                 output_mask,
                 carried_mask,
                 &carried_ranges,
-                !has_control_flow,
+                has_control_flow,
             ) else {
                 continue;
             };
@@ -428,7 +428,7 @@ fn recurrence_expression_operand_range(
     output_mask: u64,
     carried_mask: u64,
     carried_ranges: &[Option<LongInterval>; 64],
-    allow_body_definitions: bool,
+    require_dominating_definitions: bool,
 ) -> Option<LongInterval> {
     let slot = match operand {
         QuickLongOperand::Const(value) => return Some(LongInterval::exact(value)),
@@ -441,9 +441,6 @@ fn recurrence_expression_operand_range(
     if carried_mask & slot_mask != 0 {
         return carried_ranges[slot as usize];
     }
-    if !allow_body_definitions && output_mask & slot_mask != 0 {
-        return None;
-    }
     let definition = config.operations[..before_operation]
         .iter()
         .copied()
@@ -453,6 +450,11 @@ fn recurrence_expression_operand_range(
     let Some((definition_index, operation)) = definition else {
         return (output_mask & slot_mask == 0).then(|| LongInterval::exact(slots[slot as usize]));
     };
+    if require_dominating_definitions
+        && !straight_operation_dominates(config, definition_index, before_operation)
+    {
+        return None;
+    }
     let operand_range = |operand| {
         recurrence_expression_operand_range(
             config,
@@ -463,7 +465,7 @@ fn recurrence_expression_operand_range(
             output_mask,
             carried_mask,
             carried_ranges,
-            allow_body_definitions,
+            require_dominating_definitions,
         )
     };
     match operation {
@@ -491,6 +493,41 @@ fn recurrence_expression_operand_range(
         | NativeStraightLongOperation::BranchUnless { .. }
         | NativeStraightLongOperation::Jump { .. } => None,
     }
+}
+
+fn straight_operation_dominates(
+    config: &NativeStraightLongLoopConfig,
+    definition_index: usize,
+    use_index: usize,
+) -> bool {
+    if definition_index >= use_index || use_index > config.operation_count as usize {
+        return false;
+    }
+    let mut reachable_without_definition =
+        [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    reachable_without_definition[0] = true;
+    for index in 0..use_index {
+        if !reachable_without_definition[index] || index == definition_index {
+            continue;
+        }
+        match config.operations[index] {
+            NativeStraightLongOperation::BranchUnless { false_target, .. } => {
+                reachable_without_definition[index + 1] = true;
+                let false_target = false_target as usize;
+                if false_target <= use_index {
+                    reachable_without_definition[false_target] = true;
+                }
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                let target = target as usize;
+                if target <= use_index {
+                    reachable_without_definition[target] = true;
+                }
+            }
+            _ => reachable_without_definition[index + 1] = true,
+        }
+    }
+    !reachable_without_definition[use_index]
 }
 
 fn recurrence_operation_for_slot(
@@ -1202,6 +1239,54 @@ mod tests {
             straight_long_remaining_range_proof(&carried_guard, &[0_i64; 64])
                 .expect("resident carried state should be available to branch conditions");
         assert_eq!(carried_guard_proof.carried_mask, proof.carried_mask);
+
+        let dominated_delta = config(
+            &[
+                NativeStraightLongOperation::BranchUnless {
+                    kind: super::super::ScalarLongConditionKind::LessThan,
+                    lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+                    rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+                    false_target: 4,
+                },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Multiply,
+                    lhs: QuickLongOperand::Slot(0),
+                    rhs: QuickLongOperand::Const(3),
+                    result: 6,
+                },
+                NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(6),
+                    rhs: QuickLongOperand::Slot(5),
+                    result: 7,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(1),
+                    rhs: QuickLongOperand::Slot(7),
+                    result: 2,
+                    destination: 1,
+                },
+                conditional.operations[2],
+            ],
+            100,
+        );
+        let mut dominated_slots = [0_i64; 64];
+        dominated_slots[1] = 10;
+        dominated_slots[5] = 7;
+        let dominated_proof =
+            straight_long_remaining_range_proof(&dominated_delta, &dominated_slots)
+                .expect("branch-dominated scalar delta should be proven");
+        assert_eq!(dominated_proof.carried_mask, proof.carried_mask);
+
+        let mut bypassed_delta = dominated_delta;
+        bypassed_delta.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 3,
+        };
+        assert!(straight_long_remaining_range_proof(&bypassed_delta, &dominated_slots).is_none());
     }
 
     #[test]

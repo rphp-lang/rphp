@@ -2246,6 +2246,33 @@ is flat at -0.18 percent. The checkpoint passes 136 library tests, 80
 ARM64/JIT integration tests, all four application corpus tests, and
 `cargo check --all-features`.
 
+Dominated conditional-delta checkpoint (2026-08-04): composed recurrence
+deltas may now use scalar temporaries defined inside forward control flow. A
+bounded reachability check removes each candidate definition from the native
+body graph; the definition is accepted only when its use becomes unreachable,
+which proves that every path to the use executes that definition. The same
+check is applied recursively to every temporary in the delta DAG.
+
+This is deliberately narrower than general CFG liveness. A branch-dominated
+multiply and add inside the selected arm can feed its recurrence, while an
+otherwise identical branch that can jump directly to the recurrence without
+executing those definitions is rejected. Existing interval transfers still
+prove every intermediate multiply, add and all-prefix recurrence value. The
+main range-state pass independently verifies that each temporary is definitely
+written on paths reaching its consumer.
+
+A real PHP loop now range-proves `$sum += ($i * 3) + $offset` inside a guard
+over another recurrence and completes in one native activation. Its near-limit
+counterpart reaches native hotness, rejects the proof and exits from the exact
+checked overflowing operation. In 101 order-rotated `max-perf` runs against
+the resident-condition checkpoint, the permanent conditional composed
+recurrence holdout improves from 10.925 ms to 5.824 ms (paired median -46.60
+percent, 1.88x faster). PHP tracing JIT records 37.204 ms, making RPHP 6.39x
+faster. The simple carried-condition recurrence and linear composed recurrence
+controls are both flat at +0.02 percent. The checkpoint passes 136 library
+tests, 81 ARM64/JIT integration tests, all four application corpus tests, and
+`cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -73,6 +73,7 @@ BENCHMARKS=(
     "bench_scalar_recurrence_loop.php:Scalar recurrences 10M"
     "bench_conditional_recurrence_loop.php:Conditional recurrences 10M"
     "bench_carried_condition_recurrence_loop.php:Carried-condition recurrences 10M"
+    "bench_conditional_composed_recurrence_loop.php:Conditional composed recurrence 10M"
     "bench_composed_recurrence_loop.php:Composed recurrence 10M"
     "bench_dependent_recurrence_loop.php:Dependent recurrence 10M"
     "bench_reverse_dependent_recurrence_loop.php:Reverse dependent recurrence 10M"
