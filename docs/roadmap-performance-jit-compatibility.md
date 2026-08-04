@@ -2581,9 +2581,17 @@ their target-independent tests before its encoder exists. The checkpoint
 passes 149 ARM64 library tests, all 83 ARM64/JIT integration tests, all four
 application corpus tests and `cargo check --all-features`; x86-64 passes 111
 library tests, a native `max-perf --all-features` build and
-`cargo check --all-features`. The next extraction boundary is the remaining
-range, liveness, carried-dependency and publication planning currently nested
-under the ARM64 backend.
+`cargo check --all-features`.
+
+The second extraction checkpoint moves the complete straight-loop range proof,
+liveness, carried-dependency and publication planning into
+`jit::straight::{range,liveness}`. Pure analysis tests now run on both targets;
+only assertions over ARM64 instruction words and execution through the ARM64
+ABI retain architecture gates. ARM64 remains at 149 library tests, while
+x86-64 rises from 111 to 123 library tests and keeps a clean
+`cargo check --all-features`. This completes the first frozen workstream item.
+The next boundary is a small backend contract followed by the first x86-64
+SysV range-proven scalar-loop vertical slice.
 
 The frozen workstream is:
 

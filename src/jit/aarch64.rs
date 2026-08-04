@@ -7,7 +7,12 @@ use super::straight::{
     NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
-    straight_long_best_invariant_slot_masks, straight_long_operation_input_mask,
+    StraightLongRangeProof, straight_long_best_invariant_slot_masks,
+    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
+    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
+    straight_long_operation_input_mask, straight_long_remaining_range_proof,
+    straight_long_structured_block_starts, straight_long_structured_definitely_written,
+    straight_long_structured_local_resident_output_masks,
 };
 use std::cell::{Cell, OnceCell};
 use std::ffi::{c_int, c_void};
@@ -56,7 +61,7 @@ impl Arm64Register {
     }
 
     #[inline]
-    const fn from_code(code: u8) -> Self {
+    pub(super) const fn from_code(code: u8) -> Self {
         debug_assert!(code < 31);
         Self(code)
     }
@@ -2221,21 +2226,6 @@ fn conditional_long_nonempty_chunk_end(
 #[path = "aarch64_conditional_range_tests.rs"]
 mod conditional_range_proof_tests;
 
-#[path = "aarch64_straight_liveness.rs"]
-mod straight_liveness;
-use straight_liveness::{
-    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
-    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
-    straight_long_structured_block_starts, straight_long_structured_definitely_written,
-    straight_long_structured_local_resident_output_masks,
-};
-
-#[path = "aarch64_straight_range.rs"]
-mod straight_range;
-use straight_range::{
-    StraightLongRangeProof, straight_long_remaining_range_proof,
-};
-
 #[derive(Debug)]
 #[repr(C)]
 struct NativeStraightLongLoopControl {
@@ -2276,7 +2266,7 @@ impl CompiledQuickLongStraightLoop {
     }
 
     #[cfg(test)]
-    fn compile_range_proven_polling(
+    pub(super) fn compile_range_proven_polling(
         config: NativeStraightLongLoopConfig,
         safepoint_interval: u16,
     ) -> Result<Self, QuickLongAccumulateJitError> {
@@ -2289,7 +2279,7 @@ impl CompiledQuickLongStraightLoop {
     }
 
     #[cfg(test)]
-    fn compile_range_proven_polling_with_publication(
+    pub(super) fn compile_range_proven_polling_with_publication(
         config: NativeStraightLongLoopConfig,
         safepoint_interval: u16,
         publication_mask: u64,
@@ -2302,7 +2292,7 @@ impl CompiledQuickLongStraightLoop {
         )
     }
 
-    fn compile_range_proven_polling_with_publication_and_carried(
+    pub(super) fn compile_range_proven_polling_with_publication_and_carried(
         config: NativeStraightLongLoopConfig,
         safepoint_interval: u16,
         publication_mask: u64,
@@ -3459,7 +3449,7 @@ impl CompiledQuickLongStraightLoop {
         unsafe { self.call_with_control(slots, iteration_budget, &mut control) }
     }
 
-    fn call_range_proven_polling(
+    pub(super) fn call_range_proven_polling(
         &self,
         slots: &mut [i64; 64],
         exclusive_induction_end: i64,
@@ -3768,7 +3758,7 @@ fn validate_straight_long_binary(
 
 /// Select an ARM64 imm12 add/sub form, folding the PHP constant's sign into
 /// the opcode. The returned boolean is true for ADD and false for SUB.
-fn straight_binary_add_sub_immediate(
+pub(super) fn straight_binary_add_sub_immediate(
     kind: ScalarLongOpKind,
     constant: i64,
 ) -> Option<(bool, u16)> {
@@ -3786,7 +3776,7 @@ fn straight_binary_add_sub_immediate(
 
 /// Return the shift for `x * (1 + 2^shift)`, which ARM64 can encode as one
 /// shifted-register ADD in range-proven code.
-fn straight_multiply_shift_add(constant: i64) -> Option<u8> {
+pub(super) fn straight_multiply_shift_add(constant: i64) -> Option<u8> {
     if constant <= 1 {
         return None;
     }
@@ -3807,7 +3797,7 @@ fn straight_binary_embeds_rhs(
             && straight_multiply_shift_add(constant).is_some())
 }
 
-fn straight_binary_lowering_operands(
+pub(super) fn straight_binary_lowering_operands(
     kind: ScalarLongOpKind,
     lhs: QuickLongOperand,
     rhs: QuickLongOperand,
@@ -4028,7 +4018,7 @@ fn emit_straight_long_operand(
     }
 }
 
-fn emit_straight_long_operand_with_resident(
+pub(super) fn emit_straight_long_operand_with_resident(
     assembler: &mut Arm64Assembler,
     operand: QuickLongOperand,
     destination: Arm64Register,

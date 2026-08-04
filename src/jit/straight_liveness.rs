@@ -4,7 +4,7 @@ use super::{
     straight_long_best_invariant_slot_masks, straight_long_operation_input_mask,
 };
 
-pub(super) fn straight_long_linear_live_after(
+pub(crate) fn straight_long_linear_live_after(
     config: &NativeStraightLongLoopConfig,
 ) -> [u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS] {
     let mut live_after = [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
@@ -17,7 +17,7 @@ pub(super) fn straight_long_linear_live_after(
     live_after
 }
 
-pub(super) fn straight_long_linear_shadow_store_mask(
+pub(crate) fn straight_long_linear_shadow_store_mask(
     config: &NativeStraightLongLoopConfig,
     operation_index: usize,
     publication_mask: u64,
@@ -33,7 +33,7 @@ pub(super) fn straight_long_linear_shadow_store_mask(
     operation.output_mask() & (publication_mask | survives_immediate_consumer)
 }
 
-pub(super) fn straight_long_linear_final_publication_masks(
+pub(crate) fn straight_long_linear_final_publication_masks(
     config: &NativeStraightLongLoopConfig,
     publication_mask: u64,
 ) -> [u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS] {
@@ -47,7 +47,7 @@ pub(super) fn straight_long_linear_final_publication_masks(
     final_masks
 }
 
-pub(super) fn straight_long_structured_block_starts(
+pub(crate) fn straight_long_structured_block_starts(
     config: &NativeStraightLongLoopConfig,
 ) -> [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1] {
     let mut starts = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
@@ -78,7 +78,7 @@ pub(super) fn straight_long_structured_block_starts(
 /// are validated to contain only forward edges, so a single index-ordered pass
 /// reaches the fixed point: the first predecessor initializes a target and
 /// later predecessors intersect their facts with it.
-pub(super) fn straight_long_structured_definitely_written(
+pub(crate) fn straight_long_structured_definitely_written(
     config: &NativeStraightLongLoopConfig,
 ) -> ([u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS], u64) {
     let operation_count = config.operation_count as usize;
@@ -135,7 +135,7 @@ pub(super) fn straight_long_structured_definitely_written(
 /// Conservatively mark operations whose result transitively contributes to a
 /// loop-carried slot. Keeping the dependent slot set monotonic admits all
 /// branch definitions and intentionally over-approximates reused shadow slots.
-pub(super) fn straight_long_carried_dependency_operations(
+pub(crate) fn straight_long_carried_dependency_operations(
     config: &NativeStraightLongLoopConfig,
     carried_mask: u64,
 ) -> u64 {
@@ -162,7 +162,7 @@ pub(super) fn straight_long_carried_dependency_operations(
     }
 }
 
-pub(super) fn straight_long_structured_local_resident_output_masks(
+pub(crate) fn straight_long_structured_local_resident_output_masks(
     config: &NativeStraightLongLoopConfig,
     publication_mask: u64,
     carried_mask: u64,
@@ -201,6 +201,7 @@ pub(super) fn straight_long_structured_local_resident_output_masks(
 mod tests {
     use super::*;
     use crate::vm::function::ScalarLongOpKind;
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
@@ -450,22 +451,26 @@ mod tests {
             (1u64 << 0) | (1u64 << 1)
         );
 
-        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
-            config,
-            1_024,
-            (1u64 << 1) | (1u64 << 2),
-            1u64 << 1,
-        )
-        .unwrap();
-        let words = program
-            .code()
-            .chunks_exact(4)
-            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
-            .collect::<Vec<_>>();
-        assert!(words.contains(&0x9b07_7c68)); // recurrence chain keeps MUL x8, x3, x7
-        assert!(words.contains(&0x8b03_0868)); // independent i * 5 uses shifted ADD
+        #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
+        {
+            let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+                config,
+                1_024,
+                (1u64 << 1) | (1u64 << 2),
+                1u64 << 1,
+            )
+            .unwrap();
+            let words = program
+                .code()
+                .chunks_exact(4)
+                .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+                .collect::<Vec<_>>();
+            assert!(words.contains(&0x9b07_7c68)); // recurrence chain keeps MUL x8, x3, x7
+            assert!(words.contains(&0x8b03_0868)); // independent i * 5 uses shifted ADD
+        }
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn overlapping_value_is_cached_and_published_from_its_fixed_register() {
         let mut operations =
@@ -511,6 +516,7 @@ mod tests {
         assert!(words.contains(&0xf900_0804)); // exit STR x4, [x0, #16]
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn dead_temporary_store_is_omitted_but_visible_destination_is_published() {
         let mut operations =
@@ -569,6 +575,7 @@ mod tests {
         assert_eq!(slots[3], 10_004);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn immediate_consumer_uses_resident_temporary_without_shadow_store() {
         let mut operations =
@@ -621,6 +628,7 @@ mod tests {
         assert_eq!(slots[4], 42);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn four_visible_results_publish_from_fixed_registers_at_native_exits() {
         let mut operations =
@@ -687,6 +695,7 @@ mod tests {
         assert_eq!(&slots[10..14], &[29_997, 10_006, 49_995, 9_997]);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn reverse_dependent_values_observe_old_fixed_register_state() {
         let mut operations =
@@ -755,6 +764,7 @@ mod tests {
         assert_eq!(slots[3], 166_616_769_995);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn conditional_recurrence_keeps_old_register_value_on_skipped_path() {
         let mut operations =
@@ -870,6 +880,7 @@ mod tests {
         assert_eq!(never_slots[3], 95);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn structured_local_temporary_chain_stays_in_x8_until_recurrence() {
         let mut operations =
@@ -971,6 +982,7 @@ mod tests {
         assert_eq!((slots[2], slots[4], slots[6], slots[7]), (222, 444, 666, 777));
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn structured_if_else_publications_merge_in_fixed_registers() {
         let mut operations =
@@ -1085,6 +1097,7 @@ mod tests {
         assert_eq!(&slots[6..=11], &[606, 607, 608, 609, 610, 611]);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn structured_direct_result_preserves_immediate_temporary_alias() {
         let mut operations =
@@ -1146,6 +1159,7 @@ mod tests {
         assert_eq!((slots[2], slots[3]), (222, 333));
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn structured_publication_register_overflow_keeps_shadow_fallback() {
         let mut operations =
@@ -1202,6 +1216,7 @@ mod tests {
         assert_eq!(&slots[10..14], &[27, 45, 63, 99]);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn commutative_left_constants_use_immediate_native_lowering() {
         let mut operations =
@@ -1255,6 +1270,7 @@ mod tests {
         assert_eq!((slots[2], slots[3]), (222, 333));
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn structured_invariant_operands_are_loaded_once_before_native_loop() {
         let mut operations =
@@ -1346,6 +1362,7 @@ mod tests {
         assert_eq!((slots[6], slots[7], slots[8]), (666, 777, 888));
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn modulo_keeps_auxiliary_register_out_of_the_invariant_pool() {
         let mut operations =

@@ -16,6 +16,26 @@
 use crate::vm::function::{ScalarLongConditionKind, ScalarLongOpKind};
 use crate::vm::quick::QuickLongOperand;
 
+#[cfg(all(test, target_arch = "aarch64", target_os = "macos"))]
+use super::aarch64::{
+    Arm64Assembler, Arm64Register, CompiledQuickLongStraightLoop,
+    emit_straight_long_operand_with_resident, straight_binary_add_sub_immediate,
+    straight_binary_lowering_operands, straight_multiply_shift_add,
+};
+
+#[path = "straight_liveness.rs"]
+mod liveness;
+pub(crate) use liveness::{
+    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
+    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
+    straight_long_structured_block_starts, straight_long_structured_definitely_written,
+    straight_long_structured_local_resident_output_masks,
+};
+
+#[path = "straight_range.rs"]
+mod range;
+pub(crate) use range::{StraightLongRangeProof, straight_long_remaining_range_proof};
+
 /// Upper bound for one closed native scalar/mixed region. The byte-sized
 /// branch ABI still leaves ample headroom; 48 admits application-shaped
 /// regions with multiple inlined typed calls without making the shadow slot

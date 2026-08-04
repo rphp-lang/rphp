@@ -71,7 +71,7 @@ impl StraightRangeState {
 /// remaining induction range. Linear additive and subtractive loop-carried
 /// values may consume acyclic scalar expressions and other proven recurrences.
 /// Dependencies are solved topologically; cycles retain the checked path.
-pub(super) fn straight_long_remaining_range_proof(
+pub(crate) fn straight_long_remaining_range_proof(
     config: &NativeStraightLongLoopConfig,
     slots: &[i64; 64],
 ) -> Option<StraightLongRangeProof> {
@@ -750,8 +750,10 @@ fn modulo_interval(lhs: LongInterval, rhs: LongInterval) -> LongInterval {
 mod tests {
     use super::*;
     use crate::jit::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS;
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     use std::sync::atomic::{AtomicBool, Ordering};
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn resident_scalar_operand_returns_its_register_without_move_or_shadow_load() {
         let mut forwarded = super::super::Arm64Assembler::new();
@@ -791,6 +793,7 @@ mod tests {
         assert_eq!(shadow_load.finish(), 0xf940_0806u32.to_le_bytes());
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn signed_small_constants_select_exact_add_sub_immediate_forms() {
         use crate::vm::function::ScalarLongOpKind::{Add, Multiply, Subtract};
@@ -1339,6 +1342,7 @@ mod tests {
         assert!(straight_long_remaining_range_proof(&bypassed_delta, &dominated_slots).is_none());
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn proven_structured_program_polls_and_completes_exactly() {
         let config = config(
@@ -1394,6 +1398,7 @@ mod tests {
         assert_eq!(slots[4], 20_012);
     }
 
+    #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
     #[test]
     fn proven_straight_program_polls_and_resumes_at_exact_boundaries() {
         let config = config(
