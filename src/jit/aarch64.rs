@@ -2445,6 +2445,26 @@ impl CompiledQuickLongStraightLoop {
         let remaining = Arm64Register::from_code(16);
         let interrupt_value = Arm64Register::from_code(17);
 
+        // Complete-range proof makes the scalar body side-exit free. For a
+        // physically linear body, x8 can therefore carry the last committed
+        // value into its immediate consumers. Shadow stores deliberately stay
+        // in place until liveness also models exact publication boundaries.
+        let forwards_linear_scalar_result = polling_interval.is_some()
+            && config
+                .operations
+                .iter()
+                .copied()
+                .take(config.operation_count as usize)
+                .all(|operation| {
+                    matches!(
+                        operation,
+                        NativeStraightLongOperation::Modulo { .. }
+                            | NativeStraightLongOperation::Move { .. }
+                            | NativeStraightLongOperation::Binary { .. }
+                            | NativeStraightLongOperation::BinaryAssign { .. }
+                    )
+                });
+
         assembler.move_register(control, Arm64Register::X2);
         if let Some(polling_interval) = polling_interval {
             assembler.move_register(interrupt_pointer, Arm64Register::from_code(3));
@@ -2472,6 +2492,7 @@ impl CompiledQuickLongStraightLoop {
         let mut structured_conditional_branches = Vec::new();
         let mut structured_jumps = Vec::new();
         let mut operation_words = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+        let mut resident_result_mask = 0u64;
         for (index, operation) in config
             .operations
             .iter()
@@ -2489,12 +2510,14 @@ impl CompiledQuickLongStraightLoop {
                     divisor,
                     result: result_slot,
                 } => {
-                    emit_straight_long_operand(
+                    emit_straight_long_operand_with_resident(
                         &mut assembler,
                         value,
                         lhs,
                         config.induction_slot,
                         induction,
+                        resident_result_mask,
+                        result,
                     );
                     if divisor == 0 {
                         assembler.compare_registers(induction, induction);
@@ -2531,12 +2554,14 @@ impl CompiledQuickLongStraightLoop {
                     source,
                     result: result_slot,
                 } => {
-                    emit_straight_long_operand(
+                    emit_straight_long_operand_with_resident(
                         &mut assembler,
                         source,
                         result,
                         config.induction_slot,
                         induction,
+                        resident_result_mask,
+                        result,
                     );
                     assembler.store_u64(
                         result,
@@ -2652,19 +2677,23 @@ impl CompiledQuickLongStraightLoop {
                     rhs: rhs_operand,
                     result: result_slot,
                 } => {
-                    emit_straight_long_operand(
+                    emit_straight_long_operand_with_resident(
                         &mut assembler,
                         lhs_operand,
                         lhs,
                         config.induction_slot,
                         induction,
+                        resident_result_mask,
+                        result,
                     );
-                    emit_straight_long_operand(
+                    emit_straight_long_operand_with_resident(
                         &mut assembler,
                         rhs_operand,
                         rhs,
                         config.induction_slot,
                         induction,
+                        resident_result_mask,
+                        result,
                     );
                     emit_straight_binary(
                         &mut assembler,
@@ -2695,19 +2724,23 @@ impl CompiledQuickLongStraightLoop {
                     result: result_slot,
                     destination,
                 } => {
-                    emit_straight_long_operand(
+                    emit_straight_long_operand_with_resident(
                         &mut assembler,
                         lhs_operand,
                         lhs,
                         config.induction_slot,
                         induction,
+                        resident_result_mask,
+                        result,
                     );
-                    emit_straight_long_operand(
+                    emit_straight_long_operand_with_resident(
                         &mut assembler,
                         rhs_operand,
                         rhs,
                         config.induction_slot,
                         induction,
+                        resident_result_mask,
+                        result,
                     );
                     emit_straight_binary(
                         &mut assembler,
@@ -2822,6 +2855,11 @@ impl CompiledQuickLongStraightLoop {
                     structured_jumps.push((assembler.branch_placeholder(), target));
                 }
             }
+            resident_result_mask = if forwards_linear_scalar_result {
+                operation.output_mask()
+            } else {
+                0
+            };
         }
         operation_words[config.operation_count as usize] = assembler.word_count();
 
@@ -3487,6 +3525,31 @@ fn emit_straight_long_operand(
         ),
         QuickLongOperand::Const(value) => assembler.move_immediate(destination, value),
     }
+}
+
+fn emit_straight_long_operand_with_resident(
+    assembler: &mut Arm64Assembler,
+    operand: QuickLongOperand,
+    destination: Arm64Register,
+    induction_slot: u16,
+    induction: Arm64Register,
+    resident_mask: u64,
+    resident: Arm64Register,
+) {
+    // One value may name both a temporary result and its assigned destination.
+    if matches!(operand, QuickLongOperand::Slot(slot) if resident_mask & (1u64 << slot) != 0) {
+        if destination != resident {
+            assembler.move_register(destination, resident);
+        }
+        return;
+    }
+    emit_straight_long_operand(
+        assembler,
+        operand,
+        destination,
+        induction_slot,
+        induction,
+    );
 }
 
 #[allow(clippy::too_many_arguments)]

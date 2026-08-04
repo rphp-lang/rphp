@@ -1930,6 +1930,34 @@ that register-resident IR. Until those representation changes demonstrate a
 measured win, direct recurrences deliberately retain the already faster
 transactional checked path.
 
+Linear scalar forwarding checkpoint (2026-08-04): the first liveness step now
+keeps the most recently computed Long value in its ARM64 result register for
+immediate consumers. A result can represent both the operation temporary and
+its assigned CV destination, so either name avoids a redundant shadow reload.
+Admission is intentionally narrow: only complete-range-proven, physically
+linear bodies containing modulo, move, binary, and binary-assign operations
+use forwarding. Structured branches, strings, hashes, guards, and checked
+side exits remain on their previous lowering.
+
+This checkpoint does not remove a single shadow store. Every operation still
+publishes exactly the same slots at exactly the same point, which keeps VM
+resume, safepoint, and error semantics unchanged while isolating the benefit
+of register dataflow. A structural encoder test distinguishes forwarded
+`MOV`, already-resident zero-instruction reuse, and the original non-resident
+`LDR` path.
+
+Across 101 order-rotated `max-perf` A/B pairs, the scalar expression chain
+moves from 9.804 ms to 8.774 ms (paired median -10.54 percent) and the binary
+assign body from 11.017 ms to 8.756 ms (-19.79 percent), with identical output.
+PHP tracing JIT records 38.178 ms and 32.264 ms respectively, leaving RPHP
+4.35x and 3.68x faster. The deliberately excluded forward-branch control is
+flat at 9.570 versus 9.580 ms (-0.10 percent paired). In 101-run application
+controls, typed order is flat at +0.09 percent and typed ledger at +0.22
+percent, both within sub-percent noise and with identical business results.
+The next profitable step is multi-value residency and liveness-driven dead-TMP
+store elimination, but only after publication requirements are represented
+explicitly in the native IR.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
