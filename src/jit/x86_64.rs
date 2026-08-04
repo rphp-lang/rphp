@@ -8,8 +8,10 @@ use super::straight::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
     straight_long_best_invariant_slot_masks, straight_long_linear_live_after,
-    straight_long_linear_shadow_store_mask, straight_long_remaining_range_proof,
-    straight_long_structured_block_starts, straight_long_structured_local_resident_output_masks,
+    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
+    straight_long_remaining_range_proof, straight_long_structured_block_starts,
+    straight_long_structured_definitely_written,
+    straight_long_structured_local_resident_output_masks,
 };
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
@@ -386,6 +388,28 @@ fn supports_structured_scalar_residency(config: &NativeStraightLongLoopConfig) -
         })
 }
 
+fn structured_phi_candidate_is_safe(
+    config: &NativeStraightLongLoopConfig,
+    slot_mask: u64,
+    block_starts: &[bool; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1],
+    definitely_written_before: &[u64; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS],
+) -> bool {
+    config.operations[..config.operation_count as usize]
+        .iter()
+        .copied()
+        .enumerate()
+        .all(|(index, operation)| {
+            if straight_long_operation_input_mask(operation) & slot_mask == 0
+                || definitely_written_before[index] & slot_mask != 0
+            {
+                return true;
+            }
+            index != 0
+                && !block_starts[index]
+                && config.operations[index - 1].output_mask() & slot_mask != 0
+        })
+}
+
 fn emit_additive_recurrence_loop(
     induction: u16,
     accumulator: u16,
@@ -745,6 +769,7 @@ fn emit_scalar_straight_loop(
     polling_interval: Option<u16>,
     publication_mask: u64,
     carried_mask: u64,
+    defer_visible_phi: bool,
 ) -> Result<Box<[u8]>, X86StraightLongLoopError> {
     debug_assert!(!(budgeted && polling_interval.is_some()));
     let mut assembler = X86_64Assembler::new();
@@ -784,6 +809,17 @@ fn emit_scalar_straight_loop(
             "x86 carried state exceeds fixed publication registers",
         ));
     }
+    let structured_block_starts = if keeps_structured_scalar_values_resident {
+        straight_long_structured_block_starts(config)
+    } else {
+        [false; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1]
+    };
+    let (structured_definitely_written_before, structured_definitely_written_exit) =
+        if keeps_structured_scalar_values_resident {
+            straight_long_structured_definitely_written(config)
+        } else {
+            ([0; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS], 0)
+        };
     let mut carried_values = [
         (0u64, X86_64Register::R13),
         (0u64, X86_64Register::R14),
@@ -798,6 +834,62 @@ fn emit_scalar_straight_loop(
         remaining_carried &= remaining_carried - 1;
         resident.0 = slot_mask;
     }
+    let carried_count = carried_mask.count_ones() as usize;
+    let mut resident_values = carried_values;
+    let mut deferred_publication_values = carried_values;
+    let mut resident_initial_load_masks = [
+        carried_values[0].0,
+        carried_values[1].0,
+        carried_values[2].0,
+    ];
+    let mut structured_definition_operations_by_register = [0u64; 3];
+    let mut next_resident = carried_count;
+    if keeps_structured_scalar_values_resident && defer_visible_phi {
+        let mut phi_candidates =
+            publication_mask & structured_definitely_written_exit & !carried_mask;
+        while phi_candidates != 0 {
+            let slot_mask = 1u64 << phi_candidates.trailing_zeros();
+            phi_candidates &= phi_candidates - 1;
+            if !structured_phi_candidate_is_safe(
+                config,
+                slot_mask,
+                &structured_block_starts,
+                &structured_definitely_written_before,
+            ) {
+                continue;
+            }
+            let definition_operations = config.operations[..config.operation_count as usize]
+                .iter()
+                .copied()
+                .enumerate()
+                .fold(0u64, |mask, (index, operation)| {
+                    if operation.output_mask() & slot_mask != 0 {
+                        mask | (1u64 << index)
+                    } else {
+                        mask
+                    }
+                });
+            debug_assert_ne!(definition_operations, 0);
+            let resident_index = if let Some(index) =
+                (carried_count..next_resident).find(|&index| {
+                    structured_definition_operations_by_register[index] == definition_operations
+                }) {
+                index
+            } else if next_resident < resident_values.len() {
+                let index = next_resident;
+                next_resident += 1;
+                structured_definition_operations_by_register[index] = definition_operations;
+                index
+            } else {
+                continue;
+            };
+            resident_values[resident_index].0 |= slot_mask;
+            deferred_publication_values[resident_index].0 |= slot_mask;
+        }
+    }
+    let deferred_publication_mask = deferred_publication_values
+        .iter()
+        .fold(0u64, |mask, (slot_mask, _)| mask | slot_mask);
     let caches_scalar_invariants = config.operations[..config.operation_count as usize]
         .iter()
         .copied()
@@ -817,14 +909,12 @@ fn emit_scalar_straight_loop(
     } else {
         [0; 2]
     };
-    let carried_count = carried_mask.count_ones() as usize;
-    let mut resident_values = carried_values;
-    let mut next_resident = carried_count;
     for invariant_slot_mask in invariant_slot_masks {
         if invariant_slot_mask == 0 || next_resident >= resident_values.len() {
             continue;
         }
         resident_values[next_resident].0 = invariant_slot_mask;
+        resident_initial_load_masks[next_resident] = invariant_slot_mask;
         next_resident += 1;
     }
     let mut saved_resident_registers = Vec::with_capacity(3);
@@ -839,17 +929,20 @@ fn emit_scalar_straight_loop(
         };
         assembler.move_register(context, incoming_context);
     }
-    for (slot_mask, register) in resident_values.iter().copied() {
+    for (index, (slot_mask, register)) in resident_values.iter().copied().enumerate() {
         if slot_mask == 0 {
             continue;
         }
         assembler.push_register(register);
         saved_resident_registers.push(register);
-        assembler.move_from_base_disp32(
-            register,
-            slots,
-            displacement(slot_mask.trailing_zeros() as u16),
-        );
+        let initial_load_mask = resident_initial_load_masks[index];
+        if initial_load_mask != 0 {
+            assembler.move_from_base_disp32(
+                register,
+                slots,
+                displacement(initial_load_mask.trailing_zeros() as u16),
+            );
+        }
     }
 
     assembler.move_from_base_disp32(induction, slots, displacement(config.induction_slot));
@@ -872,11 +965,6 @@ fn emit_scalar_straight_loop(
     let mut structured_jumps = Vec::new();
     let mut operation_offsets = [0usize; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
     let linear_live_after = straight_long_linear_live_after(config);
-    let structured_block_starts = if keeps_structured_scalar_values_resident {
-        straight_long_structured_block_starts(config)
-    } else {
-        [false; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1]
-    };
     let structured_local_resident_output_masks = if keeps_structured_scalar_values_resident {
         straight_long_structured_local_resident_output_masks(
             config,
@@ -898,10 +986,22 @@ fn emit_scalar_straight_loop(
         if keeps_structured_scalar_values_resident && structured_block_starts[operation_index] {
             latest_output_mask = 0;
         }
+        let mut active_fixed_resident_values = resident_values;
+        if keeps_structured_scalar_values_resident {
+            for resident_index in 0..active_fixed_resident_values.len() {
+                let publication_slots = deferred_publication_values[resident_index].0;
+                if structured_definition_operations_by_register[resident_index] != 0
+                    && structured_definitely_written_before[operation_index] & publication_slots
+                        != publication_slots
+                {
+                    active_fixed_resident_values[resident_index].0 = 0;
+                }
+            }
+        }
         let active_resident_values = [
-            resident_values[0],
-            resident_values[1],
-            resident_values[2],
+            active_fixed_resident_values[0],
+            active_fixed_resident_values[1],
+            active_fixed_resident_values[2],
             (latest_output_mask, X86_64Register::RDX),
         ];
         let shadow_store_mask = if keeps_linear_scalar_values_resident {
@@ -910,13 +1010,13 @@ fn emit_scalar_straight_loop(
                 operation_index,
                 publication_mask,
                 &linear_live_after,
-            ) & !carried_mask
+            ) & !deferred_publication_mask
         } else if keeps_structured_scalar_values_resident {
             operation.shadow_output_mask()
-                & !carried_mask
+                & !deferred_publication_mask
                 & !structured_local_resident_output_masks[operation_index]
         } else {
-            operation.shadow_output_mask() & !carried_mask
+            operation.shadow_output_mask() & !deferred_publication_mask
         };
         let (kind, left, right, result, destination) = match operation {
             NativeStraightLongOperation::Move { source, result } => {
@@ -928,7 +1028,12 @@ fn emit_scalar_straight_loop(
                     induction,
                     &active_resident_values,
                 );
-                emit_x86_resident_output(&mut assembler, 1u64 << result, lhs, &carried_values);
+                emit_x86_resident_output(
+                    &mut assembler,
+                    1u64 << result,
+                    lhs,
+                    &deferred_publication_values,
+                );
                 if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
                     assembler.move_register(X86_64Register::RDX, lhs);
                     latest_output_mask = 1u64 << result;
@@ -1193,7 +1298,7 @@ fn emit_scalar_straight_loop(
             &mut assembler,
             operation.output_mask(),
             lhs,
-            &carried_values,
+            &deferred_publication_values,
         );
         if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
             assembler.move_register(X86_64Register::RDX, lhs);
@@ -1248,13 +1353,12 @@ fn emit_scalar_straight_loop(
             assembler.patch_rel32(interrupt_jump, chunk_exhausted);
         }
         assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
-        emit_x86_resident_publications(&mut assembler, &carried_values);
+        emit_x86_resident_publications(&mut assembler, &deferred_publication_values);
         assembler.move_immediate32_eax(X86_STRAIGHT_CHUNK_EXHAUSTED);
         emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
     }
 
     let completed = assembler.bytes.len();
-    assembler.patch_rel32(completed_jump, completed);
     if let Some(completed_after_iteration_jump) = completed_after_iteration_jump {
         assembler.patch_rel32(completed_after_iteration_jump, completed);
     }
@@ -1262,7 +1366,13 @@ fn emit_scalar_straight_loop(
         assembler.patch_rel32(loop_jump, loop_start);
     }
     assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
-    emit_x86_resident_publications(&mut assembler, &carried_values);
+    emit_x86_resident_publications(&mut assembler, &deferred_publication_values);
+    assembler.clear_eax();
+    emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
+
+    let empty_completed = assembler.bytes.len();
+    assembler.patch_rel32(completed_jump, empty_completed);
+    assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
     assembler.clear_eax();
     emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
 
@@ -1270,7 +1380,7 @@ fn emit_scalar_straight_loop(
         let side_exit = assembler.bytes.len();
         assembler.patch_rel32(side_exit_jump, side_exit);
         assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
-        emit_x86_resident_publications(&mut assembler, &carried_values);
+        emit_x86_resident_publications(&mut assembler, &deferred_publication_values);
         let status = X86_STRAIGHT_OPERATION_SIDE_EXIT | (u32::from(operation_index) << 8);
         assembler.move_immediate32_eax(status);
         emit_x86_straight_return(&mut assembler, uses_context, &saved_resident_registers);
@@ -1476,7 +1586,7 @@ fn validate_scalar_straight_config(
 
 impl CompiledX86StraightLongLoop {
     pub fn compile(config: NativeStraightLongLoopConfig) -> Result<Self, X86StraightLongLoopError> {
-        Self::compile_with_metadata(config, u64::MAX, 0)
+        Self::compile_with_metadata(config, u64::MAX, 0, false)
     }
 
     pub(super) fn compile_range_proven_polling_with_publication_and_carried(
@@ -1489,13 +1599,14 @@ impl CompiledX86StraightLongLoop {
                 "x86 carried state exceeds fixed publication registers",
             ));
         }
-        Self::compile_with_metadata(config, publication_mask, carried_mask)
+        Self::compile_with_metadata(config, publication_mask, carried_mask, true)
     }
 
     fn compile_with_metadata(
         config: NativeStraightLongLoopConfig,
         publication_mask: u64,
         carried_mask: u64,
+        defer_visible_phi: bool,
     ) -> Result<Self, X86StraightLongLoopError> {
         if config.operation_count == 0
             || config.operation_count as usize > super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
@@ -1528,7 +1639,7 @@ impl CompiledX86StraightLongLoop {
             None
         };
         let Some((accumulator, result, destination)) = additive_recurrence else {
-            return Self::compile_scalar(config, publication_mask, carried_mask);
+            return Self::compile_scalar(config, publication_mask, carried_mask, defer_visible_phi);
         };
         let bound_slot = match bound {
             QuickLongOperand::Slot(slot) => Some(slot),
@@ -1634,6 +1745,7 @@ impl CompiledX86StraightLongLoop {
         config: NativeStraightLongLoopConfig,
         publication_mask: u64,
         carried_mask: u64,
+        defer_visible_phi: bool,
     ) -> Result<Self, X86StraightLongLoopError> {
         validate_scalar_straight_config(&config)?;
         let polling_carried_mask = ((supports_linear_scalar_residency(&config)
@@ -1643,16 +1755,18 @@ impl CompiledX86StraightLongLoop {
                 .is_some_and(|slot| carried_mask & (1u64 << slot) != 0))
         .then_some(carried_mask)
         .unwrap_or(0);
-        let fast_code = emit_scalar_straight_loop(&config, false, false, None, u64::MAX, 0)?;
+        let fast_code = emit_scalar_straight_loop(&config, false, false, None, u64::MAX, 0, false)?;
         let checked_entry_offset = fast_code.len();
-        let checked_code = emit_scalar_straight_loop(&config, true, false, None, u64::MAX, 0)?;
+        let checked_code =
+            emit_scalar_straight_loop(&config, true, false, None, u64::MAX, 0, false)?;
         let mut code = fast_code.into_vec();
         code.extend_from_slice(&checked_code);
         let chunk_entry_offset = code.len();
-        let chunk_code = emit_scalar_straight_loop(&config, false, true, None, u64::MAX, 0)?;
+        let chunk_code = emit_scalar_straight_loop(&config, false, true, None, u64::MAX, 0, false)?;
         code.extend_from_slice(&chunk_code);
         let checked_chunk_entry_offset = code.len();
-        let checked_chunk_code = emit_scalar_straight_loop(&config, true, true, None, u64::MAX, 0)?;
+        let checked_chunk_code =
+            emit_scalar_straight_loop(&config, true, true, None, u64::MAX, 0, false)?;
         code.extend_from_slice(&checked_chunk_code);
         let polling_entry_offset = code.len();
         let polling_code = emit_scalar_straight_loop(
@@ -1662,6 +1776,7 @@ impl CompiledX86StraightLongLoop {
             Some(X86_STRAIGHT_SAFEPOINT_INTERVAL),
             publication_mask,
             polling_carried_mask,
+            defer_visible_phi,
         )?;
         code.extend_from_slice(&polling_code);
         let code = code.into_boxed_slice();
@@ -3433,6 +3548,144 @@ mod tests {
         assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!((slots[0], slots[1], slots[3]), (4, 27, -1));
         assert_eq!((slots[5], slots[6]), (77, 88));
+    }
+
+    #[test]
+    fn range_proven_structured_polling_defers_visible_phi_publication() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 5,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(5),
+            rhs: QuickLongOperand::Const(1),
+            result: 2,
+            destination: 1,
+        };
+        operations[3] = NativeStraightLongOperation::Jump { target: 6 };
+        operations[4] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 6,
+        };
+        operations[5] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Const(2),
+            result: 2,
+            destination: 1,
+        };
+        operations[6] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(3),
+            result: 7,
+        };
+        operations[7] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(7),
+            rhs: QuickLongOperand::Const(11),
+            result: 4,
+            destination: 3,
+        };
+        // Result/destination aliases are defined by the same operation and
+        // therefore share one fixed publication register per pair.
+        let publication_mask = (1u64 << 1) | (1u64 << 2) | (1u64 << 3) | (1u64 << 4);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 8,
+                    post_result: None,
+                },
+                publication_mask,
+                0,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(
+            (slots[0], slots[1], slots[2], slots[3], slots[4]),
+            (4, 13, 13, 50, 50)
+        );
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        for slot in [1_i32, 2_i32, 3_i32, 4_i32] {
+            let mut rax_store = vec![0x48, 0x89, 0x87];
+            rax_store.extend_from_slice(&(slot * 8).to_le_bytes());
+            assert!(
+                !polling_code
+                    .windows(rax_store.len())
+                    .any(|window| window == rax_store),
+                "visible phi slot {slot} should publish from its fixed register"
+            );
+        }
+
+        slots[1..=4].copy_from_slice(&[101, 102, 103, 104]);
+        let empty = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(empty.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[1..=4], &[101, 102, 103, 104]);
+    }
+
+    #[test]
+    fn structured_phi_rejects_nonlocal_read_before_merge() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+            false_target: 3,
+        };
+        operations[1] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Const(1),
+            result: 1,
+        };
+        operations[2] = NativeStraightLongOperation::Jump { target: 4 };
+        operations[3] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Const(9),
+            result: 5,
+        };
+        operations[4] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Slot(1),
+            result: 2,
+        };
+        operations[5] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Const(2),
+            result: 1,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(4),
+            operations,
+            operation_count: 6,
+            post_result: None,
+        };
+        let block_starts = straight_long_structured_block_starts(&config);
+        let (definitely_written_before, definitely_written_exit) =
+            straight_long_structured_definitely_written(&config);
+        assert_ne!(definitely_written_exit & (1u64 << 1), 0);
+        assert!(!structured_phi_candidate_is_safe(
+            &config,
+            1u64 << 1,
+            &block_starts,
+            &definitely_written_before,
+        ));
     }
 
     #[test]

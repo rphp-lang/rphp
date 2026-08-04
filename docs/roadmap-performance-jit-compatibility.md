@@ -2940,6 +2940,36 @@ tracing-JIT medians are respectively 32.898900, 48.981000, 34.140800,
 41.789100 and 11.091900 ms. x86-64 passes 157 library tests, all fourteen JIT
 integration tests and the four-test corpus.
 
+The next x86 publication checkpoint admits visible structured phi values that
+are definitely overwritten on every path but are not carried into the next
+iteration. The three fixed publication registers are allocated in semantic
+priority order: carried state, safe visible phi groups, then invariants. Slots
+defined by the same operation set may share one register because every native
+operation exposes one scalar result and its output aliases. These registers are
+not treated as initialized on entry; they become readable only after the
+forward dataflow proves their definitions on every predecessor reaching an
+operation. Empty ranges use a separate completion path and do not publish
+uninitialized deferred values.
+
+Admission is deliberately stricter than definite exit assignment alone. A
+candidate is rejected when an input could observe a path-specific shadow value
+before a safe merge, except for an immediate same-block consumer forwarded by
+`RDX`. Visible-phi deferral is also an explicit remaining-range compilation
+mode, so the ordinary five-entry program retains its existing invariant
+allocation. Tests cover mutually exclusive definitions, two result/destination
+alias groups sharing fixed registers, absence of per-loop `RAX` stores to all
+four visible slots, empty-range preservation, and rejection of a real
+stale-shadow merge.
+
+Across 201 pinned, order-rotated pairs against the preceding structured-state
+binary, `bench_straight_branch_expression_loop.php` moves from 7.943150 to
+7.819410 ms (paired -1.52 percent) and the routing application holdout from
+7.681850 to 7.560010 ms (-1.56 percent). Conditional composed, modulo branch,
+order corpus and ledger corpus controls remain within +0.16, +0.27, +0.16 and
++0.33 percent respectively. The same-host PHP 8.5 tracing-JIT branch-expression
+median is 41.789100 ms, making the new x86 path 5.34x faster. x86-64 passes 159
+library tests, all fourteen JIT integration tests and the four-test corpus.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
