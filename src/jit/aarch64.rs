@@ -2189,7 +2189,8 @@ mod conditional_range_proof_tests;
 #[path = "aarch64_straight_liveness.rs"]
 mod straight_liveness;
 use straight_liveness::{
-    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
+    straight_long_linear_final_publication_masks, straight_long_linear_live_after,
+    straight_long_linear_shadow_store_mask,
 };
 
 #[path = "aarch64_straight_range.rs"]
@@ -2518,18 +2519,55 @@ impl CompiledQuickLongStraightLoop {
         let mut structured_jumps = Vec::new();
         let mut operation_words = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
         let linear_live_after = straight_long_linear_live_after(&config);
-        let deferred_exit_publication_mask = if keeps_linear_scalar_values_resident {
-            config.operations[config.operation_count as usize - 1].output_mask()
-                & publication_mask
-        } else {
-            0
-        };
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
             (0u64, one),
             (0u64, failed_operation),
         ];
+        let final_publication_masks = if keeps_linear_scalar_values_resident {
+            straight_long_linear_final_publication_masks(&config, publication_mask)
+        } else {
+            [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
+        };
+        let mut deferred_register_by_operation =
+            [usize::MAX; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        let mut deferred_exit_values = [(0u64, result); 4];
+        let mut deferred_exit_value_count = 0usize;
+        let mut deferred_exit_publication_mask = 0u64;
+        let mut reserved_resident_registers = [false; 4];
+        let mut next_publication_cache = 1usize;
+        if keeps_linear_scalar_values_resident {
+            for (index, slot_mask) in final_publication_masks
+                .iter()
+                .copied()
+                .take(config.operation_count as usize)
+                .enumerate()
+            {
+                if slot_mask == 0 {
+                    continue;
+                }
+                let resident_index = if index + 1 == config.operation_count as usize {
+                    Some(0)
+                } else if next_publication_cache < resident_values.len() {
+                    let index = next_publication_cache;
+                    next_publication_cache += 1;
+                    Some(index)
+                } else {
+                    None
+                };
+                let Some(resident_index) = resident_index else {
+                    continue;
+                };
+                deferred_register_by_operation[index] = resident_index;
+                deferred_exit_values[deferred_exit_value_count] =
+                    (slot_mask, resident_values[resident_index].1);
+                deferred_exit_value_count += 1;
+                deferred_exit_publication_mask |= slot_mask;
+                reserved_resident_registers[resident_index] = resident_index != 0;
+            }
+        }
+        let mut active_exit_masks = [0u64; 4];
         for (index, operation) in config
             .operations
             .iter()
@@ -2544,16 +2582,20 @@ impl CompiledQuickLongStraightLoop {
                 } else {
                     linear_live_after[index - 1]
                 };
-                for (slot_mask, _) in &mut resident_values {
-                    *slot_mask &= live_before;
+                for (resident_index, (slot_mask, _)) in
+                    resident_values.iter_mut().enumerate()
+                {
+                    *slot_mask &= live_before | active_exit_masks[resident_index];
                 }
 
                 let latest_survives_output = resident_values[0].0
                     & linear_live_after[index]
                     & !operation.output_mask();
                 if latest_survives_output != 0
-                    && let Some(cache_index) =
-                        (1..resident_values.len()).find(|&index| resident_values[index].0 == 0)
+                    && let Some(cache_index) = (1..resident_values.len()).find(|&index| {
+                        !reserved_resident_registers[index]
+                            && resident_values[index].0 == 0
+                    })
                 {
                     assembler.move_register(resident_values[cache_index].1, result);
                     resident_values[cache_index].0 = resident_values[0].0;
@@ -2566,7 +2608,7 @@ impl CompiledQuickLongStraightLoop {
                     index,
                     publication_mask & !deferred_exit_publication_mask,
                     &linear_live_after,
-                )
+                ) & !deferred_exit_publication_mask
             } else {
                 operation.shadow_output_mask()
             };
@@ -2936,6 +2978,18 @@ impl CompiledQuickLongStraightLoop {
                     *slot_mask &= !output_mask;
                 }
                 resident_values[0].0 = output_mask;
+                let deferred_register = deferred_register_by_operation[index];
+                if deferred_register != usize::MAX {
+                    if deferred_register != 0 {
+                        assembler.move_register(
+                            resident_values[deferred_register].1,
+                            result,
+                        );
+                        resident_values[deferred_register].0 = output_mask;
+                    }
+                    active_exit_masks[deferred_register] =
+                        final_publication_masks[index];
+                }
             }
         }
         operation_words[config.operation_count as usize] = assembler.word_count();
@@ -2985,11 +3039,13 @@ impl CompiledQuickLongStraightLoop {
             };
 
         let chunk_exhausted_word = assembler.word_count();
-        emit_straight_long_slots(
-            &mut assembler,
-            deferred_exit_publication_mask,
-            result,
-        );
+        for (slot_mask, register) in deferred_exit_values
+            .iter()
+            .copied()
+            .take(deferred_exit_value_count)
+        {
+            emit_straight_long_slots(&mut assembler, slot_mask, register);
+        }
         emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,
@@ -2998,11 +3054,13 @@ impl CompiledQuickLongStraightLoop {
         assembler.ret();
 
         let completed_word = assembler.word_count();
-        emit_straight_long_slots(
-            &mut assembler,
-            deferred_exit_publication_mask,
-            result,
-        );
+        for (slot_mask, register) in deferred_exit_values
+            .iter()
+            .copied()
+            .take(deferred_exit_value_count)
+        {
+            emit_straight_long_slots(&mut assembler, slot_mask, register);
+        }
         emit_straight_long_induction(&mut assembler, &config, induction);
         assembler.move_immediate(
             Arm64Register::X0,

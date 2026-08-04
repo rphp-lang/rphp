@@ -2052,6 +2052,29 @@ lifetimes -4.63 percent. Typed order is flat at -0.05 percent and typed ledger
 at +0.43 percent. This establishes the exit-publication mechanism; the larger
 payoff requires assigning earlier final CV values to dedicated registers.
 
+Multi-CV safepoint publication checkpoint (2026-08-04): a reverse definition
+pass identifies the final body value for every published CV. Up to three
+values defined before the final operation receive fixed `x4`, `x5`, and `x11`
+registers; the final operation can retain `x8`. Reserved publication registers
+are excluded from temporary-cache allocation before their definition and join
+normal resident operand lookup afterwards. Additional values beyond capacity
+retain their original per-iteration shadow stores.
+
+Each fixed register is written only by its final defining operation and is
+flushed to all aliased CV slots in both native completion and interrupt exits.
+Temporary aliases retain their independent liveness rules. A direct four-CV
+test validates all three cache-register moves, exact values after an interrupt
+at iteration 1,024, and exact final values after resume; the real-PHP overflow
+test confirms that checked fallback remains unchanged.
+
+In 101 A/B pairs against last-result-only publication, the two-CV expression
+control is flat at +0.34 percent, the three-CV binary body improves 2.19
+percent, and the four-CV overlapping-lifetime body improves 12.25 percent to
+5.128 ms. PHP tracing JIT records 63.242 ms on the latter, making RPHP 12.33x
+faster. Typed order is flat at +0.01 percent and typed ledger at -0.16 percent.
+The fixed-register exit contract is now sufficient to revisit loop-carried
+recurrence values without reintroducing per-iteration publication.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
