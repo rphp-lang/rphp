@@ -112,6 +112,50 @@ impl X86_64Assembler {
         self.emit_register_modrm(destination, source);
     }
 
+    /// Encode `ADD destination, immediate` when x86 can sign-extend the
+    /// immediate without changing the i64 value.
+    fn add_immediate(&mut self, destination: X86_64Register, immediate: i64) -> bool {
+        self.emit_group1_immediate(destination, 0, immediate)
+    }
+
+    /// Encode `SUB destination, immediate` when x86 can sign-extend the
+    /// immediate without changing the i64 value.
+    fn subtract_immediate(&mut self, destination: X86_64Register, immediate: i64) -> bool {
+        self.emit_group1_immediate(destination, 5, immediate)
+    }
+
+    /// Encode `XOR destination, immediate` when x86 can sign-extend the
+    /// immediate without changing the i64 value.
+    fn xor_immediate(&mut self, destination: X86_64Register, immediate: i64) -> bool {
+        self.emit_group1_immediate(destination, 6, immediate)
+    }
+
+    /// Encode the three-operand signed `IMUL destination, source, immediate`
+    /// form. Unlike the register-register form this does not require copying
+    /// `source` into `destination` first.
+    fn multiply_immediate(
+        &mut self,
+        destination: X86_64Register,
+        source: X86_64Register,
+        immediate: i64,
+    ) -> bool {
+        if let Ok(immediate) = i8::try_from(immediate) {
+            self.emit_rex_w(destination, source);
+            self.bytes.push(0x6b);
+            self.emit_register_modrm(destination, source);
+            self.bytes.push(immediate as u8);
+            true
+        } else if let Ok(immediate) = i32::try_from(immediate) {
+            self.emit_rex_w(destination, source);
+            self.bytes.push(0x69);
+            self.emit_register_modrm(destination, source);
+            self.bytes.extend_from_slice(&immediate.to_le_bytes());
+            true
+        } else {
+            false
+        }
+    }
+
     fn move_from_base_disp32(
         &mut self,
         destination: X86_64Register,
@@ -295,6 +339,29 @@ impl X86_64Assembler {
     fn emit_register_modrm(&mut self, reg: X86_64Register, rm: X86_64Register) {
         self.bytes
             .push(0xc0 | (reg.low_bits() << 3) | rm.low_bits());
+    }
+
+    fn emit_group1_immediate(
+        &mut self,
+        destination: X86_64Register,
+        opcode_extension: u8,
+        immediate: i64,
+    ) -> bool {
+        debug_assert!(opcode_extension < 8);
+        let modrm = 0xc0 | (opcode_extension << 3) | destination.low_bits();
+        if let Ok(immediate) = i8::try_from(immediate) {
+            self.bytes.push(0x48 | destination.extension());
+            self.bytes
+                .extend_from_slice(&[0x83, modrm, immediate as u8]);
+            true
+        } else if let Ok(immediate) = i32::try_from(immediate) {
+            self.bytes.push(0x48 | destination.extension());
+            self.bytes.extend_from_slice(&[0x81, modrm]);
+            self.bytes.extend_from_slice(&immediate.to_le_bytes());
+            true
+        } else {
+            false
+        }
     }
 }
 
@@ -1329,32 +1396,44 @@ fn emit_scalar_straight_loop(
             }
         };
         let result_register = direct_result_register.unwrap_or(lhs);
-        let mut right_register = emit_linear_operand_with_resident(
-            &mut assembler,
-            right,
-            rhs,
-            config.induction_slot,
-            induction,
-            &active_resident_values,
-        );
-        if right_register == result_register && result_register != lhs {
+        let embedded_immediate = match (kind, right) {
+            (
+                ScalarLongOpKind::Add
+                | ScalarLongOpKind::Subtract
+                | ScalarLongOpKind::Multiply
+                | ScalarLongOpKind::BitwiseXor,
+                QuickLongOperand::Const(value),
+            ) if i32::try_from(value).is_ok() => Some(value),
+            _ => None,
+        };
+        let mut right_register = embedded_immediate.is_none().then(|| {
+            emit_linear_operand_with_resident(
+                &mut assembler,
+                right,
+                rhs,
+                config.induction_slot,
+                induction,
+                &active_resident_values,
+            )
+        });
+        if right_register == Some(result_register) && result_register != lhs {
             // x86 arithmetic overwrites its left operand. Preserve an old
             // right-side value before reusing its fixed register as the
             // result destination.
-            assembler.move_register(rhs, right_register);
-            right_register = rhs;
+            assembler.move_register(rhs, result_register);
+            right_register = Some(rhs);
         } else if result_register != lhs
             && matches!(
                 right_register,
-                X86_64Register::R13 | X86_64Register::R14 | X86_64Register::R15
+                Some(X86_64Register::R13 | X86_64Register::R14 | X86_64Register::R15)
             )
         {
             // On Zen-family cores, two long-lived publication operands can
             // repeatedly collide in the banked integer register file. A
             // short-lived copy re-banks the right operand and is measurably
             // faster for dependent fixed-to-fixed recurrences.
-            assembler.move_register(rhs, right_register);
-            right_register = rhs;
+            assembler.move_register(rhs, right_register.unwrap());
+            right_register = Some(rhs);
         }
         let left_register = emit_linear_operand_with_resident(
             &mut assembler,
@@ -1364,25 +1443,50 @@ fn emit_scalar_straight_loop(
             induction,
             &active_resident_values,
         );
-        assembler.move_register(result_register, left_register);
+        if kind != ScalarLongOpKind::Multiply || embedded_immediate.is_none() {
+            assembler.move_register(result_register, left_register);
+        }
         if matches!(kind, ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo)
             && !matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some())
-            && right_register == X86_64Register::RDX
+            && right_register == Some(X86_64Register::RDX)
         {
             // CQO owns RDX, so a resident divisor must leave the architectural
             // dividend pair before sign extension.
-            assembler.move_register(rhs, right_register);
-            right_register = rhs;
+            assembler.move_register(rhs, X86_64Register::RDX);
+            right_register = Some(rhs);
         }
         match kind {
-            ScalarLongOpKind::Add => assembler.add_register(result_register, right_register),
+            ScalarLongOpKind::Add => match embedded_immediate {
+                Some(immediate) => {
+                    let encoded = assembler.add_immediate(result_register, immediate);
+                    debug_assert!(encoded);
+                }
+                None => assembler.add_register(result_register, right_register.unwrap()),
+            },
             ScalarLongOpKind::Subtract => {
-                assembler.subtract_register(result_register, right_register)
+                if let Some(immediate) = embedded_immediate {
+                    let encoded = assembler.subtract_immediate(result_register, immediate);
+                    debug_assert!(encoded);
+                } else {
+                    assembler.subtract_register(result_register, right_register.unwrap());
+                }
             }
             ScalarLongOpKind::Multiply => {
-                assembler.multiply_register(result_register, right_register)
+                if let Some(immediate) = embedded_immediate {
+                    let encoded =
+                        assembler.multiply_immediate(result_register, left_register, immediate);
+                    debug_assert!(encoded);
+                } else {
+                    assembler.multiply_register(result_register, right_register.unwrap());
+                }
             }
-            ScalarLongOpKind::BitwiseXor => assembler.xor_register(result_register, right_register),
+            ScalarLongOpKind::BitwiseXor => match embedded_immediate {
+                Some(immediate) => {
+                    let encoded = assembler.xor_immediate(result_register, immediate);
+                    debug_assert!(encoded);
+                }
+                None => assembler.xor_register(result_register, right_register.unwrap()),
+            },
             ScalarLongOpKind::Modulo if matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
             {
                 let QuickLongOperand::Const(divisor) = right else {
@@ -1400,6 +1504,7 @@ fn emit_scalar_straight_loop(
                 assembler.subtract_register(result_register, auxiliary);
             }
             ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
+                let right_register = right_register.unwrap();
                 debug_assert_eq!(result_register, lhs);
                 if checked {
                     assembler.compare_immediate8(right_register, 0);
@@ -2683,23 +2788,57 @@ fn emit_x86_scalar_operation(
     let lhs = X86_64Register::RAX;
     let rhs = X86_64Register::R8;
     let auxiliary = X86_64Register::R9;
+    let embedded_immediate = match (operation.kind, operation.rhs) {
+        (
+            ScalarLongOpKind::Add
+            | ScalarLongOpKind::Subtract
+            | ScalarLongOpKind::Multiply
+            | ScalarLongOpKind::BitwiseXor,
+            ScalarLongSource::Constant(value),
+        ) if i32::try_from(value).is_ok() => Some(value),
+        _ => None,
+    };
     emit_x86_scalar_source(assembler, operation.lhs, lhs);
-    emit_x86_scalar_source(assembler, operation.rhs, rhs);
+    if embedded_immediate.is_none() {
+        emit_x86_scalar_source(assembler, operation.rhs, rhs);
+    }
 
     match operation.kind {
         ScalarLongOpKind::Add => {
-            assembler.add_register(lhs, rhs);
+            if let Some(immediate) = embedded_immediate {
+                let encoded = assembler.add_immediate(lhs, immediate);
+                debug_assert!(encoded);
+            } else {
+                assembler.add_register(lhs, rhs);
+            }
             side_exit_jumps.push(assembler.jump_overflow_rel32());
         }
         ScalarLongOpKind::Subtract => {
-            assembler.subtract_register(lhs, rhs);
+            if let Some(immediate) = embedded_immediate {
+                let encoded = assembler.subtract_immediate(lhs, immediate);
+                debug_assert!(encoded);
+            } else {
+                assembler.subtract_register(lhs, rhs);
+            }
             side_exit_jumps.push(assembler.jump_overflow_rel32());
         }
         ScalarLongOpKind::Multiply => {
-            assembler.multiply_register(lhs, rhs);
+            if let Some(immediate) = embedded_immediate {
+                let encoded = assembler.multiply_immediate(lhs, lhs, immediate);
+                debug_assert!(encoded);
+            } else {
+                assembler.multiply_register(lhs, rhs);
+            }
             side_exit_jumps.push(assembler.jump_overflow_rel32());
         }
-        ScalarLongOpKind::BitwiseXor => assembler.xor_register(lhs, rhs),
+        ScalarLongOpKind::BitwiseXor => {
+            if let Some(immediate) = embedded_immediate {
+                let encoded = assembler.xor_immediate(lhs, immediate);
+                debug_assert!(encoded);
+            } else {
+                assembler.xor_register(lhs, rhs);
+            }
+        }
         ScalarLongOpKind::Modulo if matches!(operation.rhs, ScalarLongSource::Constant(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
         {
             let ScalarLongSource::Constant(divisor) = operation.rhs else {
@@ -3299,6 +3438,36 @@ mod tests {
     }
 
     #[test]
+    fn standalone_scalar_lowering_embeds_imm32_multiply_and_keeps_overflow_exit() {
+        let plan = scalar_plan(
+            1,
+            vec![ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(129),
+            }],
+            ScalarLongSource::Temporary(0),
+        );
+        let program = CompiledScalarLongProgram::compile(&plan).unwrap();
+        let imul_imm32 = [0x48, 0x69, 0xc0, 0x81, 0x00, 0x00, 0x00];
+        assert!(
+            program
+                .code()
+                .windows(imul_imm32.len())
+                .any(|window| window == imul_imm32),
+            "constant multiply should lower directly to IMUL r64, r64, imm32"
+        );
+        assert_eq!(
+            program.call(&[-7]).unwrap(),
+            ScalarLongJitOutcome::Value(-903)
+        );
+        assert_eq!(
+            program.call(&[i64::MAX]).unwrap(),
+            ScalarLongJitOutcome::SideExit
+        );
+    }
+
+    #[test]
     fn standalone_conditional_scalar_program_executes_only_selected_edge() {
         let plan = conditional_scalar_plan(
             1,
@@ -3372,6 +3541,30 @@ mod tests {
         let mut assembler = X86_64Assembler::new();
         assembler.move_register(X86_64Register::R8, X86_64Register::R9);
         assert_eq!(&*assembler.finish(), &[0x4d, 0x8b, 0xc1]);
+    }
+
+    #[test]
+    fn encoder_uses_the_shortest_exact_signed_immediate_forms() {
+        let mut assembler = X86_64Assembler::new();
+        assert!(assembler.add_immediate(X86_64Register::R13, 127));
+        assert!(assembler.subtract_immediate(X86_64Register::R14, -129));
+        assert!(assembler.xor_immediate(X86_64Register::R15, -1));
+        assert!(assembler.multiply_immediate(X86_64Register::R13, X86_64Register::R11, 3,));
+        assert!(assembler.multiply_immediate(X86_64Register::R14, X86_64Register::R13, -129,));
+        assert_eq!(
+            &*assembler.finish(),
+            &[
+                0x49, 0x83, 0xc5, 0x7f, // ADD R13, 127 (imm8)
+                0x49, 0x81, 0xee, 0x7f, 0xff, 0xff, 0xff, // SUB R14, -129 (imm32)
+                0x49, 0x83, 0xf7, 0xff, // XOR R15, -1 (imm8)
+                0x4d, 0x6b, 0xeb, 0x03, // IMUL R13, R11, 3 (imm8)
+                0x4d, 0x69, 0xf5, 0x7f, 0xff, 0xff, 0xff, // IMUL R14, R13, -129
+            ]
+        );
+
+        let mut too_wide = X86_64Assembler::new();
+        assert!(!too_wide.add_immediate(X86_64Register::RAX, 1_i64 << 40));
+        assert!(too_wide.finish().is_empty());
     }
 
     #[test]
@@ -3784,12 +3977,16 @@ mod tests {
                 "fully represented fixed result should not be copied to RDX"
             );
         }
-        for direct_arithmetic in [[0x4d, 0x03, 0xe8], [0x4d, 0x2b, 0xe8], [0x4d, 0x03, 0xf0]] {
+        for direct_arithmetic in [
+            [0x49, 0x83, 0xc5, 0x01],
+            [0x49, 0x83, 0xed, 0x02],
+            [0x49, 0x83, 0xc6, 0x0b],
+        ] {
             assert!(
                 polling_code
                     .windows(direct_arithmetic.len())
                     .any(|window| window == direct_arithmetic),
-                "expected arithmetic with a fixed publication destination"
+                "expected immediate arithmetic with a fixed publication destination"
             );
         }
         for slot in [1_i32, 2_i32, 3_i32, 4_i32] {

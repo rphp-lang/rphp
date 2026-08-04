@@ -3042,6 +3042,36 @@ while ledger corpus is within -0.12 percent. Previously recorded same-host PHP
 fourteen JIT integration tests, the four-test corpus and
 `cargo check --all-features`.
 
+The x86 signed-immediate instruction-selection checkpoint removes per-iteration
+constant materialization from both the straight-loop backend and standalone
+`ScalarLongFunctionPlan` lowering. `ADD`, `SUB` and `XOR` select the sign-extended
+`imm8` or `imm32` group-1 form; constant multiply selects three-operand `IMUL`,
+which also avoids copying the left source into the result register. Constants
+outside signed 32-bit range retain the existing `MOVABS` plus register operation.
+Checked arithmetic still tests the flags from the selected instruction with the
+same precise `JO` side exit. Encoder tests require exact high-register `imm8`
+and `imm32` bytes, and an executable standalone-scalar test requires an
+`IMUL r64,r64,129` while checking both its value and overflow side exit.
+
+Across 201 order-alternated, CPU-pinned A/B samples against `7029898`, the
+previously unseen scalar expression chain falls from 7.723331 to 6.138325 ms
+(-20.52 percent), conditional composed recurrence from 4.827738 to 4.034996 ms
+(-16.42 percent), and linear composed recurrence from 3.860712 to 3.850698 ms
+(-0.26 percent). Scalar recurrence and modulo controls remain within +0.16 and
++0.05 percent. Longer 401-pair corpus controls put routing at -0.78 percent,
+ledger at +0.06 percent and order at +0.95 percent, where positive percentages
+denote a regression.
+
+Two isolated builds reject a benchmark-shaped immediate threshold. Disabling
+constant `IMUL` moves order to -0.32 percent but loses the expression-chain gain
+(only -0.16 percent) and regresses conditional composed by 10.19 percent.
+Restricting `IMUL` to `imm8` preserves the two large wins but order still
+regresses 0.54 percent. The backend therefore keeps the complete architectural
+`imm8`/`imm32` selection instead of encoding a constant-value heuristic. The
+next x86 front-end investigation is structured block placement/alignment; the
+next instruction-selection slice is immediate comparisons and encodable
+power-of-two remainder masks.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
