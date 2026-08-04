@@ -5225,9 +5225,19 @@ unsafe fn run_native_quick_long_straight_kernel(
     let config = &kernel.config;
     let bound = quick_long_operand(slots, config.bound);
     let cache = plan.native_jit();
-    let Some(program) = cache.prepare_straight_program(config) else {
+    let remaining_range_proven = cache.prove_straight_remaining_range(config, slots);
+    let program = if remaining_range_proven {
+        cache.prepare_range_proven_straight_program(
+            config,
+            NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
+        )
+    } else {
+        cache.prepare_straight_program(config)
+    };
+    let Some(program) = program else {
         return Ok(None);
     };
+    let interrupt_flag = eg.vm_interrupt.as_ptr() as *const bool;
     let body_output_mask = config.body_output_mask();
     let post_result_mask = config.post_result.map_or(0, |slot| 1u64 << slot);
     let mut iterations = 0u64;
@@ -5242,11 +5252,24 @@ unsafe fn run_native_quick_long_straight_kernel(
             before_values[index] = slots[kernel.mutable_slots[index] as usize];
         }
 
-        let native_result = cache.dispatch_prepared_straight_chunk(
-            program,
-            slots,
-            NATIVE_LONG_SAFEPOINT_INTERVAL,
-        );
+        let native_result = if remaining_range_proven {
+            let Some(result) = cache.dispatch_prepared_proven_straight_remaining(
+                program,
+                config,
+                slots,
+                interrupt_flag,
+                NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
+            ) else {
+                return Ok(None);
+            };
+            result
+        } else {
+            cache.dispatch_prepared_straight_chunk(
+                program,
+                slots,
+                NATIVE_LONG_SAFEPOINT_INTERVAL,
+            )
+        };
         let mut result = match native_result {
             Ok(result) => {
                 if !entered_native {
@@ -5326,7 +5349,11 @@ unsafe fn run_native_quick_long_straight_kernel(
                 return Ok(Some(QuickLoopOutcome::Completed));
             }
             NativeStraightLongLoopOutcome::ChunkExhausted => {
-                debug_assert_eq!(completed_in_chunk, NATIVE_LONG_SAFEPOINT_INTERVAL);
+                debug_assert_ne!(completed_in_chunk, 0);
+                debug_assert_eq!(
+                    completed_in_chunk % NATIVE_LONG_SAFEPOINT_INTERVAL,
+                    0
+                );
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
                     publish_native_quick_long_trace_guards(
                         kernel,

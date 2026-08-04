@@ -3003,7 +3003,13 @@ fn real_php_straight_binary_body_enters_general_native_ir_region() {
         .expect("compiler should select the straight Long loop IR");
     assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert_amortized_safepoint_chunks(plan.native_jit().native_chunks());
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -3068,7 +3074,13 @@ fn real_php_scalar_expression_chains_enter_general_native_ir_region() {
         .expect("compiler should select the scalar-expression Long loop IR");
     assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -3109,6 +3121,8 @@ fn real_php_straight_binary_overflow_resumes_exact_canonical_operation() {
         })
         .expect("binaryOverflow should use general Long loop IR");
     assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(plan.native_jit().range_proven_chunks(), 0);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 

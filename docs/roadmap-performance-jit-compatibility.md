@@ -1839,6 +1839,44 @@ identical outputs. Absolute clock rates varied between batches, but an earlier
 for the branch loop (3.30x faster), and 4.467 ms versus 13.253 ms for modulo
 (2.97x faster), again with identical outputs.
 
+Straight typed-loop interval checkpoint (2026-08-04): complete-range proof and
+in-native safepoint polling now extend to the general straight Long IR. A
+separate interval analyzer propagates `i128` bounds through moves, add,
+subtract, multiply, integer divide, modulo, bitwise XOR, and materialized or
+assigned intermediate results. It derives the induction interval from the
+actual remaining activation, so one proof covers arbitrary composed scalar
+expressions rather than a benchmark-specific instruction sequence.
+
+Admission remains deliberately conservative. Every checked intermediate must
+fit in `i64`; zero divisors and the `PHP_INT_MIN / -1` edge are rejected. A body
+output read before its first current-iteration write is loop-carried and is
+therefore left for a future recurrence proof. String tokens, hash operations,
+guards, and control flow also retain the existing transactional checked path.
+An accepted activation removes arithmetic and induction overflow branches,
+uses one Rust/native call, and polls the shared interrupt flag inside generated
+ARM64 every 1,024 iterations. A rejected activation keeps exact PHP operation
+replay and checked side exits unchanged.
+
+Four focused analyzer tests cover composed affine/modulo expressions,
+overflow and recurrence rejection, interval-transfer edge samples, and exact
+interrupt publication/resume at iteration 1,024. Instrumented real-PHP tests
+require one proof evaluation and one native call for both a straight binary
+body and a non-materialized scalar-expression chain, while deliberate
+loop-carried overflow proves no range and exits at the canonical operation.
+The complete checkpoint passes 122 library tests, 70 ARM64/JIT integration
+tests, and all four stateful application-corpus tests.
+
+In 101 order-rotated `max-perf` A/B pairs against the preceding conditional
+checkpoint, `bench_binary_assign_loop.php` moves from 11.279 ms to 11.120 ms
+(paired median -1.48 percent), while
+`bench_scalar_expression_chain_loop.php` moves from 12.375 ms to 9.916 ms
+(paired median -19.92 percent); every output is identical. A separate 31-run
+comparison records 10.675 ms for RPHP versus 32.348 ms for PHP tracing JIT on
+the binary body (3.03x faster), and 9.774 ms versus 38.320 ms on the expression
+chain (3.92x faster). The small binary-body gain is expected because its modulo
+and slot traffic dominate; the composed chain demonstrates the reusable value
+of proving multiple checked intermediates once outside the loop.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
