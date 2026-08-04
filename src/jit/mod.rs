@@ -7,6 +7,18 @@
 
 mod straight;
 
+#[cfg(any(
+    all(target_arch = "aarch64", target_os = "macos"),
+    all(target_arch = "x86_64", target_os = "linux")
+))]
+mod memory;
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+mod x86_64;
+
+#[cfg(all(target_arch = "x86_64", target_os = "linux"))]
+pub use x86_64::{CompiledX86AddMultiply, X86_64Assembler, X86_64Register};
+
 pub use straight::{
     NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,

@@ -3,6 +3,7 @@ use crate::vm::function::{
     ScalarLongOpKind, ScalarLongSource,
 };
 use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
+use super::memory::ExecutableMemory;
 use super::straight::{
     NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
@@ -15,32 +16,9 @@ use super::straight::{
     straight_long_structured_local_resident_output_masks,
 };
 use std::cell::{Cell, OnceCell};
-use std::ffi::{c_int, c_void};
 use std::fmt;
 use std::io;
 use std::mem::MaybeUninit;
-use std::ptr::NonNull;
-
-const PROT_READ: c_int = 0x01;
-const PROT_WRITE: c_int = 0x02;
-const PROT_EXEC: c_int = 0x04;
-const MAP_PRIVATE: c_int = 0x0002;
-const MAP_ANONYMOUS: c_int = 0x1000;
-
-unsafe extern "C" {
-    fn mmap(
-        address: *mut c_void,
-        length: usize,
-        protection: c_int,
-        flags: c_int,
-        file_descriptor: c_int,
-        offset: i64,
-    ) -> *mut c_void;
-    fn mprotect(address: *mut c_void, length: usize, protection: c_int) -> c_int;
-    fn munmap(address: *mut c_void, length: usize) -> c_int;
-    fn getpagesize() -> c_int;
-    fn sys_icache_invalidate(start: *mut c_void, length: usize);
-}
 
 /// General-purpose ARM64 register accepted by the prototype encoder.
 ///
@@ -470,87 +448,6 @@ fn emit_signed_power_of_two_remainder(
     assembler.add_register(result, value, bias);
     assembler.bitwise_and_register(result, result, mask_register);
     assembler.subtract_register(result, result, bias);
-}
-
-struct ExecutableMemory {
-    address: NonNull<u8>,
-    mapped_length: usize,
-}
-
-impl ExecutableMemory {
-    fn from_code(code: &[u8]) -> io::Result<Self> {
-        if code.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "cannot execute an empty code buffer",
-            ));
-        }
-
-        let page_size = unsafe { getpagesize() };
-        if page_size <= 0 {
-            return Err(io::Error::last_os_error());
-        }
-        let page_size = page_size as usize;
-        let mapped_length = code
-            .len()
-            .checked_next_multiple_of(page_size)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "code buffer is too large")
-            })?;
-
-        // Maintain W^X: the mapping is writable while populated and executable
-        // only after all bytes have been copied into it.
-        let raw = unsafe {
-            mmap(
-                std::ptr::null_mut(),
-                mapped_length,
-                PROT_READ | PROT_WRITE,
-                MAP_PRIVATE | MAP_ANONYMOUS,
-                -1,
-                0,
-            )
-        };
-        if raw == (-1_isize) as *mut c_void {
-            return Err(io::Error::last_os_error());
-        }
-        let Some(address) = NonNull::new(raw.cast::<u8>()) else {
-            unsafe {
-                munmap(raw, mapped_length);
-            }
-            return Err(io::Error::other("mmap returned a null address"));
-        };
-
-        unsafe {
-            std::ptr::copy_nonoverlapping(code.as_ptr(), address.as_ptr(), code.len());
-            sys_icache_invalidate(address.as_ptr().cast::<c_void>(), code.len());
-        }
-
-        if unsafe { mprotect(raw, mapped_length, PROT_READ | PROT_EXEC) } != 0 {
-            let error = io::Error::last_os_error();
-            unsafe {
-                munmap(raw, mapped_length);
-            }
-            return Err(error);
-        }
-
-        Ok(Self {
-            address,
-            mapped_length,
-        })
-    }
-
-    #[inline]
-    fn entry(&self) -> *const u8 {
-        self.address.as_ptr()
-    }
-}
-
-impl Drop for ExecutableMemory {
-    fn drop(&mut self) {
-        unsafe {
-            munmap(self.address.as_ptr().cast::<c_void>(), self.mapped_length);
-        }
-    }
 }
 
 /// Native prototype for `(first + second) * multiplier`.

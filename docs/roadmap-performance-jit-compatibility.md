@@ -2593,6 +2593,17 @@ x86-64 rises from 111 to 123 library tests and keeps a clean
 The next boundary is a small backend contract followed by the first x86-64
 SysV range-proven scalar-loop vertical slice.
 
+The backend bootstrap checkpoint extracts one W^X executable-memory owner for
+macOS/ARM64 and Linux/x86-64, with an explicit architecture-specific
+instruction-cache boundary. A dependency-free x86-64 encoder then emits and
+executes `(a + b) * c` through the System V AMD64 ABI. Tests require the exact
+`MOV`/`ADD`/`IMUL`/`RET` bytes, correct REX extension bits and native results on
+physical x86-64 hardware. This is deliberately not counted as PHP loop support
+yet; it proves encoder, executable memory and ABI ownership before straight IR
+lowering is added. ARM64 passes 150 library tests, all 83 focused JIT tests and
+the four-test corpus; x86-64 passes 127 library tests and a warning-free
+`cargo check --all-features`.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
