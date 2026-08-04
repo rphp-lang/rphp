@@ -3157,6 +3157,42 @@ fn real_php_independent_recurrences_stay_in_range_proven_native_region() {
 }
 
 #[test]
+fn real_php_conditional_and_unconditional_recurrences_share_one_native_region() {
+    let source = "<?php $bound = 100000; $cutoff = 50000; $sum = 10; $count = -5; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } echo $i . ':' . $sum . ':' . $count;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let (mut globals, output) = common::make_eg_with_capture();
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:1249975010:99995"
+    );
+
+    let plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the structured recurrence Long loop IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_forward_dependent_recurrences_stay_in_one_native_region() {
     let source = "<?php $bound = 100000; $a = 3; $b = -7; for ($i = 0; $i < $bound; $i++) { $a = $a + 1; $b = $b + $a; } echo $i . ':' . $a . ':' . $b;";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -3488,6 +3524,48 @@ fn general_native_ir_sum_overflow_resumes_canonical_add() {
         })
         .expect("conditionalOverflow should use general Long loop IR");
     assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(plan.native_jit().range_proven_chunks(), 0);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn structured_recurrence_overflow_uses_checked_fallback() {
+    let source = "<?php function structuredOverflow(int $bound, int $cutoff): int { $sum = PHP_INT_MAX - 1000; $count = 0; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } return $sum; } try { structuredOverflow(60, 60); } catch (TypeError $error) { echo 'caught'; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "caught"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("structuredOverflow"))
+        .map(|(_, function)| function)
+        .expect("compiled structuredOverflow function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("structuredOverflow should use general Long loop IR");
+    assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
     assert_eq!(plan.native_jit().range_proven_chunks(), 0);
     assert_eq!(plan.native_jit().side_exits(), 1);

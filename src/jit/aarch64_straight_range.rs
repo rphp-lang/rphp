@@ -295,7 +295,20 @@ fn linear_recurrence_proof(
             carried_mask: 0,
         });
     }
-    if has_control_flow || carried_mask.count_ones() > 3 {
+    if carried_mask.count_ones() > 3 {
+        return None;
+    }
+    if has_control_flow
+        && config
+            .operations
+            .iter()
+            .copied()
+            .take(config.operation_count as usize)
+            .any(|operation| {
+                matches!(operation, NativeStraightLongOperation::BranchUnless { .. })
+                    && straight_long_operation_input_mask(operation) & carried_mask != 0
+            })
+    {
         return None;
     }
 
@@ -346,6 +359,7 @@ fn linear_recurrence_proof(
                 output_mask,
                 carried_mask,
                 &carried_ranges,
+                !has_control_flow,
             ) else {
                 continue;
             };
@@ -428,6 +442,7 @@ fn recurrence_expression_operand_range(
     output_mask: u64,
     carried_mask: u64,
     carried_ranges: &[Option<LongInterval>; 64],
+    allow_body_definitions: bool,
 ) -> Option<LongInterval> {
     let slot = match operand {
         QuickLongOperand::Const(value) => return Some(LongInterval::exact(value)),
@@ -439,6 +454,9 @@ fn recurrence_expression_operand_range(
     let slot_mask = 1u64 << slot;
     if carried_mask & slot_mask != 0 {
         return carried_ranges[slot as usize];
+    }
+    if !allow_body_definitions && output_mask & slot_mask != 0 {
+        return None;
     }
     let definition = config.operations[..before_operation]
         .iter()
@@ -459,6 +477,7 @@ fn recurrence_expression_operand_range(
             output_mask,
             carried_mask,
             carried_ranges,
+            allow_body_definitions,
         )
     };
     match operation {
@@ -1147,6 +1166,53 @@ mod tests {
             100,
         );
         assert!(straight_long_remaining_range_proof(&cyclic, &[0_i64; 64]).is_none());
+    }
+
+    #[test]
+    fn conditional_recurrence_is_proven_when_guard_does_not_read_carried_state() {
+        let conditional = config(
+            &[
+                NativeStraightLongOperation::BranchUnless {
+                    kind: super::super::ScalarLongConditionKind::LessThan,
+                    lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+                    rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+                    false_target: 2,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(1),
+                    rhs: QuickLongOperand::Slot(0),
+                    result: 2,
+                    destination: 1,
+                },
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(3),
+                    rhs: QuickLongOperand::Const(1),
+                    result: 4,
+                    destination: 3,
+                },
+            ],
+            100,
+        );
+        let proof = straight_long_remaining_range_proof(&conditional, &[0_i64; 64])
+            .expect("induction-guarded recurrences should be proven");
+        assert_eq!(proof.carried_mask, (1u64 << 1) | (1u64 << 3));
+
+        let carried_guard = config(
+            &[
+                NativeStraightLongOperation::BranchUnless {
+                    kind: super::super::ScalarLongConditionKind::LessThan,
+                    lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(1)),
+                    rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+                    false_target: 2,
+                },
+                conditional.operations[1],
+                conditional.operations[2],
+            ],
+            100,
+        );
+        assert!(straight_long_remaining_range_proof(&carried_guard, &[0_i64; 64]).is_none());
     }
 
     #[test]

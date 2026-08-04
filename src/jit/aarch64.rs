@@ -2519,6 +2519,32 @@ impl CompiledQuickLongStraightLoop {
                             | NativeStraightLongOperation::BinaryAssign { .. }
                     )
                 });
+        // Forward branches invalidate the linear temporary cache because an
+        // output may not have executed on every path. Range-proven carried
+        // values are different: each owns a fixed register initialized before
+        // the loop, and a skipped update deliberately leaves its old value in
+        // place. Keep only those values resident for structured scalar bodies.
+        let keeps_structured_carried_values_resident = polling_interval.is_some()
+            && carried_mask != 0
+            && !keeps_linear_scalar_values_resident
+            && config
+                .operations
+                .iter()
+                .copied()
+                .take(config.operation_count as usize)
+                .all(|operation| {
+                    matches!(
+                        operation,
+                        NativeStraightLongOperation::Modulo { .. }
+                            | NativeStraightLongOperation::Move { .. }
+                            | NativeStraightLongOperation::Binary { .. }
+                            | NativeStraightLongOperation::BinaryAssign { .. }
+                            | NativeStraightLongOperation::BranchUnless { .. }
+                            | NativeStraightLongOperation::Jump { .. }
+                    )
+                });
+        let keeps_carried_values_resident = keeps_linear_scalar_values_resident
+            || keeps_structured_carried_values_resident;
 
         assembler.move_register(control, Arm64Register::X2);
         if let Some(polling_interval) = polling_interval {
@@ -2554,7 +2580,7 @@ impl CompiledQuickLongStraightLoop {
             (0u64, one),
             (0u64, failed_operation),
         ];
-        let final_publication_masks = if keeps_linear_scalar_values_resident {
+        let final_publication_masks = if keeps_carried_values_resident {
             straight_long_linear_final_publication_masks(&config, publication_mask)
         } else {
             [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
@@ -2567,7 +2593,7 @@ impl CompiledQuickLongStraightLoop {
         let mut reserved_resident_registers = [false; 4];
         let mut initial_carried_masks = [0u64; 4];
         let mut next_publication_cache = 1usize;
-        if keeps_linear_scalar_values_resident {
+        if keeps_carried_values_resident {
             for (index, slot_mask) in final_publication_masks
                 .iter()
                 .copied()
@@ -2588,13 +2614,20 @@ impl CompiledQuickLongStraightLoop {
                 let resident_index = next_publication_cache;
                 next_publication_cache += 1;
                 deferred_register_by_operation[index] = resident_index;
+                let deferred_mask = if keeps_structured_carried_values_resident {
+                    operation_carried_mask
+                } else {
+                    slot_mask
+                };
                 deferred_exit_values[deferred_exit_value_count] =
-                    (slot_mask, resident_values[resident_index].1);
+                    (deferred_mask, resident_values[resident_index].1);
                 deferred_exit_value_count += 1;
-                deferred_exit_publication_mask |= slot_mask;
+                deferred_exit_publication_mask |= deferred_mask;
                 reserved_resident_registers[resident_index] = true;
                 initial_carried_masks[resident_index] = operation_carried_mask;
             }
+        }
+        if keeps_linear_scalar_values_resident {
             for (index, slot_mask) in final_publication_masks
                 .iter()
                 .copied()
@@ -2628,9 +2661,9 @@ impl CompiledQuickLongStraightLoop {
             }
         }
         let mut active_exit_masks = [0u64; 4];
-        if carried_mask != 0 && !keeps_linear_scalar_values_resident {
+        if carried_mask != 0 && !keeps_carried_values_resident {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
-                "straight-loop carried state requires linear range-proven lowering",
+                "straight-loop carried state requires range-proven scalar lowering",
             ));
         }
         for resident_index in 1..resident_values.len() {
@@ -2698,6 +2731,8 @@ impl CompiledQuickLongStraightLoop {
                     publication_mask & !deferred_exit_publication_mask,
                     &linear_live_after,
                 ) & !deferred_exit_publication_mask
+            } else if keeps_structured_carried_values_resident {
+                operation.shadow_output_mask() & !deferred_exit_publication_mask
             } else {
                 operation.shadow_output_mask()
             };
@@ -3078,6 +3113,21 @@ impl CompiledQuickLongStraightLoop {
                     }
                     active_exit_masks[deferred_register] =
                         final_publication_masks[index];
+                }
+            } else if keeps_structured_carried_values_resident {
+                let deferred_register = deferred_register_by_operation[index];
+                if deferred_register != usize::MAX {
+                    debug_assert_ne!(deferred_register, 0);
+                    assembler.move_register(
+                        resident_values[deferred_register].1,
+                        result,
+                    );
+                    // Temporary aliases are path-local. Only the carried
+                    // destination is guaranteed to exist after a skipped arm.
+                    resident_values[deferred_register].0 =
+                        final_publication_masks[index] & carried_mask;
+                    active_exit_masks[deferred_register] =
+                        final_publication_masks[index] & carried_mask;
                 }
             }
         }

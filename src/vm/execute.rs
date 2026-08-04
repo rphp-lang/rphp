@@ -5027,6 +5027,53 @@ fn native_quick_long_straight_kernel(
                 pending_branches.push((native_index, target));
                 next_target
             }
+            QuickLongOp::ConditionalAddAssign {
+                condition,
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                condition_resume_ip,
+                add_resume_ip,
+                ..
+            } if result != post_value && destination != post_value => {
+                let (kind, condition_lhs, condition_rhs) = match condition {
+                    QuickLongCondition::Lt { lhs, rhs } => {
+                        (ScalarLongConditionKind::LessThan, lhs, rhs)
+                    }
+                    QuickLongCondition::Eq { lhs, rhs } => {
+                        (ScalarLongConditionKind::Equal, lhs, rhs)
+                    }
+                };
+                let branch_index = append_operation(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(condition_lhs),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(condition_rhs),
+                        false_target: 0,
+                    },
+                    condition_resume_ip,
+                )?;
+                // The fused quick operation represents a forward branch over
+                // the add. Resolve its false edge to the next quick operation
+                // after both native operations have been appended.
+                pending_branches.push((branch_index, plan_index + 1));
+                append_operation(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(lhs),
+                        rhs: QuickLongOperand::Slot(rhs),
+                        result,
+                        destination,
+                    },
+                    add_resume_ip,
+                )?;
+                has_materialized_arithmetic = true;
+                next_target
+            }
             QuickLongOp::Jump { target } => {
                 let native_index = append_operation(
                     NativeStraightLongOperation::Jump { target: 0 },

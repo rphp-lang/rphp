@@ -437,4 +437,116 @@ mod tests {
         assert_eq!(slots[1], 49_995_010);
         assert_eq!(slots[3], 166_616_769_995);
     }
+
+    #[test]
+    fn conditional_recurrence_keeps_old_register_value_on_skipped_path() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 2,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 3,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10_000),
+            operations,
+            operation_count: 3,
+            post_result: None,
+        };
+        let publication_mask = (1u64 << 1) | (1u64 << 3);
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+            config,
+            1_024,
+            publication_mask,
+            publication_mask,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
+        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8
+        assert!(!words.contains(&0xf900_0408)); // no loop STR x8, [x0, #8]
+        assert!(!words.contains(&0xf900_0c08)); // no loop STR x8, [x0, #24]
+
+        let interrupt = AtomicBool::new(true);
+        let mut slots = [0i64; 64];
+        slots[1] = 10;
+        slots[3] = -5;
+        let interrupted = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 1_024)
+            .unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            super::super::NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(slots[0], 1_024);
+        assert_eq!(slots[1], 1_235);
+        assert_eq!(slots[3], 1_019);
+
+        interrupt.store(false, Ordering::Relaxed);
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 2_048)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[0], 10_000);
+        assert_eq!(slots[1], 1_235);
+        assert_eq!(slots[3], 9_995);
+
+        let mut never_config = config;
+        never_config.bound = QuickLongOperand::Const(100);
+        never_config.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+            false_target: 2,
+        };
+        let never_program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+            never_config,
+            1_024,
+            publication_mask | (1u64 << 2),
+            publication_mask,
+        )
+        .unwrap();
+        let mut never_slots = [0i64; 64];
+        never_slots[1] = 10;
+        never_slots[2] = 777;
+        never_slots[3] = -5;
+        let never_completed = never_program
+            .call_range_proven_polling(
+                &mut never_slots,
+                100,
+                interrupt.as_ptr() as *const bool,
+                100,
+            )
+            .unwrap();
+        assert_eq!(
+            never_completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(never_slots[1], 10);
+        assert_eq!(never_slots[2], 777, "skipped result alias must remain untouched");
+        assert_eq!(never_slots[3], 95);
+    }
 }

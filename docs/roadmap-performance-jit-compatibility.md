@@ -2183,6 +2183,43 @@ percent and the composed recurrence control at -0.16 percent. The checkpoint
 passes 134 library tests, 78 ARM64/JIT integration tests, all four application
 corpus tests, and `cargo check --all-features`.
 
+Structured conditional recurrence checkpoint (2026-08-04): the recurrence
+proof now admits forward control flow when every carried value still has one
+unique additive or subtractive definition. A guarded update uses the same
+all-prefix envelope as an unconditional update; treating any subset of at most
+the remaining iteration count is conservative and therefore covers a skipped
+arm. To avoid claiming general CFG liveness, a structured recurrence delta may
+only use a constant, induction, invariant slot, or already-proven carried CV.
+A branch condition that reads carried state is also rejected until condition
+lowering can consume fixed resident registers directly.
+
+The ARM64 backend separates fixed carried residency from linear temporary
+residency. Structured scalar code loads each carried CV into `x4`, `x5`, or
+`x11` once, but continues to materialize ordinary temporaries in shadow state
+across branches. Executing a recurrence replaces its fixed register; skipping
+it naturally preserves the old value. Only carried CVs are deferred to native
+completion or interrupt exits, so a never-executed temporary alias remains
+untouched. This gives conditional loops the optimization without an unsound
+assumption that every path defines every temporary.
+
+Compiler fusion is normalized at the native boundary: `ConditionalAddAssign`
+lowers to a forward `BranchUnless` and checked `BinaryAssign`. A real PHP loop
+with one conditional and one unconditional recurrence now enters one straight
+native region, evaluates its range proof once, and completes all 98 safepoint
+chunks without a side exit. A near-limit counterpart rejects the proof and
+uses the existing checked operation side exit, preserving canonical PHP
+overflow behavior.
+
+In 101 order-rotated `max-perf` runs against the topological-recurrence commit,
+the new permanent conditional-recurrence holdout improves from 65.542 ms to
+5.303 ms (paired median -91.90 percent, 12.36x faster). PHP tracing JIT records
+28.083 ms, making RPHP 5.30x faster. The existing linear recurrence control is
+flat at -0.26 percent and the structured non-recurrence expression control is
+flat at -0.03 percent; the dedicated one-recurrence branch control moves by
++0.69 percent. The checkpoint passes 136 library tests, 80 ARM64/JIT
+integration tests, all four application corpus tests, and
+`cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

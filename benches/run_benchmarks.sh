@@ -71,6 +71,7 @@ BENCHMARKS=(
     "bench_scalar_expression_chain_loop.php:Scalar expression chain 10M"
     "bench_scalar_overlapping_lifetimes_loop.php:Overlapping scalar lifetimes 10M"
     "bench_scalar_recurrence_loop.php:Scalar recurrences 10M"
+    "bench_conditional_recurrence_loop.php:Conditional recurrences 10M"
     "bench_composed_recurrence_loop.php:Composed recurrence 10M"
     "bench_dependent_recurrence_loop.php:Dependent recurrence 10M"
     "bench_reverse_dependent_recurrence_loop.php:Reverse dependent recurrence 10M"
