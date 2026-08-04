@@ -80,6 +80,7 @@ fn conditional_scalar_plan(
 fn encoder_produces_expected_arm64_instruction_words() {
     let mut assembler = Arm64Assembler::new();
     assembler.add_register(Arm64Register::X0, Arm64Register::X0, Arm64Register::X1);
+    assembler.add_immediate(Arm64Register::X0, Arm64Register::X0, 1);
     assembler.multiply_register(Arm64Register::X0, Arm64Register::X0, Arm64Register::X2);
     assembler.ret();
 
@@ -87,6 +88,7 @@ fn encoder_produces_expected_arm64_instruction_words() {
         assembler.finish(),
         [
             0x00, 0x00, 0x01, 0x8b, // add x0, x0, x1
+            0x00, 0x04, 0x00, 0x91, // add x0, x0, #1
             0x00, 0x7c, 0x02, 0x9b, // mul x0, x0, x2
             0xc0, 0x03, 0x5f, 0xd6, // ret
         ]
@@ -895,6 +897,7 @@ fn real_php_accumulate_loop_enters_native_region() {
         plan.native_jit().range_proven_chunks(),
         plan.native_jit().native_chunks()
     );
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -928,6 +931,7 @@ fn negative_accumulate_loop_uses_range_proven_native_chunks() {
         plan.native_jit().range_proven_chunks(),
         plan.native_jit().native_chunks()
     );
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -1952,6 +1956,7 @@ fn real_php_constant_term_loop_enters_specialized_native_region() {
         plan.native_jit().range_proven_chunks(),
         plan.native_jit().native_chunks()
     );
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 
@@ -1993,6 +1998,7 @@ fn native_loop_sum_overflow_resumes_canonical_php_instruction() {
         .expect("overflow function should have an accumulate plan");
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().range_proven_chunks(), 0);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 2);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
@@ -2039,6 +2045,7 @@ fn native_constant_term_overflow_resumes_canonical_term_instruction() {
         plan.native_jit().range_proven_chunks()
             < plan.native_jit().native_chunks()
     );
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 3);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
 

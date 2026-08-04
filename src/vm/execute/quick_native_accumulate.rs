@@ -952,6 +952,7 @@ unsafe fn run_native_long_accumulate_loop(
     };
     let mut iterations = 0u64;
     let cache = plan.native_jit();
+    let remaining_range_proven = cache.prove_remaining_range(plan, state);
     let mut entered_native = false;
 
     loop {
@@ -960,6 +961,7 @@ unsafe fn run_native_long_accumulate_loop(
             plan,
             &mut state,
             NATIVE_LONG_SAFEPOINT_INTERVAL,
+            remaining_range_proven,
         ) else {
             return Ok(None);
         };

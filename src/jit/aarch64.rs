@@ -91,6 +91,21 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `ADD Xd, Xn, #imm12` (64-bit, unshifted immediate form).
+    pub fn add_immediate(
+        &mut self,
+        destination: Arm64Register,
+        source: Arm64Register,
+        immediate: u16,
+    ) {
+        debug_assert!(immediate < 4_096);
+        let instruction = 0x9100_0000
+            | (u32::from(immediate) << 10)
+            | (source.bits() << 5)
+            | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode the `MUL Xd, Xn, Xm` alias of `MADD Xd, Xn, Xm, XZR`.
     pub fn multiply_register(
         &mut self,
@@ -115,6 +130,21 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `ADDS Xd, Xn, #imm12`, retaining signed-overflow information.
+    fn add_immediate_checked(
+        &mut self,
+        destination: Arm64Register,
+        source: Arm64Register,
+        immediate: u16,
+    ) {
+        debug_assert!(immediate < 4_096);
+        let instruction = 0xb100_0000
+            | (u32::from(immediate) << 10)
+            | (source.bits() << 5)
+            | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode `SUBS Xd, Xn, Xm`, retaining signed-overflow information in PSTATE.V.
     fn subtract_register_checked(
         &mut self,
@@ -123,6 +153,21 @@ impl Arm64Assembler {
         rhs: Arm64Register,
     ) {
         let instruction = 0xeb00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `SUBS Xd, Xn, #imm12`, retaining signed-overflow information.
+    fn subtract_immediate_checked(
+        &mut self,
+        destination: Arm64Register,
+        source: Arm64Register,
+        immediate: u16,
+    ) {
+        debug_assert!(immediate < 4_096);
+        let instruction = 0xf100_0000
+            | (u32::from(immediate) << 10)
+            | (source.bits() << 5)
+            | destination.bits();
         self.words.push(instruction);
     }
 
@@ -587,10 +632,11 @@ impl From<io::Error> for QuickLongAccumulateJitError {
 /// }
 /// ```
 ///
-/// ABI: `x0` points to `NativeLongAccumulateState`, `x1` is a non-zero
-/// iteration budget, and `w0` returns a `QuickLongAccumulateJitOutcome`
-/// discriminator. Checked operations publish neither their wrapped result nor
-/// an ambiguous resume position.
+/// ABI: `x0` points to `NativeLongAccumulateState` and `w0` returns a
+/// `QuickLongAccumulateJitOutcome` discriminator. The checked program accepts
+/// a non-zero iteration budget in `x1`; the range-proven program accepts the
+/// exclusive induction end of its non-empty chunk. Checked operations publish
+/// neither their wrapped result nor an ambiguous resume position.
 pub struct CompiledQuickLongAccumulateLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -623,23 +669,30 @@ impl CompiledQuickLongAccumulateLoop {
         let induction = Arm64Register::from_code(2);
         let bound = Arm64Register::from_code(3);
         let accumulator = Arm64Register::from_code(4);
-        let one = Arm64Register::from_code(5);
         let addend_register = Arm64Register::from_code(6);
         let computed_term = Arm64Register::from_code(7);
         let checked_result = Arm64Register::from_code(8);
 
         assembler.load_u64(induction, Arm64Register::X0, 0);
-        assembler.load_u64(bound, Arm64Register::X0, 8);
+        if check_overflow {
+            assembler.load_u64(bound, Arm64Register::X0, 8);
+        }
         assembler.load_u64(accumulator, Arm64Register::X0, 16);
-        assembler.move_immediate(one, 1);
         if let Some(addend) = addend {
             assembler.move_immediate(addend_register, addend);
         }
 
-        let loop_word = assembler.word_count();
-        assembler.compare_registers(induction, bound);
-        let completed_branch = assembler
-            .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+        let (loop_word, completed_branch) = if check_overflow {
+            let word = assembler.word_count();
+            assembler.compare_registers(induction, bound);
+            let completed = assembler
+                .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+            (word, Some(completed))
+        } else {
+            // The dispatcher supplies an exclusive induction end in x1, so a
+            // non-empty proven chunk enters its body without a header guard.
+            (assembler.word_count(), None)
+        };
 
         let (term, term_overflow_branch) = if addend.is_some() {
             if check_overflow {
@@ -664,7 +717,7 @@ impl CompiledQuickLongAccumulateLoop {
 
             // The same transactional rule preserves the old induction value for
             // the baseline increment instruction on overflow.
-            assembler.add_register_checked(checked_result, induction, one);
+            assembler.add_immediate_checked(checked_result, induction, 1);
             let increment_overflow =
                 assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
             assembler.move_register(induction, checked_result);
@@ -674,15 +727,15 @@ impl CompiledQuickLongAccumulateLoop {
             // chunk. Keep the hot iteration free of flag dependencies and side
             // branches; the checked program remains available for other chunks.
             assembler.add_register(accumulator, accumulator, term);
-            assembler.add_register(induction, induction, one);
+            assembler.add_immediate(induction, induction, 1);
             (None, None)
         };
 
-        assembler.subtract_register_checked(
-            Arm64Register::X1,
-            Arm64Register::X1,
-            one,
-        );
+        if check_overflow {
+            assembler.subtract_immediate_checked(Arm64Register::X1, Arm64Register::X1, 1);
+        } else {
+            assembler.compare_registers(induction, Arm64Register::X1);
+        }
         let loop_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
@@ -694,13 +747,16 @@ impl CompiledQuickLongAccumulateLoop {
         );
         assembler.ret();
 
-        let completed_word = assembler.word_count();
-        emit_long_accumulate_state(&mut assembler, induction, accumulator);
-        assembler.move_immediate(
-            Arm64Register::X0,
-            i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
-        );
-        assembler.ret();
+        let completed_word = completed_branch.map(|_| {
+            let word = assembler.word_count();
+            emit_long_accumulate_state(&mut assembler, induction, accumulator);
+            assembler.move_immediate(
+                Arm64Register::X0,
+                i64::from(NATIVE_LONG_ACCUMULATE_COMPLETED),
+            );
+            assembler.ret();
+            word
+        });
 
         let sum_overflow_word = sum_overflow_branch.map(|_| {
             let word = assembler.word_count();
@@ -735,15 +791,11 @@ impl CompiledQuickLongAccumulateLoop {
             word
         });
 
-        for (branch, target) in [
-            (completed_branch, completed_word),
-            (loop_branch, loop_word),
-        ] {
-            if !assembler.patch_conditional_branch(branch, target) {
-                return Err(QuickLongAccumulateJitError::BranchOutOfRange);
-            }
+        if !assembler.patch_conditional_branch(loop_branch, loop_word) {
+            return Err(QuickLongAccumulateJitError::BranchOutOfRange);
         }
         for (branch, target) in [
+            completed_branch.zip(completed_word),
             sum_overflow_branch.zip(sum_overflow_word),
             increment_overflow_branch.zip(increment_overflow_word),
             term_overflow_branch.zip(term_overflow_word),
@@ -755,7 +807,7 @@ impl CompiledQuickLongAccumulateLoop {
                 return Err(QuickLongAccumulateJitError::BranchOutOfRange);
             }
         }
-        debug_assert!(chunk_exhausted_word < completed_word);
+        debug_assert!(completed_word.is_none_or(|word| chunk_exhausted_word < word));
 
         let code = assembler.finish().into_boxed_slice();
         let memory = ExecutableMemory::from_code(&code)?;
@@ -770,10 +822,27 @@ impl CompiledQuickLongAccumulateLoop {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
         }
+        self.call_with_argument(state, iteration_budget)
+    }
+
+    fn call_range_proven(
+        &self,
+        state: &mut NativeLongAccumulateState,
+        exclusive_induction_end: i64,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
+        debug_assert!(state.induction < exclusive_induction_end);
+        self.call_with_argument(state, exclusive_induction_end as u64)
+    }
+
+    fn call_with_argument(
+        &self,
+        state: &mut NativeLongAccumulateState,
+        argument: u64,
+    ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
         type NativeFunction =
             unsafe extern "C" fn(*mut NativeLongAccumulateState, u64) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
-        let status = unsafe { function(state, iteration_budget) };
+        let status = unsafe { function(state, argument) };
         match status {
             NATIVE_LONG_ACCUMULATE_COMPLETED => {
                 Ok(QuickLongAccumulateJitOutcome::Completed)
@@ -815,45 +884,58 @@ fn emit_long_accumulate_state(
 /// convex, so their extrema occur at the endpoints or immediately after the
 /// last negative term. Checking those points in `i128` proves all intermediate
 /// accumulator values without repeating the loop in the dispatcher.
-fn long_accumulate_chunk_is_range_proven(
+fn long_accumulate_chunk_range_proven_end(
     plan: &QuickLongAccumulateLoop,
     state: NativeLongAccumulateState,
     iteration_budget: u64,
-) -> bool {
+) -> Option<i64> {
     let addend = match plan.term {
         QuickLongTerm::Induction => 0,
         QuickLongTerm::InductionPlusConst { addend, .. } => addend,
-        _ => return false,
+        _ => return None,
     };
-    arithmetic_long_chunk_is_range_proven(addend, state, iteration_budget)
+    arithmetic_long_chunk_range_proven_end(addend, state, iteration_budget)
 }
 
+#[cfg(test)]
 fn arithmetic_long_chunk_is_range_proven(
     addend: i64,
     state: NativeLongAccumulateState,
     iteration_budget: u64,
 ) -> bool {
+    iteration_budget != 0
+        && (state.induction >= state.bound
+            || arithmetic_long_chunk_range_proven_end(
+                addend,
+                state,
+                iteration_budget,
+            )
+            .is_some())
+}
+
+fn arithmetic_long_chunk_range_proven_end(
+    addend: i64,
+    state: NativeLongAccumulateState,
+    iteration_budget: u64,
+) -> Option<i64> {
     if iteration_budget == 0 {
-        return false;
+        return None;
     }
     if state.induction >= state.bound {
-        return true;
+        return None;
     }
 
-    // The wrapping unsigned difference is the exact non-negative distance for
-    // any ordered pair of signed i64 values, including MIN..MAX.
-    let distance = (state.bound as u64).wrapping_sub(state.induction as u64);
-    let iterations = distance.min(iteration_budget);
-    debug_assert_ne!(iterations, 0);
+    let exclusive_end = long_accumulate_nonempty_chunk_end(state, iteration_budget)?;
+    let iterations = (exclusive_end as u64).wrapping_sub(state.induction as u64);
 
     let first_term = i128::from(state.induction) + i128::from(addend);
     let last_term = first_term + i128::from(iterations - 1);
     if first_term < i128::from(i64::MIN) || last_term > i128::from(i64::MAX) {
-        return false;
+        return None;
     }
 
     let Some(final_prefix) = arithmetic_long_prefix_sum(first_term, iterations) else {
-        return false;
+        return None;
     };
     let negative_terms = if first_term < 0 {
         iterations.min(u64::try_from(-first_term).unwrap_or(u64::MAX))
@@ -861,18 +943,40 @@ fn arithmetic_long_chunk_is_range_proven(
         0
     };
     let Some(minimum_prefix) = arithmetic_long_prefix_sum(first_term, negative_terms) else {
-        return false;
+        return None;
     };
     let minimum_prefix = minimum_prefix.min(0);
     let maximum_prefix = final_prefix.max(0);
     let accumulator = i128::from(state.accumulator);
 
-    accumulator
+    let accumulator_is_safe = accumulator
         .checked_add(minimum_prefix)
         .is_some_and(|value| value >= i128::from(i64::MIN))
         && accumulator
             .checked_add(maximum_prefix)
-            .is_some_and(|value| value <= i128::from(i64::MAX))
+            .is_some_and(|value| value <= i128::from(i64::MAX));
+    if !accumulator_is_safe {
+        return None;
+    }
+
+    Some(exclusive_end)
+}
+
+fn long_accumulate_nonempty_chunk_end(
+    state: NativeLongAccumulateState,
+    iteration_budget: u64,
+) -> Option<i64> {
+    if iteration_budget == 0 || state.induction >= state.bound {
+        return None;
+    }
+    // The wrapping unsigned difference is the exact non-negative distance for
+    // any ordered pair of signed i64 values, including MIN..MAX.
+    let distance = (state.bound as u64).wrapping_sub(state.induction as u64);
+    let iterations = distance.min(iteration_budget);
+    let exclusive_end = (state.induction as u64).wrapping_add(iterations) as i64;
+    debug_assert!(state.induction < exclusive_end);
+    debug_assert!(exclusive_end <= state.bound);
+    Some(exclusive_end)
 }
 
 fn arithmetic_long_prefix_sum(first_term: i128, count: u64) -> Option<i128> {
@@ -916,6 +1020,7 @@ pub struct QuickLongAccumulateJitCache {
     native_entries: Cell<u64>,
     native_chunks: Cell<u64>,
     range_proven_chunks: Cell<u64>,
+    range_proof_evaluations: Cell<u64>,
     side_exits: Cell<u64>,
 }
 
@@ -928,19 +1033,37 @@ impl QuickLongAccumulateJitCache {
             native_entries: Cell::new(0),
             native_chunks: Cell::new(0),
             range_proven_chunks: Cell::new(0),
+            range_proof_evaluations: Cell::new(0),
             side_exits: Cell::new(0),
         }
     }
 
-    pub fn dispatch_chunk(
+    pub(crate) fn prove_remaining_range(
+        &self,
+        plan: &QuickLongAccumulateLoop,
+        state: NativeLongAccumulateState,
+    ) -> bool {
+        self.range_proof_evaluations
+            .set(self.range_proof_evaluations.get().saturating_add(1));
+        long_accumulate_chunk_range_proven_end(plan, state, u64::MAX)
+            == Some(state.bound)
+    }
+
+    pub(crate) fn dispatch_chunk(
         &self,
         plan: &QuickLongAccumulateLoop,
         state: &mut NativeLongAccumulateState,
         iteration_budget: u64,
+        remaining_range_proven: bool,
     ) -> Option<Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError>> {
-        let range_proven =
-            long_accumulate_chunk_is_range_proven(plan, *state, iteration_budget);
-        let program = if range_proven {
+        let range_proven_end = if remaining_range_proven {
+            long_accumulate_nonempty_chunk_end(*state, iteration_budget)
+        } else {
+            self.range_proof_evaluations
+                .set(self.range_proof_evaluations.get().saturating_add(1));
+            long_accumulate_chunk_range_proven_end(plan, *state, iteration_budget)
+        };
+        let program = if range_proven_end.is_some() {
             self.range_proven_compiled
                 .get_or_init(|| match plan.term {
                     QuickLongTerm::Induction => {
@@ -968,11 +1091,16 @@ impl QuickLongAccumulateJitCache {
         };
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
-        if range_proven {
+        if range_proven_end.is_some() {
             self.range_proven_chunks
                 .set(self.range_proven_chunks.get().saturating_add(1));
         }
-        let outcome = program.call(state, iteration_budget);
+        let outcome = match range_proven_end {
+            Some(exclusive_induction_end) => {
+                program.call_range_proven(state, exclusive_induction_end)
+            }
+            None => program.call(state, iteration_budget),
+        };
         if matches!(
             outcome,
             Ok(QuickLongAccumulateJitOutcome::TermOverflow)
@@ -1061,6 +1189,10 @@ impl QuickLongAccumulateJitCache {
         self.range_proven_chunks.get()
     }
 
+    pub fn range_proof_evaluations(&self) -> u64 {
+        self.range_proof_evaluations.get()
+    }
+
     pub fn side_exits(&self) -> u64 {
         self.side_exits.get()
     }
@@ -1087,6 +1219,7 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
             .field("native_entries", &self.native_entries())
             .field("native_chunks", &self.native_chunks())
             .field("range_proven_chunks", &self.range_proven_chunks())
+            .field("range_proof_evaluations", &self.range_proof_evaluations())
             .field("side_exits", &self.side_exits())
             .finish()
     }

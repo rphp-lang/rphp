@@ -78,8 +78,8 @@ fn range_proven_program_has_no_checked_overflow_stubs() {
         accumulator: 0,
     };
     assert_eq!(
-        range_proven.call(&mut state, 1_024).unwrap(),
-        QuickLongAccumulateJitOutcome::Completed
+        range_proven.call_range_proven(&mut state, 4).unwrap(),
+        QuickLongAccumulateJitOutcome::ChunkExhausted
     );
     assert_eq!(state.induction, 4);
     assert_eq!(state.accumulator, 0);

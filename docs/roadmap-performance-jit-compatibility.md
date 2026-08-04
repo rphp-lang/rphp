@@ -1747,6 +1747,35 @@ the earlier PHP tracing-JIT median of 8.906 ms. Separate 51-run batches at
 2.641 and 2.434 ms show the expected short-run frequency variance while
 preserving the structural gain.
 
+Range-proven endpoint lowering follow-up (2026-08-04): a non-empty proven
+chunk now receives its exclusive induction end in the native ABI. It enters
+the body without a redundant PHP-bound header check and terminates with one
+induction/end comparison rather than maintaining a second per-iteration
+safepoint countdown. ARM64 immediate `ADD`, checked `ADDS`, and checked `SUBS`
+encodings also remove the materialized constant-one register. The common hot
+body is consequently the same four-instruction scalar shape emitted by Clang:
+accumulator add, induction increment, end comparison, and back edge.
+
+The VM proves the complete remaining activation once on entry when possible;
+all later 1,024-iteration chunks derive only their exclusive end. Plans that
+cannot prove the full remaining range continue to evaluate each chunk and use
+the checked program where required. Instrumented integration checks require
+one proof evaluation for positive, negative, and constant-term safe loops, two
+for an immediately overflowing sum, and preserve the existing exact side exits.
+
+In 201 order-rotated A/B pairs, the preceding per-chunk-proof binary records a
+2.416 ms median and the endpoint/prove-once binary 2.388 ms; the paired median
+change is -1.09 percent. A same-run scalar-C comparison is 2.259 ms versus
+2.388 ms, putting RPHP at approximately 94.6 percent of C throughput and 5.7
+percent more elapsed time. A 100-million-iteration holdout remains separated
+by nearly the same 5.55 percent (22.573 ms C, 23.826 ms RPHP). Because the hot
+instruction shape is now equal and the percentage does not shrink with a
+longer loop, the remaining simple-loop gap is attributed primarily to the
+roughly 1,024-iteration Rust/native safepoint crossings, not JIT compilation or
+per-iteration arithmetic. The next focused experiment is therefore an in-native
+interrupt poll that keeps the same safepoint interval without returning to Rust
+when no interrupt is pending.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
