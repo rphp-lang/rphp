@@ -753,9 +753,9 @@ mod tests {
     use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
-    fn resident_scalar_operand_uses_register_forwarding_instead_of_shadow_load() {
+    fn resident_scalar_operand_returns_its_register_without_move_or_shadow_load() {
         let mut forwarded = super::super::Arm64Assembler::new();
-        super::super::emit_straight_long_operand_with_resident(
+        let forwarded_register = super::super::emit_straight_long_operand_with_resident(
             &mut forwarded,
             QuickLongOperand::Slot(2),
             super::super::Arm64Register::from_code(6),
@@ -763,10 +763,11 @@ mod tests {
             super::super::Arm64Register::from_code(3),
             &[(1u64 << 2, super::super::Arm64Register::from_code(8))],
         );
-        assert_eq!(forwarded.finish(), 0xaa08_03e6u32.to_le_bytes());
+        assert_eq!(forwarded_register, super::super::Arm64Register::from_code(8));
+        assert!(forwarded.finish().is_empty());
 
         let mut already_in_destination = super::super::Arm64Assembler::new();
-        super::super::emit_straight_long_operand_with_resident(
+        let already_resident = super::super::emit_straight_long_operand_with_resident(
             &mut already_in_destination,
             QuickLongOperand::Slot(2),
             super::super::Arm64Register::from_code(8),
@@ -774,10 +775,11 @@ mod tests {
             super::super::Arm64Register::from_code(3),
             &[(1u64 << 2, super::super::Arm64Register::from_code(8))],
         );
+        assert_eq!(already_resident, super::super::Arm64Register::from_code(8));
         assert!(already_in_destination.finish().is_empty());
 
         let mut shadow_load = super::super::Arm64Assembler::new();
-        super::super::emit_straight_long_operand_with_resident(
+        let loaded_register = super::super::emit_straight_long_operand_with_resident(
             &mut shadow_load,
             QuickLongOperand::Slot(2),
             super::super::Arm64Register::from_code(6),
@@ -785,6 +787,7 @@ mod tests {
             super::super::Arm64Register::from_code(3),
             &[(0, super::super::Arm64Register::from_code(8))],
         );
+        assert_eq!(loaded_register, super::super::Arm64Register::from_code(6));
         assert_eq!(shadow_load.finish(), 0xf940_0806u32.to_le_bytes());
     }
 

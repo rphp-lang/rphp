@@ -2878,7 +2878,7 @@ impl CompiledQuickLongStraightLoop {
                     divisor,
                     result: result_slot,
                 } => {
-                    emit_straight_long_operand_with_resident(
+                    let value_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         value,
                         lhs,
@@ -2895,7 +2895,7 @@ impl CompiledQuickLongStraightLoop {
                     } else if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
                         emit_signed_power_of_two_remainder(
                             &mut assembler,
-                            lhs,
+                            value_register,
                             mask,
                             result,
                             rhs,
@@ -2910,8 +2910,13 @@ impl CompiledQuickLongStraightLoop {
                         }
                     } else {
                         assembler.move_immediate(rhs, divisor);
-                        assembler.signed_divide(auxiliary, lhs, rhs);
-                        assembler.multiply_subtract(result, auxiliary, rhs, lhs);
+                        assembler.signed_divide(auxiliary, value_register, rhs);
+                        assembler.multiply_subtract(
+                            result,
+                            auxiliary,
+                            rhs,
+                            value_register,
+                        );
                         if shadow_store_mask & (1u64 << result_slot) != 0 {
                             assembler.store_u64(
                                 result,
@@ -2925,7 +2930,7 @@ impl CompiledQuickLongStraightLoop {
                     source,
                     result: result_slot,
                 } => {
-                    emit_straight_long_operand_with_resident(
+                    let source_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         source,
                         result,
@@ -2933,6 +2938,9 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
+                    if source_register != result {
+                        assembler.move_register(result, source_register);
+                    }
                     if shadow_store_mask & (1u64 << result_slot) != 0 {
                         assembler.store_u64(
                             result,
@@ -3049,7 +3057,7 @@ impl CompiledQuickLongStraightLoop {
                     rhs: rhs_operand,
                     result: result_slot,
                 } => {
-                    emit_straight_long_operand_with_resident(
+                    let lhs_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         lhs_operand,
                         lhs,
@@ -3057,7 +3065,7 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    emit_straight_long_operand_with_resident(
+                    let rhs_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         rhs_operand,
                         rhs,
@@ -3073,8 +3081,8 @@ impl CompiledQuickLongStraightLoop {
                             QuickLongOperand::Const(value) => Some(value),
                             QuickLongOperand::Slot(_) => None,
                         },
-                        lhs,
-                        rhs,
+                        lhs_register,
+                        rhs_register,
                         result,
                         auxiliary,
                         guard,
@@ -3096,7 +3104,7 @@ impl CompiledQuickLongStraightLoop {
                     result: result_slot,
                     destination,
                 } => {
-                    emit_straight_long_operand_with_resident(
+                    let lhs_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         lhs_operand,
                         lhs,
@@ -3104,7 +3112,7 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    emit_straight_long_operand_with_resident(
+                    let rhs_register = emit_straight_long_operand_with_resident(
                         &mut assembler,
                         rhs_operand,
                         rhs,
@@ -3120,8 +3128,8 @@ impl CompiledQuickLongStraightLoop {
                             QuickLongOperand::Const(value) => Some(value),
                             QuickLongOperand::Slot(_) => None,
                         },
-                        lhs,
-                        rhs,
+                        lhs_register,
+                        rhs_register,
                         result,
                         auxiliary,
                         guard,
@@ -3968,17 +3976,18 @@ fn emit_straight_long_operand_with_resident(
     induction_slot: u16,
     induction: Arm64Register,
     resident_values: &[(u64, Arm64Register)],
-) {
+) -> Arm64Register {
     // One value may name both a temporary result and its assigned destination.
-    if let QuickLongOperand::Slot(slot) = operand
-        && let Some((_, resident)) = resident_values
+    if let QuickLongOperand::Slot(slot) = operand {
+        if slot == induction_slot {
+            return induction;
+        }
+        if let Some((_, resident)) = resident_values
             .iter()
             .find(|(slot_mask, _)| slot_mask & (1u64 << slot) != 0)
-    {
-        if destination != *resident {
-            assembler.move_register(destination, *resident);
+        {
+            return *resident;
         }
-        return;
     }
     emit_straight_long_operand(
         assembler,
@@ -3987,6 +3996,7 @@ fn emit_straight_long_operand_with_resident(
         induction_slot,
         induction,
     );
+    destination
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -4142,7 +4152,7 @@ fn emit_straight_long_condition_operand(
             );
         }
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
-            emit_straight_long_operand_with_resident(
+            let lhs_register = emit_straight_long_operand_with_resident(
                 assembler,
                 lhs,
                 destination,
@@ -4150,7 +4160,7 @@ fn emit_straight_long_condition_operand(
                 induction,
                 resident_values,
             );
-            emit_straight_long_operand_with_resident(
+            let rhs_register = emit_straight_long_operand_with_resident(
                 assembler,
                 rhs,
                 auxiliary,
@@ -4158,7 +4168,7 @@ fn emit_straight_long_condition_operand(
                 induction,
                 resident_values,
             );
-            assembler.bitwise_and_register(destination, destination, auxiliary);
+            assembler.bitwise_and_register(destination, lhs_register, rhs_register);
         }
     }
     destination

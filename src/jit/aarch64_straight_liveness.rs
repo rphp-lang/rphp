@@ -881,8 +881,8 @@ mod tests {
             .chunks_exact(4)
             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
-        assert!(words.contains(&0xaa08_03e6)); // MOV x6, x8
-        assert!(words.contains(&0xaa08_03e7)); // MOV x7, x8
+        assert!(!words.contains(&0xaa08_03e6)); // consumers read resident x8 directly
+        assert!(!words.contains(&0xaa08_03e7));
         for omitted_store in [
             0xf900_0808, // STR x8, [x0, #16] result TMP 2
             0xf900_1008, // STR x8, [x0, #32] result TMP 4

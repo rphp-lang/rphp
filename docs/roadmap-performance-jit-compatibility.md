@@ -2384,6 +2384,33 @@ RPHP at 5.183 ms versus PHP tracing JIT at 34.503 ms with identical output, or
 The checkpoint passes 142 library tests, 81 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Direct resident-operand checkpoint (2026-08-04): scalar arithmetic now receives
+the register that already owns a resident operand instead of first copying it
+to the conventional `x6` or `x7` scratch register. The same selector returns
+the induction register directly and loads only non-resident slots or constants
+into a scratch. Binary, binary-assign, move, modulo and composed bitwise
+conditions all consume the returned register explicitly.
+
+This is safe for the range-proven lowering because ARM64 scalar arithmetic may
+use the destination as either source; checked lowering has no resident scalar
+results and therefore retains distinct scratch inputs wherever overflow logic
+needs them. A direct assembler test now requires no emitted instruction for a
+resident lookup, while a shadow lookup must still emit the exact load. The
+structured temporary-chain test likewise rejects its former `MOV x6, x8` and
+`MOV x7, x8` instructions while preserving results and TMP sentinels.
+
+In 101 order-rotated native-CPU `max-perf` A/B pairs against direct-result
+checkpoint `ea87450`, conditional composed recurrence falls from 5.124 ms to
+4.252 ms (paired median -16.68 percent) and linear composed recurrence from
+3.075 ms to 2.783 ms (-9.71 percent). Simple conditional recurrence improves
+by 1.06 percent; the already branch-bound structured expression is flat at
+-0.18 percent. Separate 101-run comparisons record 4.295 ms versus 37.342 ms
+for PHP tracing JIT on conditional composition (8.69x faster), and 2.797 ms
+versus 35.429 ms on linear composition (12.67x faster), with identical output.
+
+The checkpoint passes 142 library tests, 81 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
