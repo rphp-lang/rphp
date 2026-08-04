@@ -2299,6 +2299,26 @@ non-recurrence expression control at +0.24 percent. The checkpoint passes 138
 library tests, 81 ARM64/JIT integration tests, all four application corpus
 tests, and `cargo check --all-features`.
 
+General structured-local residency checkpoint (2026-08-04): basic-block `x8`
+forwarding is no longer coupled to the presence of a loop-carried CV. Every
+range-proven scalar body composed of moves, modulo, binary operations and
+forward branches may use local temporary residency. Fixed-register allocation
+and exit-only publication remain gated by the carried mask, so ordinary
+branching assignments continue to store their visible CVs on the selected
+path and require no phi publication contract.
+
+This separation lets ordinary `if/else` expression code remove branch-local
+TMP loads and stores while retaining the established merge behavior. The real
+PHP forward-branch integration still enters one range-proven native region and
+produces the same selected and folded values. In 101 order-rotated `max-perf`
+runs against the carried-only branch-local checkpoint, the permanent
+structured branch-expression benchmark improves from 10.355 ms to 6.586 ms
+(paired median -36.58 percent, 1.57x faster). PHP tracing JIT records 34.718
+ms, making RPHP 5.27x faster. The conditional composed recurrence is flat at
+-0.09 percent and the linear composed recurrence at -0.25 percent. The
+checkpoint passes 138 library tests, 81 ARM64/JIT integration tests, all four
+application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -2521,12 +2521,11 @@ impl CompiledQuickLongStraightLoop {
                     )
                 });
         // Forward branches invalidate the linear temporary cache because an
-        // output may not have executed on every path. Range-proven carried
-        // values are different: each owns a fixed register initialized before
-        // the loop, and a skipped update deliberately leaves its old value in
-        // place. Keep only those values resident for structured scalar bodies.
-        let keeps_structured_carried_values_resident = polling_interval.is_some()
-            && carried_mask != 0
+        // output may not have executed on every path. Structured scalar bodies
+        // therefore retain x8 only inside one basic block. Range-proven carried
+        // values additionally own fixed registers across branches; a skipped
+        // update deliberately leaves the old fixed value in place.
+        let keeps_structured_scalar_temporaries_resident = polling_interval.is_some()
             && !keeps_linear_scalar_values_resident
             && config
                 .operations
@@ -2544,6 +2543,8 @@ impl CompiledQuickLongStraightLoop {
                             | NativeStraightLongOperation::Jump { .. }
                     )
                 });
+        let keeps_structured_carried_values_resident =
+            keeps_structured_scalar_temporaries_resident && carried_mask != 0;
         let keeps_carried_values_resident = keeps_linear_scalar_values_resident
             || keeps_structured_carried_values_resident;
 
@@ -2575,13 +2576,13 @@ impl CompiledQuickLongStraightLoop {
         let mut structured_jumps = Vec::new();
         let mut operation_words = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
         let linear_live_after = straight_long_linear_live_after(&config);
-        let structured_block_starts = if keeps_structured_carried_values_resident {
+        let structured_block_starts = if keeps_structured_scalar_temporaries_resident {
             straight_long_structured_block_starts(&config)
         } else {
             [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1]
         };
         let structured_local_resident_output_masks =
-            if keeps_structured_carried_values_resident {
+            if keeps_structured_scalar_temporaries_resident {
                 straight_long_structured_local_resident_output_masks(
                     &config,
                     publication_mask,
@@ -2740,7 +2741,7 @@ impl CompiledQuickLongStraightLoop {
                     resident_values[cache_index].0 = resident_values[0].0;
                     resident_values[0].0 = 0;
                 }
-            } else if keeps_structured_carried_values_resident
+            } else if keeps_structured_scalar_temporaries_resident
                 && structured_block_starts[index]
             {
                 resident_values[0].0 = 0;
@@ -2752,7 +2753,7 @@ impl CompiledQuickLongStraightLoop {
                     publication_mask & !deferred_exit_publication_mask,
                     &linear_live_after,
                 ) & !deferred_exit_publication_mask
-            } else if keeps_structured_carried_values_resident {
+            } else if keeps_structured_scalar_temporaries_resident {
                 operation.shadow_output_mask()
                     & !deferred_exit_publication_mask
                     & !structured_local_resident_output_masks[index]
@@ -3141,21 +3142,23 @@ impl CompiledQuickLongStraightLoop {
                     active_exit_masks[deferred_register] =
                         final_publication_masks[index];
                 }
-            } else if keeps_structured_carried_values_resident {
+            } else if keeps_structured_scalar_temporaries_resident {
                 resident_values[0].0 = operation.output_mask();
-                let deferred_register = deferred_register_by_operation[index];
-                if deferred_register != usize::MAX {
-                    debug_assert_ne!(deferred_register, 0);
-                    assembler.move_register(
-                        resident_values[deferred_register].1,
-                        result,
-                    );
-                    // Temporary aliases are path-local. Only the carried
-                    // destination is guaranteed to exist after a skipped arm.
-                    resident_values[deferred_register].0 =
-                        final_publication_masks[index] & carried_mask;
-                    active_exit_masks[deferred_register] =
-                        final_publication_masks[index] & carried_mask;
+                if keeps_structured_carried_values_resident {
+                    let deferred_register = deferred_register_by_operation[index];
+                    if deferred_register != usize::MAX {
+                        debug_assert_ne!(deferred_register, 0);
+                        assembler.move_register(
+                            resident_values[deferred_register].1,
+                            result,
+                        );
+                        // Temporary aliases are path-local. Only the carried
+                        // destination is guaranteed to exist after a skipped arm.
+                        resident_values[deferred_register].0 =
+                            final_publication_masks[index] & carried_mask;
+                        active_exit_masks[deferred_register] =
+                            final_publication_masks[index] & carried_mask;
+                    }
                 }
             }
         }
