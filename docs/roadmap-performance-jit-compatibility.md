@@ -2666,6 +2666,23 @@ JIT was enabled. This particular 8.5 build/kernel is slower under tracing than
 the earlier PHP 8.3.6 result, so both versioned baselines remain recorded
 rather than replacing the faster reference.
 
+The x86-64 chunk checkpoint adds separate unchecked and overflow-checked ABI
+entries that accept a non-zero iteration budget in SysV `RSI`. They publish
+the same exact shadow state on `ChunkExhausted`, give completion priority when
+the final iteration exactly consumes the budget, and can resume through any
+number of chunks. The unbudgeted benchmark entry remains byte-for-byte free of
+the budget decrement and branch. Zero budgets are rejected before native
+entry, while the checked chunk entry retains the precise operation side exit.
+
+The physical target passes 133 library tests. In a pinned 101-sample run, the
+unbudgeted entry records a 1.886724 ms median
+(1.882603/1.911803 ms p10/p90), while one budgeted entry spanning the same ten
+million iterations records 1.874604 ms
+(1.871994/1.883493 ms p10/p90). The safepoint-capable loop is therefore not
+slower in this kernel; repeated VM chunk returns remain a separate dispatch
+cost to measure after integration. Emitting all four entries raises median
+code creation to 4.290 microseconds, still reported outside execution time.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

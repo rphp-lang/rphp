@@ -13,6 +13,10 @@ use crate::vm::quick::QuickLongOperand;
 use std::fmt;
 use std::io;
 
+const X86_STRAIGHT_COMPLETED: u32 = 0;
+const X86_STRAIGHT_CHUNK_EXHAUSTED: u32 = 1;
+const X86_STRAIGHT_OPERATION_SIDE_EXIT: u32 = 6;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct X86_64Register(u8);
 
@@ -108,6 +112,13 @@ impl X86_64Assembler {
         self.bytes.push(immediate as u8);
     }
 
+    fn subtract_immediate8(&mut self, destination: X86_64Register, immediate: i8) {
+        self.bytes.push(0x48 | destination.extension());
+        self.bytes.push(0x83);
+        self.bytes.push(0xe8 | destination.low_bits());
+        self.bytes.push(immediate as u8);
+    }
+
     fn compare_register(&mut self, lhs: X86_64Register, rhs: X86_64Register) {
         self.emit_rex_w(lhs, rhs);
         self.bytes.push(0x3b);
@@ -120,6 +131,10 @@ impl X86_64Assembler {
 
     fn jump_less_than_rel32(&mut self) -> usize {
         self.emit_conditional_jump_rel32(0x8c)
+    }
+
+    fn jump_not_equal_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x85)
     }
 
     fn jump_overflow_rel32(&mut self) -> usize {
@@ -171,6 +186,7 @@ impl X86_64Assembler {
 #[derive(Debug)]
 pub enum X86StraightLongLoopError {
     UnsupportedConfig(&'static str),
+    ZeroIterationBudget,
     InvalidStatus(u32),
     Memory(io::Error),
 }
@@ -179,6 +195,9 @@ impl fmt::Display for X86StraightLongLoopError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedConfig(message) => formatter.write_str(message),
+            Self::ZeroIterationBudget => {
+                formatter.write_str("x86 JIT iteration budget must be non-zero")
+            }
             Self::InvalidStatus(status) => write!(formatter, "invalid x86 JIT status {status}"),
             Self::Memory(error) => write!(formatter, "executable memory error: {error}"),
         }
@@ -201,6 +220,8 @@ pub struct CompiledX86StraightLongLoop {
     config: NativeStraightLongLoopConfig,
     bound: i64,
     checked_entry_offset: usize,
+    chunk_entry_offset: usize,
+    checked_chunk_entry_offset: usize,
 }
 
 fn emit_additive_recurrence_loop(
@@ -210,6 +231,7 @@ fn emit_additive_recurrence_loop(
     destination: u16,
     bound: i64,
     checked: bool,
+    budgeted: bool,
 ) -> Box<[u8]> {
     let mut assembler = X86_64Assembler::new();
     let slots = X86_64Register::RDI;
@@ -218,6 +240,7 @@ fn emit_additive_recurrence_loop(
     let accumulator_register = X86_64Register::RDX;
     let candidate_register = X86_64Register::R8;
     let previous_result_register = X86_64Register::R9;
+    let remaining_register = X86_64Register::RSI;
     let displacement = |slot: u16| i32::from(slot) * 8;
 
     assembler.move_from_base_disp32(induction_register, slots, displacement(induction));
@@ -244,9 +267,29 @@ fn emit_additive_recurrence_loop(
     };
     assembler.add_immediate8(induction_register, 1);
     assembler.compare_register(induction_register, bound_register);
-    let loop_jump = assembler.jump_less_than_rel32();
+    let completed_after_iteration_jump = budgeted.then(|| assembler.jump_greater_or_equal_rel32());
+    let loop_jump = if budgeted {
+        assembler.subtract_immediate8(remaining_register, 1);
+        assembler.jump_not_equal_rel32()
+    } else {
+        assembler.jump_less_than_rel32()
+    };
+
+    if budgeted {
+        assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
+        assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
+        if result != destination {
+            assembler.move_to_base_disp32(slots, accumulator_register, displacement(result));
+        }
+        assembler.move_immediate32_eax(X86_STRAIGHT_CHUNK_EXHAUSTED);
+        assembler.return_near();
+    }
+
     let completed = assembler.bytes.len();
     assembler.patch_rel32(completed_jump, completed);
+    if let Some(completed_after_iteration_jump) = completed_after_iteration_jump {
+        assembler.patch_rel32(completed_after_iteration_jump, completed);
+    }
     assembler.patch_rel32(loop_jump, loop_start);
     assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
     assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
@@ -264,7 +307,7 @@ fn emit_additive_recurrence_loop(
         if result != destination {
             assembler.move_to_base_disp32(slots, previous_result_register, displacement(result));
         }
-        assembler.move_immediate32_eax(1);
+        assembler.move_immediate32_eax(X86_STRAIGHT_OPERATION_SIDE_EXIT);
         assembler.return_near();
     }
 
@@ -320,12 +363,42 @@ impl CompiledX86StraightLongLoop {
             destination,
             bound,
             false,
+            false,
         );
         let checked_entry_offset = fast_code.len();
-        let checked_code =
-            emit_additive_recurrence_loop(induction, accumulator, result, destination, bound, true);
+        let checked_code = emit_additive_recurrence_loop(
+            induction,
+            accumulator,
+            result,
+            destination,
+            bound,
+            true,
+            false,
+        );
         let mut code = fast_code.into_vec();
         code.extend_from_slice(&checked_code);
+        let chunk_entry_offset = code.len();
+        let chunk_code = emit_additive_recurrence_loop(
+            induction,
+            accumulator,
+            result,
+            destination,
+            bound,
+            false,
+            true,
+        );
+        code.extend_from_slice(&chunk_code);
+        let checked_chunk_entry_offset = code.len();
+        let checked_chunk_code = emit_additive_recurrence_loop(
+            induction,
+            accumulator,
+            result,
+            destination,
+            bound,
+            true,
+            true,
+        );
+        code.extend_from_slice(&checked_chunk_code);
         let code = code.into_boxed_slice();
         let memory = ExecutableMemory::from_code(&code)?;
         Ok(Self {
@@ -334,6 +407,8 @@ impl CompiledX86StraightLongLoop {
             config,
             bound,
             checked_entry_offset,
+            chunk_entry_offset,
+            checked_chunk_entry_offset,
         })
     }
 
@@ -347,20 +422,60 @@ impl CompiledX86StraightLongLoop {
                 failed_operation: None,
             });
         }
-        type NativeFunction = unsafe extern "C" fn(*mut i64) -> u32;
         let entry = if straight_long_remaining_range_proof(&self.config, slots).is_some() {
             self.memory.entry()
         } else {
             unsafe { self.memory.entry().add(self.checked_entry_offset) }
         };
+        type NativeFunction = unsafe extern "C" fn(*mut i64) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(entry) };
         let status = unsafe { function(slots.as_mut_ptr()) };
+        self.decode_status(status)
+    }
+
+    /// Execute no more than `iteration_budget` loop iterations. This is the
+    /// VM-facing safepoint boundary; exact scalar state is published on every
+    /// chunk return, completion, or checked operation side exit.
+    pub fn call_chunk(
+        &self,
+        slots: &mut [i64; 64],
+        iteration_budget: u64,
+    ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
+        if iteration_budget == 0 {
+            return Err(X86StraightLongLoopError::ZeroIterationBudget);
+        }
+        if slots[self.config.induction_slot as usize] >= self.bound {
+            return Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::Completed,
+                failed_operation: None,
+            });
+        }
+        let entry_offset = if straight_long_remaining_range_proof(&self.config, slots).is_some() {
+            self.chunk_entry_offset
+        } else {
+            self.checked_chunk_entry_offset
+        };
+        let entry = unsafe { self.memory.entry().add(entry_offset) };
+        type NativeFunction = unsafe extern "C" fn(*mut i64, u64) -> u32;
+        let function: NativeFunction = unsafe { std::mem::transmute(entry) };
+        let status = unsafe { function(slots.as_mut_ptr(), iteration_budget) };
+        self.decode_status(status)
+    }
+
+    fn decode_status(
+        &self,
+        status: u32,
+    ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
         match status {
-            0 => Ok(NativeStraightLongLoopResult {
+            X86_STRAIGHT_COMPLETED => Ok(NativeStraightLongLoopResult {
                 outcome: NativeStraightLongLoopOutcome::Completed,
                 failed_operation: None,
             }),
-            1 => Ok(NativeStraightLongLoopResult {
+            X86_STRAIGHT_CHUNK_EXHAUSTED => Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::ChunkExhausted,
+                failed_operation: None,
+            }),
+            X86_STRAIGHT_OPERATION_SIDE_EXIT => Ok(NativeStraightLongLoopResult {
                 outcome: NativeStraightLongLoopOutcome::OperationSideExit,
                 failed_operation: Some(0),
             }),
@@ -492,6 +607,65 @@ mod tests {
                 .windows(7)
                 .any(|bytes| bytes == [0x48, 0x89, 0x97, 0x10, 0, 0, 0])
         );
+    }
+
+    #[test]
+    fn chunk_entry_publishes_exact_safepoint_and_resumes_to_completion() {
+        let program = CompiledX86StraightLongLoop::compile(additive_recurrence(10, false)).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 5;
+
+        let first = program.call_chunk(&mut slots, 3).unwrap();
+        assert_eq!(
+            first,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::ChunkExhausted,
+                failed_operation: None,
+            }
+        );
+        assert_eq!(&slots[..3], &[3, 8, 8]);
+
+        let second = program.call_chunk(&mut slots, 7).unwrap();
+        assert_eq!(
+            second,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::Completed,
+                failed_operation: None,
+            }
+        );
+        assert_eq!(&slots[..3], &[10, 50, 50]);
+
+        let mut exact = [0_i64; 64];
+        exact[1] = 5;
+        let exact_result = program.call_chunk(&mut exact, 10).unwrap();
+        assert_eq!(
+            exact_result.outcome,
+            NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(&exact[..3], &[10, 50, 50]);
+    }
+
+    #[test]
+    fn chunk_entry_rejects_zero_budget_and_retains_checked_side_exit() {
+        let program = CompiledX86StraightLongLoop::compile(additive_recurrence(2, false)).unwrap();
+        let mut slots = [0_i64; 64];
+        assert!(matches!(
+            program.call_chunk(&mut slots, 0),
+            Err(X86StraightLongLoopError::ZeroIterationBudget)
+        ));
+
+        slots[0] = 1;
+        slots[1] = i64::MAX;
+        slots[2] = 77;
+        let side_exit = program.call_chunk(&mut slots, 1).unwrap();
+        assert_eq!(
+            side_exit,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(0),
+            }
+        );
+        assert_eq!(&slots[..3], &[1, i64::MAX, 77]);
     }
 
     #[test]

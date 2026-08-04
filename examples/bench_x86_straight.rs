@@ -63,16 +63,40 @@ fn main() {
         final_slots = black_box(slots);
     }
 
+    for _ in 0..3 {
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        program
+            .call_chunk(black_box(&mut slots), iterations as u64)
+            .unwrap();
+        black_box(slots);
+    }
+    let mut chunk_times = Vec::with_capacity(sample_count);
+    let mut final_chunk_slots = [0_i64; 64];
+    for _ in 0..sample_count {
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        let started = Instant::now();
+        program
+            .call_chunk(black_box(&mut slots), iterations as u64)
+            .unwrap();
+        chunk_times.push(started.elapsed().as_secs_f64());
+        final_chunk_slots = black_box(slots);
+    }
+
     compile_times.sort_by(f64::total_cmp);
     execute_times.sort_by(f64::total_cmp);
+    chunk_times.sort_by(f64::total_cmp);
     let percentile = |samples: &[f64], numerator: usize| {
         let index = (samples.len() - 1) * numerator / 10;
         samples[index]
     };
     let compile_median = compile_times[compile_times.len() / 2];
     let execute_median = execute_times[execute_times.len() / 2];
+    let chunk_median = chunk_times[chunk_times.len() / 2];
     let expected = 10 + (iterations - 1) * iterations / 2;
     assert_eq!(&final_slots[..3], &[iterations, expected, expected]);
+    assert_eq!(&final_chunk_slots[..3], &[iterations, expected, expected]);
 
     println!("iterations={iterations} samples={sample_count}");
     println!(
@@ -92,6 +116,13 @@ fn main() {
     println!(
         "execute_ns_per_iteration={:.6}",
         execute_median * 1_000_000_000.0 / iterations as f64
+    );
+    println!("chunk_p10_ms={:.6}", percentile(&chunk_times, 1) * 1_000.0);
+    println!("chunk_median_ms={:.6}", chunk_median * 1_000.0);
+    println!("chunk_p90_ms={:.6}", percentile(&chunk_times, 9) * 1_000.0);
+    println!(
+        "chunk_ns_per_iteration={:.6}",
+        chunk_median * 1_000_000_000.0 / iterations as f64
     );
 }
 
