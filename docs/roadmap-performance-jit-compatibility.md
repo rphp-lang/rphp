@@ -2220,6 +2220,32 @@ flat at -0.03 percent; the dedicated one-recurrence branch control moves by
 integration tests, all four application corpus tests, and
 `cargo check --all-features`.
 
+Resident recurrence-condition checkpoint (2026-08-04): structured branch
+conditions can now consume the exact current value of a carried CV. A simple
+source operand returns its fixed register directly; induction likewise returns
+the induction register instead of first copying it. Bitwise-and conditions
+keep their result temporary but obtain either input through the same resident
+lookup. The branch therefore observes source-order state whether it appears
+before or after that recurrence's defining operation.
+
+The range proof's existing state already assigns every carried CV its proven
+all-prefix envelope and treats conditional execution as a conservative subset,
+so no new arithmetic assumption is required. The former backend-driven
+rejection of carried branch inputs is removed. Direct tests cover a source
+condition, a bitwise carried condition whose update never executes, exact
+safepoint publication and resume. The real PHP integration makes `$count`
+both a condition input and an unconditional recurrence; its near-limit variant
+still rejects the proof and takes the checked overflow side exit.
+
+In 101 order-rotated `max-perf` runs against the structured-conditional
+checkpoint, the permanent carried-condition holdout improves from 8.148 ms to
+5.187 ms (paired median -36.21 percent, 1.57x faster). PHP tracing JIT records
+28.827 ms, making RPHP 5.56x faster. The induction-guarded conditional
+recurrence control is flat at +0.06 percent and the dedicated branch control
+is flat at -0.18 percent. The checkpoint passes 136 library tests, 80
+ARM64/JIT integration tests, all four application corpus tests, and
+`cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

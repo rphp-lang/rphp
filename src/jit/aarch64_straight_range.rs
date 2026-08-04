@@ -298,20 +298,6 @@ fn linear_recurrence_proof(
     if carried_mask.count_ones() > 3 {
         return None;
     }
-    if has_control_flow
-        && config
-            .operations
-            .iter()
-            .copied()
-            .take(config.operation_count as usize)
-            .any(|operation| {
-                matches!(operation, NativeStraightLongOperation::BranchUnless { .. })
-                    && straight_long_operation_input_mask(operation) & carried_mask != 0
-            })
-    {
-        return None;
-    }
-
     let mut carried_slots_by_operation = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut recurrence_kinds = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut recurrence_deltas = [None; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
@@ -1169,7 +1155,7 @@ mod tests {
     }
 
     #[test]
-    fn conditional_recurrence_is_proven_when_guard_does_not_read_carried_state() {
+    fn conditional_recurrence_proves_induction_and_carried_guards() {
         let conditional = config(
             &[
                 NativeStraightLongOperation::BranchUnless {
@@ -1212,7 +1198,10 @@ mod tests {
             ],
             100,
         );
-        assert!(straight_long_remaining_range_proof(&carried_guard, &[0_i64; 64]).is_none());
+        let carried_guard_proof =
+            straight_long_remaining_range_proof(&carried_guard, &[0_i64; 64])
+                .expect("resident carried state should be available to branch conditions");
+        assert_eq!(carried_guard_proof.carried_mask, proof.carried_mask);
     }
 
     #[test]

@@ -3157,8 +3157,8 @@ fn real_php_independent_recurrences_stay_in_range_proven_native_region() {
 }
 
 #[test]
-fn real_php_conditional_and_unconditional_recurrences_share_one_native_region() {
-    let source = "<?php $bound = 100000; $cutoff = 50000; $sum = 10; $count = -5; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } echo $i . ':' . $sum . ':' . $count;";
+fn real_php_carried_condition_recurrences_share_one_native_region() {
+    let source = "<?php $bound = 100000; $cutoff = 49995; $sum = 10; $count = -5; for ($i = 0; $i < $bound; $i++) { if ($count < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } echo $i . ':' . $sum . ':' . $count;";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -3531,7 +3531,7 @@ fn general_native_ir_sum_overflow_resumes_canonical_add() {
 
 #[test]
 fn structured_recurrence_overflow_uses_checked_fallback() {
-    let source = "<?php function structuredOverflow(int $bound, int $cutoff): int { $sum = PHP_INT_MAX - 1000; $count = 0; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } return $sum; } try { structuredOverflow(60, 60); } catch (TypeError $error) { echo 'caught'; }";
+    let source = "<?php function structuredOverflow(int $bound, int $cutoff): int { $sum = PHP_INT_MAX - 1000; $count = 0; for ($i = 0; $i < $bound; $i++) { if ($count < $cutoff) { $sum = $sum + $i; } $count = $count + 1; } return $sum; } try { structuredOverflow(60, 60); } catch (TypeError $error) { echo 'caught'; }";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();

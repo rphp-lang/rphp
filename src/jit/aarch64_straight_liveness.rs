@@ -444,8 +444,8 @@ mod tests {
             [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
         operations[0] = NativeStraightLongOperation::BranchUnless {
             kind: super::super::ScalarLongConditionKind::LessThan,
-            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
-            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(45)),
             false_target: 2,
         };
         operations[1] = NativeStraightLongOperation::BinaryAssign {
@@ -517,9 +517,12 @@ mod tests {
         let mut never_config = config;
         never_config.bound = QuickLongOperand::Const(100);
         never_config.operations[0] = NativeStraightLongOperation::BranchUnless {
-            kind: super::super::ScalarLongConditionKind::LessThan,
-            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
-            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+            kind: super::super::ScalarLongConditionKind::Equal,
+            lhs: NativeStraightLongConditionOperand::BitwiseAnd {
+                lhs: QuickLongOperand::Slot(3),
+                rhs: QuickLongOperand::Const(1),
+            },
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
             false_target: 2,
         };
         let never_program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(

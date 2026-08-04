@@ -3025,6 +3025,7 @@ impl CompiledQuickLongStraightLoop {
                         auxiliary,
                         config.induction_slot,
                         induction,
+                        &resident_values,
                     );
                     let condition_rhs = emit_straight_long_condition_operand(
                         &mut assembler,
@@ -3033,6 +3034,7 @@ impl CompiledQuickLongStraightLoop {
                         auxiliary,
                         config.induction_slot,
                         induction,
+                        &resident_values,
                     );
                     assembler.compare_registers(condition_lhs, condition_rhs);
                     let mismatch = match (kind, expected) {
@@ -3071,6 +3073,7 @@ impl CompiledQuickLongStraightLoop {
                         auxiliary,
                         config.induction_slot,
                         induction,
+                        &resident_values,
                     );
                     let condition_rhs = emit_straight_long_condition_operand(
                         &mut assembler,
@@ -3079,6 +3082,7 @@ impl CompiledQuickLongStraightLoop {
                         auxiliary,
                         config.induction_slot,
                         induction,
+                        &resident_values,
                     );
                     assembler.compare_registers(condition_lhs, condition_rhs);
                     let false_condition = match kind {
@@ -3969,8 +3973,29 @@ fn emit_straight_long_condition_operand(
     auxiliary: Arm64Register,
     induction_slot: u16,
     induction: Arm64Register,
+    resident_values: &[(u64, Arm64Register)],
 ) -> Arm64Register {
     match operand {
+        NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(slot))
+            if slot == induction_slot =>
+        {
+            return induction;
+        }
+        NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(slot)) => {
+            if let Some((_, resident)) = resident_values
+                .iter()
+                .find(|(slot_mask, _)| slot_mask & (1u64 << slot) != 0)
+            {
+                return *resident;
+            }
+            emit_straight_long_operand(
+                assembler,
+                QuickLongOperand::Slot(slot),
+                destination,
+                induction_slot,
+                induction,
+            );
+        }
         NativeStraightLongConditionOperand::Source(source) => {
             emit_straight_long_operand(
                 assembler,
@@ -3981,19 +4006,21 @@ fn emit_straight_long_condition_operand(
             );
         }
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
-            emit_straight_long_operand(
+            emit_straight_long_operand_with_resident(
                 assembler,
                 lhs,
                 destination,
                 induction_slot,
                 induction,
+                resident_values,
             );
-            emit_straight_long_operand(
+            emit_straight_long_operand_with_resident(
                 assembler,
                 rhs,
                 auxiliary,
                 induction_slot,
                 induction,
+                resident_values,
             );
             assembler.bitwise_and_register(destination, destination, auxiliary);
         }
