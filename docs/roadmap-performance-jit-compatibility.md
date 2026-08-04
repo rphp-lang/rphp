@@ -2636,6 +2636,36 @@ reported separately and would add only 0.194 percent to one measured loop.
 `examples/bench_x86_straight.rs` and
 `benches/bench_x86_straight_equivalent.php` keep the comparison reproducible.
 
+The precise x86-64 side-exit checkpoint (2026-08-04) emits two entries in one
+executable allocation. A successful shared complete-range proof selects the
+original unchecked instruction stream, which contains no overflow branch. An
+unproven range selects a checked stream that computes each candidate in a
+temporary register and uses x86 `JO` before committing carried state. On
+failure it publishes the current induction value, the last successful
+destination and any distinct pre-operation result, then reports operation zero
+through the shared `OperationSideExit` contract. It can therefore resume the
+canonical VM at the exact failed PHP operation instead of rejecting native
+entry in Rust.
+
+Physical AMD64 tests cover failure on the first operation and after a
+successful iteration, including a distinct result slot. The target now passes
+131 library tests; ARM64 remains at 150. A fresh independent 101-sample run of
+the unchanged range-proven entry records a 1.892093 ms median
+(1.883214/1.899284 ms p10/p90), approximately 0.9 percent above the earlier
+1.875893 ms checkpoint and within ordinary run-to-run variation. Compilation,
+which now creates both streams, records a 3.830 microsecond median.
+
+PHP 8.5 server baseline (2026-08-04): Ubuntu 24.04 on the same AMD Ryzen 9
+7950X now has co-installable `/usr/bin/php8.5` version 8.5.9 with OPcache,
+while the system `/usr/bin/php` alternative deliberately remains at 8.3.6.
+For the same pinned 10-million-iteration PHP kernel and 101 samples, PHP 8.5.9
+records a 32.072067 ms median without JIT (31.821966/34.128904 ms p10/p90) and
+a 22.450209 ms median with CLI tracing JIT
+(22.337198/22.573948 ms p10/p90). `opcache_get_status()` verified that tracing
+JIT was enabled. This particular 8.5 build/kernel is slower under tracing than
+the earlier PHP 8.3.6 result, so both versioned baselines remain recorded
+rather than replacing the faster reference.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

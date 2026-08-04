@@ -22,10 +22,7 @@ impl X86_64Register {
     pub const RDX: Self = Self(2);
     pub const RSI: Self = Self(6);
     pub const RDI: Self = Self(7);
-
-    #[cfg(test)]
     const R8: Self = Self(8);
-    #[cfg(test)]
     const R9: Self = Self(9);
 
     #[inline]
@@ -125,6 +122,10 @@ impl X86_64Assembler {
         self.emit_conditional_jump_rel32(0x8c)
     }
 
+    fn jump_overflow_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x80)
+    }
+
     fn emit_conditional_jump_rel32(&mut self, opcode: u8) -> usize {
         self.bytes.extend_from_slice(&[0x0f, opcode]);
         let displacement = self.bytes.len();
@@ -141,6 +142,11 @@ impl X86_64Assembler {
 
     fn clear_eax(&mut self) {
         self.bytes.extend_from_slice(&[0x31, 0xc0]);
+    }
+
+    fn move_immediate32_eax(&mut self, immediate: u32) {
+        self.bytes.push(0xb8);
+        self.bytes.extend_from_slice(&immediate.to_le_bytes());
     }
 
     pub fn return_near(&mut self) {
@@ -165,7 +171,7 @@ impl X86_64Assembler {
 #[derive(Debug)]
 pub enum X86StraightLongLoopError {
     UnsupportedConfig(&'static str),
-    RangeNotProven,
+    InvalidStatus(u32),
     Memory(io::Error),
 }
 
@@ -173,9 +179,7 @@ impl fmt::Display for X86StraightLongLoopError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::UnsupportedConfig(message) => formatter.write_str(message),
-            Self::RangeNotProven => {
-                formatter.write_str("straight-loop range proof rejected native execution")
-            }
+            Self::InvalidStatus(status) => write!(formatter, "invalid x86 JIT status {status}"),
             Self::Memory(error) => write!(formatter, "executable memory error: {error}"),
         }
     }
@@ -190,12 +194,81 @@ impl From<io::Error> for X86StraightLongLoopError {
 }
 
 /// First straight-IR lowering on x86-64. It accepts one additive recurrence
-/// and enters native code only after the shared complete-range proof succeeds.
+/// and emits both an unchecked range-proven entry and a checked side-exit entry.
 pub struct CompiledX86StraightLongLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
     config: NativeStraightLongLoopConfig,
     bound: i64,
+    checked_entry_offset: usize,
+}
+
+fn emit_additive_recurrence_loop(
+    induction: u16,
+    accumulator: u16,
+    result: u16,
+    destination: u16,
+    bound: i64,
+    checked: bool,
+) -> Box<[u8]> {
+    let mut assembler = X86_64Assembler::new();
+    let slots = X86_64Register::RDI;
+    let induction_register = X86_64Register::RAX;
+    let bound_register = X86_64Register::RCX;
+    let accumulator_register = X86_64Register::RDX;
+    let candidate_register = X86_64Register::R8;
+    let previous_result_register = X86_64Register::R9;
+    let displacement = |slot: u16| i32::from(slot) * 8;
+
+    assembler.move_from_base_disp32(induction_register, slots, displacement(induction));
+    assembler.move_from_base_disp32(accumulator_register, slots, displacement(accumulator));
+    if checked && result != destination {
+        assembler.move_from_base_disp32(previous_result_register, slots, displacement(result));
+    }
+    assembler.move_immediate64(bound_register, bound);
+    assembler.compare_register(induction_register, bound_register);
+    let completed_jump = assembler.jump_greater_or_equal_rel32();
+    let loop_start = assembler.bytes.len();
+    let overflow_jump = if checked {
+        assembler.move_register(candidate_register, accumulator_register);
+        assembler.add_register(candidate_register, induction_register);
+        let overflow_jump = assembler.jump_overflow_rel32();
+        assembler.move_register(accumulator_register, candidate_register);
+        if result != destination {
+            assembler.move_register(previous_result_register, accumulator_register);
+        }
+        Some(overflow_jump)
+    } else {
+        assembler.add_register(accumulator_register, induction_register);
+        None
+    };
+    assembler.add_immediate8(induction_register, 1);
+    assembler.compare_register(induction_register, bound_register);
+    let loop_jump = assembler.jump_less_than_rel32();
+    let completed = assembler.bytes.len();
+    assembler.patch_rel32(completed_jump, completed);
+    assembler.patch_rel32(loop_jump, loop_start);
+    assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
+    assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
+    if result != destination {
+        assembler.move_to_base_disp32(slots, accumulator_register, displacement(result));
+    }
+    assembler.clear_eax();
+    assembler.return_near();
+
+    if let Some(overflow_jump) = overflow_jump {
+        let side_exit = assembler.bytes.len();
+        assembler.patch_rel32(overflow_jump, side_exit);
+        assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
+        assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
+        if result != destination {
+            assembler.move_to_base_disp32(slots, previous_result_register, displacement(result));
+        }
+        assembler.move_immediate32_eax(1);
+        assembler.return_near();
+    }
+
+    assembler.finish()
 }
 
 impl CompiledX86StraightLongLoop {
@@ -240,41 +313,27 @@ impl CompiledX86StraightLongLoop {
             }
         }
 
-        let mut assembler = X86_64Assembler::new();
-        let slots = X86_64Register::RDI;
-        let induction_register = X86_64Register::RAX;
-        let bound_register = X86_64Register::RCX;
-        let accumulator_register = X86_64Register::RDX;
-        let displacement = |slot: u16| i32::from(slot) * 8;
-
-        assembler.move_from_base_disp32(induction_register, slots, displacement(induction));
-        assembler.move_from_base_disp32(accumulator_register, slots, displacement(accumulator));
-        assembler.move_immediate64(bound_register, bound);
-        assembler.compare_register(induction_register, bound_register);
-        let completed_jump = assembler.jump_greater_or_equal_rel32();
-        let loop_start = assembler.bytes.len();
-        assembler.add_register(accumulator_register, induction_register);
-        assembler.add_immediate8(induction_register, 1);
-        assembler.compare_register(induction_register, bound_register);
-        let loop_jump = assembler.jump_less_than_rel32();
-        let completed = assembler.bytes.len();
-        assembler.patch_rel32(completed_jump, completed);
-        assembler.patch_rel32(loop_jump, loop_start);
-        assembler.move_to_base_disp32(slots, induction_register, displacement(induction));
-        assembler.move_to_base_disp32(slots, accumulator_register, displacement(destination));
-        if result != destination {
-            assembler.move_to_base_disp32(slots, accumulator_register, displacement(result));
-        }
-        assembler.clear_eax();
-        assembler.return_near();
-
-        let code = assembler.finish();
+        let fast_code = emit_additive_recurrence_loop(
+            induction,
+            accumulator,
+            result,
+            destination,
+            bound,
+            false,
+        );
+        let checked_entry_offset = fast_code.len();
+        let checked_code =
+            emit_additive_recurrence_loop(induction, accumulator, result, destination, bound, true);
+        let mut code = fast_code.into_vec();
+        code.extend_from_slice(&checked_code);
+        let code = code.into_boxed_slice();
         let memory = ExecutableMemory::from_code(&code)?;
         Ok(Self {
             memory,
             code,
             config,
             bound,
+            checked_entry_offset,
         })
     }
 
@@ -288,17 +347,25 @@ impl CompiledX86StraightLongLoop {
                 failed_operation: None,
             });
         }
-        straight_long_remaining_range_proof(&self.config, slots)
-            .ok_or(X86StraightLongLoopError::RangeNotProven)?;
-
         type NativeFunction = unsafe extern "C" fn(*mut i64) -> u32;
-        let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
+        let entry = if straight_long_remaining_range_proof(&self.config, slots).is_some() {
+            self.memory.entry()
+        } else {
+            unsafe { self.memory.entry().add(self.checked_entry_offset) }
+        };
+        let function: NativeFunction = unsafe { std::mem::transmute(entry) };
         let status = unsafe { function(slots.as_mut_ptr()) };
-        debug_assert_eq!(status, 0);
-        Ok(NativeStraightLongLoopResult {
-            outcome: NativeStraightLongLoopOutcome::Completed,
-            failed_operation: None,
-        })
+        match status {
+            0 => Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::Completed,
+                failed_operation: None,
+            }),
+            1 => Ok(NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(0),
+            }),
+            status => Err(X86StraightLongLoopError::InvalidStatus(status)),
+        }
     }
 
     pub fn code(&self) -> &[u8] {
@@ -428,17 +495,44 @@ mod tests {
     }
 
     #[test]
-    fn range_proof_rejects_overflow_without_touching_state() {
+    fn checked_side_exit_preserves_state_before_first_failed_operation() {
+        let program = CompiledX86StraightLongLoop::compile(additive_recurrence(2, false)).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[0] = 1;
+        slots[1] = i64::MAX;
+        slots[2] = 77;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(
+            result.outcome,
+            NativeStraightLongLoopOutcome::OperationSideExit
+        );
+        assert_eq!(result.failed_operation, Some(0));
+        assert_eq!(&slots[..3], &[1, i64::MAX, 77]);
+        assert!(
+            !program.code()[..program.checked_entry_offset]
+                .windows(2)
+                .any(|bytes| bytes == [0x0f, 0x80])
+        );
+        assert!(
+            program.code()[program.checked_entry_offset..]
+                .windows(2)
+                .any(|bytes| bytes == [0x0f, 0x80])
+        );
+    }
+
+    #[test]
+    fn checked_side_exit_publishes_last_successful_iteration() {
         let program = CompiledX86StraightLongLoop::compile(additive_recurrence(2, false)).unwrap();
         let mut slots = [0_i64; 64];
         slots[1] = i64::MAX;
         slots[2] = 77;
-        let before = slots;
-        assert!(matches!(
-            program.call(&mut slots),
-            Err(X86StraightLongLoopError::RangeNotProven)
-        ));
-        assert_eq!(slots, before);
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(
+            result.outcome,
+            NativeStraightLongLoopOutcome::OperationSideExit
+        );
+        assert_eq!(result.failed_operation, Some(0));
+        assert_eq!(&slots[..3], &[1, i64::MAX, i64::MAX]);
     }
 
     #[test]
