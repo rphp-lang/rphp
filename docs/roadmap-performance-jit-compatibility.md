@@ -1982,6 +1982,36 @@ controls are also flat at +0.10 and +0.03 percent with identical results. This
 isolates the next remaining memory cost cleanly: dead temporary stores, not
 reloads of live overlapping values.
 
+Dead scalar temporary publication checkpoint (2026-08-04): native compilation
+now receives an explicit mask of externally visible Long outputs. The VM
+derives it from the OpArray CV boundary; compiler TMP slots remain internal.
+The existing planner invariant already proves that a TMP produced by a region
+is redefined before every valid later use, while CVs retain loop and user
+state. A backward value-version liveness mask then preserves the shadow store
+for any TMP that is read later and removes it only when that exact version is
+dead after the operation.
+
+The optimization is restricted to complete-range-proven, physically linear
+scalar bodies. Checked bodies still compile with a full publication mask, so
+operation overflow, increment overflow, and precise side-exit replay are
+unchanged. Induction and post-result publication are also unchanged. At normal
+completion or an interrupt safepoint, the VM commits the same CV publication
+mask rather than copying stale internal TMP slots. A structural execution test
+proves that the dead result `STR` is absent, the paired destination `STR`
+remains, and interrupt/resume preserves the visible destination while leaving
+the excluded TMP untouched.
+
+Across 101 order-rotated A/B pairs against the multi-register checkpoint,
+binary assign falls from 8.712 ms to 5.828 ms (-33.16 percent), expression chain
+from 9.051 ms to 6.538 ms (-27.43 percent), and overlapping lifetimes from
+11.556 ms to 6.451 ms (-44.03 percent), all with identical output. PHP tracing
+JIT records 32.265, 39.478, and 63.844 ms, making RPHP 5.54x, 6.04x, and 9.90x
+faster. The excluded forward-branch control is flat at -0.12 percent. Typed
+order and typed ledger controls are +0.55 and +0.09 percent respectively,
+without a result change. This confirms that per-iteration publication, rather
+than arithmetic throughput, was the dominant remaining cost in these scalar
+regions.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

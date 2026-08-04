@@ -2374,14 +2374,17 @@ impl Default for NativeStraightLongLoopControl {
 }
 
 /// Native lowering of a straight or forward-structured `QuickLongOpsLoop`
-/// body. Body results are
-/// written into the private 64-Long shadow state immediately after each
-/// checked operation succeeds. PHP values remain untouched until the VM
-/// commits that shadow at a chunk boundary, completion, or precise side exit.
+/// body. Checked operations publish every successful result into the private
+/// 64-Long shadow state. A complete-range-proven linear body may keep dead
+/// compiler temporaries private to generated code, while all visible or
+/// subsequently read values remain in the shadow. PHP values stay untouched
+/// until the VM commits that shadow at a safepoint, completion, or precise
+/// side exit.
 pub struct CompiledQuickLongStraightLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
     config: NativeStraightLongLoopConfig,
+    publication_mask: u64,
     required_context_mask: u16,
 }
 
@@ -2389,9 +2392,10 @@ impl CompiledQuickLongStraightLoop {
     pub fn compile(
         config: NativeStraightLongLoopConfig,
     ) -> Result<Self, QuickLongAccumulateJitError> {
-        Self::compile_mode(config, None)
+        Self::compile_mode(config, None, u64::MAX)
     }
 
+    #[cfg(test)]
     fn compile_range_proven_polling(
         config: NativeStraightLongLoopConfig,
         safepoint_interval: u16,
@@ -2401,12 +2405,26 @@ impl CompiledQuickLongStraightLoop {
                 "native polling interval must fit a non-zero ARM64 immediate",
             ));
         }
-        Self::compile_mode(config, Some(safepoint_interval))
+        Self::compile_mode(config, Some(safepoint_interval), u64::MAX)
+    }
+
+    fn compile_range_proven_polling_with_publication(
+        config: NativeStraightLongLoopConfig,
+        safepoint_interval: u16,
+        publication_mask: u64,
+    ) -> Result<Self, QuickLongAccumulateJitError> {
+        if safepoint_interval == 0 || safepoint_interval >= 4_096 {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "native polling interval must fit a non-zero ARM64 immediate",
+            ));
+        }
+        Self::compile_mode(config, Some(safepoint_interval), publication_mask)
     }
 
     fn compile_mode(
         config: NativeStraightLongLoopConfig,
         polling_interval: Option<u16>,
+        publication_mask: u64,
     ) -> Result<Self, QuickLongAccumulateJitError> {
         validate_straight_long_loop_config(&config)?;
         let required_context_mask = config
@@ -2534,6 +2552,11 @@ impl CompiledQuickLongStraightLoop {
                     resident_values[0].0 = 0;
                 }
             }
+            let shadow_store_mask = if keeps_linear_scalar_values_resident {
+                operation.output_mask() & (publication_mask | linear_live_after[index])
+            } else {
+                operation.shadow_output_mask()
+            };
             match operation {
                 NativeStraightLongOperation::Unused => {
                     unreachable!("validated straight operation cannot be unused")
@@ -2566,20 +2589,24 @@ impl CompiledQuickLongStraightLoop {
                             rhs,
                             auxiliary,
                         );
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(result_slot),
-                        );
+                        if shadow_store_mask & (1u64 << result_slot) != 0 {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(result_slot),
+                            );
+                        }
                     } else {
                         assembler.move_immediate(rhs, divisor);
                         assembler.signed_divide(auxiliary, lhs, rhs);
                         assembler.multiply_subtract(result, auxiliary, rhs, lhs);
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(result_slot),
-                        );
+                        if shadow_store_mask & (1u64 << result_slot) != 0 {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(result_slot),
+                            );
+                        }
                     }
                 }
                 NativeStraightLongOperation::Move {
@@ -2594,11 +2621,13 @@ impl CompiledQuickLongStraightLoop {
                         induction,
                         &resident_values,
                     );
-                    assembler.store_u64(
-                        result,
-                        Arm64Register::X0,
-                        long_slot_offset(result_slot),
-                    );
+                    if shadow_store_mask & (1u64 << result_slot) != 0 {
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
+                    }
                 }
                 NativeStraightLongOperation::StringToken {
                     token,
@@ -2740,11 +2769,13 @@ impl CompiledQuickLongStraightLoop {
                         index as u8,
                         &mut operation_side_exit_branches,
                     )?;
-                    assembler.store_u64(
-                        result,
-                        Arm64Register::X0,
-                        long_slot_offset(result_slot),
-                    );
+                    if shadow_store_mask & (1u64 << result_slot) != 0 {
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
+                    }
                 }
                 NativeStraightLongOperation::BinaryAssign {
                     kind,
@@ -2785,12 +2816,16 @@ impl CompiledQuickLongStraightLoop {
                         index as u8,
                         &mut operation_side_exit_branches,
                     )?;
-                    assembler.store_u64(
-                        result,
-                        Arm64Register::X0,
-                        long_slot_offset(result_slot),
-                    );
-                    if destination != result_slot {
+                    if shadow_store_mask & (1u64 << result_slot) != 0 {
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
+                    }
+                    if destination != result_slot
+                        && shadow_store_mask & (1u64 << destination) != 0
+                    {
                         assembler.store_u64(
                             result,
                             Arm64Register::X0,
@@ -3030,6 +3065,7 @@ impl CompiledQuickLongStraightLoop {
             memory,
             code,
             config,
+            publication_mask,
             required_context_mask,
         })
     }
@@ -3168,6 +3204,10 @@ impl CompiledQuickLongStraightLoop {
 
     pub fn config(&self) -> NativeStraightLongLoopConfig {
         self.config
+    }
+
+    fn publication_mask(&self) -> u64 {
+        self.publication_mask
     }
 
     pub fn code(&self) -> &[u8] {
@@ -3914,18 +3954,21 @@ impl QuickLongOpsJitCache {
         &self,
         config: &NativeStraightLongLoopConfig,
         safepoint_interval: u16,
+        publication_mask: u64,
     ) -> Option<&CompiledQuickLongStraightLoop> {
         let program = self
             .straight_range_proven_polling_compiled
             .get_or_init(|| {
-                CompiledQuickLongStraightLoop::compile_range_proven_polling(
+                CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
                     *config,
                     safepoint_interval,
+                    publication_mask,
                 )
                 .ok()
             })
             .as_ref()?;
-        (program.config() == *config).then_some(program)
+        (program.config() == *config && program.publication_mask() == publication_mask)
+            .then_some(program)
     }
 
     pub(crate) fn dispatch_prepared_proven_straight_remaining(

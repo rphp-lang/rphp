@@ -5333,10 +5333,17 @@ unsafe fn run_native_quick_long_straight_kernel(
     let bound = quick_long_operand(slots, config.bound);
     let cache = plan.native_jit();
     let remaining_range_proven = cache.prove_straight_remaining_range(config, slots);
+    let cv_mask = if op_array.num_cvs == 64 {
+        u64::MAX
+    } else {
+        (1u64 << op_array.num_cvs) - 1
+    };
+    let publication_mask = config.body_output_mask() & cv_mask;
     let program = if remaining_range_proven {
         cache.prepare_range_proven_straight_program(
             config,
             NATIVE_LONG_SAFEPOINT_INTERVAL as u16,
+            publication_mask,
         )
     } else {
         cache.prepare_straight_program(config)
@@ -5345,7 +5352,11 @@ unsafe fn run_native_quick_long_straight_kernel(
         return Ok(None);
     };
     let interrupt_flag = eg.vm_interrupt.as_ptr() as *const bool;
-    let body_output_mask = config.body_output_mask();
+    let body_output_mask = if remaining_range_proven {
+        publication_mask
+    } else {
+        config.body_output_mask()
+    };
     let post_result_mask = config.post_result.map_or(0, |slot| 1u64 << slot);
     let mut iterations = 0u64;
     let mut dirty_long_mask = 0u64;
@@ -5483,7 +5494,8 @@ unsafe fn run_native_quick_long_straight_kernel(
                 let failed_operation = result
                     .failed_operation
                     .expect("operation side exit carries its operation index");
-                dirty_long_mask |= config.output_mask_before(failed_operation);
+                dirty_long_mask |=
+                    config.output_mask_before(failed_operation) & body_output_mask;
                 if iterations != 0 {
                     publish_native_quick_long_trace_guards(
                         kernel,

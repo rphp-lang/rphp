@@ -59,6 +59,7 @@ fn operand_mask(operand: QuickLongOperand) -> u64 {
 mod tests {
     use super::*;
     use crate::vm::function::ScalarLongOpKind;
+    use std::sync::atomic::{AtomicBool, Ordering};
 
     #[test]
     fn linear_liveness_tracks_overlapping_values_and_kills_old_versions() {
@@ -143,5 +144,63 @@ mod tests {
 
         assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
         assert!(words.contains(&0xf900_0808)); // STR x8, [x0, #16]
+    }
+
+    #[test]
+    fn dead_temporary_store_is_omitted_but_visible_destination_is_published() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 2,
+            destination: 3,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10_000),
+            operations,
+            operation_count: 1,
+            post_result: None,
+        };
+
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+            config,
+            1_024,
+            1u64 << 3,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert!(!words.contains(&0xf900_0808)); // no STR x8, [x0, #16]
+        assert!(words.contains(&0xf900_0c08)); // STR x8, [x0, #24]
+
+        let interrupt = AtomicBool::new(true);
+        let mut slots = [0i64; 64];
+        slots[2] = 777;
+        let interrupted = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 1_024)
+            .unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            super::super::NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(slots[2], 777);
+        assert_eq!(slots[3], 1_028);
+
+        interrupt.store(false, Ordering::Relaxed);
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 2_048)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[2], 777);
+        assert_eq!(slots[3], 10_004);
     }
 }
