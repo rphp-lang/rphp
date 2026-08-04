@@ -2909,6 +2909,37 @@ same pinned CPU are respectively 39.147100, 48.911100, 38.472900 and 56.242000
 ms. The checkpoint passes 155 x86 library tests, all fourteen x86 JIT
 integration tests and the four-test corpus.
 
+The following x86 checkpoint extends the same fixed-register contract across
+forward-structured scalar control flow. A carried CV owns one of `R13-R15` for
+the whole polling entry: an executed definition replaces its register value,
+while a skipped definition deliberately retains the previous iteration value.
+Branch conditions therefore read current carried state directly and multiple
+forward definitions merge into the same physical register without a shadow
+round trip. This is the structured phi case; checked and unsupported guarded
+bodies still select the conservative shadow lowering.
+
+Structured path-local temporaries reuse the shared basic-block and local-output
+analyses. `RDX` forwards the latest scalar result only inside one basic block,
+and every branch fallthrough, jump successor and merge target invalidates that
+mapping. A temporary proven local to the block is not stored in the shadow;
+visible and non-local aliases remain materialized. Dedicated x86 tests cover a
+carried condition with a skipped update, exact interrupt/resume publication,
+and a multi-operation branch expression whose private temporary slots remain
+unchanged.
+
+In 201 pinned, order-rotated three-way runs, comparing the preceding committed
+x86 binary, the intermediate carried-phi binary and the final phi-plus-local
+binary, conditional recurrence moves from 6.907940 through 5.496030 to
+5.420450 ms (final paired -21.52 percent). Conditional composed recurrence
+moves from 9.803530 through 8.182290 to 7.632020 ms (-22.15 percent), a guard
+reading another carried recurrence from 6.852630 through 5.475040 to 4.465580
+ms (-34.82 percent), the general structured branch expression from 11.642900
+through 11.656800 to 7.979390 ms (-31.47 percent), and modulo branch from
+7.248160 through 6.902930 to 6.689550 ms (-7.65 percent). Same-host PHP 8.5
+tracing-JIT medians are respectively 32.898900, 48.981000, 34.140800,
+41.789100 and 11.091900 ms. x86-64 passes 157 library tests, all fourteen JIT
+integration tests and the four-test corpus.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

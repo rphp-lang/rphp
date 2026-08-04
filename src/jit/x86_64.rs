@@ -9,6 +9,7 @@ use super::straight::{
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
     straight_long_best_invariant_slot_masks, straight_long_linear_live_after,
     straight_long_linear_shadow_store_mask, straight_long_remaining_range_proof,
+    straight_long_structured_block_starts, straight_long_structured_local_resident_output_masks,
 };
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
@@ -364,6 +365,23 @@ fn supports_linear_scalar_residency(config: &NativeStraightLongLoopConfig) -> bo
                     | NativeStraightLongOperation::Move { .. }
                     | NativeStraightLongOperation::Binary { .. }
                     | NativeStraightLongOperation::BinaryAssign { .. }
+            )
+        })
+}
+
+fn supports_structured_scalar_residency(config: &NativeStraightLongLoopConfig) -> bool {
+    config.operations[..config.operation_count as usize]
+        .iter()
+        .copied()
+        .all(|operation| {
+            matches!(
+                operation,
+                NativeStraightLongOperation::Modulo { .. }
+                    | NativeStraightLongOperation::Move { .. }
+                    | NativeStraightLongOperation::Binary { .. }
+                    | NativeStraightLongOperation::BinaryAssign { .. }
+                    | NativeStraightLongOperation::BranchUnless { .. }
+                    | NativeStraightLongOperation::Jump { .. }
             )
         })
 }
@@ -743,10 +761,17 @@ fn emit_scalar_straight_loop(
     let uses_context = required_straight_context_mask(config) != 0;
     let keeps_linear_scalar_values_resident =
         polling_interval.is_some() && supports_linear_scalar_residency(config);
-    let keeps_carried_values_resident = keeps_linear_scalar_values_resident && carried_mask != 0;
+    let keeps_structured_scalar_values_resident = polling_interval.is_some()
+        && !keeps_linear_scalar_values_resident
+        && supports_structured_scalar_residency(config);
+    let keeps_structured_carried_values_resident =
+        keeps_structured_scalar_values_resident && carried_mask != 0;
+    let keeps_carried_values_resident = (keeps_linear_scalar_values_resident
+        || keeps_structured_carried_values_resident)
+        && carried_mask != 0;
     if carried_mask != 0 && !keeps_carried_values_resident {
         return Err(X86StraightLongLoopError::UnsupportedConfig(
-            "x86 carried state requires a range-proven linear scalar loop",
+            "x86 carried state requires a range-proven scalar loop",
         ));
     }
     if carried_mask & !publication_mask != 0
@@ -847,6 +872,21 @@ fn emit_scalar_straight_loop(
     let mut structured_jumps = Vec::new();
     let mut operation_offsets = [0usize; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
     let linear_live_after = straight_long_linear_live_after(config);
+    let structured_block_starts = if keeps_structured_scalar_values_resident {
+        straight_long_structured_block_starts(config)
+    } else {
+        [false; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1]
+    };
+    let structured_local_resident_output_masks = if keeps_structured_scalar_values_resident {
+        straight_long_structured_local_resident_output_masks(
+            config,
+            publication_mask,
+            carried_mask,
+            &structured_block_starts,
+        )
+    } else {
+        [0; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
+    };
     let mut latest_output_mask = 0u64;
 
     for (operation_index, operation) in config.operations[..config.operation_count as usize]
@@ -855,6 +895,9 @@ fn emit_scalar_straight_loop(
         .enumerate()
     {
         operation_offsets[operation_index] = assembler.bytes.len();
+        if keeps_structured_scalar_values_resident && structured_block_starts[operation_index] {
+            latest_output_mask = 0;
+        }
         let active_resident_values = [
             resident_values[0],
             resident_values[1],
@@ -868,6 +911,10 @@ fn emit_scalar_straight_loop(
                 publication_mask,
                 &linear_live_after,
             ) & !carried_mask
+        } else if keeps_structured_scalar_values_resident {
+            operation.shadow_output_mask()
+                & !carried_mask
+                & !structured_local_resident_output_masks[operation_index]
         } else {
             operation.shadow_output_mask() & !carried_mask
         };
@@ -882,7 +929,7 @@ fn emit_scalar_straight_loop(
                     &active_resident_values,
                 );
                 emit_x86_resident_output(&mut assembler, 1u64 << result, lhs, &carried_values);
-                if keeps_linear_scalar_values_resident {
+                if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
                     assembler.move_register(X86_64Register::RDX, lhs);
                     latest_output_mask = 1u64 << result;
                 }
@@ -1047,7 +1094,7 @@ fn emit_scalar_straight_loop(
                     auxiliary,
                     config.induction_slot,
                     induction,
-                    &resident_values,
+                    &active_resident_values,
                 );
                 emit_linear_condition_operand(
                     &mut assembler,
@@ -1056,7 +1103,7 @@ fn emit_scalar_straight_loop(
                     auxiliary,
                     config.induction_slot,
                     induction,
-                    &resident_values,
+                    &active_resident_values,
                 );
                 assembler.compare_register(lhs, rhs);
                 structured_conditional_jumps.push((
@@ -1148,7 +1195,7 @@ fn emit_scalar_straight_loop(
             lhs,
             &carried_values,
         );
-        if keeps_linear_scalar_values_resident {
+        if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
             assembler.move_register(X86_64Register::RDX, lhs);
             latest_output_mask = operation.output_mask();
         }
@@ -1589,7 +1636,8 @@ impl CompiledX86StraightLongLoop {
         carried_mask: u64,
     ) -> Result<Self, X86StraightLongLoopError> {
         validate_scalar_straight_config(&config)?;
-        let polling_carried_mask = (supports_linear_scalar_residency(&config)
+        let polling_carried_mask = ((supports_linear_scalar_residency(&config)
+            || supports_structured_scalar_residency(&config))
             && !config
                 .post_result
                 .is_some_and(|slot| carried_mask & (1u64 << slot) != 0))
@@ -3269,6 +3317,122 @@ mod tests {
         assert_eq!(slots[2], 10_007);
         assert_eq!(slots[3], expected_xor);
         assert_eq!(&slots[4..7], &[0, 0, 0]);
+    }
+
+    #[test]
+    fn range_proven_structured_polling_merges_carried_register_values() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+            false_target: 2,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(0),
+            result: 2,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 3,
+        };
+        let publication_mask = (1u64 << 1) | (1u64 << 3);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(5_000),
+                    operations,
+                    operation_count: 3,
+                    post_result: None,
+                },
+                publication_mask,
+                publication_mask,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        slots[3] = -5;
+
+        let interrupted = program.call_proven_polling(&mut slots, &true).unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!((slots[0], slots[1], slots[3]), (1_024, 31, 1_019));
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[3]), (5_000, 31, 4_995));
+    }
+
+    #[test]
+    fn range_proven_structured_polling_forwards_branch_local_temporaries() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 5,
+        };
+        operations[2] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(5),
+            rhs: QuickLongOperand::Const(7),
+            result: 6,
+        };
+        operations[3] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(6),
+            result: 2,
+            destination: 1,
+        };
+        operations[4] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 3,
+        };
+        let publication_mask = (1u64 << 1) | (1u64 << 3);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                NativeStraightLongLoopConfig {
+                    induction_slot: 0,
+                    bound: QuickLongOperand::Const(4),
+                    operations,
+                    operation_count: 5,
+                    post_result: None,
+                },
+                publication_mask,
+                publication_mask,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        slots[3] = -5;
+        slots[5] = 77;
+        slots[6] = 88;
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[3]), (4, 27, -1));
+        assert_eq!((slots[5], slots[6]), (77, 88));
     }
 
     #[test]
