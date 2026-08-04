@@ -2616,6 +2616,26 @@ publication stores. x86-64 now passes 130 library tests. This slice is not yet
 wired into VM dispatch and deliberately has no safepoint polling; the next
 increment adds precise checked side exits before production integration.
 
+The first native x86-64 performance checkpoint uses an AMD Ryzen 9 7950X, a
+fixed logical CPU, the `max-perf` profile and 101 samples of the equivalent
+10-million-iteration additive recurrence. All paths produce
+`49999995000010`. The direct x86 slice records a 1.875893 ms median
+(1.872263/1.894114 ms p10/p90, 0.187589 ns per iteration); executable-code
+creation has a 3.640 microsecond median. The current RPHP CLI path, which does
+not dispatch to this x86 backend yet, records 11.761427 ms. PHP 8.3.6 records
+33.901930 ms without JIT and 12.964010 ms with CLI tracing JIT enabled and
+verified. The isolated slice is therefore 6.27x faster than current RPHP CLI,
+18.07x faster than PHP without JIT and 6.91x faster than PHP tracing JIT on
+this kernel. RPHP CLI itself is 2.88x faster than PHP without JIT and 1.10x
+faster than PHP tracing JIT.
+
+The direct result is a code-generation kernel measurement, not an end-to-end
+RPHP claim: it includes the shared range proof and native execution but not VM
+dispatch, safepoint polling or a precise checked side exit. The compile cost is
+reported separately and would add only 0.194 percent to one measured loop.
+`examples/bench_x86_straight.rs` and
+`benches/bench_x86_straight_equivalent.php` keep the comparison reproducible.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
