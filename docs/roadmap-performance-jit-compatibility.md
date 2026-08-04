@@ -2838,7 +2838,7 @@ source, making RPHP about 4.53x faster than PHP tracing JIT for this shape. A
 second real-PHP test takes a cold edge after a hash store and proves canonical
 replay neither loses nor duplicates that update. x86-64 passes 152 library
 tests, fourteen real-PHP JIT integration tests and the four-test corpus; ARM64
-continues to pass 150 library tests, 83 JIT integration tests and the corpus.
+continues to pass 151 library tests, 83 JIT integration tests and the corpus.
 
 The same checkpoint also admits the existing composed property, virtual-object
 and multi-method builders without another x86-specific runtime path. Three ARM
@@ -2858,6 +2858,26 @@ property and virtual-object contexts now share the backend contract, but
 arbitrary dynamic String domains, structural array writes and the remaining
 ARM-specific publication/register optimizations continue through the typed or
 canonical executor and define the next parity steps.
+
+The first x86 register-residency checkpoint consumes the shared invariant-slot
+ranking directly. Pure linear and forward-structured scalar entries load their
+two most frequently read, non-written CV slots once into callee-saved
+`R13/R14`; every completion, chunk return and exact side exit restores the SysV
+register state. Shadow stores remain unchanged, deliberately separating safe
+load elimination from the later publication problem. The shared ranking now
+excludes `StringToken` shadow outputs as writes, closing a latent distinction
+between public output masks and the actual private shadow state.
+
+An initial unrestricted version regressed the already tiny mixed String/hash
+region by a paired 3.23 percent because its chunk/context prologue was more
+expensive than the saved loads. The final profitability rule mirrors ARM64 and
+admits only scalar/structured-scalar bodies. In 201 pinned, order-rotated A/B
+pairs, the permanent scalar expression-chain benchmark falls from 13.616800 to
+13.463974 ms (paired median -1.11 percent), while the binary body changes from
+13.484001 to 13.447285 ms (paired median -0.19 percent). The excluded mixed
+benchmark remains flat at 2.778292 versus 2.783298 ms (paired +0.21 percent,
+with overlapping p10/p90 ranges). x86-64 passes 154 library tests, fourteen JIT
+integration tests and the four-test corpus.
 
 The frozen workstream is:
 

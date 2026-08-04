@@ -224,7 +224,12 @@ pub(crate) fn straight_long_operation_input_mask(operation: NativeStraightLongOp
 pub(crate) fn straight_long_best_invariant_slot_masks(
     config: &NativeStraightLongLoopConfig,
 ) -> [u64; 2] {
-    let excluded = config.body_output_mask() | (1u64 << config.induction_slot);
+    let excluded = config.operations[..config.operation_count as usize]
+        .iter()
+        .copied()
+        .fold(1u64 << config.induction_slot, |mask, operation| {
+            mask | operation.shadow_output_mask()
+        });
     let mut uses = [0u8; 64];
     for operation in config.operations[..config.operation_count as usize]
         .iter()
@@ -350,5 +355,30 @@ mod tests {
             straight_long_best_invariant_slot_masks(&config),
             [1u64 << 3, 1u64 << 4]
         );
+    }
+
+    #[test]
+    fn finite_string_token_outputs_are_not_ranked_as_invariants() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::StringToken {
+            token: 1,
+            result: 3,
+        };
+        operations[1] = NativeStraightLongOperation::StringLength {
+            source: 3,
+            lengths: [4, 5, 0, 0],
+            token_count: 2,
+            result: 4,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10),
+            operations,
+            operation_count: 2,
+            post_result: None,
+        };
+
+        assert_eq!(straight_long_best_invariant_slot_masks(&config), [0, 0]);
     }
 }

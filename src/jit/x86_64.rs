@@ -7,7 +7,7 @@ use super::memory::ExecutableMemory;
 use super::straight::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
-    straight_long_remaining_range_proof,
+    straight_long_best_invariant_slot_masks, straight_long_remaining_range_proof,
 };
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
@@ -38,6 +38,8 @@ impl X86_64Register {
     const R10: Self = Self(10);
     const R11: Self = Self(11);
     const R12: Self = Self(12);
+    const R13: Self = Self(13);
+    const R14: Self = Self(14);
 
     #[inline]
     const fn low_bits(self) -> u8 {
@@ -473,13 +475,26 @@ fn emit_linear_operand(
     destination: X86_64Register,
     induction_slot: u16,
     induction_register: X86_64Register,
+    resident_values: &[(u64, X86_64Register); 2],
 ) {
     match operand {
         QuickLongOperand::Slot(slot) if slot == induction_slot => {
             assembler.move_register(destination, induction_register)
         }
         QuickLongOperand::Slot(slot) => {
-            assembler.move_from_base_disp32(destination, X86_64Register::RDI, i32::from(slot) * 8)
+            let slot_mask = 1u64 << slot;
+            if let Some((_, register)) = resident_values
+                .iter()
+                .find(|(mask, _)| *mask & slot_mask != 0)
+            {
+                assembler.move_register(destination, *register);
+            } else {
+                assembler.move_from_base_disp32(
+                    destination,
+                    X86_64Register::RDI,
+                    i32::from(slot) * 8,
+                );
+            }
         }
         QuickLongOperand::Const(value) => assembler.move_immediate64(destination, value),
     }
@@ -492,6 +507,7 @@ fn emit_linear_condition_operand(
     scratch: X86_64Register,
     induction_slot: u16,
     induction_register: X86_64Register,
+    resident_values: &[(u64, X86_64Register); 2],
 ) {
     match operand {
         NativeStraightLongConditionOperand::Source(source) => {
@@ -501,6 +517,7 @@ fn emit_linear_condition_operand(
                 destination,
                 induction_slot,
                 induction_register,
+                resident_values,
             );
         }
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
@@ -510,8 +527,16 @@ fn emit_linear_condition_operand(
                 destination,
                 induction_slot,
                 induction_register,
+                resident_values,
             );
-            emit_linear_operand(assembler, rhs, scratch, induction_slot, induction_register);
+            emit_linear_operand(
+                assembler,
+                rhs,
+                scratch,
+                induction_slot,
+                induction_register,
+                resident_values,
+            );
             assembler.and_register(destination, scratch);
         }
     }
@@ -553,7 +578,17 @@ fn signed_power_of_two_remainder_mask(divisor: i64) -> Option<i64> {
     (magnitude >= 2 && magnitude.is_power_of_two()).then(|| (magnitude - 1) as i64)
 }
 
-fn emit_x86_straight_return(assembler: &mut X86_64Assembler, uses_context: bool) {
+fn emit_x86_straight_return(
+    assembler: &mut X86_64Assembler,
+    uses_context: bool,
+    invariant_count: usize,
+) {
+    if invariant_count >= 2 {
+        assembler.pop_register(X86_64Register::R14);
+    }
+    if invariant_count >= 1 {
+        assembler.pop_register(X86_64Register::R13);
+    }
     if uses_context {
         assembler.pop_register(X86_64Register::R12);
     }
@@ -570,6 +605,7 @@ fn emit_token_immediate_select(
     result: X86_64Register,
     induction_slot: u16,
     induction: X86_64Register,
+    resident_values: &[(u64, X86_64Register); 2],
     operation_index: u8,
     operation_side_exit_jumps: &mut Vec<(usize, u8)>,
 ) {
@@ -579,6 +615,7 @@ fn emit_token_immediate_select(
         token,
         induction_slot,
         induction,
+        resident_values,
     );
     let mut selected_jumps = Vec::with_capacity(token_count as usize);
     for index in 0..token_count as usize {
@@ -607,6 +644,7 @@ fn emit_context_entry_select(
     context: X86_64Register,
     induction_slot: u16,
     induction: X86_64Register,
+    resident_values: &[(u64, X86_64Register); 2],
     operation_index: u8,
     operation_side_exit_jumps: &mut Vec<(usize, u8)>,
 ) {
@@ -616,6 +654,7 @@ fn emit_context_entry_select(
         token,
         induction_slot,
         induction,
+        resident_values,
     );
     let mut selected_jumps = Vec::with_capacity(token_count as usize);
     for token_index in 0..token_count as usize {
@@ -658,6 +697,33 @@ fn emit_scalar_straight_loop(
     let polling_remaining = X86_64Register::R10;
     let context = X86_64Register::R12;
     let uses_context = required_straight_context_mask(config) != 0;
+    let caches_scalar_invariants = config.operations[..config.operation_count as usize]
+        .iter()
+        .copied()
+        .all(|operation| {
+            matches!(
+                operation,
+                NativeStraightLongOperation::Modulo { .. }
+                    | NativeStraightLongOperation::Move { .. }
+                    | NativeStraightLongOperation::Binary { .. }
+                    | NativeStraightLongOperation::BinaryAssign { .. }
+                    | NativeStraightLongOperation::BranchUnless { .. }
+                    | NativeStraightLongOperation::Jump { .. }
+            )
+        });
+    let invariant_slot_masks = if caches_scalar_invariants {
+        straight_long_best_invariant_slot_masks(config)
+    } else {
+        [0; 2]
+    };
+    let resident_values = [
+        (invariant_slot_masks[0], X86_64Register::R13),
+        (invariant_slot_masks[1], X86_64Register::R14),
+    ];
+    let invariant_count = invariant_slot_masks
+        .iter()
+        .filter(|mask| **mask != 0)
+        .count();
     let displacement = |slot: u16| i32::from(slot) * 8;
 
     if uses_context {
@@ -669,6 +735,17 @@ fn emit_scalar_straight_loop(
         };
         assembler.move_register(context, incoming_context);
     }
+    for (slot_mask, register) in resident_values.iter().copied() {
+        if slot_mask == 0 {
+            continue;
+        }
+        assembler.push_register(register);
+        assembler.move_from_base_disp32(
+            register,
+            slots,
+            displacement(slot_mask.trailing_zeros() as u16),
+        );
+    }
 
     assembler.move_from_base_disp32(induction, slots, displacement(config.induction_slot));
     emit_linear_operand(
@@ -677,6 +754,7 @@ fn emit_scalar_straight_loop(
         bound,
         config.induction_slot,
         induction,
+        &resident_values,
     );
     if let Some(interval) = polling_interval {
         assembler.move_immediate64(polling_remaining, i64::from(interval));
@@ -703,6 +781,7 @@ fn emit_scalar_straight_loop(
                     lhs,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                 );
                 assembler.move_to_base_disp32(slots, lhs, displacement(result));
                 continue;
@@ -727,6 +806,7 @@ fn emit_scalar_straight_loop(
                     rhs,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                     operation_index as u8,
                     &mut operation_side_exit_jumps,
                 );
@@ -750,6 +830,7 @@ fn emit_scalar_straight_loop(
                     context,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                     operation_index as u8,
                     &mut operation_side_exit_jumps,
                 );
@@ -778,6 +859,7 @@ fn emit_scalar_straight_loop(
                     context,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                     operation_index as u8,
                     &mut operation_side_exit_jumps,
                 );
@@ -787,6 +869,7 @@ fn emit_scalar_straight_loop(
                     rhs,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                 );
                 assembler.move_to_base_disp32(auxiliary, rhs, 0);
                 continue;
@@ -828,6 +911,7 @@ fn emit_scalar_straight_loop(
                     auxiliary,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                 );
                 emit_linear_condition_operand(
                     &mut assembler,
@@ -836,6 +920,7 @@ fn emit_scalar_straight_loop(
                     auxiliary,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                 );
                 assembler.compare_register(lhs, rhs);
                 operation_side_exit_jumps.push((
@@ -857,6 +942,7 @@ fn emit_scalar_straight_loop(
                     auxiliary,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                 );
                 emit_linear_condition_operand(
                     &mut assembler,
@@ -865,6 +951,7 @@ fn emit_scalar_straight_loop(
                     auxiliary,
                     config.induction_slot,
                     induction,
+                    &resident_values,
                 );
                 assembler.compare_register(lhs, rhs);
                 structured_conditional_jumps.push((
@@ -883,8 +970,22 @@ fn emit_scalar_straight_loop(
                 ));
             }
         };
-        emit_linear_operand(&mut assembler, left, lhs, config.induction_slot, induction);
-        emit_linear_operand(&mut assembler, right, rhs, config.induction_slot, induction);
+        emit_linear_operand(
+            &mut assembler,
+            left,
+            lhs,
+            config.induction_slot,
+            induction,
+            &resident_values,
+        );
+        emit_linear_operand(
+            &mut assembler,
+            right,
+            rhs,
+            config.induction_slot,
+            induction,
+            &resident_values,
+        );
         match kind {
             ScalarLongOpKind::Add => assembler.add_register(lhs, rhs),
             ScalarLongOpKind::Subtract => assembler.subtract_register(lhs, rhs),
@@ -983,7 +1084,7 @@ fn emit_scalar_straight_loop(
         }
         assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
         assembler.move_immediate32_eax(X86_STRAIGHT_CHUNK_EXHAUSTED);
-        emit_x86_straight_return(&mut assembler, uses_context);
+        emit_x86_straight_return(&mut assembler, uses_context, invariant_count);
     }
 
     let completed = assembler.bytes.len();
@@ -996,7 +1097,7 @@ fn emit_scalar_straight_loop(
     }
     assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
     assembler.clear_eax();
-    emit_x86_straight_return(&mut assembler, uses_context);
+    emit_x86_straight_return(&mut assembler, uses_context, invariant_count);
 
     for (side_exit_jump, operation_index) in operation_side_exit_jumps {
         let side_exit = assembler.bytes.len();
@@ -1004,7 +1105,7 @@ fn emit_scalar_straight_loop(
         assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
         let status = X86_STRAIGHT_OPERATION_SIDE_EXIT | (u32::from(operation_index) << 8);
         assembler.move_immediate32_eax(status);
-        emit_x86_straight_return(&mut assembler, uses_context);
+        emit_x86_straight_return(&mut assembler, uses_context, invariant_count);
     }
 
     Ok(assembler.finish())
@@ -2338,6 +2439,79 @@ mod tests {
     use super::*;
 
     #[test]
+    fn invariant_operands_are_loaded_once_per_native_entry() {
+        let mut operations = [NativeStraightLongOperation::Unused;
+            super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(3)),
+            false_target: 3,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Slot(3),
+            result: 6,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::Jump { target: 4 };
+        operations[3] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(1),
+            result: 7,
+            destination: 1,
+        };
+        operations[4] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(4),
+            result: 8,
+            destination: 2,
+        };
+        let program = CompiledX86StraightLongLoop::compile(NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(100),
+            operations,
+            operation_count: 5,
+            post_result: None,
+        })
+        .unwrap();
+
+        let slot_3_load = [0x4c, 0x8b, 0xaf, 0x18, 0x00, 0x00, 0x00];
+        let slot_4_load = [0x4c, 0x8b, 0xb7, 0x20, 0x00, 0x00, 0x00];
+        assert_eq!(
+            program
+                .code()
+                .windows(slot_3_load.len())
+                .filter(|window| *window == slot_3_load)
+                .count(),
+            5,
+            "each of the five ABI entries should load invariant slot 3 once"
+        );
+        assert_eq!(
+            program
+                .code()
+                .windows(slot_4_load.len())
+                .filter(|window| *window == slot_4_load)
+                .count(),
+            5,
+            "each of the five ABI entries should load invariant slot 4 once"
+        );
+
+        let mut slots = [0i64; 64];
+        slots[3] = 50;
+        slots[4] = 7;
+        let outcome = program.call_chunk(&mut slots, 128).unwrap();
+        assert_eq!(outcome.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(
+            (slots[0], slots[1], slots[2], slots[3], slots[4]),
+            (100, 98, 105, 50, 7)
+        );
+    }
+
+    #[test]
     fn finite_string_hash_context_survives_signed_division_abi_registers() {
         let mut operations = [NativeStraightLongOperation::Unused;
             super::super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
@@ -2378,6 +2552,13 @@ mod tests {
             post_result: None,
         })
         .expect("finite String and contextual hash operations should lower on x86");
+        assert!(
+            !program
+                .code()
+                .windows(2)
+                .any(|window| window == [0x41, 0x55]),
+            "mixed context entries must not pay the scalar invariant R13 prologue"
+        );
 
         let mut left = 7i64;
         let mut right = 20i64;
