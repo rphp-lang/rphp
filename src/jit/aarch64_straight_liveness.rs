@@ -72,6 +72,65 @@ pub(super) fn straight_long_structured_block_starts(
     starts
 }
 
+/// Computes the slots that have definitely been written on every forward path
+/// reaching each operation and the loop-body exit. Structured straight loops
+/// are validated to contain only forward edges, so a single index-ordered pass
+/// reaches the fixed point: the first predecessor initializes a target and
+/// later predecessors intersect their facts with it.
+pub(super) fn straight_long_structured_definitely_written(
+    config: &NativeStraightLongLoopConfig,
+) -> ([u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS], u64) {
+    let operation_count = config.operation_count as usize;
+    let mut before = [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut incoming = [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    let mut reachable = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    reachable[0] = true;
+
+    fn merge_forward_fact(
+        incoming: &mut [u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1],
+        reachable: &mut [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1],
+        target: usize,
+        fact: u64,
+    ) {
+        if reachable[target] {
+            incoming[target] &= fact;
+        } else {
+            incoming[target] = fact;
+            reachable[target] = true;
+        }
+    }
+
+    for index in 0..operation_count {
+        if !reachable[index] {
+            continue;
+        }
+        before[index] = incoming[index];
+        let after = incoming[index] | config.operations[index].output_mask();
+        match config.operations[index] {
+            NativeStraightLongOperation::BranchUnless { false_target, .. } => {
+                merge_forward_fact(&mut incoming, &mut reachable, index + 1, after);
+                merge_forward_fact(
+                    &mut incoming,
+                    &mut reachable,
+                    false_target as usize,
+                    after,
+                );
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                merge_forward_fact(&mut incoming, &mut reachable, target as usize, after);
+            }
+            _ => {
+                merge_forward_fact(&mut incoming, &mut reachable, index + 1, after);
+            }
+        }
+    }
+
+    let exit = reachable[operation_count]
+        .then_some(incoming[operation_count])
+        .unwrap_or(0);
+    (before, exit)
+}
+
 pub(super) fn straight_long_structured_local_resident_output_masks(
     config: &NativeStraightLongLoopConfig,
     publication_mask: u64,
@@ -287,6 +346,79 @@ mod tests {
             &bypassed_starts,
         );
         assert_eq!(bypassed_masks[1], 0);
+    }
+
+    #[test]
+    fn structured_definite_writes_intersect_branch_predecessors() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 6,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Const(1),
+            result: 7,
+            destination: 1,
+        };
+        operations[3] = NativeStraightLongOperation::Jump { target: 6 };
+        operations[4] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 8,
+        };
+        operations[5] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(8),
+            rhs: QuickLongOperand::Const(2),
+            result: 9,
+            destination: 1,
+        };
+        operations[6] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(3),
+            result: 10,
+            destination: 2,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(100),
+            operations,
+            operation_count: 7,
+            post_result: None,
+        };
+
+        let (before, exit) = straight_long_structured_definitely_written(&config);
+        assert_eq!(before[1] & (1u64 << 1), 0);
+        assert_eq!(before[4] & (1u64 << 1), 0);
+        assert_ne!(before[6] & (1u64 << 1), 0);
+        assert_ne!(exit & (1u64 << 1), 0);
+        assert_ne!(exit & (1u64 << 2), 0);
+
+        let mut partial = config;
+        partial.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 6,
+        };
+        let (partial_before, partial_exit) =
+            straight_long_structured_definitely_written(&partial);
+        assert_eq!(partial_before[6] & (1u64 << 1), 0);
+        assert_eq!(partial_exit & (1u64 << 1), 0);
+        assert_ne!(partial_exit & (1u64 << 2), 0);
     }
 
     #[test]
@@ -792,5 +924,113 @@ mod tests {
         assert_eq!(slots[1], 4_035);
         assert_eq!(slots[3], 9_995);
         assert_eq!((slots[2], slots[4], slots[6], slots[7]), (222, 444, 666, 777));
+    }
+
+    #[test]
+    fn structured_if_else_publications_merge_in_fixed_registers() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 6,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Const(1),
+            result: 7,
+            destination: 1,
+        };
+        operations[3] = NativeStraightLongOperation::Jump { target: 6 };
+        operations[4] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 8,
+        };
+        operations[5] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(8),
+            rhs: QuickLongOperand::Const(2),
+            result: 9,
+            destination: 1,
+        };
+        operations[6] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(3),
+            result: 10,
+        };
+        operations[7] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(10),
+            rhs: QuickLongOperand::Const(11),
+            result: 11,
+            destination: 2,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(10_000),
+            operations,
+            operation_count: 8,
+            post_result: None,
+        };
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+            config,
+            1_024,
+            (1u64 << 1) | (1u64 << 2),
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words.iter().filter(|&&word| word == 0xaa08_03e4).count(),
+            2,
+            "both selected definitions must reach the same x4 merge register"
+        );
+        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8 for folded
+        assert!(!words.contains(&0xf900_0408)); // no loop STR x8, selected
+        assert!(!words.contains(&0xf900_0808)); // no loop STR x8, folded
+        assert!(words.contains(&0xf900_0404)); // exit STR x4, selected
+        assert!(words.contains(&0xf900_0805)); // exit STR x5, folded
+
+        let interrupt = AtomicBool::new(true);
+        let mut slots = [0i64; 64];
+        for (slot, sentinel) in (6..=11).zip(606..=611) {
+            slots[slot] = sentinel;
+        }
+        let interrupted = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 1_024)
+            .unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            super::super::NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(slots[0], 1_024);
+        assert_eq!((slots[1], slots[2]), (5_113, 15_350));
+        assert_eq!(&slots[6..=11], &[606, 607, 608, 609, 610, 611]);
+
+        interrupt.store(false, Ordering::Relaxed);
+        let completed = program
+            .call_range_proven_polling(&mut slots, 10_000, interrupt.as_ptr() as *const bool, 2_048)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!(slots[0], 10_000);
+        assert_eq!((slots[1], slots[2]), (49_993, 149_990));
+        assert_eq!(&slots[6..=11], &[606, 607, 608, 609, 610, 611]);
     }
 }

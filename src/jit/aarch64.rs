@@ -2191,6 +2191,7 @@ mod straight_liveness;
 use straight_liveness::{
     straight_long_linear_final_publication_masks, straight_long_linear_live_after,
     straight_long_linear_shadow_store_mask, straight_long_structured_block_starts,
+    straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
 
@@ -2592,6 +2593,12 @@ impl CompiledQuickLongStraightLoop {
             } else {
                 [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
             };
+        let (structured_definitely_written_before, structured_definitely_written_exit) =
+            if keeps_structured_scalar_temporaries_resident {
+                straight_long_structured_definitely_written(&config)
+            } else {
+                ([0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS], 0)
+            };
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
@@ -2610,6 +2617,8 @@ impl CompiledQuickLongStraightLoop {
         let mut deferred_exit_publication_mask = 0u64;
         let mut reserved_resident_registers = [false; 4];
         let mut initial_carried_masks = [0u64; 4];
+        let mut structured_definition_operations_by_register = [0u64; 4];
+        let mut structured_publication_masks_by_register = [0u64; 4];
         let mut next_publication_cache = 1usize;
         if keeps_carried_values_resident {
             for (index, slot_mask) in final_publication_masks
@@ -2643,6 +2652,66 @@ impl CompiledQuickLongStraightLoop {
                 deferred_exit_publication_mask |= deferred_mask;
                 reserved_resident_registers[resident_index] = true;
                 initial_carried_masks[resident_index] = operation_carried_mask;
+                if keeps_structured_carried_values_resident {
+                    structured_definition_operations_by_register[resident_index] = 1u64 << index;
+                    structured_publication_masks_by_register[resident_index] = deferred_mask;
+                }
+            }
+        }
+        if keeps_structured_scalar_temporaries_resident {
+            let mut phi_candidates = publication_mask
+                & structured_definitely_written_exit
+                & !carried_mask;
+            while phi_candidates != 0 {
+                let slot_mask = 1u64 << phi_candidates.trailing_zeros();
+                phi_candidates &= phi_candidates - 1;
+                let definition_operations = config
+                    .operations
+                    .iter()
+                    .copied()
+                    .take(config.operation_count as usize)
+                    .enumerate()
+                    .fold(0u64, |mask, (index, operation)| {
+                        if operation.output_mask() & slot_mask != 0 {
+                            mask | (1u64 << index)
+                        } else {
+                            mask
+                        }
+                    });
+                debug_assert_ne!(definition_operations, 0);
+
+                let existing_register = (1..next_publication_cache).find(|&resident_index| {
+                    initial_carried_masks[resident_index] == 0
+                        && structured_publication_masks_by_register[resident_index] != 0
+                        && structured_definition_operations_by_register[resident_index]
+                            == definition_operations
+                });
+                let resident_index = if let Some(resident_index) = existing_register {
+                    resident_index
+                } else if next_publication_cache < resident_values.len() {
+                    let resident_index = next_publication_cache;
+                    next_publication_cache += 1;
+                    structured_definition_operations_by_register[resident_index] =
+                        definition_operations;
+                    deferred_exit_values[deferred_exit_value_count] =
+                        (0, resident_values[resident_index].1);
+                    deferred_exit_value_count += 1;
+                    reserved_resident_registers[resident_index] = true;
+                    resident_index
+                } else {
+                    continue;
+                };
+
+                structured_publication_masks_by_register[resident_index] |= slot_mask;
+                deferred_exit_publication_mask |= slot_mask;
+                let deferred_mask = deferred_exit_values
+                    .iter_mut()
+                    .take(deferred_exit_value_count)
+                    .find_map(|(mask, register)| {
+                        (*register == resident_values[resident_index].1).then_some(mask)
+                    })
+                    .expect("structured publication register has an exit entry");
+                *deferred_mask |= slot_mask;
             }
         }
         if keeps_linear_scalar_values_resident {
@@ -2741,10 +2810,25 @@ impl CompiledQuickLongStraightLoop {
                     resident_values[cache_index].0 = resident_values[0].0;
                     resident_values[0].0 = 0;
                 }
-            } else if keeps_structured_scalar_temporaries_resident
-                && structured_block_starts[index]
-            {
-                resident_values[0].0 = 0;
+            } else if keeps_structured_scalar_temporaries_resident {
+                if structured_block_starts[index] {
+                    resident_values[0].0 = 0;
+                }
+                for resident_index in 1..resident_values.len() {
+                    let carried_slots = initial_carried_masks[resident_index];
+                    let publication_slots =
+                        structured_publication_masks_by_register[resident_index];
+                    resident_values[resident_index].0 = if carried_slots != 0 {
+                        carried_slots
+                    } else if publication_slots != 0
+                        && structured_definitely_written_before[index] & publication_slots
+                            == publication_slots
+                    {
+                        publication_slots
+                    } else {
+                        0
+                    };
+                }
             }
             let shadow_store_mask = if keeps_linear_scalar_values_resident {
                 straight_long_linear_shadow_store_mask(
@@ -3144,20 +3228,17 @@ impl CompiledQuickLongStraightLoop {
                 }
             } else if keeps_structured_scalar_temporaries_resident {
                 resident_values[0].0 = operation.output_mask();
-                if keeps_structured_carried_values_resident {
-                    let deferred_register = deferred_register_by_operation[index];
-                    if deferred_register != usize::MAX {
-                        debug_assert_ne!(deferred_register, 0);
+                for resident_index in 1..resident_values.len() {
+                    if structured_definition_operations_by_register[resident_index]
+                        & (1u64 << index)
+                        != 0
+                    {
                         assembler.move_register(
-                            resident_values[deferred_register].1,
+                            resident_values[resident_index].1,
                             result,
                         );
-                        // Temporary aliases are path-local. Only the carried
-                        // destination is guaranteed to exist after a skipped arm.
-                        resident_values[deferred_register].0 =
-                            final_publication_masks[index] & carried_mask;
-                        active_exit_masks[deferred_register] =
-                            final_publication_masks[index] & carried_mask;
+                        resident_values[resident_index].0 =
+                            structured_publication_masks_by_register[resident_index];
                     }
                 }
             }

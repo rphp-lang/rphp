@@ -2319,6 +2319,42 @@ ms, making RPHP 5.27x faster. The conditional composed recurrence is flat at
 checkpoint passes 138 library tests, 81 ARM64/JIT integration tests, all four
 application corpus tests, and `cargo check --all-features`.
 
+Structured merge-publication checkpoint (2026-08-04): forward scalar control
+flow now computes a definitely-written mask at every operation and at the body
+exit. Incoming masks are intersected at merges, so an ordinary visible CV is
+eligible for deferred publication only when every predecessor defines it. An
+`if/else` result can therefore own one fixed register across both definitions
+and its merge consumer, while an `if` without an `else` remains on the checked
+shadow-store path because the old value may reach the merge.
+
+Published aliases with the same reaching-definition operation set share one
+register. Carried registers are allocated first; up to three remaining groups
+use the existing fixed publication registers. Compile-time register validity is
+reconstructed from the definitely-written fact at each operation rather than
+from physical code-generation order, preventing a true-arm value from leaking
+into a separately emitted false arm. Both native exits publish the deferred
+groups, including after a safepoint interruption.
+
+The direct ABI test requires both `$selected` definitions to reach the same
+register, `$folded` to use a second register, and all per-iteration CV stores to
+be absent. It also preserves six TMP sentinels and validates exact values after
+an interrupt and final completion. The real PHP forward-branch test still
+enters one range-proven region; the partially-written control still rejects the
+complete-range proof and uses checked chunks.
+
+This checkpoint is intentionally an architectural prerequisite rather than a
+claimed speed win. In 101 order-rotated native-CPU `max-perf` A/B pairs against
+a freshly rebuilt `fdf66e0`, the structured branch-expression benchmark is
+6.500 ms versus 6.507 ms (paired median +0.14 percent). The conditional
+composed recurrence is +0.18 percent and the linear composed recurrence
+-0.03 percent. The former shadow store/load/store sequence has been exchanged
+for three register moves, leaving the effective operation count approximately
+flat on this CPU. The next lowering step should write each selected scalar
+definition directly into its fixed merge register and remove those moves.
+
+The checkpoint passes 140 library tests, 81 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
