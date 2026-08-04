@@ -2737,8 +2737,47 @@ typed executor (13.947248/14.752865 ms). This is a 57.64 percent reduction or
 recurrence at 3.824711 ms median, within 0.15 percent of its 3.818989 ms
 checkpoint.
 
+The structured-control-flow checkpoint adds all four shared scalar comparisons,
+finite `BitwiseAnd` condition operands, forward `BranchUnless` and `Jump`, and
+trace `Guard` exits. Every generated branch targets a validated shared-IR
+operation boundary. Guard failures publish the exact induction state and carry
+the failing operation index through the native status, while all successful
+prior shadow writes remain committed. This makes ordinary PHP `if`/`else`
+bodies eligible through the existing `QuickLongOps` planner; it is not a
+benchmark-only recognizer.
+
+On the pinned x86-64 server, the existing 10M conditional-recurrence benchmark
+falls from the immediately prior binary's 97.887754 ms median
+(97.493410/98.395109 ms p10/p90) to 6.877661 ms
+(6.849051/6.942987 ms), a 92.97 percent reduction or 14.23x speedup over the
+typed fallback. The same 101-sample workload records 53.598881 ms in PHP 8.5.9
+without JIT and 33.494949 ms with tracing JIT, so this structured RPHP kernel is
+4.87x faster than PHP 8.5 tracing JIT on the measured host. x86-64 passes 143
+library tests, three real-PHP JIT integration tests and the four-test corpus.
+
+The scalar-arithmetic parity checkpoint moves the generic induction register
+away from x86-64's architectural `RAX:RDX` division pair and lowers
+`IntDivide`, signed `Modulo`, standalone constant modulo and `BitwiseXor`.
+Checked entries guard zero divisors and the `MIN / -1` overflow before `idiv`,
+preserving the exact pre-operation shadow and failed-operation index. Constant
+power-of-two remainder uses the branchless signed identity
+`bias = sign(value) & mask; ((value + bias) & mask) - bias`, so negative PHP
+remainders remain truncating rather than being replaced with an incorrect
+unsigned mask. The dispatcher now offers eligible scalar regions to native JIT
+before the older conditional Rust kernel and retains that kernel as the normal
+fallback when native compilation declines the shared IR.
+
+The unchanged 10M `bench_modulo_branch_loop.php` now takes the native path. In
+101 pinned, order-rotated pairs it falls from the pre-arithmetic fallback's
+26.400328 ms median (26.265383/26.561022 ms p10/p90) to 7.194757 ms
+(7.033348/7.470369 ms), a 72.75 percent reduction or 3.67x speedup. An isolated
+A/B shows the signed power-of-two lowering reducing the intermediate `idiv`
+version from 13.272762 to 7.282972 ms median. PHP 8.5.9 records 50.990820 ms
+without JIT and 11.234999 ms with tracing JIT on the same workload, making the
+final RPHP result about 1.56x faster than PHP tracing JIT. x86-64 now passes 147
+library tests, four real-PHP JIT integration tests and the four-test corpus.
+
 This is still not full ARM64 feature parity. x86-64 conservatively rejects
-structured branches, division/modulo/bitwise arithmetic,
 call/property/array/string context operations and scalar-function native
 programs. Those forms continue through the existing typed or canonical
 executor and define the next parity steps.

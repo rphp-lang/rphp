@@ -5,10 +5,11 @@
 
 use super::memory::ExecutableMemory;
 use super::straight::{
-    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongLoopResult,
-    NativeStraightLongOperation, straight_long_remaining_range_proof,
+    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
+    NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
+    straight_long_remaining_range_proof,
 };
-use crate::vm::function::ScalarLongOpKind;
+use crate::vm::function::{ScalarLongConditionKind, ScalarLongOpKind};
 use crate::vm::quick::QuickLongOperand;
 use std::cell::{Cell, OnceCell};
 use std::fmt;
@@ -31,6 +32,7 @@ impl X86_64Register {
     const R8: Self = Self(8);
     const R9: Self = Self(9);
     const R10: Self = Self(10);
+    const R11: Self = Self(11);
 
     #[inline]
     const fn low_bits(self) -> u8 {
@@ -71,6 +73,20 @@ impl X86_64Assembler {
     pub fn subtract_register(&mut self, destination: X86_64Register, source: X86_64Register) {
         self.emit_rex_w(destination, source);
         self.bytes.push(0x2b);
+        self.emit_register_modrm(destination, source);
+    }
+
+    /// Encode `AND destination, source` using the register-direct r64/rm64 form.
+    pub fn and_register(&mut self, destination: X86_64Register, source: X86_64Register) {
+        self.emit_rex_w(destination, source);
+        self.bytes.push(0x23);
+        self.emit_register_modrm(destination, source);
+    }
+
+    /// Encode `XOR destination, source` using the register-direct r64/rm64 form.
+    pub fn xor_register(&mut self, destination: X86_64Register, source: X86_64Register) {
+        self.emit_rex_w(destination, source);
+        self.bytes.push(0x33);
         self.emit_register_modrm(destination, source);
     }
 
@@ -129,10 +145,34 @@ impl X86_64Assembler {
         self.bytes.push(immediate as u8);
     }
 
+    fn arithmetic_shift_right_immediate8(&mut self, destination: X86_64Register, immediate: u8) {
+        self.bytes.push(0x48 | destination.extension());
+        self.bytes.push(0xc1);
+        self.bytes.push(0xf8 | destination.low_bits());
+        self.bytes.push(immediate);
+    }
+
     fn compare_register(&mut self, lhs: X86_64Register, rhs: X86_64Register) {
         self.emit_rex_w(lhs, rhs);
         self.bytes.push(0x3b);
         self.emit_register_modrm(lhs, rhs);
+    }
+
+    fn compare_immediate8(&mut self, register: X86_64Register, immediate: i8) {
+        self.bytes.push(0x48 | register.extension());
+        self.bytes.push(0x83);
+        self.bytes.push(0xf8 | register.low_bits());
+        self.bytes.push(immediate as u8);
+    }
+
+    fn sign_extend_rax_into_rdx(&mut self) {
+        self.bytes.extend_from_slice(&[0x48, 0x99]);
+    }
+
+    fn signed_divide(&mut self, divisor: X86_64Register) {
+        self.bytes.push(0x48 | divisor.extension());
+        self.bytes.push(0xf7);
+        self.bytes.push(0xf8 | divisor.low_bits());
     }
 
     fn compare_byte_base_immediate8(&mut self, base: X86_64Register, immediate: u8) {
@@ -149,8 +189,20 @@ impl X86_64Assembler {
         self.emit_conditional_jump_rel32(0x8d)
     }
 
+    fn jump_greater_than_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x8f)
+    }
+
     fn jump_less_than_rel32(&mut self) -> usize {
         self.emit_conditional_jump_rel32(0x8c)
+    }
+
+    fn jump_less_or_equal_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x8e)
+    }
+
+    fn jump_equal_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x84)
     }
 
     fn jump_not_equal_rel32(&mut self) -> usize {
@@ -239,8 +291,9 @@ impl From<io::Error> for X86StraightLongLoopError {
     }
 }
 
-/// First straight-IR lowering on x86-64. It accepts one additive recurrence
-/// and emits both an unchecked range-proven entry and a checked side-exit entry.
+/// Shared straight-IR lowering on x86-64. It retains a register-specialized
+/// additive recurrence and otherwise emits structured scalar programs with
+/// unchecked range-proven and checked exact-side-exit entries.
 pub struct CompiledX86StraightLongLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -376,10 +429,11 @@ fn emit_linear_operand(
     operand: QuickLongOperand,
     destination: X86_64Register,
     induction_slot: u16,
+    induction_register: X86_64Register,
 ) {
     match operand {
         QuickLongOperand::Slot(slot) if slot == induction_slot => {
-            assembler.move_register(destination, X86_64Register::RAX)
+            assembler.move_register(destination, induction_register)
         }
         QuickLongOperand::Slot(slot) => {
             assembler.move_from_base_disp32(destination, X86_64Register::RDI, i32::from(slot) * 8)
@@ -388,7 +442,75 @@ fn emit_linear_operand(
     }
 }
 
-fn emit_linear_straight_loop(
+fn emit_linear_condition_operand(
+    assembler: &mut X86_64Assembler,
+    operand: NativeStraightLongConditionOperand,
+    destination: X86_64Register,
+    scratch: X86_64Register,
+    induction_slot: u16,
+    induction_register: X86_64Register,
+) {
+    match operand {
+        NativeStraightLongConditionOperand::Source(source) => {
+            emit_linear_operand(
+                assembler,
+                source,
+                destination,
+                induction_slot,
+                induction_register,
+            );
+        }
+        NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            emit_linear_operand(
+                assembler,
+                lhs,
+                destination,
+                induction_slot,
+                induction_register,
+            );
+            emit_linear_operand(assembler, rhs, scratch, induction_slot, induction_register);
+            assembler.and_register(destination, scratch);
+        }
+    }
+}
+
+fn emit_false_condition_jump(
+    assembler: &mut X86_64Assembler,
+    kind: ScalarLongConditionKind,
+) -> usize {
+    match kind {
+        ScalarLongConditionKind::Equal => assembler.jump_not_equal_rel32(),
+        ScalarLongConditionKind::NotEqual => assembler.jump_equal_rel32(),
+        ScalarLongConditionKind::LessThan => assembler.jump_greater_or_equal_rel32(),
+        ScalarLongConditionKind::LessThanOrEqual => assembler.jump_greater_than_rel32(),
+    }
+}
+
+fn emit_guard_mismatch_jump(
+    assembler: &mut X86_64Assembler,
+    kind: ScalarLongConditionKind,
+    expected: bool,
+) -> usize {
+    match (kind, expected) {
+        (ScalarLongConditionKind::Equal, true) | (ScalarLongConditionKind::NotEqual, false) => {
+            assembler.jump_not_equal_rel32()
+        }
+        (ScalarLongConditionKind::Equal, false) | (ScalarLongConditionKind::NotEqual, true) => {
+            assembler.jump_equal_rel32()
+        }
+        (ScalarLongConditionKind::LessThan, true) => assembler.jump_greater_or_equal_rel32(),
+        (ScalarLongConditionKind::LessThan, false) => assembler.jump_less_than_rel32(),
+        (ScalarLongConditionKind::LessThanOrEqual, true) => assembler.jump_greater_than_rel32(),
+        (ScalarLongConditionKind::LessThanOrEqual, false) => assembler.jump_less_or_equal_rel32(),
+    }
+}
+
+fn signed_power_of_two_remainder_mask(divisor: i64) -> Option<i64> {
+    let magnitude = divisor.unsigned_abs();
+    (magnitude >= 2 && magnitude.is_power_of_two()).then(|| (magnitude - 1) as i64)
+}
+
+fn emit_scalar_straight_loop(
     config: &NativeStraightLongLoopConfig,
     checked: bool,
     budgeted: bool,
@@ -397,34 +519,64 @@ fn emit_linear_straight_loop(
     debug_assert!(!(budgeted && polling_interval.is_some()));
     let mut assembler = X86_64Assembler::new();
     let slots = X86_64Register::RDI;
-    let induction = X86_64Register::RAX;
+    // Keep the loop induction outside RAX/RDX so signed division can use its
+    // architectural dividend and remainder pair without spilling loop state.
+    let induction = X86_64Register::R11;
     let bound = X86_64Register::RCX;
-    let lhs = X86_64Register::RDX;
+    let lhs = X86_64Register::RAX;
     let rhs = X86_64Register::R8;
+    let auxiliary = X86_64Register::R9;
     let polling_remaining = X86_64Register::R10;
     let displacement = |slot: u16| i32::from(slot) * 8;
 
     assembler.move_from_base_disp32(induction, slots, displacement(config.induction_slot));
-    emit_linear_operand(&mut assembler, config.bound, bound, config.induction_slot);
+    emit_linear_operand(
+        &mut assembler,
+        config.bound,
+        bound,
+        config.induction_slot,
+        induction,
+    );
     if let Some(interval) = polling_interval {
         assembler.move_immediate64(polling_remaining, i64::from(interval));
     }
     assembler.compare_register(induction, bound);
     let completed_jump = assembler.jump_greater_or_equal_rel32();
     let loop_start = assembler.bytes.len();
-    let mut overflow_jumps = Vec::new();
+    let mut operation_side_exit_jumps = Vec::new();
+    let mut structured_conditional_jumps = Vec::new();
+    let mut structured_jumps = Vec::new();
+    let mut operation_offsets = [0usize; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
 
     for (operation_index, operation) in config.operations[..config.operation_count as usize]
         .iter()
         .copied()
         .enumerate()
     {
+        operation_offsets[operation_index] = assembler.bytes.len();
         let (kind, left, right, result, destination) = match operation {
             NativeStraightLongOperation::Move { source, result } => {
-                emit_linear_operand(&mut assembler, source, lhs, config.induction_slot);
+                emit_linear_operand(
+                    &mut assembler,
+                    source,
+                    lhs,
+                    config.induction_slot,
+                    induction,
+                );
                 assembler.move_to_base_disp32(slots, lhs, displacement(result));
                 continue;
             }
+            NativeStraightLongOperation::Modulo {
+                value,
+                divisor,
+                result,
+            } => (
+                ScalarLongOpKind::Modulo,
+                value,
+                QuickLongOperand::Const(divisor),
+                result,
+                None,
+            ),
             NativeStraightLongOperation::Binary {
                 kind,
                 lhs,
@@ -438,26 +590,126 @@ fn emit_linear_straight_loop(
                 result,
                 destination,
             } => (kind, lhs, rhs, result, Some(destination)),
+            NativeStraightLongOperation::Guard {
+                kind,
+                lhs: condition_lhs,
+                rhs: condition_rhs,
+                expected,
+            } => {
+                emit_linear_condition_operand(
+                    &mut assembler,
+                    condition_lhs,
+                    lhs,
+                    auxiliary,
+                    config.induction_slot,
+                    induction,
+                );
+                emit_linear_condition_operand(
+                    &mut assembler,
+                    condition_rhs,
+                    rhs,
+                    auxiliary,
+                    config.induction_slot,
+                    induction,
+                );
+                assembler.compare_register(lhs, rhs);
+                operation_side_exit_jumps.push((
+                    emit_guard_mismatch_jump(&mut assembler, kind, expected),
+                    operation_index as u8,
+                ));
+                continue;
+            }
+            NativeStraightLongOperation::BranchUnless {
+                kind,
+                lhs: condition_lhs,
+                rhs: condition_rhs,
+                false_target,
+            } => {
+                emit_linear_condition_operand(
+                    &mut assembler,
+                    condition_lhs,
+                    lhs,
+                    auxiliary,
+                    config.induction_slot,
+                    induction,
+                );
+                emit_linear_condition_operand(
+                    &mut assembler,
+                    condition_rhs,
+                    rhs,
+                    auxiliary,
+                    config.induction_slot,
+                    induction,
+                );
+                assembler.compare_register(lhs, rhs);
+                structured_conditional_jumps.push((
+                    emit_false_condition_jump(&mut assembler, kind),
+                    false_target,
+                ));
+                continue;
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                structured_jumps.push((assembler.jump_rel32(), target));
+                continue;
+            }
             _ => {
                 return Err(X86StraightLongLoopError::UnsupportedConfig(
-                    "x86 linear loop supports Move and scalar Binary operations",
+                    "x86 scalar loop operation is not lowered",
                 ));
             }
         };
-        emit_linear_operand(&mut assembler, left, lhs, config.induction_slot);
-        emit_linear_operand(&mut assembler, right, rhs, config.induction_slot);
+        emit_linear_operand(&mut assembler, left, lhs, config.induction_slot, induction);
+        emit_linear_operand(&mut assembler, right, rhs, config.induction_slot, induction);
         match kind {
             ScalarLongOpKind::Add => assembler.add_register(lhs, rhs),
             ScalarLongOpKind::Subtract => assembler.subtract_register(lhs, rhs),
             ScalarLongOpKind::Multiply => assembler.multiply_register(lhs, rhs),
-            _ => {
-                return Err(X86StraightLongLoopError::UnsupportedConfig(
-                    "x86 linear loop supports Add, Subtract and Multiply",
-                ));
+            ScalarLongOpKind::BitwiseXor => assembler.xor_register(lhs, rhs),
+            ScalarLongOpKind::Modulo if matches!(right, QuickLongOperand::Const(divisor) if signed_power_of_two_remainder_mask(divisor).is_some()) =>
+            {
+                let QuickLongOperand::Const(divisor) = right else {
+                    unreachable!();
+                };
+                let mask = signed_power_of_two_remainder_mask(divisor).unwrap();
+                // Truncating signed remainder by 2^k without IDIV:
+                // bias = sign(lhs) & mask; ((lhs + bias) & mask) - bias.
+                assembler.move_register(auxiliary, lhs);
+                assembler.arithmetic_shift_right_immediate8(auxiliary, 63);
+                assembler.move_immediate64(rhs, mask);
+                assembler.and_register(auxiliary, rhs);
+                assembler.add_register(lhs, auxiliary);
+                assembler.and_register(lhs, rhs);
+                assembler.subtract_register(lhs, auxiliary);
+            }
+            ScalarLongOpKind::IntDivide | ScalarLongOpKind::Modulo => {
+                if checked {
+                    assembler.compare_immediate8(rhs, 0);
+                    operation_side_exit_jumps
+                        .push((assembler.jump_equal_rel32(), operation_index as u8));
+                    assembler.compare_immediate8(rhs, -1);
+                    let safe_divisor = assembler.jump_not_equal_rel32();
+                    assembler.move_immediate64(auxiliary, i64::MIN);
+                    assembler.compare_register(lhs, auxiliary);
+                    operation_side_exit_jumps
+                        .push((assembler.jump_equal_rel32(), operation_index as u8));
+                    let divide = assembler.bytes.len();
+                    assembler.patch_rel32(safe_divisor, divide);
+                }
+                assembler.sign_extend_rax_into_rdx();
+                assembler.signed_divide(rhs);
+                if kind == ScalarLongOpKind::Modulo {
+                    assembler.move_register(lhs, X86_64Register::RDX);
+                }
             }
         }
-        if checked {
-            overflow_jumps.push((assembler.jump_overflow_rel32(), operation_index as u8));
+        if checked
+            && matches!(
+                kind,
+                ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
+            )
+        {
+            operation_side_exit_jumps
+                .push((assembler.jump_overflow_rel32(), operation_index as u8));
         }
         assembler.move_to_base_disp32(slots, lhs, displacement(result));
         if let Some(destination) = destination
@@ -465,6 +717,13 @@ fn emit_linear_straight_loop(
         {
             assembler.move_to_base_disp32(slots, lhs, displacement(destination));
         }
+    }
+    operation_offsets[config.operation_count as usize] = assembler.bytes.len();
+    for (branch, target) in structured_conditional_jumps {
+        assembler.patch_rel32(branch, operation_offsets[target as usize]);
+    }
+    for (branch, target) in structured_jumps {
+        assembler.patch_rel32(branch, operation_offsets[target as usize]);
     }
 
     if let Some(post_result) = config.post_result {
@@ -514,9 +773,9 @@ fn emit_linear_straight_loop(
     assembler.clear_eax();
     assembler.return_near();
 
-    for (overflow_jump, operation_index) in overflow_jumps {
+    for (side_exit_jump, operation_index) in operation_side_exit_jumps {
         let side_exit = assembler.bytes.len();
-        assembler.patch_rel32(overflow_jump, side_exit);
+        assembler.patch_rel32(side_exit_jump, side_exit);
         assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
         let status = X86_STRAIGHT_OPERATION_SIDE_EXIT | (u32::from(operation_index) << 8);
         assembler.move_immediate32_eax(status);
@@ -526,7 +785,7 @@ fn emit_linear_straight_loop(
     Ok(assembler.finish())
 }
 
-fn validate_linear_straight_config(
+fn validate_scalar_straight_config(
     config: &NativeStraightLongLoopConfig,
 ) -> Result<(), X86StraightLongLoopError> {
     let validate_slot = |slot: u16| {
@@ -542,11 +801,18 @@ fn validate_linear_straight_config(
         QuickLongOperand::Slot(slot) => validate_slot(slot),
         QuickLongOperand::Const(_) => Ok(()),
     };
+    let validate_condition_operand = |operand: NativeStraightLongConditionOperand| match operand {
+        NativeStraightLongConditionOperand::Source(source) => validate_operand(source),
+        NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
+            validate_operand(lhs)?;
+            validate_operand(rhs)
+        }
+    };
     let validate_output = |slot: u16| {
         validate_slot(slot)?;
         if slot == config.induction_slot {
             Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 linear loop body cannot overwrite its induction slot",
+                "x86 scalar loop body cannot overwrite its induction slot",
             ))
         } else {
             Ok(())
@@ -562,59 +828,80 @@ fn validate_linear_straight_config(
     if let Some(post_result) = config.post_result {
         written_mask |= 1u64 << post_result;
     }
-    for operation in config.operations[..config.operation_count as usize]
+    for (index, operation) in config.operations[..config.operation_count as usize]
         .iter()
         .copied()
+        .enumerate()
     {
         match operation {
+            NativeStraightLongOperation::Modulo {
+                value,
+                divisor: _,
+                result,
+            } => {
+                validate_operand(value)?;
+                validate_output(result)?;
+                written_mask |= 1u64 << result;
+            }
             NativeStraightLongOperation::Move { source, result } => {
                 validate_operand(source)?;
                 validate_output(result)?;
                 written_mask |= 1u64 << result;
             }
             NativeStraightLongOperation::Binary {
-                kind,
+                kind: _,
                 lhs,
                 rhs,
                 result,
             } => {
-                if !matches!(
-                    kind,
-                    ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
-                ) {
-                    return Err(X86StraightLongLoopError::UnsupportedConfig(
-                        "x86 linear loop supports Add, Subtract and Multiply",
-                    ));
-                }
                 validate_operand(lhs)?;
                 validate_operand(rhs)?;
                 validate_output(result)?;
                 written_mask |= 1u64 << result;
             }
             NativeStraightLongOperation::BinaryAssign {
-                kind,
+                kind: _,
                 lhs,
                 rhs,
                 result,
                 destination,
             } => {
-                if !matches!(
-                    kind,
-                    ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
-                ) {
-                    return Err(X86StraightLongLoopError::UnsupportedConfig(
-                        "x86 linear loop supports Add, Subtract and Multiply",
-                    ));
-                }
                 validate_operand(lhs)?;
                 validate_operand(rhs)?;
                 validate_output(result)?;
                 validate_output(destination)?;
                 written_mask |= (1u64 << result) | (1u64 << destination);
             }
+            NativeStraightLongOperation::Guard { lhs, rhs, .. } => {
+                validate_condition_operand(lhs)?;
+                validate_condition_operand(rhs)?;
+            }
+            NativeStraightLongOperation::BranchUnless {
+                lhs,
+                rhs,
+                false_target,
+                ..
+            } => {
+                validate_condition_operand(lhs)?;
+                validate_condition_operand(rhs)?;
+                if false_target as usize <= index
+                    || false_target as usize > config.operation_count as usize
+                {
+                    return Err(X86StraightLongLoopError::UnsupportedConfig(
+                        "x86 conditional branch target is not forward and in range",
+                    ));
+                }
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                if target as usize <= index || target as usize > config.operation_count as usize {
+                    return Err(X86StraightLongLoopError::UnsupportedConfig(
+                        "x86 jump target is not forward and in range",
+                    ));
+                }
+            }
             _ => {
                 return Err(X86StraightLongLoopError::UnsupportedConfig(
-                    "x86 linear loop supports Move and scalar Binary operations",
+                    "x86 scalar loop operation is not lowered",
                 ));
             }
         }
@@ -660,7 +947,7 @@ impl CompiledX86StraightLongLoop {
             None
         };
         let Some((accumulator, result, destination)) = additive_recurrence else {
-            return Self::compile_linear(config);
+            return Self::compile_scalar(config);
         };
         let bound_slot = match bound {
             QuickLongOperand::Slot(slot) => Some(slot),
@@ -759,23 +1046,23 @@ impl CompiledX86StraightLongLoop {
         })
     }
 
-    fn compile_linear(
+    fn compile_scalar(
         config: NativeStraightLongLoopConfig,
     ) -> Result<Self, X86StraightLongLoopError> {
-        validate_linear_straight_config(&config)?;
-        let fast_code = emit_linear_straight_loop(&config, false, false, None)?;
+        validate_scalar_straight_config(&config)?;
+        let fast_code = emit_scalar_straight_loop(&config, false, false, None)?;
         let checked_entry_offset = fast_code.len();
-        let checked_code = emit_linear_straight_loop(&config, true, false, None)?;
+        let checked_code = emit_scalar_straight_loop(&config, true, false, None)?;
         let mut code = fast_code.into_vec();
         code.extend_from_slice(&checked_code);
         let chunk_entry_offset = code.len();
-        let chunk_code = emit_linear_straight_loop(&config, false, true, None)?;
+        let chunk_code = emit_scalar_straight_loop(&config, false, true, None)?;
         code.extend_from_slice(&chunk_code);
         let checked_chunk_entry_offset = code.len();
-        let checked_chunk_code = emit_linear_straight_loop(&config, true, true, None)?;
+        let checked_chunk_code = emit_scalar_straight_loop(&config, true, true, None)?;
         code.extend_from_slice(&checked_chunk_code);
         let polling_entry_offset = code.len();
-        let polling_code = emit_linear_straight_loop(
+        let polling_code = emit_scalar_straight_loop(
             &config,
             false,
             false,
@@ -1181,6 +1468,46 @@ mod tests {
         }
     }
 
+    fn structured_recurrence(bound: i64) -> NativeStraightLongLoopConfig {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+            false_target: 3,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(10),
+            result: 2,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::Jump { target: 4 };
+        operations[3] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(100),
+            result: 2,
+            destination: 1,
+        };
+        operations[4] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(1),
+            result: 2,
+            destination: 1,
+        };
+        NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(bound),
+            operations,
+            operation_count: 5,
+            post_result: None,
+        }
+    }
+
     #[test]
     fn encoder_produces_exact_sysv_add_multiply_bytes() {
         let program = CompiledX86AddMultiply::compile().unwrap();
@@ -1342,6 +1669,178 @@ mod tests {
         assert_eq!(slots[2], 524_810);
         assert_eq!(slots[4], 1_024);
         assert_eq!(slots[5], 1_023);
+    }
+
+    #[test]
+    fn structured_lowering_executes_both_forward_control_flow_edges() {
+        let program = CompiledX86StraightLongLoop::compile(structured_recurrence(4)).unwrap();
+        let mut slots = [0_i64; 64];
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[4, 224, 224]);
+    }
+
+    #[test]
+    fn structured_bitwise_condition_executes_in_private_shadow() {
+        let mut config = structured_recurrence(4);
+        config.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: NativeStraightLongConditionOperand::BitwiseAnd {
+                lhs: QuickLongOperand::Slot(0),
+                rhs: QuickLongOperand::Const(1),
+            },
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+            false_target: 3,
+        };
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[4, 224, 224]);
+    }
+
+    #[test]
+    fn guard_side_exit_reports_exact_operation_after_completed_iterations() {
+        let mut config = structured_recurrence(4);
+        config.operations[0] = NativeStraightLongOperation::Guard {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(2)),
+            expected: true,
+        };
+        config.operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(10),
+            result: 2,
+            destination: 1,
+        };
+        config.operations[2] = NativeStraightLongOperation::Jump { target: 5 };
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(
+            result,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(0),
+            }
+        );
+        assert_eq!(&slots[..3], &[2, 20, 20]);
+    }
+
+    #[test]
+    fn scalar_lowering_executes_divide_modulo_and_xor() {
+        let mut config = composed_add_recurrence(5);
+        config.operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Modulo,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 4,
+        };
+        config.operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::IntDivide,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(2),
+            result: 5,
+        };
+        config.operations[2] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::BitwiseXor,
+            lhs: QuickLongOperand::Slot(4),
+            rhs: QuickLongOperand::Slot(5),
+            result: 6,
+        };
+        config.operation_count = 3;
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(slots[0], 5);
+        assert_eq!(&slots[4..7], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn checked_division_side_exit_prevents_native_zero_divide() {
+        let mut config = composed_add_recurrence(1);
+        config.operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::IntDivide,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Slot(7),
+            result: 4,
+        };
+        config.operation_count = 1;
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[4] = 91;
+        slots[7] = 0;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(
+            result,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(0),
+            }
+        );
+        assert_eq!(slots[0], 0);
+        assert_eq!(slots[4], 91);
+    }
+
+    #[test]
+    fn standalone_modulo_preserves_signed_remainder_semantics() {
+        let mut config = composed_add_recurrence(1);
+        config.operations[0] = NativeStraightLongOperation::Modulo {
+            value: QuickLongOperand::Slot(6),
+            divisor: 2,
+            result: 4,
+        };
+        config.operation_count = 1;
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[6] = -5;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(slots[4], -1);
+    }
+
+    #[test]
+    fn modulo_conditional_accumulate_matches_quick_ops_shape() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Modulo {
+            value: QuickLongOperand::Slot(2),
+            divisor: 2,
+            result: 4,
+        };
+        operations[1] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::Equal,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(4)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+            false_target: 3,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(2),
+            result: 6,
+            destination: 1,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 2,
+            bound: QuickLongOperand::Slot(0),
+            operations,
+            operation_count: 3,
+            post_result: None,
+        };
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[0] = 100_000;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(slots[2], 100_000);
+        assert_eq!(slots[1], 2_499_950_000);
     }
 
     #[test]

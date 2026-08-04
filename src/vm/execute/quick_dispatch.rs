@@ -76,12 +76,6 @@ unsafe fn run_quick_long_ops_loop(
         );
     }
 
-    if let Some((kernel, body)) = quick_long_conditional_kernel(plan) {
-        return dispatch_quick_long_conditional_kernel(
-            eg, frame, op_array, plan, slot_base, slots, kernel, body,
-        );
-    }
-
     #[cfg(all(
         feature = "jit-prototype",
         any(
@@ -101,6 +95,12 @@ unsafe fn run_quick_long_ops_loop(
         )? {
             return Ok(outcome);
         }
+    }
+
+    if let Some((kernel, body)) = quick_long_conditional_kernel(plan) {
+        return dispatch_quick_long_conditional_kernel(
+            eg, frame, op_array, plan, slot_base, slots, kernel, body,
+        );
     }
 
     let mut mutable_strings = [std::ptr::null_mut(); 64];
