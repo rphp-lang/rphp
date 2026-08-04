@@ -2502,6 +2502,34 @@ register-pressure/profitability model, not a benchmark-name exception.
 The checkpoint passes 145 library tests, 81 ARM64/JIT integration tests, all
 four application corpus tests, and `cargo check --all-features`.
 
+Second invariant register checkpoint (2026-08-04): invariant discovery now
+ranks the two most frequently read immutable body slots in one bounded linear
+scan. The primary invariant retains `x10`. The secondary may use `x9`, but only
+after the ARM64 lowering proves that no modulo operation or composed bitwise
+condition in the native body can clobber that auxiliary register. Checked code
+still allocates neither invariant, and the three fixed publication registers
+remain independent of both.
+
+Assembly coverage exercises both directions of the contract. A structured
+program with two invariant slots must contain exactly one entry `LDR` into
+each of `x10` and `x9`, no corresponding body loads through `x6` or `x7`, the
+exact final values and untouched TMP shadows. A second program adds modulo and
+requires that `x9` is excluded from the invariant pool, the second invariant
+retains its ordinary operand load, and modulo execution remains exact. A real
+typed PHP function test passes the bound, cutoff and offset as runtime
+arguments and confirms one range-proven native call with no side exits.
+
+The permanent `bench_two_invariant_operands_loop.php` prevents constant
+folding by using those function arguments. In 301 order-rotated native-CPU
+`max-perf` pairs against the one-invariant commit `f86b723`, identical
+`199999959` output moves from 4.433 ms to 4.354 ms (paired median -1.92
+percent). Four existing one-or-zero-invariant controls remain within -0.04 to
++0.18 percent. In a separate 101-pair comparison, the resulting RPHP records
+4.439 ms versus 10.962 ms for PHP tracing JIT, or 2.47x faster.
+
+The checkpoint passes 146 library tests, 82 ARM64/JIT integration tests, all
+four application corpus tests, and `cargo check --all-features`.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

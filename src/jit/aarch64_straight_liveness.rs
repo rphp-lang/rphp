@@ -161,11 +161,11 @@ pub(super) fn straight_long_carried_dependency_operations(
     }
 }
 
-/// Pick the most frequently read slot that the native body never writes.
+/// Pick the two most frequently read slots that the native body never writes.
 /// Ties are deterministic and favor the lower shadow-slot index.
-pub(super) fn straight_long_best_invariant_slot_mask(
+pub(super) fn straight_long_best_invariant_slot_masks(
     config: &NativeStraightLongLoopConfig,
-) -> u64 {
+) -> [u64; 2] {
     let excluded = config.body_output_mask() | (1u64 << config.induction_slot);
     let mut uses = [0u8; 64];
     for operation in config.operations[..config.operation_count as usize]
@@ -179,12 +179,32 @@ pub(super) fn straight_long_best_invariant_slot_mask(
             uses[slot] = uses[slot].saturating_add(1);
         }
     }
-    uses.iter()
-        .copied()
-        .enumerate()
-        .max_by_key(|(slot, count)| (*count, std::cmp::Reverse(*slot)))
-        .and_then(|(slot, count)| (count != 0).then_some(1u64 << slot))
-        .unwrap_or(0)
+    let mut best_slots = [usize::MAX; 2];
+    for slot in 0..uses.len() {
+        if uses[slot] == 0 {
+            continue;
+        }
+        let insertion = if best_slots[0] == usize::MAX
+            || uses[slot] > uses[best_slots[0]]
+        {
+            0
+        } else if best_slots[1] == usize::MAX || uses[slot] > uses[best_slots[1]] {
+            1
+        } else {
+            continue;
+        };
+        if insertion == 0 {
+            best_slots[1] = best_slots[0];
+        }
+        best_slots[insertion] = slot;
+    }
+    best_slots.map(|slot| {
+        if slot == usize::MAX {
+            0
+        } else {
+            1u64 << slot
+        }
+    })
 }
 
 pub(super) fn straight_long_structured_local_resident_output_masks(
@@ -1267,7 +1287,7 @@ mod tests {
     }
 
     #[test]
-    fn structured_invariant_operand_is_loaded_once_before_native_loop() {
+    fn structured_invariant_operands_are_loaded_once_before_native_loop() {
         let mut operations =
             [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
         operations[0] = NativeStraightLongOperation::BranchUnless {
@@ -1294,7 +1314,7 @@ mod tests {
         operations[4] = NativeStraightLongOperation::BinaryAssign {
             kind: ScalarLongOpKind::Add,
             lhs: QuickLongOperand::Slot(1),
-            rhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Slot(4),
             result: 8,
             destination: 2,
         };
@@ -1305,7 +1325,10 @@ mod tests {
             operation_count: 5,
             post_result: None,
         };
-        assert_eq!(straight_long_best_invariant_slot_mask(&config), 1u64 << 3);
+        assert_eq!(
+            straight_long_best_invariant_slot_masks(&config),
+            [1u64 << 3, 1u64 << 4]
+        );
 
         let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
             config,
@@ -1323,12 +1346,20 @@ mod tests {
             1,
             "invariant slot 3 must be loaded into x10 exactly once"
         );
+        assert_eq!(
+            words.iter().filter(|&&word| word == 0xf940_1009).count(),
+            1,
+            "invariant slot 4 must be loaded into x9 exactly once"
+        );
         assert!(!words.contains(&0xf940_0c06));
         assert!(!words.contains(&0xf940_0c07));
+        assert!(!words.contains(&0xf940_1006));
+        assert!(!words.contains(&0xf940_1007));
 
         let interrupt = AtomicBool::new(false);
         let mut slots = [0i64; 64];
         slots[3] = 50;
+        slots[4] = 7;
         slots[6] = 666;
         slots[7] = 777;
         slots[8] = 888;
@@ -1339,7 +1370,74 @@ mod tests {
             completed.outcome,
             super::super::NativeStraightLongLoopOutcome::Completed
         );
-        assert_eq!((slots[0], slots[1], slots[2], slots[3]), (100, 98, 148, 50));
+        assert_eq!(
+            (slots[0], slots[1], slots[2], slots[3], slots[4]),
+            (100, 98, 105, 50, 7)
+        );
         assert_eq!((slots[6], slots[7], slots[8]), (666, 777, 888));
+    }
+
+    #[test]
+    fn modulo_keeps_auxiliary_register_out_of_the_invariant_pool() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Slot(3),
+            result: 6,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Slot(4),
+            result: 7,
+            destination: 1,
+        };
+        operations[2] = NativeStraightLongOperation::Modulo {
+            value: QuickLongOperand::Slot(0),
+            divisor: 3,
+            result: 8,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(4),
+            operations,
+            operation_count: 3,
+            post_result: None,
+        };
+        assert_eq!(
+            straight_long_best_invariant_slot_masks(&config),
+            [1u64 << 3, 1u64 << 4]
+        );
+
+        let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
+            config,
+            1_024,
+            1u64 << 1,
+        )
+        .unwrap();
+        let words = program
+            .code()
+            .chunks_exact(4)
+            .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            words.iter().filter(|&&word| word == 0xf940_0c0a).count(),
+            1
+        );
+        assert!(!words.contains(&0xf940_1009));
+        assert!(words.contains(&0xf940_1007));
+
+        let interrupt = AtomicBool::new(false);
+        let mut slots = [0i64; 64];
+        slots[3] = 10;
+        slots[4] = 7;
+        let completed = program
+            .call_range_proven_polling(&mut slots, 4, interrupt.as_ptr() as *const bool, 4)
+            .unwrap();
+        assert_eq!(
+            completed.outcome,
+            super::super::NativeStraightLongLoopOutcome::Completed
+        );
+        assert_eq!((slots[0], slots[1], slots[3], slots[4]), (4, 17, 10, 7));
     }
 }

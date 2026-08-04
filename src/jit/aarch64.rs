@@ -2221,7 +2221,7 @@ mod conditional_range_proof_tests;
 #[path = "aarch64_straight_liveness.rs"]
 mod straight_liveness;
 use straight_liveness::{
-    straight_long_best_invariant_slot_mask, straight_long_carried_dependency_operations,
+    straight_long_best_invariant_slot_masks, straight_long_carried_dependency_operations,
     straight_long_linear_final_publication_masks, straight_long_linear_live_after,
     straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
@@ -2634,21 +2634,45 @@ impl CompiledQuickLongStraightLoop {
             };
         let carried_dependency_operations =
             straight_long_carried_dependency_operations(&config, carried_mask);
-        let invariant_slot_mask = if keeps_linear_scalar_values_resident
+        let mut invariant_slot_masks = if keeps_linear_scalar_values_resident
             || keeps_structured_scalar_temporaries_resident
         {
-            straight_long_best_invariant_slot_mask(&config)
+            straight_long_best_invariant_slot_masks(&config)
         } else {
-            0
+            [0; 2]
         };
+        let auxiliary_is_clobbered = config.operations[..config.operation_count as usize]
+            .iter()
+            .copied()
+            .any(|operation| match operation {
+                NativeStraightLongOperation::Modulo { .. }
+                | NativeStraightLongOperation::Binary {
+                    kind: ScalarLongOpKind::Modulo,
+                    ..
+                }
+                | NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Modulo,
+                    ..
+                } => true,
+                NativeStraightLongOperation::Guard { lhs, rhs, .. }
+                | NativeStraightLongOperation::BranchUnless { lhs, rhs, .. } => {
+                    matches!(lhs, NativeStraightLongConditionOperand::BitwiseAnd { .. })
+                        || matches!(rhs, NativeStraightLongConditionOperand::BitwiseAnd { .. })
+                }
+                _ => false,
+            });
+        if auxiliary_is_clobbered {
+            invariant_slot_masks[1] = 0;
+        }
         const PUBLICATION_RESIDENT_COUNT: usize = 4;
-        const INVARIANT_RESIDENT_INDEX: usize = 4;
+        const INVARIANT_RESIDENT_START: usize = PUBLICATION_RESIDENT_COUNT;
         let mut resident_values = [
             (0u64, result),
             (0u64, bound),
             (0u64, one),
             (0u64, failed_operation),
-            (invariant_slot_mask, guard),
+            (invariant_slot_masks[0], guard),
+            (invariant_slot_masks[1], auxiliary),
         ];
         let final_publication_masks = if keeps_carried_values_resident {
             straight_long_linear_final_publication_masks(&config, publication_mask)
@@ -2660,11 +2684,13 @@ impl CompiledQuickLongStraightLoop {
         let mut deferred_exit_values = [(0u64, result); 4];
         let mut deferred_exit_value_count = 0usize;
         let mut deferred_exit_publication_mask = 0u64;
-        let mut reserved_resident_registers = [false; 5];
-        reserved_resident_registers[INVARIANT_RESIDENT_INDEX] = invariant_slot_mask != 0;
-        let mut initial_carried_masks = [0u64; 5];
-        let mut structured_definition_operations_by_register = [0u64; 5];
-        let mut structured_publication_masks_by_register = [0u64; 5];
+        let mut reserved_resident_registers = [false; 6];
+        for resident_index in INVARIANT_RESIDENT_START..resident_values.len() {
+            reserved_resident_registers[resident_index] = resident_values[resident_index].0 != 0;
+        }
+        let mut initial_carried_masks = [0u64; 6];
+        let mut structured_definition_operations_by_register = [0u64; 6];
+        let mut structured_publication_masks_by_register = [0u64; 6];
         let mut next_publication_cache = 1usize;
         if keeps_carried_values_resident {
             for (index, slot_mask) in final_publication_masks
@@ -2793,7 +2819,7 @@ impl CompiledQuickLongStraightLoop {
                 reserved_resident_registers[resident_index] = resident_index != 0;
             }
         }
-        let mut active_exit_masks = [0u64; 5];
+        let mut active_exit_masks = [0u64; 6];
         if carried_mask != 0 && !keeps_carried_values_resident {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
                 "straight-loop carried state requires range-proven scalar lowering",
@@ -2820,14 +2846,20 @@ impl CompiledQuickLongStraightLoop {
                 })
                 .unwrap_or(0);
         }
-        if invariant_slot_mask != 0 {
+        for resident_index in INVARIANT_RESIDENT_START..resident_values.len() {
+            let invariant_slot_mask = resident_values[resident_index].0;
+            if invariant_slot_mask == 0 {
+                continue;
+            }
             assembler.load_u64(
-                resident_values[INVARIANT_RESIDENT_INDEX].1,
+                resident_values[resident_index].1,
                 Arm64Register::X0,
                 long_slot_offset(invariant_slot_mask.trailing_zeros() as u16),
             );
         }
-        if polling_interval.is_some() && (carried_mask != 0 || invariant_slot_mask != 0) {
+        if polling_interval.is_some()
+            && (carried_mask != 0 || invariant_slot_masks.iter().any(|&mask| mask != 0))
+        {
             loop_word = assembler.word_count();
         }
         for (index, operation) in config
@@ -2847,8 +2879,9 @@ impl CompiledQuickLongStraightLoop {
                 for (resident_index, (slot_mask, _)) in
                     resident_values.iter_mut().enumerate()
                 {
-                    if resident_index == INVARIANT_RESIDENT_INDEX {
-                        *slot_mask = invariant_slot_mask;
+                    if resident_index >= INVARIANT_RESIDENT_START {
+                        *slot_mask = invariant_slot_masks
+                            [resident_index - INVARIANT_RESIDENT_START];
                         continue;
                     }
                     *slot_mask &= live_before | active_exit_masks[resident_index];
@@ -2872,8 +2905,9 @@ impl CompiledQuickLongStraightLoop {
                     resident_values[0].0 = 0;
                 }
                 for resident_index in 1..resident_values.len() {
-                    if resident_index == INVARIANT_RESIDENT_INDEX {
-                        resident_values[resident_index].0 = invariant_slot_mask;
+                    if resident_index >= INVARIANT_RESIDENT_START {
+                        resident_values[resident_index].0 = invariant_slot_masks
+                            [resident_index - INVARIANT_RESIDENT_START];
                         continue;
                     }
                     let carried_slots = initial_carried_masks[resident_index];

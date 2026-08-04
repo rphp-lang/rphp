@@ -3420,6 +3420,53 @@ fn real_php_forward_scalar_branches_use_range_proven_native_region() {
 }
 
 #[test]
+fn real_php_runtime_invariant_arguments_share_native_registers() {
+    let source = "<?php function runTwoInvariantLoop(int $bound, int $cutoff, int $offset): int { $selected = 0; $folded = 0; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $selected = ($i * 3) + $offset; } else { $selected = ($i * 5) - $offset; } $folded = ($selected * 3) + $offset; } return $selected + $folded; } echo runTwoInvariantLoop(100000, 50000, 7);";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "1999959"
+    );
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("runTwoInvariantLoop"))
+        .map(|(_, function)| function)
+        .expect("compiled two-invariant function");
+    let plan = function
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickLongOps(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the two-invariant forward-branch IR");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().native_calls(), 1);
+    assert_eq!(plan.native_jit().range_proof_evaluations(), 1);
+    assert_eq!(
+        plan.native_jit().range_proven_chunks(),
+        plan.native_jit().native_chunks()
+    );
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn real_php_partially_written_branch_keeps_checked_native_chunks() {
     let source = "<?php $bound = 100000; $cutoff = 50000; $selected = 7; $folded = 0; for ($i = 0; $i < $bound; $i++) { if ($i < $cutoff) { $selected = $i * 3; } $folded = $selected + 1; } echo $i . ':' . $selected . ':' . $folded;";
     let tokens = Lexer::new(source).tokenize().unwrap();
