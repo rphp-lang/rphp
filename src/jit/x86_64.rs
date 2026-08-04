@@ -30,6 +30,7 @@ impl X86_64Register {
     pub const RDI: Self = Self(7);
     const R8: Self = Self(8);
     const R9: Self = Self(9);
+    const R10: Self = Self(10);
 
     #[inline]
     const fn low_bits(self) -> u8 {
@@ -63,6 +64,13 @@ impl X86_64Assembler {
     pub fn add_register(&mut self, destination: X86_64Register, source: X86_64Register) {
         self.emit_rex_w(destination, source);
         self.bytes.push(0x03);
+        self.emit_register_modrm(destination, source);
+    }
+
+    /// Encode `SUB destination, source` using the register-direct r64/rm64 form.
+    pub fn subtract_register(&mut self, destination: X86_64Register, source: X86_64Register) {
+        self.emit_rex_w(destination, source);
+        self.bytes.push(0x2b);
         self.emit_register_modrm(destination, source);
     }
 
@@ -363,35 +371,296 @@ fn emit_additive_recurrence_loop(
     assembler.finish()
 }
 
+fn emit_linear_operand(
+    assembler: &mut X86_64Assembler,
+    operand: QuickLongOperand,
+    destination: X86_64Register,
+    induction_slot: u16,
+) {
+    match operand {
+        QuickLongOperand::Slot(slot) if slot == induction_slot => {
+            assembler.move_register(destination, X86_64Register::RAX)
+        }
+        QuickLongOperand::Slot(slot) => {
+            assembler.move_from_base_disp32(destination, X86_64Register::RDI, i32::from(slot) * 8)
+        }
+        QuickLongOperand::Const(value) => assembler.move_immediate64(destination, value),
+    }
+}
+
+fn emit_linear_straight_loop(
+    config: &NativeStraightLongLoopConfig,
+    checked: bool,
+    budgeted: bool,
+    polling_interval: Option<u16>,
+) -> Result<Box<[u8]>, X86StraightLongLoopError> {
+    debug_assert!(!(budgeted && polling_interval.is_some()));
+    let mut assembler = X86_64Assembler::new();
+    let slots = X86_64Register::RDI;
+    let induction = X86_64Register::RAX;
+    let bound = X86_64Register::RCX;
+    let lhs = X86_64Register::RDX;
+    let rhs = X86_64Register::R8;
+    let polling_remaining = X86_64Register::R10;
+    let displacement = |slot: u16| i32::from(slot) * 8;
+
+    assembler.move_from_base_disp32(induction, slots, displacement(config.induction_slot));
+    emit_linear_operand(&mut assembler, config.bound, bound, config.induction_slot);
+    if let Some(interval) = polling_interval {
+        assembler.move_immediate64(polling_remaining, i64::from(interval));
+    }
+    assembler.compare_register(induction, bound);
+    let completed_jump = assembler.jump_greater_or_equal_rel32();
+    let loop_start = assembler.bytes.len();
+    let mut overflow_jumps = Vec::new();
+
+    for (operation_index, operation) in config.operations[..config.operation_count as usize]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        let (kind, left, right, result, destination) = match operation {
+            NativeStraightLongOperation::Move { source, result } => {
+                emit_linear_operand(&mut assembler, source, lhs, config.induction_slot);
+                assembler.move_to_base_disp32(slots, lhs, displacement(result));
+                continue;
+            }
+            NativeStraightLongOperation::Binary {
+                kind,
+                lhs,
+                rhs,
+                result,
+            } => (kind, lhs, rhs, result, None),
+            NativeStraightLongOperation::BinaryAssign {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination,
+            } => (kind, lhs, rhs, result, Some(destination)),
+            _ => {
+                return Err(X86StraightLongLoopError::UnsupportedConfig(
+                    "x86 linear loop supports Move and scalar Binary operations",
+                ));
+            }
+        };
+        emit_linear_operand(&mut assembler, left, lhs, config.induction_slot);
+        emit_linear_operand(&mut assembler, right, rhs, config.induction_slot);
+        match kind {
+            ScalarLongOpKind::Add => assembler.add_register(lhs, rhs),
+            ScalarLongOpKind::Subtract => assembler.subtract_register(lhs, rhs),
+            ScalarLongOpKind::Multiply => assembler.multiply_register(lhs, rhs),
+            _ => {
+                return Err(X86StraightLongLoopError::UnsupportedConfig(
+                    "x86 linear loop supports Add, Subtract and Multiply",
+                ));
+            }
+        }
+        if checked {
+            overflow_jumps.push((assembler.jump_overflow_rel32(), operation_index as u8));
+        }
+        assembler.move_to_base_disp32(slots, lhs, displacement(result));
+        if let Some(destination) = destination
+            && destination != result
+        {
+            assembler.move_to_base_disp32(slots, lhs, displacement(destination));
+        }
+    }
+
+    if let Some(post_result) = config.post_result {
+        assembler.move_to_base_disp32(slots, induction, displacement(post_result));
+    }
+    assembler.add_immediate8(induction, 1);
+    assembler.compare_register(induction, bound);
+    let completed_after_iteration_jump =
+        (budgeted || polling_interval.is_some()).then(|| assembler.jump_greater_or_equal_rel32());
+    let mut loop_jumps = Vec::with_capacity(2);
+    let interrupt_jump = if budgeted {
+        assembler.subtract_immediate8(X86_64Register::RSI, 1);
+        loop_jumps.push(assembler.jump_not_equal_rel32());
+        None
+    } else if let Some(interval) = polling_interval {
+        assembler.subtract_immediate8(polling_remaining, 1);
+        loop_jumps.push(assembler.jump_not_equal_rel32());
+        assembler.compare_byte_base_immediate8(X86_64Register::RSI, 0);
+        let interrupt_jump = assembler.jump_not_equal_rel32();
+        assembler.move_immediate64(polling_remaining, i64::from(interval));
+        loop_jumps.push(assembler.jump_rel32());
+        Some(interrupt_jump)
+    } else {
+        loop_jumps.push(assembler.jump_less_than_rel32());
+        None
+    };
+
+    if budgeted || polling_interval.is_some() {
+        let chunk_exhausted = assembler.bytes.len();
+        if let Some(interrupt_jump) = interrupt_jump {
+            assembler.patch_rel32(interrupt_jump, chunk_exhausted);
+        }
+        assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
+        assembler.move_immediate32_eax(X86_STRAIGHT_CHUNK_EXHAUSTED);
+        assembler.return_near();
+    }
+
+    let completed = assembler.bytes.len();
+    assembler.patch_rel32(completed_jump, completed);
+    if let Some(completed_after_iteration_jump) = completed_after_iteration_jump {
+        assembler.patch_rel32(completed_after_iteration_jump, completed);
+    }
+    for loop_jump in loop_jumps {
+        assembler.patch_rel32(loop_jump, loop_start);
+    }
+    assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
+    assembler.clear_eax();
+    assembler.return_near();
+
+    for (overflow_jump, operation_index) in overflow_jumps {
+        let side_exit = assembler.bytes.len();
+        assembler.patch_rel32(overflow_jump, side_exit);
+        assembler.move_to_base_disp32(slots, induction, displacement(config.induction_slot));
+        let status = X86_STRAIGHT_OPERATION_SIDE_EXIT | (u32::from(operation_index) << 8);
+        assembler.move_immediate32_eax(status);
+        assembler.return_near();
+    }
+
+    Ok(assembler.finish())
+}
+
+fn validate_linear_straight_config(
+    config: &NativeStraightLongLoopConfig,
+) -> Result<(), X86StraightLongLoopError> {
+    let validate_slot = |slot: u16| {
+        if slot < 64 {
+            Ok(())
+        } else {
+            Err(X86StraightLongLoopError::UnsupportedConfig(
+                "x86 straight-loop slot exceeds the fixed shadow",
+            ))
+        }
+    };
+    let validate_operand = |operand: QuickLongOperand| match operand {
+        QuickLongOperand::Slot(slot) => validate_slot(slot),
+        QuickLongOperand::Const(_) => Ok(()),
+    };
+    let validate_output = |slot: u16| {
+        validate_slot(slot)?;
+        if slot == config.induction_slot {
+            Err(X86StraightLongLoopError::UnsupportedConfig(
+                "x86 linear loop body cannot overwrite its induction slot",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+
+    validate_slot(config.induction_slot)?;
+    validate_operand(config.bound)?;
+    if let Some(post_result) = config.post_result {
+        validate_output(post_result)?;
+    }
+    let mut written_mask = 1u64 << config.induction_slot;
+    if let Some(post_result) = config.post_result {
+        written_mask |= 1u64 << post_result;
+    }
+    for operation in config.operations[..config.operation_count as usize]
+        .iter()
+        .copied()
+    {
+        match operation {
+            NativeStraightLongOperation::Move { source, result } => {
+                validate_operand(source)?;
+                validate_output(result)?;
+                written_mask |= 1u64 << result;
+            }
+            NativeStraightLongOperation::Binary {
+                kind,
+                lhs,
+                rhs,
+                result,
+            } => {
+                if !matches!(
+                    kind,
+                    ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
+                ) {
+                    return Err(X86StraightLongLoopError::UnsupportedConfig(
+                        "x86 linear loop supports Add, Subtract and Multiply",
+                    ));
+                }
+                validate_operand(lhs)?;
+                validate_operand(rhs)?;
+                validate_output(result)?;
+                written_mask |= 1u64 << result;
+            }
+            NativeStraightLongOperation::BinaryAssign {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination,
+            } => {
+                if !matches!(
+                    kind,
+                    ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
+                ) {
+                    return Err(X86StraightLongLoopError::UnsupportedConfig(
+                        "x86 linear loop supports Add, Subtract and Multiply",
+                    ));
+                }
+                validate_operand(lhs)?;
+                validate_operand(rhs)?;
+                validate_output(result)?;
+                validate_output(destination)?;
+                written_mask |= (1u64 << result) | (1u64 << destination);
+            }
+            _ => {
+                return Err(X86StraightLongLoopError::UnsupportedConfig(
+                    "x86 linear loop supports Move and scalar Binary operations",
+                ));
+            }
+        }
+    }
+    if matches!(config.bound, QuickLongOperand::Slot(slot) if written_mask & (1u64 << slot) != 0) {
+        return Err(X86StraightLongLoopError::UnsupportedConfig(
+            "x86 straight-loop bound cannot be written by the loop",
+        ));
+    }
+    Ok(())
+}
+
 impl CompiledX86StraightLongLoop {
     pub fn compile(config: NativeStraightLongLoopConfig) -> Result<Self, X86StraightLongLoopError> {
-        if config.operation_count != 1 {
+        if config.operation_count == 0
+            || config.operation_count as usize > super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS
+        {
             return Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 straight-loop prototype requires exactly one operation",
+                "x86 straight-loop operation count is outside the shared IR capacity",
             ));
         }
         let bound = config.bound;
-        let NativeStraightLongOperation::BinaryAssign {
-            kind: ScalarLongOpKind::Add,
-            lhs: QuickLongOperand::Slot(lhs),
-            rhs: QuickLongOperand::Slot(rhs),
-            result,
-            destination,
-        } = config.operations[0]
-        else {
-            return Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 straight-loop prototype requires BinaryAssign(Add)",
-            ));
-        };
         let induction = config.induction_slot;
-        let accumulator = if lhs == destination && rhs == induction {
-            lhs
-        } else if rhs == destination && lhs == induction {
-            rhs
+        let additive_recurrence = if config.operation_count == 1 {
+            match config.operations[0] {
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(lhs),
+                    rhs: QuickLongOperand::Slot(rhs),
+                    result,
+                    destination,
+                } if lhs == destination && rhs == induction => Some((lhs, result, destination)),
+                NativeStraightLongOperation::BinaryAssign {
+                    kind: ScalarLongOpKind::Add,
+                    lhs: QuickLongOperand::Slot(lhs),
+                    rhs: QuickLongOperand::Slot(rhs),
+                    result,
+                    destination,
+                } if rhs == destination && lhs == induction => Some((rhs, result, destination)),
+                _ => None,
+            }
         } else {
-            return Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 straight-loop prototype requires destination plus induction",
-            ));
+            None
+        };
+        let Some((accumulator, result, destination)) = additive_recurrence else {
+            return Self::compile_linear(config);
         };
         let bound_slot = match bound {
             QuickLongOperand::Slot(slot) => Some(slot),
@@ -476,6 +745,42 @@ impl CompiledX86StraightLongLoop {
             false,
             Some(X86_STRAIGHT_SAFEPOINT_INTERVAL),
         );
+        code.extend_from_slice(&polling_code);
+        let code = code.into_boxed_slice();
+        let memory = ExecutableMemory::from_code(&code)?;
+        Ok(Self {
+            memory,
+            code,
+            config,
+            checked_entry_offset,
+            chunk_entry_offset,
+            checked_chunk_entry_offset,
+            polling_entry_offset,
+        })
+    }
+
+    fn compile_linear(
+        config: NativeStraightLongLoopConfig,
+    ) -> Result<Self, X86StraightLongLoopError> {
+        validate_linear_straight_config(&config)?;
+        let fast_code = emit_linear_straight_loop(&config, false, false, None)?;
+        let checked_entry_offset = fast_code.len();
+        let checked_code = emit_linear_straight_loop(&config, true, false, None)?;
+        let mut code = fast_code.into_vec();
+        code.extend_from_slice(&checked_code);
+        let chunk_entry_offset = code.len();
+        let chunk_code = emit_linear_straight_loop(&config, false, true, None)?;
+        code.extend_from_slice(&chunk_code);
+        let checked_chunk_entry_offset = code.len();
+        let checked_chunk_code = emit_linear_straight_loop(&config, true, true, None)?;
+        code.extend_from_slice(&checked_chunk_code);
+        let polling_entry_offset = code.len();
+        let polling_code = emit_linear_straight_loop(
+            &config,
+            false,
+            false,
+            Some(X86_STRAIGHT_SAFEPOINT_INTERVAL),
+        )?;
         code.extend_from_slice(&polling_code);
         let code = code.into_boxed_slice();
         let memory = ExecutableMemory::from_code(&code)?;
@@ -580,10 +885,17 @@ impl CompiledX86StraightLongLoop {
                 outcome: NativeStraightLongLoopOutcome::ChunkExhausted,
                 failed_operation: None,
             }),
-            X86_STRAIGHT_OPERATION_SIDE_EXIT => Ok(NativeStraightLongLoopResult {
-                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
-                failed_operation: Some(0),
-            }),
+            status if status & 0xff == X86_STRAIGHT_OPERATION_SIDE_EXIT => {
+                let operation = u8::try_from(status >> 8)
+                    .map_err(|_| X86StraightLongLoopError::InvalidStatus(status))?;
+                if operation >= self.config.operation_count {
+                    return Err(X86StraightLongLoopError::InvalidStatus(status));
+                }
+                Ok(NativeStraightLongLoopResult {
+                    outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                    failed_operation: Some(operation),
+                })
+            }
             status => Err(X86StraightLongLoopError::InvalidStatus(status)),
         }
     }
@@ -844,6 +1156,31 @@ mod tests {
         }
     }
 
+    fn composed_add_recurrence(bound: i64) -> NativeStraightLongLoopConfig {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(4),
+            result: 2,
+            destination: 1,
+        };
+        NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(bound),
+            operations,
+            operation_count: 2,
+            post_result: Some(5),
+        }
+    }
+
     #[test]
     fn encoder_produces_exact_sysv_add_multiply_bytes() {
         let program = CompiledX86AddMultiply::compile().unwrap();
@@ -922,6 +1259,89 @@ mod tests {
         second[3] = 6;
         program.call(&mut second).unwrap();
         assert_eq!(&second[..4], &[6, 16, 16, 6]);
+    }
+
+    #[test]
+    fn linear_lowering_executes_composed_operations_and_post_result() {
+        let program = CompiledX86StraightLongLoop::compile(composed_add_recurrence(4)).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..6], &[4, 20, 20, 0, 4, 3]);
+    }
+
+    #[test]
+    fn linear_lowering_supports_subtract_and_multiply() {
+        let mut config = composed_add_recurrence(3);
+        config.operations[0] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(2),
+            result: 2,
+            destination: 1,
+        };
+        config.operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(3),
+            result: 4,
+        };
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 2;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..5], &[3, 16, 16, 0, 13]);
+    }
+
+    #[test]
+    fn linear_checked_exit_reports_exact_failed_operation() {
+        let mut config = composed_add_recurrence(1);
+        config.operations[0] = NativeStraightLongOperation::Move {
+            source: QuickLongOperand::Const(2),
+            result: 4,
+        };
+        config.operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Slot(4),
+            result: 2,
+            destination: 1,
+        };
+        config.post_result = None;
+        let program = CompiledX86StraightLongLoop::compile(config).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = i64::MAX;
+        slots[2] = 77;
+        let result = program.call(&mut slots).unwrap();
+        assert_eq!(
+            result,
+            NativeStraightLongLoopResult {
+                outcome: NativeStraightLongLoopOutcome::OperationSideExit,
+                failed_operation: Some(1),
+            }
+        );
+        assert_eq!(&slots[..5], &[0, i64::MAX, 77, 0, 2]);
+    }
+
+    #[test]
+    fn linear_polling_entry_preserves_composed_state_at_safepoint() {
+        let program = CompiledX86StraightLongLoop::compile(composed_add_recurrence(5_000)).unwrap();
+        let mut slots = [0_i64; 64];
+        slots[1] = 10;
+        let interrupt = true;
+        let result = program.call_proven_polling(&mut slots, &interrupt).unwrap();
+        assert_eq!(
+            result.outcome,
+            NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(slots[0], 1_024);
+        assert_eq!(slots[1], 524_810);
+        assert_eq!(slots[2], 524_810);
+        assert_eq!(slots[4], 1_024);
+        assert_eq!(slots[5], 1_023);
     }
 
     #[test]

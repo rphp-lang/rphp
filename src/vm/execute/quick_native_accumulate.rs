@@ -684,9 +684,7 @@ unsafe fn run_native_long_accumulate_loop(
     accumulator: i64,
     bound: i64,
 ) -> Result<Option<QuickLoopOutcome>, VmError> {
-    if !matches!(plan.term, QuickLongTerm::Induction)
-        || plan.tail_guard.is_some()
-    {
+    if plan.tail_guard.is_some() {
         return Ok(None);
     }
 
@@ -694,12 +692,48 @@ unsafe fn run_native_long_accumulate_loop(
     const ACCUMULATOR_SLOT: u16 = 1;
     const SUM_SLOT: u16 = 2;
     const BOUND_SLOT: u16 = 3;
+    const TERM_SLOT: u16 = 4;
+    const ADDEND_SLOT: u16 = 5;
     let mut operations =
         [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
-    operations[0] = NativeStraightLongOperation::BinaryAssign {
+    let (sum_operation_index, term_resume_ip, addend) = match plan.term {
+        QuickLongTerm::Induction => (0usize, None, None),
+        QuickLongTerm::InductionPlusConst {
+            addend, term_ip, ..
+        } => {
+            operations[0] = NativeStraightLongOperation::Binary {
+                kind: ScalarLongOpKind::Add,
+                lhs: QuickLongOperand::Slot(INDUCTION_SLOT),
+                rhs: QuickLongOperand::Const(addend),
+                result: TERM_SLOT,
+            };
+            (1, Some(term_ip), None)
+        }
+        QuickLongTerm::InductionPlusCv {
+            addend_cv,
+            term_ip,
+            ..
+        } => {
+            operations[0] = NativeStraightLongOperation::Binary {
+                kind: ScalarLongOpKind::Add,
+                lhs: QuickLongOperand::Slot(INDUCTION_SLOT),
+                rhs: QuickLongOperand::Slot(ADDEND_SLOT),
+                result: TERM_SLOT,
+            };
+            let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+            (1, Some(term_ip), Some((*slot_base.add(addend_cv as usize)).raw_long()))
+        }
+        _ => return Ok(None),
+    };
+    let sum_rhs = if sum_operation_index == 0 {
+        QuickLongOperand::Slot(INDUCTION_SLOT)
+    } else {
+        QuickLongOperand::Slot(TERM_SLOT)
+    };
+    operations[sum_operation_index] = NativeStraightLongOperation::BinaryAssign {
         kind: ScalarLongOpKind::Add,
         lhs: QuickLongOperand::Slot(ACCUMULATOR_SLOT),
-        rhs: QuickLongOperand::Slot(INDUCTION_SLOT),
+        rhs: sum_rhs,
         result: SUM_SLOT,
         destination: ACCUMULATOR_SLOT,
     };
@@ -710,7 +744,7 @@ unsafe fn run_native_long_accumulate_loop(
             QuickLongBound::Const(bound) => QuickLongOperand::Const(bound),
         },
         operations,
-        operation_count: 1,
+        operation_count: (sum_operation_index + 1) as u8,
         post_result: None,
     };
     let mut slots = [0i64; 64];
@@ -718,6 +752,12 @@ unsafe fn run_native_long_accumulate_loop(
     slots[ACCUMULATOR_SLOT as usize] = accumulator;
     slots[SUM_SLOT as usize] = (*sum_ptr).raw_long();
     slots[BOUND_SLOT as usize] = bound;
+    if let Some(ptr) = term_ptr {
+        slots[TERM_SLOT as usize] = (*ptr).raw_long();
+    }
+    if let Some(addend) = addend {
+        slots[ADDEND_SLOT as usize] = addend;
+    }
 
     let cache = plan.native_jit();
     let remaining_range_proven = cache
@@ -768,8 +808,13 @@ unsafe fn run_native_long_accumulate_loop(
                 }
                 if iterations != 0 {
                     let last_induction = slots[INDUCTION_SLOT as usize] - 1;
+                    let last_term = if sum_operation_index == 0 {
+                        last_induction
+                    } else {
+                        slots[TERM_SLOT as usize]
+                    };
                     if let Some(ptr) = term_ptr {
-                        Value::write_long(ptr, last_induction);
+                        Value::write_long(ptr, last_term);
                     }
                     Value::write_long(sum_ptr, slots[ACCUMULATOR_SLOT as usize]);
                     if let Some(ptr) = increment_ptr {
@@ -800,8 +845,13 @@ unsafe fn run_native_long_accumulate_loop(
                 }
                 if iterations != 0 {
                     let last_induction = induction - 1;
+                    let last_term = if sum_operation_index == 0 {
+                        last_induction
+                    } else {
+                        slots[TERM_SLOT as usize]
+                    };
                     if let Some(ptr) = term_ptr {
-                        Value::write_long(ptr, last_induction);
+                        Value::write_long(ptr, last_term);
                     }
                     Value::write_long(sum_ptr, accumulator);
                     if let Some(ptr) = increment_ptr {
@@ -824,13 +874,18 @@ unsafe fn run_native_long_accumulate_loop(
                     let induction = slots[INDUCTION_SLOT as usize];
                     let accumulator = slots[ACCUMULATOR_SLOT as usize];
                     let last_induction = induction - 1;
+                    let last_term = if sum_operation_index == 0 {
+                        last_induction
+                    } else {
+                        slots[TERM_SLOT as usize]
+                    };
                     Value::write_long(induction_ptr, induction);
                     Value::write_long(accumulator_ptr, accumulator);
                     if let Some(ptr) = condition_ptr {
                         Value::write_bool(ptr, true);
                     }
                     if let Some(ptr) = term_ptr {
-                        Value::write_long(ptr, last_induction);
+                        Value::write_long(ptr, last_term);
                     }
                     Value::write_long(sum_ptr, accumulator);
                     if let Some(ptr) = increment_ptr {
@@ -847,7 +902,9 @@ unsafe fn run_native_long_accumulate_loop(
                 }
             }
             NativeStraightLongLoopOutcome::OperationSideExit => {
-                debug_assert_eq!(result.failed_operation, Some(0));
+                let failed_operation = result
+                    .failed_operation
+                    .expect("x86 operation side exit carries its operation index");
                 let induction = slots[INDUCTION_SLOT as usize];
                 let accumulator = slots[ACCUMULATOR_SLOT as usize];
                 Value::write_long(induction_ptr, induction);
@@ -855,11 +912,20 @@ unsafe fn run_native_long_accumulate_loop(
                 if let Some(ptr) = condition_ptr {
                     Value::write_bool(ptr, true);
                 }
+                if let Some(ptr) = term_ptr
+                    && (iterations != 0
+                        || usize::from(failed_operation) >= sum_operation_index)
+                {
+                    let last_induction = induction - 1;
+                    let term = if sum_operation_index == 0 {
+                        last_induction
+                    } else {
+                        slots[TERM_SLOT as usize]
+                    };
+                    Value::write_long(ptr, term);
+                }
                 if iterations != 0 {
                     let last_induction = induction - 1;
-                    if let Some(ptr) = term_ptr {
-                        Value::write_long(ptr, last_induction);
-                    }
                     Value::write_long(sum_ptr, accumulator);
                     if let Some(ptr) = increment_ptr {
                         Value::write_long(
@@ -871,7 +937,12 @@ unsafe fn run_native_long_accumulate_loop(
                         );
                     }
                 }
-                (*frame).opline = op_array.instructions.as_ptr().add(plan.sum_ip);
+                let resume_ip = if usize::from(failed_operation) < sum_operation_index {
+                    term_resume_ip.expect("x86 term operation has a resume point")
+                } else {
+                    plan.sum_ip
+                };
+                (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }

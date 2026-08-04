@@ -2711,11 +2711,37 @@ build. The remaining 1.932 ms above the 1.887 ms direct kernel includes warmup,
 range proof, native-code creation, VM publication and the benchmark's timing
 calls; it is no longer repeated Rust/native chunk dispatch.
 
-This is production dispatch for one general recurrence, not full ARM64
-feature parity. x86-64 still conservatively rejects multiple operations,
-structured branches, non-add arithmetic, call/property/array/string context
-operations and scalar-function native programs. Those forms continue through
-the existing typed or canonical executor and define the next parity steps.
+The x86 linear-IR checkpoint then retains the one-register additive recurrence
+as a fast specialization while adding a memory-backed general lowering for up
+to the shared 48-operation capacity. Sequential `Move`, `Add`, `Subtract` and
+`Multiply` operations observe prior outputs in exact PHP order; the live
+induction value remains register-resident instead of reading its stale
+publication slot. Range-proven code uses the same one-call polling contract.
+Checked code commits only successful operations and encodes the exact failed
+operation index in its native status, so the VM can resume either a composed
+term or its following accumulation instruction. Post-increment result slots
+are published at complete iteration boundaries.
+
+Real PHP integration tests cover `$sum += $i + 7` and
+`$sum += $i + $offset`, each with a dynamic bound, one native call and one
+range-proof evaluation. Physical unit tests additionally cover subtraction,
+multiplication, failure in operation one after operation zero committed, and
+composed-state publication at an interrupt safepoint. x86-64 now passes 140
+library tests and two focused JIT integration tests.
+
+In 101 order-rotated pinned-CPU pairs, the permanent two-operation CV benchmark
+records 5.986214 ms with native linear IR
+(5.909681/6.139040 ms p10/p90), versus 14.131784 ms for the immediately prior
+typed executor (13.947248/14.752865 ms). This is a 57.64 percent reduction or
+2.36x speedup. A separate 51-sample control keeps the original specialized
+recurrence at 3.824711 ms median, within 0.15 percent of its 3.818989 ms
+checkpoint.
+
+This is still not full ARM64 feature parity. x86-64 conservatively rejects
+structured branches, division/modulo/bitwise arithmetic,
+call/property/array/string context operations and scalar-function native
+programs. Those forms continue through the existing typed or canonical
+executor and define the next parity steps.
 
 The frozen workstream is:
 
