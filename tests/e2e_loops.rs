@@ -66,6 +66,26 @@ fn test_e2e_conditional_typed_double_call_accumulation() {
 }
 
 #[test]
+fn test_e2e_composed_conditional_typed_double_call_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function composedFloat(float $value, float $pivot): float { return (conditionalFloat($value, $pivot) * 1.25) + 3.0; } $total = 0.0; for ($i = 0; $i < 100; $i++) { $total += composedFloat($i * 0.5, 25.0); } echo $i . ':' . $total;"
+        ),
+        "100:2675"
+    );
+}
+
+#[test]
+fn test_e2e_composed_conditional_typed_double_method_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php class FloatPipeline { public function conditional(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } public function composed(float $value, float $pivot): float { return ($this->conditional($value, $pivot) * 1.25) + 3.0; } } $pipeline = new FloatPipeline(); $total = 0.0; for ($i = 0; $i < 100; $i++) { $total += $pipeline->composed($i * 0.5, 25.0); } echo $i . ':' . $total;"
+        ),
+        "100:2675"
+    );
+}
+
+#[test]
 fn test_e2e_conditional_typed_double_method_accumulation() {
     assert_eq!(
         run_php(

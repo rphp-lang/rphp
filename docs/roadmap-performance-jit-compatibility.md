@@ -984,6 +984,51 @@ tracing-JIT invocation. Every JIT batch must first verify
 Also track compilation latency, code-cache memory, runtime memory, and
 deoptimization frequency.
 
+### Planned JIT extension: fused collection, JSON, and callback pipelines
+
+After the minimal scalar/object JIT is stable, extend the same guarded region
+model to high-level library pipelines. The goal is to optimize ordinary PHP
+composition such as `array_filter` -> `array_map` -> `array_reduce` ->
+`json_encode`, not to add isolated benchmark-only native helpers. A chain is
+planned once, keeps eligible elements and aggregates in typed native state,
+and materializes an intermediate PHP array or string only when semantics make
+it observable.
+
+The collection layer should cover `array_map`, `array_filter`, `array_reduce`,
+`array_walk` and then the remaining callback-taking array functions through a
+shared callback/pipeline IR. It must preserve PHP key and iteration order,
+packed/hash behavior, callback arity, COW, references, mutations, exceptions
+and exact partial-progress visibility. Unknown or by-reference callbacks,
+structural writes, callback replacement and observable intermediate values
+end or reject fusion before behavior can diverge.
+
+Callback lowering is a general JIT capability rather than an array-only
+special case. All supported standard-library functions that accept a callback
+should use one guarded callback ABI for named functions, closures with
+captures, instance/static methods, inherited methods and invokable objects.
+Identity, receiver class, method cache, capture layout, signature and
+by-reference contracts are guarded at region entry. Monomorphic pure callbacks
+may inline into the caller region; stable non-inlinable callbacks use one
+specialized call stub; polymorphic or side-effect-ambiguous sites retain the
+canonical call protocol.
+
+`json_encode` should gain typed encoders for proven scalar, packed-array,
+stable hash/object and repeated-schema inputs, with option/depth guards and a
+streaming output buffer that avoids temporary strings. `json_decode` should
+specialize repeated input/schema shapes into directly allocated RPHP arrays or
+objects and reuse proven key/layout metadata. Invalid UTF-8, numeric corner
+cases, depth/errors, flags, `JsonSerializable`, visibility/magic behavior and
+throwing modes remain exact side exits or canonical helpers. JSON
+specialization must never bypass PHP-visible error state.
+
+Permanent benchmarks must include isolated callback cost, multi-stage array
+chains, JSON-only encode/decode, and an end-to-end decode -> callback pipeline
+-> encode workload in all four PHP/RPHP JIT/no-JIT modes. Admission requires a
+win after allocation counts and peak memory are included, no regression for an
+unfused single library call, and differential results against reference PHP
+for callbacks, references, exceptions, flags, malformed JSON and mixed
+packed/hash inputs.
+
 Implementation prototype checkpoint (2026-08-03): the first native platform
 boundary is proven on macOS ARM64 behind the opt-in `jit-prototype` feature.
 RPHP now owns a minimal binary encoder for register `ADD`, `MUL`, and `RET`,
@@ -4056,6 +4101,48 @@ a conditional callee without duplicating or linearly executing its arms. That
 requires explicit block/edge remapping plus the existing target identity and
 method-class guards, but should not require a new architecture-specific
 recognizer or a workload-specific loop kernel.
+
+### Conditional composed exact-Double merge checkpoint
+
+The bounded composed-call IR now admits one conditional exact-Double callee
+inside an otherwise straight function or same-receiver method tree
+(2026-08-05). Both branch outputs publish to one target-neutral `Selection`
+value; only then does the common arithmetic suffix execute. The composer keeps
+the established eight-operation budget and target/cache identity guards. It
+does not duplicate either arm, and a second conditional callee rejects the
+flattened region and returns to canonical execution.
+
+The Rust evaluator, standalone scalar JIT and call/accumulate loop use the
+same merged plan. ARM64 reserves `D24` for the selected value. Linux x86-64
+reserves `XMM13`, covered under forced SSE2 and AVX. Branch-only temporaries
+cannot escape into the common suffix, inactive divisions remain unexecuted,
+and a native side exit publishes no partial iteration. Permanent tests cover
+IR remapping, both branch results plus a shared suffix, no-JIT execution,
+function and monomorphic method guards, recursive composition, one native
+region and safe fallback for two conditionals.
+
+The five-million-iteration
+`bench_typed_float_composed_conditional.php` holdout returns the identical
+`5859391562500` value. Serial `max-perf` measurements produced these medians:
+
+| Host | Previous RPHP JIT | Merged RPHP JIT | Merged RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 279.424 ms | 4.530 ms | 78.517 ms | 55.070 ms | 158.498 ms |
+| Ryzen x86-64, PHP 8.4.24 | 426.105 ms | 8.795 ms | 108.357 ms | 63.428 ms | 156.816 ms |
+
+The shared merge removes about 98.4%/97.9% of the previous RPHP JIT time on
+ARM64/x86-64. Merged RPHP JIT is about 12.2x/7.2x faster than the measured PHP
+tracing JIT. RPHP without JIT is about 2.0x/1.45x faster than PHP without JIT,
+which independently confirms that the flattened call/frame work benefits the
+runtime even without native code. The complete local all-feature matrix
+passes with a larger test-harness stack for the existing Ackermann debug
+test; the product runtime and stack configuration are unchanged.
+
+The next Double control-flow extension should be chosen from corpus evidence.
+Likely candidates are two independent conditional callees or a small nested
+conditional, but either requires a bounded multi-merge representation and
+register-pressure proof rather than silently expanding this single-selection
+contract.
 
 ### Nice to have: persistent compiled artifacts
 

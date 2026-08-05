@@ -332,6 +332,102 @@ fn nested_typed_double_leaf_is_flattened_into_one_native_region() {
 }
 
 #[test]
+fn composed_conditional_double_leaf_is_flattened_into_one_native_region() {
+    let source = "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } function composedFloat(float $value, float $pivot): float { return (conditionalFloat($value, $pivot) * 1.25) + 3.0; } $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += composedFloat($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(captured_output(&output), "100000:2344081250");
+
+    let loop_plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the composed conditional Double loop");
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 0);
+
+    let outer = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("composedFloat"))
+        .map(|(_, function)| function)
+        .expect("compiled composed Double function");
+    assert!(outer.scalar_double_plan.is_none());
+    assert!(outer.composed_scalar_double_plan.is_some());
+    let leaf = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("conditionalFloat"))
+        .and_then(|(_, function)| function.scalar_double_plan.as_deref())
+        .expect("conditional Double leaf");
+    assert!(leaf.select.is_some());
+}
+
+#[test]
+fn same_receiver_conditional_double_method_is_flattened_into_one_native_region() {
+    let source = "<?php class FloatPipeline { public function conditional(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } public function composed(float $value, float $pivot): float { return ($this->conditional($value, $pivot) * 1.25) + 3.0; } } $pipeline = new FloatPipeline(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->composed($i * 0.5, 25000.0); } echo $i . ':' . $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    assert_eq!(captured_output(&output), "100000:2344081250");
+    let loop_plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the composed conditional method loop");
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 0);
+
+    let class = globals
+        .class_table
+        .values()
+        .find(|class| class.name.eq_ignore_ascii_case("FloatPipeline"))
+        .expect("registered FloatPipeline");
+    let method = |name: &str| {
+        class
+            .methods
+            .iter()
+            .find(|(candidate, ..)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, _, _, _, method)| method)
+            .expect("compiled FloatPipeline method")
+    };
+    assert!(method("conditional")
+        .scalar_double_plan
+        .as_deref()
+        .and_then(|plan| plan.select)
+        .is_some());
+    assert!(method("composed").composed_scalar_double_plan.is_some());
+}
+
+#[test]
 fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
     let source = "<?php class FloatPipeline { public function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } public function calculate(float $value, float $scale): float { return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0; } } $pipeline = new FloatPipeline(); $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->calculate($i * 0.5, $scale); } echo $i . ':' . $total;";
     let tokens = Lexer::new(source).tokenize().unwrap();

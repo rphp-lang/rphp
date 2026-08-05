@@ -16,6 +16,7 @@ use std::io;
 const MAX_INPUTS: usize = 8;
 const MAX_OPERATIONS: usize = 8;
 const FIRST_TEMPORARY: u8 = 16;
+const DOUBLE_SELECTION_REGISTER: u8 = 24;
 const SAFEPOINT_INTERVAL: u16 = 1024;
 const STATUS_COMPLETED: u32 = 0;
 const STATUS_INTERRUPTED: u32 = 1;
@@ -146,10 +147,10 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             forwarded_argument_mask,
             &mut side_exits,
         );
-        let mut selected_true_join = None;
         if let Some(select) = plan.select {
-            let shared_end = select.shared_operation_count as usize;
-            let true_end = shared_end + select.when_true_operation_count as usize;
+            let (shared_end, true_end, false_end) = select
+                .operation_ranges(plan.program.operations.len())
+                .expect("validated Double select ranges");
             emit_operations(
                 &mut assembler,
                 working_arguments,
@@ -206,9 +207,13 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 argument_plan,
                 forwarded_argument_mask,
                 select.when_true,
-                last_term,
+                if select.merge_result {
+                    Arm64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER)
+                } else {
+                    last_term
+                },
             );
-            selected_true_join = Some(assembler.branch_placeholder());
+            let selected_true_join = assembler.branch_placeholder();
 
             let false_word = assembler.word_count();
             if !assembler.patch_conditional_branch(selected_false, false_word) {
@@ -222,7 +227,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 forwarded_argument_mask,
                 &plan.program.operations,
                 true_end,
-                plan.program.operations.len(),
+                false_end,
                 &mut side_exits,
             );
             emit_selected_output(
@@ -232,8 +237,38 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 argument_plan,
                 forwarded_argument_mask,
                 select.when_false,
-                last_term,
+                if select.merge_result {
+                    Arm64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER)
+                } else {
+                    last_term
+                },
             );
+            let continuation_word = assembler.word_count();
+            if !assembler.patch_branch(selected_true_join, continuation_word) {
+                return Err(QuickDoubleCallAccumulateJitError::BranchOutOfRange);
+            }
+            if select.merge_result {
+                emit_operations(
+                    &mut assembler,
+                    working_arguments,
+                    bits,
+                    argument_plan,
+                    forwarded_argument_mask,
+                    &plan.program.operations,
+                    false_end,
+                    plan.program.operations.len(),
+                    &mut side_exits,
+                );
+                emit_selected_output(
+                    &mut assembler,
+                    working_arguments,
+                    bits,
+                    argument_plan,
+                    forwarded_argument_mask,
+                    plan.program.output,
+                    last_term,
+                );
+            }
         } else {
             emit_operations(
                 &mut assembler,
@@ -255,12 +290,6 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 plan.program.output,
                 last_term,
             );
-        }
-        let accumulate_word = assembler.word_count();
-        if let Some(branch) = selected_true_join
-            && !assembler.patch_branch(branch, accumulate_word)
-        {
-            return Err(QuickDoubleCallAccumulateJitError::BranchOutOfRange);
         }
         assembler.add_double(accumulator, accumulator, last_term);
         assembler.add_immediate(induction, induction, 1);
@@ -741,6 +770,7 @@ fn emit_source(
             scratch
         }
         ScalarDoubleSource::Temporary(index) => temporary(index as usize),
+        ScalarDoubleSource::Selection => Arm64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
     }
 }
 

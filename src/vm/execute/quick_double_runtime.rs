@@ -128,10 +128,7 @@ const MAX_COMPOSED_DOUBLE_TARGETS: usize = 8;
 
 enum ResolvedDoubleCallee<'a> {
     Flat(&'a ScalarDoubleFunctionPlan),
-    Composed {
-        public_args: u8,
-        program: ScalarDoubleProgram,
-    },
+    Composed(ScalarDoubleFunctionPlan),
 }
 
 impl ResolvedDoubleCallee<'_> {
@@ -141,13 +138,12 @@ impl ResolvedDoubleCallee<'_> {
             Self::Flat(plan) => ResolvedScalarDoubleProgram {
                 public_args: plan.public_args,
                 program: &plan.program,
+                select: plan.select,
             },
-            Self::Composed {
-                public_args,
-                program,
-            } => ResolvedScalarDoubleProgram {
-                public_args: *public_args,
-                program,
+            Self::Composed(plan) => ResolvedScalarDoubleProgram {
+                public_args: plan.public_args,
+                program: &plan.program,
+                select: plan.select,
             },
         }
     }
@@ -163,7 +159,7 @@ unsafe fn resolve_composed_double_program_inner(
     active_target_count: usize,
     targets: &mut [*const FunctionCommon; MAX_COMPOSED_DOUBLE_TARGETS],
     target_count: &mut usize,
-) -> Option<ScalarDoubleProgram> {
+) -> Option<ScalarDoubleFunctionPlan> {
     if depth > MAX_COMPOSED_DOUBLE_DEPTH || plan.operations.len() > 16 {
         return None;
     }
@@ -245,7 +241,7 @@ unsafe fn resolve_composed_double_program_inner(
         *target_count += 1;
 
         callees[operation_index] = Some(if let Some(leaf) = user.scalar_double_plan.as_deref() {
-            if leaf.public_args as usize != call.arguments.len() || leaf.select.is_some() {
+            if leaf.public_args as usize != call.arguments.len() {
                 return None;
             }
             ResolvedDoubleCallee::Flat(leaf)
@@ -269,10 +265,7 @@ unsafe fn resolve_composed_double_program_inner(
                 targets,
                 target_count,
             )?;
-            ResolvedDoubleCallee::Composed {
-                public_args: composed.public_args,
-                program,
-            }
+            ResolvedDoubleCallee::Composed(program)
         });
     }
 
@@ -286,7 +279,7 @@ unsafe fn resolve_composed_double_program(
     owner: &UserFunction,
     owner_receiver: Option<&Value>,
     plan: &ComposedScalarDoubleFunctionPlan,
-) -> Option<(ScalarDoubleProgram, [*const FunctionCommon; 8], usize)> {
+) -> Option<(ScalarDoubleFunctionPlan, [*const FunctionCommon; 8], usize)> {
     let owner_target = &owner.common as *const FunctionCommon;
     let mut active_targets = [std::ptr::null(); MAX_COMPOSED_DOUBLE_TARGETS + 1];
     active_targets[0] = owner_target;
@@ -571,10 +564,7 @@ unsafe fn run_quick_double_call_accumulate_loop(
         call_targets[1..1 + nested_target_count]
             .copy_from_slice(&nested_targets[..nested_target_count]);
         call_target_count += nested_target_count;
-        composed_call_plan = Some(ScalarDoubleFunctionPlan::new(
-            composed.public_args,
-            program,
-        ));
+        composed_call_plan = Some(program);
     }
     let call_plan = user
         .scalar_double_plan

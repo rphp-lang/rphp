@@ -297,7 +297,7 @@ echo gettype($exact) . ':' . $exact . '|' . gettype($coerced) . ':' . $coerced;
 }
 
 #[test]
-fn test_e2e_composed_double_body_falls_back_for_conditional_leaf() {
+fn test_e2e_composed_double_body_accepts_one_conditional_leaf() {
     assert_eq!(
         run_php(r#"<?php
 function conditionalLeaf(float $value, float $pivot): float {
@@ -312,6 +312,27 @@ function conditionalOuter(float $value, float $pivot): float {
 echo conditionalOuter(2.0, 3.0) . ':' . conditionalOuter(4.0, 3.0);
 "#),
         "8:4"
+    );
+}
+
+#[test]
+fn test_e2e_composed_double_body_safely_falls_back_for_two_conditional_leaves() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function conditionalLeaf(float $value, float $pivot): float {
+    if ($value < $pivot) {
+        return ($value * 1.5) + 2.0;
+    }
+    return ($value * 0.5) - 1.0;
+}
+function conditionalPair(float $a, float $b, float $pivot): float {
+    return conditionalLeaf($a, $pivot) + conditionalLeaf($b, $pivot);
+}
+echo conditionalPair(2.0, 4.0, 3.0);
+"#
+        ),
+        "6"
     );
 }
 

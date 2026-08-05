@@ -14,6 +14,7 @@ use std::mem::MaybeUninit;
 const MAX_SCALAR_DOUBLE_INPUTS: usize = 8;
 const MAX_SCALAR_DOUBLE_OPERATIONS: usize = 8;
 const FIRST_DOUBLE_TEMPORARY_REGISTER: u8 = 16;
+const DOUBLE_SELECTION_REGISTER: u8 = 24;
 const NATIVE_DOUBLE_STATUS_SUCCESS: u32 = 0;
 const NATIVE_DOUBLE_STATUS_SIDE_EXIT: u32 = 1;
 
@@ -160,10 +161,10 @@ impl CompiledScalarDoubleProgram {
         validate_scalar_double_plan(plan)?;
         let mut assembler = Arm64Assembler::new();
         let mut side_exit_branches = Vec::new();
-        let mut selected_true_join = None;
         if let Some(select) = plan.select {
-            let shared_end = select.shared_operation_count as usize;
-            let true_end = shared_end + select.when_true_operation_count as usize;
+            let (shared_end, true_end, false_end) = select
+                .operation_ranges(plan.program.operations.len())
+                .expect("validated Double select ranges");
             emit_scalar_double_operations(
                 &mut assembler,
                 &plan.program.operations,
@@ -200,8 +201,12 @@ impl CompiledScalarDoubleProgram {
                 true_end,
                 &mut side_exit_branches,
             );
-            emit_scalar_double_output(&mut assembler, select.when_true);
-            selected_true_join = Some(assembler.branch_placeholder());
+            if select.merge_result {
+                emit_scalar_double_selection(&mut assembler, select.when_true);
+            } else {
+                emit_scalar_double_output(&mut assembler, select.when_true);
+            }
+            let selected_true_join = assembler.branch_placeholder();
 
             let false_word = assembler.word_count();
             if !assembler.patch_conditional_branch(selected_false, false_word) {
@@ -211,10 +216,28 @@ impl CompiledScalarDoubleProgram {
                 &mut assembler,
                 &plan.program.operations,
                 true_end,
-                plan.program.operations.len(),
+                false_end,
                 &mut side_exit_branches,
             );
-            emit_scalar_double_output(&mut assembler, select.when_false);
+            if select.merge_result {
+                emit_scalar_double_selection(&mut assembler, select.when_false);
+            } else {
+                emit_scalar_double_output(&mut assembler, select.when_false);
+            }
+            let continuation_word = assembler.word_count();
+            if !assembler.patch_branch(selected_true_join, continuation_word) {
+                return Err(ScalarDoubleJitError::BranchOutOfRange);
+            }
+            if select.merge_result {
+                emit_scalar_double_operations(
+                    &mut assembler,
+                    &plan.program.operations,
+                    false_end,
+                    plan.program.operations.len(),
+                    &mut side_exit_branches,
+                );
+                emit_scalar_double_output(&mut assembler, plan.program.output);
+            }
         } else {
             emit_scalar_double_operations(
                 &mut assembler,
@@ -224,12 +247,6 @@ impl CompiledScalarDoubleProgram {
                 &mut side_exit_branches,
             );
             emit_scalar_double_output(&mut assembler, plan.program.output);
-        }
-        let success_word = assembler.word_count();
-        if let Some(branch) = selected_true_join
-            && !assembler.patch_branch(branch, success_word)
-        {
-            return Err(ScalarDoubleJitError::BranchOutOfRange);
         }
         assembler.move_immediate(Arm64Register::X0, i64::from(NATIVE_DOUBLE_STATUS_SUCCESS));
         assembler.ret();
@@ -309,6 +326,14 @@ fn emit_scalar_double_output(assembler: &mut Arm64Assembler, source: ScalarDoubl
     assembler.store_f64(output, Arm64Register::X1, 0);
 }
 
+fn emit_scalar_double_selection(assembler: &mut Arm64Assembler, source: ScalarDoubleSource) {
+    let output = emit_scalar_double_source(assembler, source, Arm64FloatRegister::from_code(0));
+    assembler.move_double(
+        Arm64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
+        output,
+    );
+}
+
 fn emit_scalar_double_operation(
     assembler: &mut Arm64Assembler,
     index: usize,
@@ -348,6 +373,7 @@ fn emit_scalar_double_source(
             scratch
         }
         ScalarDoubleSource::Temporary(index) => scalar_double_temporary_register(index as usize),
+        ScalarDoubleSource::Selection => Arm64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
     }
 }
 

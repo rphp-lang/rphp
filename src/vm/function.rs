@@ -120,6 +120,9 @@ pub enum ScalarDoubleSource {
     Input(u16),
     Constant(f64),
     Temporary(u8),
+    /// Value published by the selected edge of one bounded conditional and
+    /// consumed by the common continuation of a composed Double region.
+    Selection,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -153,8 +156,24 @@ pub struct ScalarDoubleSelect {
     pub rhs: ScalarDoubleSource,
     pub shared_operation_count: u8,
     pub when_true_operation_count: u8,
+    pub when_false_operation_count: u8,
     pub when_true: ScalarDoubleSource,
     pub when_false: ScalarDoubleSource,
+    /// `false` means the selected arm is the function's terminal output.
+    /// `true` publishes one `Selection` value and executes the common suffix.
+    pub merge_result: bool,
+}
+
+impl ScalarDoubleSelect {
+    pub(crate) fn operation_ranges(self, operation_count: usize) -> Option<(usize, usize, usize)> {
+        let shared_end = self.shared_operation_count as usize;
+        let true_end = shared_end.checked_add(self.when_true_operation_count as usize)?;
+        let false_end = true_end.checked_add(self.when_false_operation_count as usize)?;
+        (shared_end <= operation_count
+            && true_end <= operation_count
+            && false_end <= operation_count)
+            .then_some((shared_end, true_end, false_end))
+    }
 }
 
 /// Compile-time proof for a straight-line floating-point leaf.
@@ -264,13 +283,9 @@ impl ScalarDoubleFunctionPlan {
         };
 
         let operation_count = self.program.operations.len();
-        let shared_end = select.shared_operation_count as usize;
-        let true_end = shared_end
-            .checked_add(select.when_true_operation_count as usize)
-            .ok_or("conditional operation ranges overflow")?;
-        if shared_end > operation_count || true_end > operation_count {
-            return Err("conditional operation range is outside the program");
-        }
+        let (shared_end, true_end, false_end) = select
+            .operation_ranges(operation_count)
+            .ok_or("conditional operation range is outside the program")?;
         for (index, operation) in self.program.operations[..shared_end].iter().enumerate() {
             validate_scalar_double_register_source(operation.lhs, index, self.public_args)?;
             validate_scalar_double_register_source(operation.rhs, index, self.public_args)?;
@@ -294,7 +309,10 @@ impl ScalarDoubleFunctionPlan {
             )?;
         }
         validate_scalar_double_register_source(select.when_true, true_end, self.public_args)?;
-        for (index, operation) in self.program.operations[true_end..].iter().enumerate() {
+        for (index, operation) in self.program.operations[true_end..false_end]
+            .iter()
+            .enumerate()
+        {
             let absolute_index = true_end + index;
             validate_scalar_double_false_edge_source(
                 operation.lhs,
@@ -315,6 +333,35 @@ impl ScalarDoubleFunctionPlan {
             select.when_false,
             shared_end,
             true_end,
+            false_end,
+            self.public_args,
+        )?;
+        if !select.merge_result {
+            return (false_end == operation_count)
+                .then_some(())
+                .ok_or("terminal conditional has a common continuation");
+        }
+        for (index, operation) in self.program.operations[false_end..].iter().enumerate() {
+            let absolute_index = false_end + index;
+            validate_scalar_double_merge_edge_source(
+                operation.lhs,
+                shared_end,
+                false_end,
+                absolute_index,
+                self.public_args,
+            )?;
+            validate_scalar_double_merge_edge_source(
+                operation.rhs,
+                shared_end,
+                false_end,
+                absolute_index,
+                self.public_args,
+            )?;
+        }
+        validate_scalar_double_merge_edge_source(
+            self.program.output,
+            shared_end,
+            false_end,
             operation_count,
             self.public_args,
         )
@@ -352,7 +399,35 @@ fn validate_scalar_double_register_source(
         ScalarDoubleSource::Temporary(index) if index as usize >= available_temporaries => {
             Err("temporary is used before it is defined")
         }
+        ScalarDoubleSource::Selection => Err("selection is used before the conditional merge"),
         _ => Ok(()),
+    }
+}
+
+#[cfg(all(
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+fn validate_scalar_double_merge_edge_source(
+    source: ScalarDoubleSource,
+    shared_end: usize,
+    suffix_start: usize,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), &'static str> {
+    match source {
+        ScalarDoubleSource::Selection => Ok(()),
+        ScalarDoubleSource::Temporary(index)
+            if !((index as usize) < shared_end
+                || ((index as usize) >= suffix_start
+                    && (index as usize) < available_temporaries)) =>
+        {
+            Err("merge edge references a branch-only temporary")
+        }
+        _ => validate_scalar_double_register_source(source, available_temporaries, input_count),
     }
 }
 

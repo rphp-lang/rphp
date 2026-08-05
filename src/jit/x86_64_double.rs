@@ -14,6 +14,7 @@ use std::mem::MaybeUninit;
 const MAX_SCALAR_DOUBLE_INPUTS: usize = 8;
 const MAX_SCALAR_DOUBLE_OPERATIONS: usize = 8;
 const FIRST_DOUBLE_TEMPORARY_REGISTER: u8 = 2;
+const DOUBLE_SELECTION_REGISTER: u8 = 13;
 const NATIVE_DOUBLE_STATUS_SUCCESS: u32 = 0;
 const NATIVE_DOUBLE_STATUS_SIDE_EXIT: u32 = 1;
 
@@ -57,12 +58,16 @@ impl X86ScalarDoubleRegisterMap {
             }
         }
         if let Some(select) = select {
-            let shared_end = select.shared_operation_count as usize;
-            let true_end = shared_end + select.when_true_operation_count as usize;
+            let (shared_end, true_end, false_end) = select
+                .operation_ranges(program.operations.len())
+                .expect("validated Double select must have valid operation ranges");
             mark_source(&mut last_use, select.lhs, shared_end);
             mark_source(&mut last_use, select.rhs, shared_end);
             mark_source(&mut last_use, select.when_true, true_end);
-            mark_source(&mut last_use, select.when_false, program.operations.len());
+            mark_source(&mut last_use, select.when_false, false_end);
+            if select.merge_result {
+                mark_source(&mut last_use, program.output, program.operations.len());
+            }
         } else {
             mark_source(
                 &mut last_use,
@@ -241,10 +246,10 @@ impl CompiledScalarDoubleProgram {
         let registers = X86ScalarDoubleRegisterMap::for_plan(plan);
         let mut assembler = X86_64Assembler::new();
         let mut side_exit_jumps = Vec::new();
-        let mut selected_true_join = None;
         if let Some(select) = plan.select {
-            let shared_end = select.shared_operation_count as usize;
-            let true_end = shared_end + select.when_true_operation_count as usize;
+            let (shared_end, true_end, false_end) = select
+                .operation_ranges(plan.program.operations.len())
+                .expect("validated Double select must have valid operation ranges");
             emit_scalar_double_operations(
                 &mut assembler,
                 instruction_set,
@@ -305,13 +310,22 @@ impl CompiledScalarDoubleProgram {
                 true_end,
                 &mut side_exit_jumps,
             );
-            emit_scalar_double_output(
-                &mut assembler,
-                instruction_set,
-                registers,
-                select.when_true,
-            );
-            selected_true_join = Some(assembler.jump_rel32());
+            if select.merge_result {
+                emit_scalar_double_selection(
+                    &mut assembler,
+                    instruction_set,
+                    registers,
+                    select.when_true,
+                );
+            } else {
+                emit_scalar_double_output(
+                    &mut assembler,
+                    instruction_set,
+                    registers,
+                    select.when_true,
+                );
+            }
+            let selected_true_join = assembler.jump_rel32();
 
             let false_offset = assembler.bytes.len();
             for jump in selected_false {
@@ -323,15 +337,43 @@ impl CompiledScalarDoubleProgram {
                 registers,
                 &plan.program.operations,
                 true_end,
-                plan.program.operations.len(),
+                false_end,
                 &mut side_exit_jumps,
             );
-            emit_scalar_double_output(
-                &mut assembler,
-                instruction_set,
-                registers,
-                select.when_false,
-            );
+            if select.merge_result {
+                emit_scalar_double_selection(
+                    &mut assembler,
+                    instruction_set,
+                    registers,
+                    select.when_false,
+                );
+            } else {
+                emit_scalar_double_output(
+                    &mut assembler,
+                    instruction_set,
+                    registers,
+                    select.when_false,
+                );
+            }
+            let continuation = assembler.bytes.len();
+            assembler.patch_rel32(selected_true_join, continuation);
+            if select.merge_result {
+                emit_scalar_double_operations(
+                    &mut assembler,
+                    instruction_set,
+                    registers,
+                    &plan.program.operations,
+                    false_end,
+                    plan.program.operations.len(),
+                    &mut side_exit_jumps,
+                );
+                emit_scalar_double_output(
+                    &mut assembler,
+                    instruction_set,
+                    registers,
+                    plan.program.output,
+                );
+            }
         } else {
             emit_scalar_double_operations(
                 &mut assembler,
@@ -348,10 +390,6 @@ impl CompiledScalarDoubleProgram {
                 registers,
                 plan.program.output,
             );
-        }
-        let success = assembler.bytes.len();
-        if let Some(jump) = selected_true_join {
-            assembler.patch_rel32(jump, success);
         }
         if instruction_set == X86DoubleInstructionSet::Avx {
             assembler.vzeroupper();
@@ -453,6 +491,31 @@ fn emit_scalar_double_output(
     }
 }
 
+fn emit_scalar_double_selection(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    registers: X86ScalarDoubleRegisterMap,
+    source: ScalarDoubleSource,
+) {
+    let output = emit_scalar_double_source(
+        assembler,
+        instruction_set,
+        registers,
+        source,
+        X86_64FloatRegister::from_code(0),
+    );
+    match instruction_set {
+        X86DoubleInstructionSet::Sse2 => assembler.move_double(
+            X86_64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
+            output,
+        ),
+        X86DoubleInstructionSet::Avx => assembler.move_double_avx(
+            X86_64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
+            output,
+        ),
+    }
+}
+
 fn emit_scalar_double_operation(
     assembler: &mut X86_64Assembler,
     instruction_set: X86DoubleInstructionSet,
@@ -545,5 +608,6 @@ fn emit_scalar_double_source(
             scratch
         }
         ScalarDoubleSource::Temporary(index) => registers.temporary(index as usize),
+        ScalarDoubleSource::Selection => X86_64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
     }
 }

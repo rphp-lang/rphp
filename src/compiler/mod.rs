@@ -1350,6 +1350,8 @@ fn build_conditional_scalar_double_function_plan(
         &mut when_false_results,
         &mut operations,
     )?;
+    let when_false_operation_count =
+        operations.len() - shared_operation_count - when_true_operation_count;
 
     Some(Box::new(ScalarDoubleFunctionPlan::new_conditional(
         public_args as u8,
@@ -1363,8 +1365,10 @@ fn build_conditional_scalar_double_function_plan(
             rhs,
             shared_operation_count: shared_operation_count as u8,
             when_true_operation_count: when_true_operation_count as u8,
+            when_false_operation_count: when_false_operation_count as u8,
             when_true,
             when_false,
+            merge_result: false,
         },
     )))
 }

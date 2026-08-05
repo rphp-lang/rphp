@@ -17,6 +17,7 @@ use std::io;
 const MAX_INPUTS: usize = 8;
 const MAX_OPERATIONS: usize = 8;
 const FIRST_TEMPORARY: u8 = 2;
+const DOUBLE_SELECTION_REGISTER: u8 = 13;
 const SAFEPOINT_INTERVAL: i64 = 1024;
 const STATUS_COMPLETED: u32 = 0;
 const STATUS_INTERRUPTED: u32 = 1;
@@ -157,10 +158,10 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             forwarded_argument_mask,
             &mut side_exits,
         );
-        let mut selected_true_join = None;
         if let Some(select) = plan.select {
-            let shared_end = select.shared_operation_count as usize;
-            let true_end = shared_end + select.when_true_operation_count as usize;
+            let (shared_end, true_end, false_end) = select
+                .operation_ranges(plan.program.operations.len())
+                .expect("validated Double select must have valid operation ranges");
             emit_operations(
                 &mut assembler,
                 working_arguments,
@@ -246,9 +247,13 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 scalar_registers,
                 instruction_set,
                 select.when_true,
-                last_term,
+                if select.merge_result {
+                    X86_64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER)
+                } else {
+                    last_term
+                },
             );
-            selected_true_join = Some(assembler.jump_rel32());
+            let selected_true_join = assembler.jump_rel32();
 
             let false_offset = assembler.bytes.len();
             for jump in selected_false {
@@ -264,7 +269,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 instruction_set,
                 &plan.program.operations,
                 true_end,
-                plan.program.operations.len(),
+                false_end,
                 &mut side_exits,
             );
             emit_selected_output(
@@ -276,8 +281,40 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 scalar_registers,
                 instruction_set,
                 select.when_false,
-                last_term,
+                if select.merge_result {
+                    X86_64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER)
+                } else {
+                    last_term
+                },
             );
+            let continuation = assembler.bytes.len();
+            assembler.patch_rel32(selected_true_join, continuation);
+            if select.merge_result {
+                emit_operations(
+                    &mut assembler,
+                    working_arguments,
+                    bits,
+                    argument_plan,
+                    forwarded_argument_mask,
+                    scalar_registers,
+                    instruction_set,
+                    &plan.program.operations,
+                    false_end,
+                    plan.program.operations.len(),
+                    &mut side_exits,
+                );
+                emit_selected_output(
+                    &mut assembler,
+                    working_arguments,
+                    bits,
+                    argument_plan,
+                    forwarded_argument_mask,
+                    scalar_registers,
+                    instruction_set,
+                    plan.program.output,
+                    last_term,
+                );
+            }
         } else {
             emit_operations(
                 &mut assembler,
@@ -303,10 +340,6 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 plan.program.output,
                 last_term,
             );
-        }
-        let accumulate = assembler.bytes.len();
-        if let Some(jump) = selected_true_join {
-            assembler.patch_rel32(jump, accumulate);
         }
         match instruction_set {
             X86DoubleInstructionSet::Sse2 => assembler.add_double(accumulator, last_term),
@@ -866,6 +899,7 @@ fn emit_source(
             scratch
         }
         ScalarDoubleSource::Temporary(index) => scalar_registers.temporary(index as usize),
+        ScalarDoubleSource::Selection => X86_64FloatRegister::from_code(DOUBLE_SELECTION_REGISTER),
     }
 }
 

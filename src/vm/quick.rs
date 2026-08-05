@@ -377,6 +377,7 @@ impl QuickDoubleArgumentProgram {
 pub(crate) struct ResolvedScalarDoubleProgram<'a> {
     pub public_args: u8,
     pub program: &'a crate::vm::function::ScalarDoubleProgram,
+    pub select: Option<crate::vm::function::ScalarDoubleSelect>,
 }
 
 /// Flatten one guarded composed Double body after its direct callees have been
@@ -385,9 +386,10 @@ pub(crate) struct ResolvedScalarDoubleProgram<'a> {
 pub(crate) fn compose_scalar_double_program(
     plan: &crate::vm::function::ComposedScalarDoubleFunctionPlan,
     resolved_programs: &[Option<ResolvedScalarDoubleProgram<'_>>],
-) -> Option<crate::vm::function::ScalarDoubleProgram> {
+) -> Option<crate::vm::function::ScalarDoubleFunctionPlan> {
     use crate::vm::function::{
-        ComposedScalarDoubleOp, ScalarDoubleOp, ScalarDoubleSource,
+        ComposedScalarDoubleOp, ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleProgram,
+        ScalarDoubleSelect, ScalarDoubleSource,
     };
 
     const MAX_OPERATIONS: usize = 8;
@@ -409,11 +411,13 @@ pub(crate) fn compose_scalar_double_program(
             ScalarDoubleSource::Temporary(index) => {
                 results.get(index as usize).copied().flatten()
             }
+            ScalarDoubleSource::Selection => Some(ScalarDoubleSource::Selection),
         }
     }
 
     let mut operations = Vec::with_capacity(MAX_OPERATIONS);
     let mut results = [None; 16];
+    let mut merged_select = None;
     for (composed_index, operation) in plan.operations.iter().enumerate() {
         results[composed_index] = Some(match operation {
             ComposedScalarDoubleOp::Arithmetic(operation) => {
@@ -466,6 +470,10 @@ pub(crate) fn compose_scalar_double_program(
                         })
                         .and_then(|index| u8::try_from(index).ok())
                         .map(ScalarDoubleSource::Temporary),
+                    ScalarDoubleSource::Selection => resolved
+                        .select
+                        .is_some()
+                        .then_some(ScalarDoubleSource::Selection),
                 };
                 for operation in resolved.program.operations.iter().copied() {
                     operations.push(ScalarDoubleOp {
@@ -474,14 +482,44 @@ pub(crate) fn compose_scalar_double_program(
                         rhs: remap_leaf_source(operation.rhs)?,
                     });
                 }
-                remap_leaf_source(resolved.program.output)?
+                if let Some(select) = resolved.select {
+                    if merged_select.is_some() {
+                        return None;
+                    }
+                    let (shared_end, _, _) =
+                        select.operation_ranges(resolved.program.operations.len())?;
+                    merged_select = Some(ScalarDoubleSelect {
+                        kind: select.kind,
+                        lhs: remap_leaf_source(select.lhs)?,
+                        rhs: remap_leaf_source(select.rhs)?,
+                        shared_operation_count: u8::try_from(leaf_start.checked_add(shared_end)?)
+                            .ok()?,
+                        when_true_operation_count: select.when_true_operation_count,
+                        when_false_operation_count: select.when_false_operation_count,
+                        when_true: remap_leaf_source(select.when_true)?,
+                        when_false: remap_leaf_source(select.when_false)?,
+                        merge_result: true,
+                    });
+                    if select.merge_result {
+                        remap_leaf_source(resolved.program.output)?
+                    } else {
+                        ScalarDoubleSource::Selection
+                    }
+                } else {
+                    remap_leaf_source(resolved.program.output)?
+                }
             }
         });
     }
 
-    Some(crate::vm::function::ScalarDoubleProgram {
+    let program = ScalarDoubleProgram {
         operations: operations.into_boxed_slice(),
         output: remap_composed_source(plan.output, &results)?,
+    };
+    Some(if let Some(select) = merged_select {
+        ScalarDoubleFunctionPlan::new_conditional(plan.public_args, program, select)
+    } else {
+        ScalarDoubleFunctionPlan::new(plan.public_args, program)
     })
 }
 
@@ -4895,7 +4933,7 @@ mod tests {
     use crate::vm::function::{
         ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ScalarDoubleCall,
         ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
-        ScalarDoubleSource,
+        ScalarDoubleSelect, ScalarDoubleSource, ScalarLongConditionKind,
     };
     use crate::vm::planner::BlockPlan;
 
@@ -4998,14 +5036,15 @@ mod tests {
                 Some(ResolvedScalarDoubleProgram {
                     public_args: leaf.public_args,
                     program: &leaf.program,
+                    select: leaf.select,
                 }),
                 None,
             ],
         )
         .unwrap();
-        assert_eq!(flattened.operations.len(), 2);
+        assert_eq!(flattened.program.operations.len(), 2);
         assert!(matches!(
-            flattened.operations[0],
+            flattened.program.operations[0],
             ScalarDoubleOp {
                 kind: ScalarDoubleOpKind::Multiply,
                 lhs: ScalarDoubleSource::Input(0),
@@ -5013,14 +5052,135 @@ mod tests {
             }
         ));
         assert!(matches!(
-            flattened.operations[1],
+            flattened.program.operations[1],
             ScalarDoubleOp {
                 kind: ScalarDoubleOpKind::Add,
                 lhs: ScalarDoubleSource::Temporary(0),
                 rhs: ScalarDoubleSource::Constant(3.0),
             }
         ));
-        assert_eq!(flattened.output, ScalarDoubleSource::Temporary(1));
+        assert_eq!(flattened.program.output, ScalarDoubleSource::Temporary(1));
+        assert!(flattened.select.is_none());
+    }
+
+    fn conditional_double_leaf() -> ScalarDoubleFunctionPlan {
+        ScalarDoubleFunctionPlan::new_conditional(
+            2,
+            ScalarDoubleProgram {
+                operations: vec![
+                    ScalarDoubleOp {
+                        kind: ScalarDoubleOpKind::Multiply,
+                        lhs: ScalarDoubleSource::Input(0),
+                        rhs: ScalarDoubleSource::Constant(1.5),
+                    },
+                    ScalarDoubleOp {
+                        kind: ScalarDoubleOpKind::Subtract,
+                        lhs: ScalarDoubleSource::Input(0),
+                        rhs: ScalarDoubleSource::Constant(1.0),
+                    },
+                ]
+                .into_boxed_slice(),
+                output: ScalarDoubleSource::Temporary(0),
+            },
+            ScalarDoubleSelect {
+                kind: ScalarLongConditionKind::LessThan,
+                lhs: ScalarDoubleSource::Input(0),
+                rhs: ScalarDoubleSource::Input(1),
+                shared_operation_count: 0,
+                when_true_operation_count: 1,
+                when_false_operation_count: 1,
+                when_true: ScalarDoubleSource::Temporary(0),
+                when_false: ScalarDoubleSource::Temporary(1),
+                merge_result: false,
+            },
+        )
+    }
+
+    #[test]
+    fn flattens_one_conditional_double_leaf_into_a_common_suffix() {
+        let composed = ComposedScalarDoubleFunctionPlan {
+            public_args: 2,
+            operations: vec![
+                ComposedScalarDoubleOp::Call(ScalarDoubleCall {
+                    guard: ScalarLongCallGuard::FunctionCache { cache_ip: 0 },
+                    arguments: vec![ScalarDoubleSource::Input(0), ScalarDoubleSource::Input(1)]
+                        .into_boxed_slice(),
+                }),
+                ComposedScalarDoubleOp::Arithmetic(ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Add,
+                    lhs: ScalarDoubleSource::Temporary(0),
+                    rhs: ScalarDoubleSource::Constant(3.0),
+                }),
+            ]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Temporary(1),
+        };
+        let leaf = conditional_double_leaf();
+
+        let flattened = compose_scalar_double_program(
+            &composed,
+            &[
+                Some(ResolvedScalarDoubleProgram {
+                    public_args: leaf.public_args,
+                    program: &leaf.program,
+                    select: leaf.select,
+                }),
+                None,
+            ],
+        )
+        .expect("one conditional callee should flatten");
+
+        let select = flattened.select.expect("flattened merge select");
+        assert!(select.merge_result);
+        assert_eq!(select.operation_ranges(3), Some((0, 1, 2)));
+        assert_eq!(select.when_true, ScalarDoubleSource::Temporary(0));
+        assert_eq!(select.when_false, ScalarDoubleSource::Temporary(1));
+        assert!(matches!(
+            flattened.program.operations[2],
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: ScalarDoubleSource::Selection,
+                rhs: ScalarDoubleSource::Constant(3.0),
+            }
+        ));
+        assert_eq!(flattened.program.output, ScalarDoubleSource::Temporary(2));
+    }
+
+    #[test]
+    fn rejects_two_conditional_double_callees_from_one_flattened_region() {
+        let composed = ComposedScalarDoubleFunctionPlan {
+            public_args: 2,
+            operations: vec![
+                ComposedScalarDoubleOp::Call(ScalarDoubleCall {
+                    guard: ScalarLongCallGuard::FunctionCache { cache_ip: 0 },
+                    arguments: vec![ScalarDoubleSource::Input(0), ScalarDoubleSource::Input(1)]
+                        .into_boxed_slice(),
+                }),
+                ComposedScalarDoubleOp::Call(ScalarDoubleCall {
+                    guard: ScalarLongCallGuard::FunctionCache { cache_ip: 1 },
+                    arguments: vec![ScalarDoubleSource::Input(0), ScalarDoubleSource::Input(1)]
+                        .into_boxed_slice(),
+                }),
+                ComposedScalarDoubleOp::Arithmetic(ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Add,
+                    lhs: ScalarDoubleSource::Temporary(0),
+                    rhs: ScalarDoubleSource::Temporary(1),
+                }),
+            ]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Temporary(2),
+        };
+        let leaf = conditional_double_leaf();
+        let resolved = ResolvedScalarDoubleProgram {
+            public_args: leaf.public_args,
+            program: &leaf.program,
+            select: leaf.select,
+        };
+
+        assert!(
+            compose_scalar_double_program(&composed, &[Some(resolved), Some(resolved), None],)
+                .is_none()
+        );
     }
 
     #[test]
@@ -5068,6 +5228,7 @@ mod tests {
                     Some(ResolvedScalarDoubleProgram {
                         public_args: leaf.public_args,
                         program: &leaf.program,
+                        select: leaf.select,
                     }),
                     None,
                 ],

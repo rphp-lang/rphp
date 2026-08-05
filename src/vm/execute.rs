@@ -1404,11 +1404,13 @@ fn resolve_scalar_double_source(
     source: ScalarDoubleSource,
     arguments: &[f64; 8],
     temporaries: &[f64; 8],
+    selection: Option<f64>,
 ) -> Option<f64> {
     match source {
         ScalarDoubleSource::Input(index) => arguments.get(index as usize).copied(),
         ScalarDoubleSource::Constant(value) => Some(value),
         ScalarDoubleSource::Temporary(index) => temporaries.get(index as usize).copied(),
+        ScalarDoubleSource::Selection => selection,
     }
 }
 
@@ -1455,40 +1457,55 @@ fn evaluate_scalar_double_plan_rust(
         return None;
     }
     let mut temporaries = [0.0_f64; 8];
-    let evaluate_operations = |start: usize, end: usize, temporaries: &mut [f64; 8]| {
-        for index in start..end {
-            let operation = plan.program.operations[index];
-            let lhs = resolve_scalar_double_source(operation.lhs, arguments, temporaries)?;
-            let rhs = resolve_scalar_double_source(operation.rhs, arguments, temporaries)?;
-            temporaries[index] = apply_scalar_double_op(operation.kind, lhs, rhs)?;
-        }
-        Some(())
-    };
-    let output = if let Some(select) = plan.select {
-        let shared_end = select.shared_operation_count as usize;
-        let true_end = shared_end.checked_add(select.when_true_operation_count as usize)?;
-        if true_end > plan.program.operations.len() {
-            return None;
-        }
-        evaluate_operations(0, shared_end, &mut temporaries)?;
-        let lhs = resolve_scalar_double_source(select.lhs, arguments, &temporaries)?;
-        let rhs = resolve_scalar_double_source(select.rhs, arguments, &temporaries)?;
-        if apply_scalar_double_condition(select.kind, lhs, rhs) {
-            evaluate_operations(shared_end, true_end, &mut temporaries)?;
+    let evaluate_operations =
+        |start: usize, end: usize, temporaries: &mut [f64; 8], selection: Option<f64>| {
+            for index in start..end {
+                let operation = plan.program.operations[index];
+                let lhs =
+                    resolve_scalar_double_source(operation.lhs, arguments, temporaries, selection)?;
+                let rhs =
+                    resolve_scalar_double_source(operation.rhs, arguments, temporaries, selection)?;
+                temporaries[index] = apply_scalar_double_op(operation.kind, lhs, rhs)?;
+            }
+            Some(())
+        };
+    if let Some(select) = plan.select {
+        let (shared_end, true_end, false_end) =
+            select.operation_ranges(plan.program.operations.len())?;
+        evaluate_operations(0, shared_end, &mut temporaries, None)?;
+        let lhs = resolve_scalar_double_source(select.lhs, arguments, &temporaries, None)?;
+        let rhs = resolve_scalar_double_source(select.rhs, arguments, &temporaries, None)?;
+        let selected_source = if apply_scalar_double_condition(select.kind, lhs, rhs) {
+            evaluate_operations(shared_end, true_end, &mut temporaries, None)?;
             select.when_true
         } else {
-            evaluate_operations(
-                true_end,
-                plan.program.operations.len(),
-                &mut temporaries,
-            )?;
+            evaluate_operations(true_end, false_end, &mut temporaries, None)?;
             select.when_false
+        };
+        if !select.merge_result {
+            if false_end != plan.program.operations.len() {
+                return None;
+            }
+            return resolve_scalar_double_source(selected_source, arguments, &temporaries, None);
         }
+        let selection =
+            resolve_scalar_double_source(selected_source, arguments, &temporaries, None)?;
+        evaluate_operations(
+            false_end,
+            plan.program.operations.len(),
+            &mut temporaries,
+            Some(selection),
+        )?;
+        resolve_scalar_double_source(
+            plan.program.output,
+            arguments,
+            &temporaries,
+            Some(selection),
+        )
     } else {
-        evaluate_operations(0, plan.program.operations.len(), &mut temporaries)?;
-        plan.program.output
-    };
-    resolve_scalar_double_source(output, arguments, &temporaries)
+        evaluate_operations(0, plan.program.operations.len(), &mut temporaries, None)?;
+        resolve_scalar_double_source(plan.program.output, arguments, &temporaries, None)
+    }
 }
 
 #[inline(always)]
@@ -2136,9 +2153,8 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_double_call(
         return None;
     }
 
-    let (program, nested_targets, nested_target_count) =
+    let (flattened, nested_targets, nested_target_count) =
         resolve_composed_double_program(eg, owner, owner_receiver, plan)?;
-    let flattened = ScalarDoubleFunctionPlan::new(plan.public_args, program);
     let result = evaluate_scalar_double_plan_rust(&flattened, &arguments)?;
     for target in nested_targets.into_iter().take(nested_target_count) {
         record_scalar_call(&*target);

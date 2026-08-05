@@ -51,8 +51,10 @@ fn conditional_plan(kind: ScalarLongConditionKind) -> ScalarDoubleFunctionPlan {
             rhs: ScalarDoubleSource::Input(1),
             shared_operation_count: 0,
             when_true_operation_count: 0,
+            when_false_operation_count: 0,
             when_true: ScalarDoubleSource::Constant(1.0),
             when_false: ScalarDoubleSource::Constant(-1.0),
+            merge_result: false,
         },
     )
 }
@@ -92,10 +94,33 @@ fn conditional_arithmetic_plan() -> ScalarDoubleFunctionPlan {
             rhs: ScalarDoubleSource::Input(1),
             shared_operation_count: 0,
             when_true_operation_count: 2,
+            when_false_operation_count: 2,
             when_true: ScalarDoubleSource::Temporary(1),
             when_false: ScalarDoubleSource::Temporary(3),
+            merge_result: false,
         },
     )
+}
+
+fn merged_conditional_arithmetic_plan() -> ScalarDoubleFunctionPlan {
+    let mut plan = conditional_arithmetic_plan();
+    let mut operations = plan.program.operations.into_vec();
+    operations.extend([
+        ScalarDoubleOp {
+            kind: ScalarDoubleOpKind::Multiply,
+            lhs: ScalarDoubleSource::Selection,
+            rhs: ScalarDoubleSource::Constant(1.25),
+        },
+        ScalarDoubleOp {
+            kind: ScalarDoubleOpKind::Add,
+            lhs: ScalarDoubleSource::Temporary(4),
+            rhs: ScalarDoubleSource::Constant(3.0),
+        },
+    ]);
+    plan.program.operations = operations.into_boxed_slice();
+    plan.program.output = ScalarDoubleSource::Temporary(5);
+    plan.select.as_mut().unwrap().merge_result = true;
+    plan
 }
 
 fn conditional_argument_plan() -> QuickDoubleArgumentProgram {
@@ -140,8 +165,10 @@ fn selective_division_plan() -> ScalarDoubleFunctionPlan {
             rhs: ScalarDoubleSource::Constant(0.0),
             shared_operation_count: 0,
             when_true_operation_count: 1,
+            when_false_operation_count: 0,
             when_true: ScalarDoubleSource::Temporary(0),
             when_false: ScalarDoubleSource::Constant(3.0),
+            merge_result: false,
         },
     )
 }
@@ -528,6 +555,25 @@ fn conditional_double_program_preserves_ordered_and_nan_semantics() {
 }
 
 #[test]
+fn merged_conditional_double_program_executes_one_arm_and_the_common_suffix() {
+    for instruction_set in [X86DoubleInstructionSet::Sse2, X86DoubleInstructionSet::Avx] {
+        let program = CompiledScalarDoubleProgram::compile_with_instruction_set(
+            &merged_conditional_arithmetic_plan(),
+            instruction_set,
+        )
+        .unwrap();
+        assert_eq!(
+            program.call(&[2.0, 3.0]).unwrap(),
+            ScalarDoubleJitOutcome::Value(9.25)
+        );
+        assert_eq!(
+            program.call(&[4.0, 3.0]).unwrap(),
+            ScalarDoubleJitOutcome::Value(4.25)
+        );
+    }
+}
+
+#[test]
 fn conditional_double_loop_executes_both_arithmetic_edges() {
     for instruction_set in [X86DoubleInstructionSet::Sse2, X86DoubleInstructionSet::Avx] {
         let program = CompiledQuickDoubleCallAccumulateLoop::compile_with_instruction_set(
@@ -549,6 +595,31 @@ fn conditional_double_loop_executes_both_arithmetic_edges() {
         assert_eq!(state.induction, 10);
         assert_eq!(state.accumulator, 21.25);
         assert_eq!(state.last_term, 1.25);
+    }
+}
+
+#[test]
+fn merged_conditional_double_loop_executes_the_common_suffix_after_both_edges() {
+    for instruction_set in [X86DoubleInstructionSet::Sse2, X86DoubleInstructionSet::Avx] {
+        let program = CompiledQuickDoubleCallAccumulateLoop::compile_with_instruction_set(
+            &conditional_argument_plan(),
+            &merged_conditional_arithmetic_plan(),
+            instruction_set,
+        )
+        .unwrap();
+        let mut state = NativeDoubleCallAccumulateState {
+            induction: 0,
+            bound: 10,
+            accumulator: 0.0,
+            last_term: -1.0,
+        };
+        assert_eq!(
+            program.call(&mut state, &[], &false).unwrap(),
+            QuickDoubleCallAccumulateJitOutcome::Completed
+        );
+        assert_eq!(state.induction, 10);
+        assert_eq!(state.accumulator, 56.5625);
+        assert_eq!(state.last_term, 4.5625);
     }
 }
 
