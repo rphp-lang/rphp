@@ -139,6 +139,54 @@ fn typed_double_argument_expressions_enter_one_native_region() {
 }
 
 #[test]
+fn nested_typed_double_leaf_is_flattened_into_one_native_region() {
+    let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateNested($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(captured_output(&output), "100000:2500225000");
+
+    let loop_plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the nested Double loop");
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 0);
+
+    let outer = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("calculateNested"))
+        .map(|(_, function)| function)
+        .expect("compiled outer Double function");
+    assert!(outer.scalar_double_plan.is_none());
+    assert!(outer.composed_scalar_double_plan.is_some());
+    assert_eq!(outer.common.call_count.get(), 100000);
+    let inner = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("scaleAndShift"))
+        .map(|(_, function)| function)
+        .expect("compiled inner Double function");
+    assert_eq!(inner.common.call_count.get(), 100000);
+}
+
+#[test]
 fn monomorphic_float_method_uses_class_cache_and_double_jit() {
     let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
     let source = format!(

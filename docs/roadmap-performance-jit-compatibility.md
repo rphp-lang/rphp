@@ -3698,6 +3698,64 @@ step is nested target-neutral scalar callees. It should reuse this same source
 remapping and liveness proof before extending dispatch to monomorphic scalar
 methods guarded by receiver class and method cache.
 
+### Guarded nested Double leaf checkpoint
+
+Straight-line typed-Double functions may now contain direct calls to other
+proven typed-Double leaves (2026-08-05). The compiler records arithmetic and
+call nodes in a new target-neutral `ComposedScalarDoubleFunctionPlan`; it does
+not bind or inline a callee from source names alone. Each call retains the
+canonical owner-op-array inline-cache position and its source-remapped Double
+arguments.
+
+At execution time, RPHP resolves an empty function cache through the normal
+function table, validates the cached target's identity, arity, compact exact-
+Double ABI and pure `ScalarDoubleFunctionPlan`, then flattens the call leaf and
+outer arithmetic into the established `ScalarDoubleProgram`. Composed
+operation results are remapped to the flattened SSA temporaries, while leaf
+inputs become the outer call's actual Double sources. The complete flattened
+body must fit the shared eight-operation/register capacity. Long literals at a
+nested float boundary, named/by-reference calls, unsupported targets and
+larger bodies are rejected before speculative execution.
+
+The same flattener serves three execution modes:
+
+- ordinary contiguous exact-Double calls outside loops use the frame-free Rust
+  direct-call path;
+- quick loops without JIT evaluate the flattened Rust scalar program;
+- ARM64 and x86-64 quick-loop JITs compile that identical flat program with no
+  new backend opcode.
+
+Weak calls containing raw Long values deliberately miss the direct guard and
+retain canonical float coercion. Native division side exits remain
+transactional and resume the outer root `InitFcall`, so the ordinary nested
+frames reproduce PHP's precise division error. Root and nested targets are all
+recorded in call/hotness statistics. The native cache now stores the complete
+ordered root-plus-leaf identity tuple; a changed nested target cannot reuse
+machine code compiled for an earlier composition.
+
+The new unseen five-million-iteration
+`bench_typed_float_nested_leaf.php` holdout returns the identical
+`6250011250000` value. Nine interleaved native-CPU `max-perf` comparison runs,
+with a final 21-run ARM64 RPHP confirmation, give:
+
+| Host | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 3.444 ms | 44.920 ms | 42.006 ms | 160.914 ms |
+| Ryzen x86-64, PHP 8.4.24 | 8.963 ms | 51.824 ms | 45.291 ms | 150.608 ms |
+
+RPHP is therefore about 12.2x/3.6x faster than PHP JIT/no-JIT on ARM64 and
+5.1x/2.9x on x86-64 for this nested call shape. The final all-feature matrix
+passes 178 ARM64 and 195 x86-64 library tests, 92 ARM64 and 24 x86-64 JIT
+integration tests, all 47 loop end-to-end tests, and all four application
+corpus tests on both targets.
+
+This checkpoint intentionally admits one composed layer whose call targets are
+flat Double leaves. The next structural step is bounded recursive flattening
+of composed scalar Double callees using the same total-operation and identity
+tuple limits. After that, direct monomorphic Double methods should reuse the
+existing receiver-class plus method-cache guard contract rather than adding a
+separate object JIT.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

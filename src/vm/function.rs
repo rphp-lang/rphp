@@ -162,6 +162,28 @@ pub struct ScalarDoubleFunctionPlan {
     native_jit: crate::jit::ScalarDoubleJitCache,
 }
 
+/// Guarded exact-Double call embedded in a composed scalar body. The call-site
+/// inline cache remains authoritative for function identity; arguments are
+/// values produced by the owner's target-neutral Double IR.
+pub struct ScalarDoubleCall {
+    pub guard: ScalarLongCallGuard,
+    pub arguments: Box<[ScalarDoubleSource]>,
+}
+
+/// One operation in a pure Double body that composes arithmetic with direct
+/// user-function calls. Runtime flattening turns guarded call leaves back into
+/// the established `ScalarDoubleProgram` before either native backend sees it.
+pub enum ComposedScalarDoubleOp {
+    Arithmetic(ScalarDoubleOp),
+    Call(ScalarDoubleCall),
+}
+
+pub struct ComposedScalarDoubleFunctionPlan {
+    pub public_args: u8,
+    pub operations: Box<[ComposedScalarDoubleOp]>,
+    pub output: ScalarDoubleSource,
+}
+
 impl ScalarDoubleFunctionPlan {
     pub fn new(public_args: u8, program: ScalarDoubleProgram) -> Self {
         Self {
@@ -967,6 +989,7 @@ pub struct UserFunction {
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
     pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
     pub scalar_double_plan: Option<Box<ScalarDoubleFunctionPlan>>,
+    pub composed_scalar_double_plan: Option<Box<ComposedScalarDoubleFunctionPlan>>,
     pub object_long_plan: Option<Box<ObjectLongFunctionPlan>>,
     pub object_array_plan: Option<Box<ObjectArrayFunctionPlan>>,
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,

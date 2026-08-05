@@ -258,6 +258,24 @@ echo ':' . combine(2, 3);
 }
 
 #[test]
+fn test_e2e_composed_double_body_uses_exact_direct_path_and_weak_fallback() {
+    assert_eq!(
+        run_php(r#"<?php
+function scaleAndShift(float $value, float $scale): float {
+    return ($value * $scale) + 1.0;
+}
+function calculateNested(float $value, float $scale): float {
+    return (scaleAndShift($value, $scale) * 0.5) + 2.0;
+}
+$exact = calculateNested(2.0, 3.0);
+$coerced = calculateNested(2, 3);
+echo gettype($exact) . ':' . $exact . '|' . gettype($coerced) . ':' . $coerced;
+"#),
+        "double:5.5|double:5.5"
+    );
+}
+
+#[test]
 fn test_e2e_user_function_scope_isolation() {
     assert_eq!(
         run_php("<?php $x = 10; function foo() { $x = 99; return $x; } echo foo(); echo $x;"),

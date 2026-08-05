@@ -18,8 +18,9 @@ use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
     ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource,
-    ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind,
-    ScalarDoubleProgram, ScalarDoubleSource,
+    ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ScalarDoubleCall,
+    ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
+    ScalarDoubleSource,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
     ObjectLongModuloEqualTerm, ObjectLongObjectSource, ObjectLongOp,
     ObjectLongSource, ObjectLongStringAdjustment, ObjectLongStringIntDivCase,
@@ -634,6 +635,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
         scalar_double_plan: None,
+        composed_scalar_double_plan: None,
         object_long_plan: None,
         object_array_plan: None,
         scalar_string_plan: None,
@@ -647,6 +649,8 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.scalar_double_plan = build_scalar_double_function_plan(&function);
+    function.composed_scalar_double_plan =
+        build_composed_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
@@ -751,6 +755,7 @@ pub fn make_user_function_typed(
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
         scalar_double_plan: None,
+        composed_scalar_double_plan: None,
         object_long_plan: None,
         object_array_plan: None,
         scalar_string_plan: None,
@@ -764,6 +769,8 @@ pub fn make_user_function_typed(
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.scalar_double_plan = build_scalar_double_function_plan(&function);
+    function.composed_scalar_double_plan =
+        build_composed_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
@@ -1071,6 +1078,178 @@ fn build_scalar_double_function_plan(
                 is_double: true,
             },
         );
+    }
+    None
+}
+
+const COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS: usize = 16;
+
+/// Recognize a straight-line exact-Double body containing direct function
+/// calls. Calls remain guarded IR nodes here; the runtime resolves their
+/// canonical inline caches and flattens proven Double leaves before execution.
+fn build_composed_scalar_double_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ComposedScalarDoubleFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if !common.supports_scalar_double_plan()
+        || common.plan.ret != ReturnStrategy::Fast
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || op_array.instructions.len() > 32
+    {
+        return None;
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut operations = Vec::new();
+    let mut contains_call = false;
+    let mut ip = 0usize;
+    while ip < op_array.instructions.len() {
+        let instruction = &op_array.instructions[ip];
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 || !contains_call {
+                return None;
+            }
+            let output = scalar_double_source(
+                op_array,
+                &temporary_results,
+                common.sig.this_offset,
+                public_args,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            if !output.is_double {
+                return None;
+            }
+            return Some(Box::new(ComposedScalarDoubleFunctionPlan {
+                public_args: public_args as u8,
+                operations: operations.into_boxed_slice(),
+                output: output.source,
+            }));
+        }
+
+        if instruction.opcode == OpCode::InitFcall {
+            let argument_count = instruction.op1 as usize;
+            if argument_count > SCALAR_LONG_PLAN_MAX_ARGS as usize
+                || ip > u32::MAX as usize
+                || operations.len() == COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS
+                || ip + argument_count + 1 >= op_array.instructions.len()
+            {
+                return None;
+            }
+            let mut arguments = Vec::with_capacity(argument_count);
+            for argument_index in 0..argument_count {
+                let send = &op_array.instructions[ip + 1 + argument_index];
+                if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                    || send.op2 as usize != argument_index
+                {
+                    return None;
+                }
+                let source = scalar_double_source(
+                    op_array,
+                    &temporary_results,
+                    common.sig.this_offset,
+                    public_args,
+                    send.op1_type,
+                    send.op1,
+                )?;
+                // A Long literal would require the canonical weak-float
+                // coercion boundary before entering the nested exact ABI.
+                if !source.is_double {
+                    return None;
+                }
+                arguments.push(source.source);
+            }
+            let do_fcall = &op_array.instructions[ip + 1 + argument_count];
+            if do_fcall.opcode != OpCode::DoFcall
+                || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            let result_index = operations.len() as u8;
+            operations.push(ComposedScalarDoubleOp::Call(ScalarDoubleCall {
+                guard: ScalarLongCallGuard::FunctionCache {
+                    cache_ip: ip as u32,
+                },
+                arguments: arguments.into_boxed_slice(),
+            }));
+            temporary_results.insert(
+                do_fcall.result,
+                ProvenScalarDoubleSource {
+                    source: ScalarDoubleSource::Temporary(result_index),
+                    is_double: true,
+                },
+            );
+            contains_call = true;
+            ip += argument_count + 2;
+            continue;
+        }
+
+        if instruction.opcode == OpCode::AssignCv {
+            if instruction.op1_type != OpType::Cv {
+                return None;
+            }
+            let destination = instruction.op1 as u32;
+            let first_argument = common.sig.this_offset;
+            let argument_end = first_argument + public_args;
+            if destination < first_argument
+                || (destination >= first_argument && destination < argument_end)
+            {
+                return None;
+            }
+            let source = scalar_double_source(
+                op_array,
+                &temporary_results,
+                common.sig.this_offset,
+                public_args,
+                instruction.op2_type,
+                instruction.op2,
+            )?;
+            temporary_results.insert(instruction.op1, source);
+            ip += 1;
+            continue;
+        }
+
+        let kind = scalar_double_op_kind(instruction.opcode)?;
+        if operations.len() == COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let lhs = scalar_double_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = scalar_double_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        if !lhs.is_double && !rhs.is_double {
+            return None;
+        }
+        let result_index = operations.len() as u8;
+        operations.push(ComposedScalarDoubleOp::Arithmetic(ScalarDoubleOp {
+            kind,
+            lhs: lhs.source,
+            rhs: rhs.source,
+        }));
+        temporary_results.insert(
+            instruction.result,
+            ProvenScalarDoubleSource {
+                source: ScalarDoubleSource::Temporary(result_index),
+                is_double: true,
+            },
+        );
+        ip += 1;
     }
     None
 }
@@ -4283,6 +4462,8 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
         build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.scalar_double_plan = build_scalar_double_function_plan(&function);
+    function.composed_scalar_double_plan =
+        build_composed_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);

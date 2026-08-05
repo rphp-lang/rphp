@@ -260,7 +260,8 @@ impl CompiledQuickDoubleCallAccumulateLoop {
 }
 
 pub struct QuickDoubleCallAccumulateJitCache {
-    target_identity: Cell<usize>,
+    target_identities: Cell<[usize; 9]>,
+    target_count: Cell<u8>,
     compiled: OnceCell<Option<CompiledQuickDoubleCallAccumulateLoop>>,
     native_entries: Cell<u64>,
     side_exits: Cell<u64>,
@@ -269,7 +270,8 @@ pub struct QuickDoubleCallAccumulateJitCache {
 impl QuickDoubleCallAccumulateJitCache {
     pub const fn new() -> Self {
         Self {
-            target_identity: Cell::new(0),
+            target_identities: Cell::new([0; 9]),
+            target_count: Cell::new(0),
             compiled: OnceCell::new(),
             native_entries: Cell::new(0),
             side_exits: Cell::new(0),
@@ -278,7 +280,7 @@ impl QuickDoubleCallAccumulateJitCache {
 
     pub(crate) unsafe fn dispatch(
         &self,
-        target_identity: usize,
+        target_identities: &[usize],
         argument_plan: &QuickDoubleArgumentProgram,
         plan: &ScalarDoubleFunctionPlan,
         state: &mut NativeDoubleCallAccumulateState,
@@ -286,9 +288,17 @@ impl QuickDoubleCallAccumulateJitCache {
         interrupt: *const bool,
     ) -> Option<Result<QuickDoubleCallAccumulateJitOutcome, QuickDoubleCallAccumulateJitError>>
     {
+        if target_identities.len() > 9 {
+            return None;
+        }
         if self.compiled.get().is_none() {
-            self.target_identity.set(target_identity);
-        } else if self.target_identity.get() != target_identity {
+            let mut identities = [0usize; 9];
+            identities[..target_identities.len()].copy_from_slice(target_identities);
+            self.target_identities.set(identities);
+            self.target_count.set(target_identities.len() as u8);
+        } else if self.target_count.get() as usize != target_identities.len()
+            || self.target_identities.get()[..target_identities.len()] != *target_identities
+        {
             return None;
         }
         let program = self

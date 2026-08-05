@@ -38,9 +38,10 @@ use super::instruction::{
     NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarDoubleFunctionPlan, ScalarDoubleOpKind, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarDoubleFunctionPlan, ScalarDoubleOpKind, ScalarDoubleProgram, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
-    compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
+    compose_quick_scalar_leaf_program, compose_scalar_double_program,
+    QuickArrayIndex, QuickIncrementKind,
     QuickDoubleArgumentProgram, QuickDoubleCallAccumulateLoop, QuickDoubleSource,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
@@ -2033,6 +2034,72 @@ pub(crate) unsafe fn try_execute_direct_scalar_double_call(
         return None;
     }
     let result = evaluate_scalar_double_plan(plan, &arguments)?;
+    Some((result, do_fcall_ptr))
+}
+
+/// Enter a straight-line composed Double body from an ordinary contiguous
+/// call site. Nested targets are guarded and flattened exactly as they are for
+/// a quick loop; a failed guard leaves every original Send/DoFcall instruction
+/// untouched for canonical execution.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_direct_composed_scalar_double_call(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    sends: *const Instruction,
+    common: &FunctionCommon,
+    owner: &UserFunction,
+    plan: &ComposedScalarDoubleFunctionPlan,
+) -> Option<(f64, *const Instruction)> {
+    if !common.supports_scalar_double_plan()
+        || common.sig.public_arity() != plan.public_args as u32
+    {
+        return None;
+    }
+
+    let mut arguments = [0.0_f64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(plan.public_args as usize)
+    {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return None,
+        };
+        if value.value_type() != ValueType::Double || value.is_reference() {
+            return None;
+        }
+        *argument = value.raw_double();
+    }
+
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
+    {
+        return None;
+    }
+
+    let (program, nested_targets, nested_target_count) =
+        resolve_composed_double_program(eg, owner, plan)?;
+    let flattened = ScalarDoubleFunctionPlan::new(plan.public_args, program);
+    let result = evaluate_scalar_double_plan_rust(&flattened, &arguments)?;
+    for target in nested_targets.into_iter().take(nested_target_count) {
+        record_scalar_call(&*target);
+    }
+    record_scalar_call(common);
     Some((result, do_fcall_ptr))
 }
 

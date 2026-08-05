@@ -1315,6 +1315,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             continue 'vm;
                         }
                     }
+                    if let Some(plan) = user.composed_scalar_double_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_direct_composed_scalar_double_call(
+                                eg,
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                common,
+                                user,
+                                plan,
+                            )
+                        } {
+                            unsafe {
+                                complete_direct_scalar_double_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            continue 'vm;
+                        }
+                    }
                     if let Some(plan) = user.composed_scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
                         if let Some((result, do_fcall_ptr)) = unsafe {
@@ -2540,6 +2563,29 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     if count < u32::MAX {
                                         common.call_count.set(count + 1);
                                     }
+                                    unsafe {
+                                        complete_direct_scalar_double_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
+                                }
+                            }
+                            if let Some(plan) = user.composed_scalar_double_plan.as_deref() {
+                                scalar_plan_eligible = true;
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_composed_scalar_double_call(
+                                        eg,
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        common,
+                                        user,
+                                        plan,
+                                    )
+                                } {
                                     unsafe {
                                         complete_direct_scalar_double_call(
                                             frame,

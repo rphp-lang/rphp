@@ -66,6 +66,24 @@ fn test_e2e_typed_double_call_argument_expressions() {
 }
 
 #[test]
+fn test_e2e_nested_typed_double_leaf_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100; $i++) { $total += calculateNested($i * 0.5, $scale); } echo $i . ':' . $total;"
+        ),
+        "100:2725"
+    );
+}
+
+#[test]
+fn test_e2e_nested_typed_double_division_replays_canonical_error() {
+    let error = run_php_expect_error(
+        "<?php function divideNested(float $value, float $divisor): float { return $value / $divisor; } function calculateNested(float $value, float $divisor): float { return divideNested($value, $divisor) + 1.0; } $total = 0.0; for ($i = 0; $i < 5; $i++) { $total += calculateNested(4.0, $i - 2.0); }",
+    );
+    assert!(format!("{error:?}").contains("Division by zero"));
+}
+
+#[test]
 fn test_e2e_typed_double_argument_division_replays_canonical_error() {
     let error = run_php_expect_error(
         "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $total = 0.0; for ($i = 0; $i < 5; $i++) { $total += calculateFloat(1.0 / ($i - 2.0), 2.0, 3.0); }",

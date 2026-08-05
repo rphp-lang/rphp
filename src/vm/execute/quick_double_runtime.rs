@@ -121,6 +121,87 @@ fn evaluate_quick_double_argument_phase(
     true
 }
 
+unsafe fn resolve_composed_double_program(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    plan: &ComposedScalarDoubleFunctionPlan,
+) -> Option<(ScalarDoubleProgram, [*const FunctionCommon; 8], usize)> {
+    if plan.operations.len() > 16 {
+        return None;
+    }
+    let mut leaf_plans: [Option<&ScalarDoubleFunctionPlan>; 16] = [None; 16];
+    let mut targets = [std::ptr::null(); 8];
+    let mut target_count = 0usize;
+
+    for (operation_index, operation) in plan.operations.iter().enumerate() {
+        let ComposedScalarDoubleOp::Call(call) = operation else {
+            continue;
+        };
+        let ScalarLongCallGuard::FunctionCache { .. } = call.guard else {
+            return None;
+        };
+        let ip = call.guard.cache_ip();
+        let initializer = owner.op_array.instructions.get(ip)?;
+        if initializer.opcode != OpCode::InitFcall {
+            return None;
+        }
+        let cache = owner.op_array.cache.get(ip)?;
+        if cache.func.is_null() {
+            let primary = owner
+                .op_array
+                .literals
+                .get(initializer.op2 as usize)?
+                .as_str()?;
+            let resolved = eg.find_function(primary).or_else(|| {
+                if initializer.extended_value == 0 {
+                    return None;
+                }
+                owner
+                    .op_array
+                    .literals
+                    .get(initializer.extended_value as usize)
+                    .and_then(Value::as_str)
+                    .and_then(|fallback| eg.find_function(fallback))
+            })?;
+            let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
+                as *mut crate::vm::instruction::InlineCache);
+            cache_mut.func = resolved;
+        }
+        let (target, user) = guarded_cached_user_call_target(
+            &owner.op_array,
+            call.guard,
+            None,
+            call.arguments.len(),
+        )?;
+        let user = &*user;
+        if !user.common.supports_scalar_double_plan() {
+            return None;
+        }
+        let leaf = user.scalar_double_plan.as_deref()?;
+        if leaf.public_args as usize != call.arguments.len()
+            || target_count == targets.len()
+        {
+            return None;
+        }
+        leaf_plans[operation_index] = Some(leaf);
+        targets[target_count] = target;
+        target_count += 1;
+    }
+
+    let program = compose_scalar_double_program(plan, &leaf_plans)?;
+    Some((program, targets, target_count))
+}
+
+#[inline(always)]
+unsafe fn record_quick_double_call_targets(
+    targets: &[*const FunctionCommon],
+    iterations: u64,
+) {
+    for target in targets.iter().copied() {
+        record_scalar_calls_bulk(&*target, iterations);
+    }
+}
+
 #[inline(never)]
 #[cfg(all(
     feature = "quick-loops",
@@ -136,7 +217,7 @@ unsafe fn run_native_quick_double_call_accumulate_loop(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     plan: &QuickDoubleCallAccumulateLoop,
-    target: *const FunctionCommon,
+    targets: &[*const FunctionCommon],
     call_plan: &ScalarDoubleFunctionPlan,
     inputs: &[f64; 8],
     induction_ptr: *mut Value,
@@ -159,11 +240,15 @@ unsafe fn run_native_quick_double_call_accumulate_loop(
         accumulator,
         last_term,
     };
+    let mut target_identities = [0usize; 9];
+    for (index, target) in targets.iter().copied().enumerate() {
+        target_identities[index] = target as usize;
+    }
     let mut total_iterations = 0u64;
     loop {
         let before_induction = state.induction;
         let Some(result) = plan.native_jit().dispatch(
-            target as usize,
+            &target_identities[..targets.len()],
             &plan.argument_program,
             call_plan,
             &mut state,
@@ -174,7 +259,7 @@ unsafe fn run_native_quick_double_call_accumulate_loop(
         };
         let iterations = (state.induction as u64).wrapping_sub(before_induction as u64);
         total_iterations = total_iterations.saturating_add(iterations);
-        record_scalar_calls_bulk(&*target, iterations);
+        record_quick_double_call_targets(targets, iterations);
         let last_increment = if total_iterations == 0 {
             initial_last_increment
         } else {
@@ -318,12 +403,39 @@ unsafe fn run_quick_double_call_accumulate_loop(
         return Ok(QuickLoopOutcome::GuardFailed);
     };
     let user = &*user;
-    let Some(call_plan) = user.scalar_double_plan.as_deref() else {
+    if !user.common.supports_scalar_double_plan() {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
-    };
+    }
+    let mut call_targets = [std::ptr::null(); 9];
+    call_targets[0] = target;
+    let mut call_target_count = 1usize;
+    let mut composed_call_plan = None;
+    if user.scalar_double_plan.is_none() {
+        let Some(composed) = user.composed_scalar_double_plan.as_deref() else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        let Some((program, nested_targets, nested_target_count)) =
+            resolve_composed_double_program(eg, user, composed)
+        else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        call_targets[1..1 + nested_target_count]
+            .copy_from_slice(&nested_targets[..nested_target_count]);
+        call_target_count += nested_target_count;
+        composed_call_plan = Some(ScalarDoubleFunctionPlan::new(
+            composed.public_args,
+            program,
+        ));
+    }
+    let call_plan = user
+        .scalar_double_plan
+        .as_deref()
+        .or(composed_call_plan.as_ref())
+        .unwrap_unchecked();
     if call_plan.public_args != plan.argument_program.output_count
-        || !user.common.supports_scalar_double_plan()
     {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
@@ -366,7 +478,7 @@ unsafe fn run_quick_double_call_accumulate_loop(
         frame,
         op_array,
         plan,
-        target,
+        &call_targets[..call_target_count],
         call_plan,
         &inputs,
         induction_ptr,
@@ -413,7 +525,10 @@ unsafe fn run_quick_double_call_accumulate_loop(
             last_increment,
         );
         (*frame).opline = op_array.instructions.as_ptr().add(plan.guard.cache_ip());
-        record_scalar_calls_bulk(&*target, iterations);
+        record_quick_double_call_targets(
+            &call_targets[..call_target_count],
+            iterations,
+        );
         stats::inc_quick_loop_deoptimized(iterations);
         return Ok(QuickLoopOutcome::Deoptimized);
     }
@@ -434,7 +549,10 @@ unsafe fn run_quick_double_call_accumulate_loop(
                 last_increment,
             );
             (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
-            record_scalar_calls_bulk(&*target, iterations);
+            record_quick_double_call_targets(
+                &call_targets[..call_target_count],
+                iterations,
+            );
             stats::inc_quick_loop_completed(iterations);
             return Ok(QuickLoopOutcome::Completed);
         }
@@ -463,7 +581,10 @@ unsafe fn run_quick_double_call_accumulate_loop(
                 last_increment,
             );
             (*frame).opline = op_array.instructions.as_ptr().add(plan.guard.cache_ip());
-            record_scalar_calls_bulk(&*target, iterations);
+            record_quick_double_call_targets(
+                &call_targets[..call_target_count],
+                iterations,
+            );
             stats::inc_quick_loop_deoptimized(iterations);
             return Ok(QuickLoopOutcome::Deoptimized);
         }
@@ -482,7 +603,10 @@ unsafe fn run_quick_double_call_accumulate_loop(
                 last_increment,
             );
             (*frame).opline = op_array.instructions.as_ptr().add(plan.guard.cache_ip());
-            record_scalar_calls_bulk(&*target, iterations);
+            record_quick_double_call_targets(
+                &call_targets[..call_target_count],
+                iterations,
+            );
             stats::inc_quick_loop_deoptimized(iterations);
             return Ok(QuickLoopOutcome::Deoptimized);
         };
@@ -490,7 +614,10 @@ unsafe fn run_quick_double_call_accumulate_loop(
         let Some(next_induction) = induction.checked_add(1) else {
             last_term = term;
             accumulator = next_accumulator;
-            record_scalar_calls_bulk(&*target, iterations.saturating_add(1));
+            record_quick_double_call_targets(
+                &call_targets[..call_target_count],
+                iterations.saturating_add(1),
+            );
             publish_quick_double_call_state(
                 induction_ptr,
                 accumulator_ptr,
@@ -532,7 +659,10 @@ unsafe fn run_quick_double_call_accumulate_loop(
                 last_increment,
             );
             (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
-            record_scalar_calls_bulk(&*target, iterations);
+            record_quick_double_call_targets(
+                &call_targets[..call_target_count],
+                iterations,
+            );
             iterations = 0;
             handle_interrupt(eg)?;
         }

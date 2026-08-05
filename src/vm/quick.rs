@@ -294,6 +294,16 @@ impl QuickDoubleArgumentProgram {
     /// same-operation RHS restriction also keeps this proof valid for the
     /// two-operand x86-64 lowering, which writes the LHS into its destination
     /// before consuming the RHS.
+    #[cfg(any(
+        test,
+        all(
+            feature = "jit-prototype",
+            any(
+                all(target_arch = "aarch64", target_os = "macos"),
+                all(target_arch = "x86_64", target_os = "linux")
+            )
+        )
+    ))]
     pub(crate) fn register_forwardable_output_mask(
         &self,
         leaf: &crate::vm::function::ScalarDoubleFunctionPlan,
@@ -352,6 +362,105 @@ impl QuickDoubleArgumentProgram {
         }
         mask
     }
+}
+
+/// Flatten one guarded composed Double body after its direct call leaves have
+/// been resolved. Operation-result remapping is target-neutral: both native
+/// backends receive the same established eight-temporary scalar program.
+pub(crate) fn compose_scalar_double_program(
+    plan: &crate::vm::function::ComposedScalarDoubleFunctionPlan,
+    leaf_plans: &[Option<&crate::vm::function::ScalarDoubleFunctionPlan>],
+) -> Option<crate::vm::function::ScalarDoubleProgram> {
+    use crate::vm::function::{
+        ComposedScalarDoubleOp, ScalarDoubleOp, ScalarDoubleSource,
+    };
+
+    const MAX_OPERATIONS: usize = 8;
+    if plan.operations.len() > 16 || plan.operations.len() > leaf_plans.len() {
+        return None;
+    }
+
+    fn remap_composed_source(
+        source: ScalarDoubleSource,
+        results: &[Option<ScalarDoubleSource>],
+    ) -> Option<ScalarDoubleSource> {
+        match source {
+            ScalarDoubleSource::Input(index) => Some(ScalarDoubleSource::Input(index)),
+            ScalarDoubleSource::Constant(value) => {
+                Some(ScalarDoubleSource::Constant(value))
+            }
+            ScalarDoubleSource::Temporary(index) => {
+                results.get(index as usize).copied().flatten()
+            }
+        }
+    }
+
+    let mut operations = Vec::with_capacity(MAX_OPERATIONS);
+    let mut results = [None; 16];
+    for (composed_index, operation) in plan.operations.iter().enumerate() {
+        results[composed_index] = Some(match operation {
+            ComposedScalarDoubleOp::Arithmetic(operation) => {
+                if operations.len() == MAX_OPERATIONS {
+                    return None;
+                }
+                let lhs = remap_composed_source(operation.lhs, &results)?;
+                let rhs = remap_composed_source(operation.rhs, &results)?;
+                let result = ScalarDoubleSource::Temporary(operations.len() as u8);
+                operations.push(ScalarDoubleOp {
+                    kind: operation.kind,
+                    lhs,
+                    rhs,
+                });
+                result
+            }
+            ComposedScalarDoubleOp::Call(call) => {
+                let leaf = leaf_plans.get(composed_index).copied().flatten()?;
+                if leaf.public_args as usize != call.arguments.len()
+                    || operations.len() + leaf.program.operations.len()
+                        > MAX_OPERATIONS
+                {
+                    return None;
+                }
+                if call.arguments.len() > 8 {
+                    return None;
+                }
+                let mut arguments = [ScalarDoubleSource::Constant(0.0); 8];
+                for (index, source) in call.arguments.iter().copied().enumerate() {
+                    arguments[index] = remap_composed_source(source, &results)?;
+                }
+                let leaf_start = operations.len();
+                let remap_leaf_source = |source| match source {
+                    ScalarDoubleSource::Input(index)
+                        if (index as usize) < call.arguments.len() =>
+                    {
+                        Some(arguments[index as usize])
+                    }
+                    ScalarDoubleSource::Input(_) => None,
+                    ScalarDoubleSource::Constant(value) => {
+                        Some(ScalarDoubleSource::Constant(value))
+                    }
+                    ScalarDoubleSource::Temporary(index) => leaf_start
+                        .checked_add(index as usize)
+                        .filter(|index| *index < leaf_start + leaf.program.operations.len())
+                        .and_then(|index| u8::try_from(index).ok())
+                        .map(ScalarDoubleSource::Temporary),
+                };
+                for operation in leaf.program.operations.iter().copied() {
+                    operations.push(ScalarDoubleOp {
+                        kind: operation.kind,
+                        lhs: remap_leaf_source(operation.lhs)?,
+                        rhs: remap_leaf_source(operation.rhs)?,
+                    });
+                }
+                remap_leaf_source(leaf.program.output)?
+            }
+        });
+    }
+
+    Some(crate::vm::function::ScalarDoubleProgram {
+        operations: operations.into_boxed_slice(),
+        output: remap_composed_source(plan.output, &results)?,
+    })
 }
 
 /// A mixed Long-control/Double-data loop whose hot body is one exact-Double
@@ -4737,8 +4846,9 @@ mod tests {
     use crate::lexer::Lexer;
     use crate::parser::Parser;
     use crate::vm::function::{
-        ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind,
-        ScalarDoubleProgram, ScalarDoubleSource,
+        ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ScalarDoubleCall,
+        ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
+        ScalarDoubleSource,
     };
     use crate::vm::planner::BlockPlan;
 
@@ -4802,6 +4912,105 @@ mod tests {
         );
 
         assert_eq!(arguments.register_forwardable_output_mask(&leaf), 0);
+    }
+
+    #[test]
+    fn flattens_guarded_double_leaf_with_target_neutral_source_remapping() {
+        let composed = ComposedScalarDoubleFunctionPlan {
+            public_args: 1,
+            operations: vec![
+                ComposedScalarDoubleOp::Call(ScalarDoubleCall {
+                    guard: ScalarLongCallGuard::FunctionCache { cache_ip: 0 },
+                    arguments: vec![ScalarDoubleSource::Input(0)].into_boxed_slice(),
+                }),
+                ComposedScalarDoubleOp::Arithmetic(ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Add,
+                    lhs: ScalarDoubleSource::Temporary(0),
+                    rhs: ScalarDoubleSource::Constant(3.0),
+                }),
+            ]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Temporary(1),
+        };
+        let leaf = ScalarDoubleFunctionPlan::new(
+            1,
+            ScalarDoubleProgram {
+                operations: vec![ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Multiply,
+                    lhs: ScalarDoubleSource::Input(0),
+                    rhs: ScalarDoubleSource::Constant(2.0),
+                }]
+                .into_boxed_slice(),
+                output: ScalarDoubleSource::Temporary(0),
+            },
+        );
+
+        let flattened = compose_scalar_double_program(
+            &composed,
+            &[Some(&leaf), None],
+        )
+        .unwrap();
+        assert_eq!(flattened.operations.len(), 2);
+        assert!(matches!(
+            flattened.operations[0],
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Multiply,
+                lhs: ScalarDoubleSource::Input(0),
+                rhs: ScalarDoubleSource::Constant(2.0),
+            }
+        ));
+        assert!(matches!(
+            flattened.operations[1],
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: ScalarDoubleSource::Temporary(0),
+                rhs: ScalarDoubleSource::Constant(3.0),
+            }
+        ));
+        assert_eq!(flattened.output, ScalarDoubleSource::Temporary(1));
+    }
+
+    #[test]
+    fn rejects_flattened_double_body_beyond_shared_register_capacity() {
+        let composed = ComposedScalarDoubleFunctionPlan {
+            public_args: 1,
+            operations: vec![
+                ComposedScalarDoubleOp::Call(ScalarDoubleCall {
+                    guard: ScalarLongCallGuard::FunctionCache { cache_ip: 0 },
+                    arguments: vec![ScalarDoubleSource::Input(0)].into_boxed_slice(),
+                }),
+                ComposedScalarDoubleOp::Arithmetic(ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Add,
+                    lhs: ScalarDoubleSource::Temporary(0),
+                    rhs: ScalarDoubleSource::Constant(1.0),
+                }),
+            ]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Temporary(1),
+        };
+        let mut leaf_operations = Vec::new();
+        for index in 0..8 {
+            leaf_operations.push(ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: if index == 0 {
+                    ScalarDoubleSource::Input(0)
+                } else {
+                    ScalarDoubleSource::Temporary(index - 1)
+                },
+                rhs: ScalarDoubleSource::Constant(1.0),
+            });
+        }
+        let leaf = ScalarDoubleFunctionPlan::new(
+            1,
+            ScalarDoubleProgram {
+                operations: leaf_operations.into_boxed_slice(),
+                output: ScalarDoubleSource::Temporary(7),
+            },
+        );
+
+        assert!(
+            compose_scalar_double_program(&composed, &[Some(&leaf), None]).is_none()
+        );
     }
 
     fn compile_main(source: &str) -> crate::vm::function::UserFunction {
