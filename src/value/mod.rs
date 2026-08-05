@@ -106,6 +106,16 @@ pub struct PhpObject {
     pub generator: Option<GeneratorRef>,
 }
 
+thread_local! {
+    /// Every decoded JSON object is the same dynamic `stdClass`. Sharing its
+    /// immutable name and empty declared-property layout removes two heap
+    /// allocations per object while keeping dynamic properties per instance.
+    static STD_CLASS_METADATA: (Rc<str>, Rc<ObjectLayout>) = (
+        Rc::from("stdClass"),
+        Rc::new(ObjectLayout::empty()),
+    );
+}
+
 impl PhpObject {
     pub fn with_layout(
         class_id: u32,
@@ -133,6 +143,27 @@ impl PhpObject {
             class_name: Rc::from(class_name),
             class_id,
             property_layout: Rc::new(ObjectLayout::empty()),
+            property_values: Vec::new(),
+            dynamic_properties: if properties.is_empty() {
+                None
+            } else {
+                Some(Box::new(properties))
+            },
+            generator: None,
+        }
+    }
+
+    /// Construct the canonical dynamic `stdClass` used by `json_decode`.
+    /// Class metadata is immutable and shared; the property map remains owned
+    /// exclusively by this object.
+    pub fn std_class(properties: HashMap<String, Value>) -> Self {
+        let (class_name, property_layout) = STD_CLASS_METADATA.with(|metadata| {
+            (Rc::clone(&metadata.0), Rc::clone(&metadata.1))
+        });
+        Self {
+            class_name,
+            class_id: 0,
+            property_layout,
             property_values: Vec::new(),
             dynamic_properties: if properties.is_empty() {
                 None
@@ -243,6 +274,21 @@ mod object_tests {
         assert_eq!(object.set_property("extra", Value::long(9)), None);
         assert_eq!(object.get_property("extra").and_then(Value::as_long), Some(9));
         assert!(object.dynamic_properties.is_some());
+    }
+
+    #[test]
+    fn decoded_std_classes_share_immutable_metadata() {
+        let first = PhpObject::std_class(std::collections::HashMap::new());
+        let second = PhpObject::std_class(std::collections::HashMap::new());
+
+        assert_eq!(first.class_name.as_ref(), "stdClass");
+        assert!(Rc::ptr_eq(&first.class_name, &second.class_name));
+        assert!(Rc::ptr_eq(
+            &first.property_layout,
+            &second.property_layout
+        ));
+        assert!(first.dynamic_properties.is_none());
+        assert!(second.dynamic_properties.is_none());
     }
 }
 

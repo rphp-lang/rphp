@@ -4337,6 +4337,36 @@ The planned fused `json_encode`, collection and callback pipeline remains the
 next architectural extension rather than weakening canonical PHP values to
 win a decode-only benchmark.
 
+### Shared decoded-stdClass metadata checkpoint
+
+The canonical object-mode decoder now shares the immutable `stdClass` name and
+empty declared-property layout within each runtime thread (2026-08-05).
+Previously every decoded object allocated identical copies of both structures
+before allocating its real dynamic-property map and object container. Each
+object still owns independent properties, preserves the ordinary dynamic
+`stdClass` behavior and uses the same canonical `Value::Object`; only metadata
+that cannot vary is reference-counted once.
+
+A dedicated 500,000-document changing-input benchmark improved from a
+228.327 ms no-JIT median to 191.994 ms, or 15.9%. The identical associative
+control moved from 122.893 to 123.482 ms (0.5%, within run-to-run variation),
+confirming that parser and array paths were not specialized. A permanent
+object-mode row now accompanies the projection controls. Nine order-rotated
+native-CPU `max-perf` runs with PHP 8.5.9 produced:
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Changing object control, 200k | 77.041 ms | 78.255 ms | 36.832 ms | 38.753 ms |
+
+The remaining object gap is not decoder-only. Sampling attributes a comparable
+share to ordinary `$object->property` execution: dynamic `stdClass` reads still
+pass through general property-name resolution, visibility lookup and a string
+HashMap lookup. That should be treated as a general dynamic-object dispatch
+task. The next decode-materialization checkpoint instead targets the measured
+fourth-key cliff in associative arrays: a compact ordered representation for
+roughly four to eight entries should avoid building and immediately destroying
+a full string hash index while retaining canonical mutation and COW behavior.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

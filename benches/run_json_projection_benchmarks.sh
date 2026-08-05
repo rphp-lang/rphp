@@ -103,6 +103,7 @@ benchmark_workload "Invariant Double projection" benches/bench_json_projection_d
 benchmark_workload "Invariant String strlen" benches/bench_json_projection_string.php
 benchmark_workload "Changing-input control" benches/bench_json_projection_dynamic.php
 benchmark_workload "Changing typed control" benches/bench_json_projection_typed_dynamic.php
+benchmark_workload "Changing object control" benches/bench_json_decode_object_dynamic.php
 
 echo ""
 echo "Medians of $RUNS order-rotated internal timings; process startup is excluded."

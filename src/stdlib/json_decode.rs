@@ -129,11 +129,7 @@ impl<'de> Visitor<'de> for PhpValueVisitor {
                 let value = map.next_value_seed(PhpValueSeed::new(false))?;
                 properties.insert(key, value);
             }
-            Ok(Value::object(PhpObject::dynamic(
-                "stdClass".to_string(),
-                0,
-                properties,
-            )))
+            Ok(Value::object(PhpObject::std_class(properties)))
         }
     }
 }
