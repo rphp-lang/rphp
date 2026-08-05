@@ -2595,3 +2595,38 @@ echo $value;
         "float|100"
     );
 }
+
+#[test]
+fn nested_double_method_loop_revalidates_overridden_inner_target() {
+    assert_eq!(
+        run_php(
+            "<?php
+class FloatPipeline {
+    public function scaleAndShift(float $value, float $scale): float {
+        return ($value * $scale) + 1.0;
+    }
+    public function calculate(float $value, float $scale): float {
+        return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0;
+    }
+}
+class ChildPipeline extends FloatPipeline {
+    public function scaleAndShift(float $value, float $scale): float {
+        return ($value * $scale) + 3.0;
+    }
+}
+function accumulate(FloatPipeline $pipeline): float {
+    $scale = 2.0;
+    $total = 0.0;
+    for ($i = 0; $i < 1000; $i++) {
+        $total += $pipeline->calculate($i * 0.5, $scale);
+    }
+    return $total;
+}
+$base = new FloatPipeline();
+$child = new ChildPipeline();
+echo accumulate($base) . ':' . accumulate($child);
+"
+        ),
+        "252250:253250"
+    );
+}

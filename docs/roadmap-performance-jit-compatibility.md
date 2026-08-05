@@ -3954,6 +3954,61 @@ represented in the same bounded composer. General conditional Double regions
 are an independent alternative; neither direction should introduce an
 object-only backend kernel.
 
+### Same-receiver nested Double method checkpoint
+
+The bounded Double composer now accepts monomorphic method calls on the
+owner's hidden `CV0 == $this` receiver (2026-08-05). This is deliberately not
+a general Object value in the public Double ABI. The compiler admits
+`InitMethodCall` only for an instance method with `this_offset == 1`, an exact
+CV0 receiver, positional exact-Double arguments and the established operation,
+arity and recursion budgets. It records the canonical `MethodCache` guard and
+normalizes the hidden parameter offset exactly as the ordinary method caller
+does.
+
+Runtime flattening carries the already-guarded owner receiver through a nested
+method tree. Every method node validates the current receiver Object and class
+id against its own canonical inline cache, validates the cached target's
+instance-method Double ABI and includes that target in the native cache
+identity tuple. A cold inner method cache simply declines speculation; the
+unchanged bytecode call resolves and warms it before a later attempt. Direct
+frame-free composed calls and quick call/accumulate loops share this resolver.
+Functions inside a method tree receive no synthetic receiver, and a function
+body cannot smuggle a method node into the compact Double ABI.
+
+No architecture-specific emitter changed. ARM64 and x86-64 still receive the
+same flattened `ScalarDoubleProgram`; this slice removes nested dispatch and
+frame construction before either native backend is selected. Permanent tests
+cover the compiled method guard, a single native region, an inherited outer
+method whose inner target is overridden by a child class, and a divisor that
+becomes zero in the middle of native iteration and replays the canonical PHP
+error transactionally.
+
+The new five-million-iteration
+`bench_typed_float_nested_method.php` holdout returns the identical
+`6250011250000` value. The stable Ryzen CPU-2 measurements and the current
+thermally affected ARM64 interleaved run were:
+
+| Host | Previous RPHP JIT | Nested RPHP JIT | Nested RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 1196.301 ms | 6.858 ms | 81.677 ms | 64.526 ms | 161.892 ms |
+| Ryzen x86-64, PHP 8.4.24 | 872.418 ms | 7.087 ms | 49.735 ms | 48.508 ms | 169.083 ms |
+
+The ARM notebook also produced cold single-run values around 0.69--0.75 s
+before the change and 3.60 ms after it, so the exact multiplier is sensitive
+to passive cooling; every observed comparison remains comfortably above 100x.
+The pinned x86 result is 123.1x with 99.19% of the preceding runtime removed.
+RPHP JIT is about 9.4x/6.8x faster than the measured PHP tracing JIT. The same
+target-neutral change improves RPHP without JIT by about 14.8x/16.7x against
+the preceding build and leaves it about 2.0x/3.4x faster than PHP without JIT.
+
+The complete all-feature matrix passes 179 ARM64 and 204 x86-64 library tests,
+96 ARM64 and 28 x86-64 native-JIT integration tests, all 27 function, 51 loop
+and 108 quick-loop end-to-end tests, and all four corpus tests. A later Object
+ABI extension may represent a typed object argument as a nested method
+receiver. That should remain separate from this zero-object-ABI `$this`
+vertical slice and must prove equivalent class/cache identity and aliasing
+guards before admission.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

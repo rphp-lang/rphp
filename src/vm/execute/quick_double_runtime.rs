@@ -156,6 +156,7 @@ impl ResolvedDoubleCallee<'_> {
 unsafe fn resolve_composed_double_program_inner(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
+    owner_receiver: Option<&Value>,
     plan: &ComposedScalarDoubleFunctionPlan,
     depth: usize,
     active_targets: &mut [*const FunctionCommon; MAX_COMPOSED_DOUBLE_TARGETS + 1],
@@ -173,43 +174,65 @@ unsafe fn resolve_composed_double_program_inner(
         let ComposedScalarDoubleOp::Call(call) = operation else {
             continue;
         };
-        let ScalarLongCallGuard::FunctionCache { .. } = call.guard else {
-            return None;
-        };
         let ip = call.guard.cache_ip();
         let initializer = owner.op_array.instructions.get(ip)?;
-        if initializer.opcode != OpCode::InitFcall {
-            return None;
-        }
-        let cache = owner.op_array.cache.get(ip)?;
-        if cache.func.is_null() {
-            let primary = owner
-                .op_array
-                .literals
-                .get(initializer.op2 as usize)?
-                .as_str()?;
-            let resolved = eg.find_function(primary).or_else(|| {
-                if initializer.extended_value == 0 {
+        let callee_receiver = match call.guard {
+            ScalarLongCallGuard::FunctionCache { .. } => {
+                if initializer.opcode != OpCode::InitFcall {
                     return None;
                 }
-                owner
-                    .op_array
-                    .literals
-                    .get(initializer.extended_value as usize)
-                    .and_then(Value::as_str)
-                    .and_then(|fallback| eg.find_function(fallback))
-            })?;
-            let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
-                as *mut crate::vm::instruction::InlineCache);
-            cache_mut.func = resolved;
-        }
+                let cache = owner.op_array.cache.get(ip)?;
+                if cache.func.is_null() {
+                    let primary = owner
+                        .op_array
+                        .literals
+                        .get(initializer.op2 as usize)?
+                        .as_str()?;
+                    let resolved = eg.find_function(primary).or_else(|| {
+                        if initializer.extended_value == 0 {
+                            return None;
+                        }
+                        owner
+                            .op_array
+                            .literals
+                            .get(initializer.extended_value as usize)
+                            .and_then(Value::as_str)
+                            .and_then(|fallback| eg.find_function(fallback))
+                    })?;
+                    let cache_mut = &mut *(owner.op_array.cache.as_ptr().add(ip)
+                        as *mut crate::vm::instruction::InlineCache);
+                    cache_mut.func = resolved;
+                }
+                None
+            }
+            ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
+                if owner.common.sig.this_offset != 1
+                    || receiver_slot != 0
+                    || initializer.opcode != OpCode::InitMethodCall
+                    || initializer.op1_type != OpType::Cv
+                    || initializer.op1 != receiver_slot
+                {
+                    return None;
+                }
+                Some(owner_receiver?)
+            }
+        };
         let (target, user) = guarded_cached_user_call_target(
             &owner.op_array,
             call.guard,
-            None,
+            callee_receiver,
             call.arguments.len(),
         )?;
         let user = &*user;
+        match call.guard {
+            ScalarLongCallGuard::FunctionCache { .. } if user.common.sig.this_offset != 0 => {
+                return None;
+            }
+            ScalarLongCallGuard::MethodCache { .. } if user.common.sig.this_offset != 1 => {
+                return None;
+            }
+            _ => {}
+        }
         if !user.common.supports_scalar_double_plan() {
             return None;
         }
@@ -238,6 +261,7 @@ unsafe fn resolve_composed_double_program_inner(
             let program = resolve_composed_double_program_inner(
                 eg,
                 user,
+                callee_receiver,
                 composed,
                 depth + 1,
                 active_targets,
@@ -260,6 +284,7 @@ unsafe fn resolve_composed_double_program_inner(
 unsafe fn resolve_composed_double_program(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
+    owner_receiver: Option<&Value>,
     plan: &ComposedScalarDoubleFunctionPlan,
 ) -> Option<(ScalarDoubleProgram, [*const FunctionCommon; 8], usize)> {
     let owner_target = &owner.common as *const FunctionCommon;
@@ -270,6 +295,7 @@ unsafe fn resolve_composed_double_program(
     let program = resolve_composed_double_program_inner(
         eg,
         owner,
+        owner_receiver,
         plan,
         0,
         &mut active_targets,
@@ -530,8 +556,14 @@ unsafe fn run_quick_double_call_accumulate_loop(
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         };
+        let owner_receiver = match plan.guard {
+            ScalarLongCallGuard::FunctionCache { .. } => None,
+            ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
+                Some(&*slot_base.add(receiver_slot as usize))
+            }
+        };
         let Some((program, nested_targets, nested_target_count)) =
-            resolve_composed_double_program(eg, user, composed)
+            resolve_composed_double_program(eg, user, owner_receiver, composed)
         else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);

@@ -2050,6 +2050,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_double_call(
     sends: *const Instruction,
     common: &FunctionCommon,
     owner: &UserFunction,
+    owner_receiver: Option<&Value>,
     plan: &ComposedScalarDoubleFunctionPlan,
 ) -> Option<(f64, *const Instruction)> {
     if !common.supports_scalar_double_plan()
@@ -2094,7 +2095,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_double_call(
     }
 
     let (program, nested_targets, nested_target_count) =
-        resolve_composed_double_program(eg, owner, plan)?;
+        resolve_composed_double_program(eg, owner, owner_receiver, plan)?;
     let flattened = ScalarDoubleFunctionPlan::new(plan.public_args, program);
     let result = evaluate_scalar_double_plan_rust(&flattened, &arguments)?;
     for target in nested_targets.into_iter().take(nested_target_count) {

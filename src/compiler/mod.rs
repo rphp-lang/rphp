@@ -1085,8 +1085,9 @@ fn build_scalar_double_function_plan(
 const COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS: usize = 16;
 
 /// Recognize a straight-line exact-Double body containing direct function
-/// calls. Calls remain guarded IR nodes here; the runtime resolves their
-/// canonical inline caches and flattens proven Double callees before execution.
+/// calls or same-receiver `$this` method calls. Calls remain guarded IR nodes
+/// here; the runtime resolves their canonical inline caches and flattens
+/// proven Double callees before execution.
 fn build_composed_scalar_double_function_plan(
     function: &UserFunction,
 ) -> Option<Box<ComposedScalarDoubleFunctionPlan>> {
@@ -1129,8 +1130,31 @@ fn build_composed_scalar_double_function_plan(
             }));
         }
 
-        if instruction.opcode == OpCode::InitFcall {
-            let argument_count = instruction.op1 as usize;
+        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+            let (argument_count, parameter_offset, guard) = match instruction.opcode {
+                OpCode::InitFcall => (
+                    instruction.op1 as usize,
+                    0usize,
+                    ScalarLongCallGuard::FunctionCache {
+                        cache_ip: ip as u32,
+                    },
+                ),
+                OpCode::InitMethodCall
+                    if common.sig.this_offset == 1
+                        && instruction.op1_type == OpType::Cv
+                        && instruction.op1 == 0 =>
+                {
+                    (
+                        instruction.extended_value as usize,
+                        1usize,
+                        ScalarLongCallGuard::MethodCache {
+                            cache_ip: ip as u32,
+                            receiver_slot: 0,
+                        },
+                    )
+                }
+                _ => return None,
+            };
             if argument_count > SCALAR_LONG_PLAN_MAX_ARGS as usize
                 || ip > u32::MAX as usize
                 || operations.len() == COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS
@@ -1142,7 +1166,7 @@ fn build_composed_scalar_double_function_plan(
             for argument_index in 0..argument_count {
                 let send = &op_array.instructions[ip + 1 + argument_index];
                 if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
-                    || send.op2 as usize != argument_index
+                    || send.op2 as usize != argument_index + parameter_offset
                 {
                     return None;
                 }
@@ -1169,9 +1193,7 @@ fn build_composed_scalar_double_function_plan(
             }
             let result_index = operations.len() as u8;
             operations.push(ComposedScalarDoubleOp::Call(ScalarDoubleCall {
-                guard: ScalarLongCallGuard::FunctionCache {
-                    cache_ip: ip as u32,
-                },
+                guard,
                 arguments: arguments.into_boxed_slice(),
             }));
             temporary_results.insert(

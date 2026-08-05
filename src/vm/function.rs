@@ -163,17 +163,18 @@ pub struct ScalarDoubleFunctionPlan {
 }
 
 /// Guarded exact-Double call embedded in a composed scalar body. The call-site
-/// inline cache remains authoritative for function identity; arguments are
-/// values produced by the owner's target-neutral Double IR.
+/// inline cache remains authoritative for function or same-receiver method
+/// identity; arguments are values produced by the owner's target-neutral
+/// Double IR.
 pub struct ScalarDoubleCall {
     pub guard: ScalarLongCallGuard,
     pub arguments: Box<[ScalarDoubleSource]>,
 }
 
-/// One operation in a pure Double body that composes arithmetic with direct
-/// user-function calls. Runtime flattening turns guarded callees into
-/// the established `ScalarDoubleProgram` before either native backend sees it;
-/// a resolved callee may itself have been recursively composed.
+/// One operation in a pure Double body that composes arithmetic with guarded
+/// user calls. Runtime flattening turns guarded callees into the established
+/// `ScalarDoubleProgram` before either native backend sees it; a resolved
+/// callee may itself have been recursively composed.
 pub enum ComposedScalarDoubleOp {
     Arithmetic(ScalarDoubleOp),
     Call(ScalarDoubleCall),

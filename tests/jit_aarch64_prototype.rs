@@ -284,6 +284,69 @@ fn nested_typed_double_leaf_is_flattened_into_one_native_region() {
 }
 
 #[test]
+fn same_receiver_nested_double_method_is_flattened_into_one_native_region() {
+    let source = "<?php class FloatPipeline { public function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } public function calculate(float $value, float $scale): float { return ($this->scaleAndShift($value, $scale) * 0.5) + 2.0; } } $pipeline = new FloatPipeline(); $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $pipeline->calculate($i * 0.5, $scale); } echo $i . ':' . $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    assert_eq!(
+        String::from_utf8(output.lock().unwrap().clone()).unwrap(),
+        "100000:2500225000"
+    );
+
+    let loop_plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select the same-receiver Double method loop");
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 0);
+
+    let class = globals
+        .class_table
+        .values()
+        .find(|class| class.name.eq_ignore_ascii_case("FloatPipeline"))
+        .expect("registered FloatPipeline");
+    let method = |name: &str| {
+        class
+            .methods
+            .iter()
+            .find(|(candidate, ..)| candidate.eq_ignore_ascii_case(name))
+            .map(|(_, _, _, _, method)| method)
+            .expect("compiled FloatPipeline method")
+    };
+    let outer = method("calculate");
+    assert!(outer.scalar_double_plan.is_none());
+    let composed = outer
+        .composed_scalar_double_plan
+        .as_deref()
+        .expect("same-receiver composed Double plan");
+    assert!(composed.operations.iter().any(|operation| matches!(
+        operation,
+        rphp::vm::function::ComposedScalarDoubleOp::Call(call)
+            if matches!(call.guard, rphp::vm::function::ScalarLongCallGuard::MethodCache {
+                receiver_slot: 0,
+                ..
+            })
+    )));
+    assert_eq!(outer.common.call_count.get(), 100000);
+    assert_eq!(method("scaleAndShift").common.call_count.get(), 100000);
+}
+
+#[test]
 fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
     let source = "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function calculateOuter(float $value, float $scale): float { return calculateNested($value, $scale) + 3.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateOuter($i * 0.5, $scale); } echo $i . ':' . $total;";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -421,6 +484,46 @@ fn double_jit_zero_divisor_replays_canonical_php_error() {
     assert!(plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 10);
     assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
+fn nested_double_method_loop_zero_divisor_replays_canonical_php_error() {
+    let source = "<?php class Divider { public function divide(float $value, float $divisor): float { return $value / $divisor; } public function calculate(float $value, float $divisor): float { return $this->divide($value, $divisor) + 1.0; } } function accumulate(Divider $divider): float { $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $divider->calculate(8.0, 50000.0 - ($i * 1.0)); } return $total; } $divider = new Divider(); accumulate($divider);";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let class_defs = compilation.class_defs;
+    let (mut globals, _output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message) if message == "Division by zero"
+    ));
+
+    let loop_plan = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("accumulate"))
+        .and_then(|(_, function)| {
+            function.op_array.block_plans.iter().find_map(|plan| match plan {
+                BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                _ => None,
+            })
+        })
+        .expect("nested method Double loop");
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 1);
 }
 
 fn contains_signed_divide(code: &[u8]) -> bool {

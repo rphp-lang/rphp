@@ -1325,6 +1325,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 opline_ptr.add(1),
                                 common,
                                 user,
+                                None,
                                 plan,
                             )
                         } {
@@ -2583,6 +2584,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         opline_ptr.add(1),
                                         common,
                                         user,
+                                        Some(obj_val),
                                         plan,
                                     )
                                 } {
