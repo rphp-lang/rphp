@@ -284,6 +284,74 @@ impl QuickDoubleArgumentProgram {
                     || self.source_uses_operation(operation.rhs, expected)
             })
     }
+
+    /// Public arguments whose induction-dependent values can remain in their
+    /// argument-program temporary until the scalar leaf consumes them.
+    ///
+    /// Argument and leaf temporaries deliberately share the native register
+    /// bank. A value produced in temporary `n` is therefore safe to forward
+    /// only while leaf operation `n` has not overwritten that register. The
+    /// same-operation RHS restriction also keeps this proof valid for the
+    /// two-operand x86-64 lowering, which writes the LHS into its destination
+    /// before consuming the RHS.
+    pub(crate) fn register_forwardable_output_mask(
+        &self,
+        leaf: &crate::vm::function::ScalarDoubleFunctionPlan,
+    ) -> u8 {
+        let mut mask = 0_u8;
+        for (argument, output) in self.outputs[..self.output_count as usize]
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let QuickDoubleSource::Temporary(register) = output else {
+                continue;
+            };
+            if !self.source_depends_on_induction(output) {
+                continue;
+            }
+
+            let argument = argument as u16;
+            let overwrite = register as usize;
+            let mut safe = true;
+            for (operation_index, operation) in
+                leaf.program.operations.iter().copied().enumerate()
+            {
+                let lhs_uses_argument = matches!(
+                    operation.lhs,
+                    crate::vm::function::ScalarDoubleSource::Input(index)
+                        if index == argument
+                );
+                let rhs_uses_argument = matches!(
+                    operation.rhs,
+                    crate::vm::function::ScalarDoubleSource::Input(index)
+                        if index == argument
+                );
+                if (lhs_uses_argument && operation_index > overwrite)
+                    || (rhs_uses_argument
+                        && (operation_index > overwrite
+                            || (operation_index == overwrite && !lhs_uses_argument)))
+                {
+                    safe = false;
+                    break;
+                }
+            }
+            if safe
+                && matches!(
+                    leaf.program.output,
+                    crate::vm::function::ScalarDoubleSource::Input(index)
+                        if index == argument
+                )
+                && leaf.program.operations.len() > overwrite
+            {
+                safe = false;
+            }
+            if safe {
+                mask |= 1_u8 << argument;
+            }
+        }
+        mask
+    }
 }
 
 /// A mixed Long-control/Double-data loop whose hot body is one exact-Double
@@ -4668,8 +4736,73 @@ mod tests {
     use crate::compiler::make_user_function;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
-    use crate::vm::function::ScalarDoubleOpKind;
+    use crate::vm::function::{
+        ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind,
+        ScalarDoubleProgram, ScalarDoubleSource,
+    };
     use crate::vm::planner::BlockPlan;
+
+    fn dynamic_double_argument(register: u8) -> QuickDoubleArgumentProgram {
+        QuickDoubleArgumentProgram {
+            operations: vec![QuickDoubleArgumentOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: QuickDoubleSource::Induction,
+                rhs: QuickDoubleSource::Constant(0.5),
+            }]
+            .into_boxed_slice(),
+            outputs: [
+                QuickDoubleSource::Temporary(register),
+                QuickDoubleSource::Constant(0.0),
+                QuickDoubleSource::Constant(0.0),
+                QuickDoubleSource::Constant(0.0),
+                QuickDoubleSource::Constant(0.0),
+                QuickDoubleSource::Constant(0.0),
+                QuickDoubleSource::Constant(0.0),
+                QuickDoubleSource::Constant(0.0),
+            ],
+            output_count: 1,
+            input_slots: [u16::MAX; 8],
+            input_count: 0,
+        }
+    }
+
+    #[test]
+    fn forwards_dynamic_double_argument_used_before_register_overwrite() {
+        let arguments = dynamic_double_argument(0);
+        let leaf = ScalarDoubleFunctionPlan::new(
+            1,
+            ScalarDoubleProgram {
+                operations: vec![ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Add,
+                    lhs: ScalarDoubleSource::Input(0),
+                    rhs: ScalarDoubleSource::Constant(1.0),
+                }]
+                .into_boxed_slice(),
+                output: ScalarDoubleSource::Temporary(0),
+            },
+        );
+
+        assert_eq!(arguments.register_forwardable_output_mask(&leaf), 1);
+    }
+
+    #[test]
+    fn retains_buffer_when_x86_rhs_would_be_overwritten() {
+        let arguments = dynamic_double_argument(0);
+        let leaf = ScalarDoubleFunctionPlan::new(
+            1,
+            ScalarDoubleProgram {
+                operations: vec![ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Subtract,
+                    lhs: ScalarDoubleSource::Constant(10.0),
+                    rhs: ScalarDoubleSource::Input(0),
+                }]
+                .into_boxed_slice(),
+                output: ScalarDoubleSource::Temporary(0),
+            },
+        );
+
+        assert_eq!(arguments.register_forwardable_output_mask(&leaf), 0);
+    }
 
     fn compile_main(source: &str) -> crate::vm::function::UserFunction {
         let tokens = Lexer::new(source).tokenize().unwrap();

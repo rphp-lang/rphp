@@ -78,6 +78,7 @@ pub struct CompiledQuickDoubleCallAccumulateLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
     input_count: usize,
+    forwarded_argument_mask: u8,
 }
 
 impl CompiledQuickDoubleCallAccumulateLoop {
@@ -87,6 +88,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
     ) -> Result<Self, QuickDoubleCallAccumulateJitError> {
         validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
+        let forwarded_argument_mask = argument_plan.register_forwardable_output_mask(plan);
 
         let mut assembler = X86_64Assembler::new();
         let state = X86_64Register::R10;
@@ -121,6 +123,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             bits,
             argument_plan,
             false,
+            forwarded_argument_mask,
             &mut side_exits,
         );
         let loop_start = assembler.bytes.len();
@@ -132,6 +135,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             bits,
             argument_plan,
             true,
+            forwarded_argument_mask,
             &mut side_exits,
         );
         for (index, operation) in plan.program.operations.iter().copied().enumerate() {
@@ -139,6 +143,8 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 &mut assembler,
                 working_arguments,
                 bits,
+                argument_plan,
+                forwarded_argument_mask,
                 index,
                 operation,
                 &mut side_exits,
@@ -148,6 +154,8 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             &mut assembler,
             working_arguments,
             bits,
+            argument_plan,
+            forwarded_argument_mask,
             plan.program.output,
             X86_64FloatRegister::from_code(0),
         );
@@ -195,6 +203,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             memory,
             code,
             input_count: argument_plan.input_count as usize,
+            forwarded_argument_mask,
         })
     }
 
@@ -243,6 +252,10 @@ impl CompiledQuickDoubleCallAccumulateLoop {
 
     pub fn code(&self) -> &[u8] {
         &self.code
+    }
+
+    pub fn forwarded_argument_mask(&self) -> u8 {
+        self.forwarded_argument_mask
     }
 }
 
@@ -398,6 +411,7 @@ fn emit_argument_program(
     bits: X86_64Register,
     plan: &QuickDoubleArgumentProgram,
     induction_dependent: bool,
+    forwarded_argument_mask: u8,
     side_exits: &mut Vec<usize>,
 ) {
     for (index, operation) in plan.operations.iter().copied().enumerate() {
@@ -420,6 +434,9 @@ fn emit_argument_program(
         .enumerate()
     {
         if plan.source_depends_on_induction(output) != induction_dependent {
+            continue;
+        }
+        if forwarded_argument_mask & (1_u8 << index) != 0 {
             continue;
         }
         let output = emit_argument_source(
@@ -523,6 +540,8 @@ fn emit_operation(
     assembler: &mut X86_64Assembler,
     inputs: X86_64Register,
     bits: X86_64Register,
+    argument_plan: &QuickDoubleArgumentProgram,
+    forwarded_argument_mask: u8,
     index: usize,
     operation: ScalarDoubleOp,
     side_exits: &mut Vec<usize>,
@@ -531,6 +550,8 @@ fn emit_operation(
         assembler,
         inputs,
         bits,
+        argument_plan,
+        forwarded_argument_mask,
         operation.lhs,
         X86_64FloatRegister::from_code(0),
     );
@@ -538,6 +559,8 @@ fn emit_operation(
         assembler,
         inputs,
         bits,
+        argument_plan,
+        forwarded_argument_mask,
         operation.rhs,
         X86_64FloatRegister::from_code(1),
     );
@@ -561,10 +584,18 @@ fn emit_source(
     assembler: &mut X86_64Assembler,
     inputs: X86_64Register,
     bits: X86_64Register,
+    argument_plan: &QuickDoubleArgumentProgram,
+    forwarded_argument_mask: u8,
     source: ScalarDoubleSource,
     scratch: X86_64FloatRegister,
 ) -> X86_64FloatRegister {
     match source {
+        ScalarDoubleSource::Input(index) if forwarded_argument_mask & (1_u8 << index) != 0 => {
+            let QuickDoubleSource::Temporary(index) = argument_plan.outputs[index as usize] else {
+                unreachable!("forwarded Double argument must be a temporary")
+            };
+            temporary(index as usize)
+        }
         ScalarDoubleSource::Input(index) => {
             assembler.load_f64(scratch, inputs, i32::from(index) * 8);
             scratch

@@ -3649,6 +3649,55 @@ the general fallback. That same composition machinery should then admit nested
 scalar callees, followed by monomorphic scalar methods guarded by receiver
 class and method cache. It must not introduce a workload-specific float loop.
 
+### Liveness-aware Double argument/leaf composition checkpoint
+
+Dynamic Double arguments can now flow directly from the caller argument IR
+into the leaf IR without a memory round trip (2026-08-05). The target-neutral
+`QuickDoubleArgumentProgram` computes a forwarding mask from the actual leaf
+uses. Only induction-dependent values backed by an argument temporary are
+eligible, and only while the leaf has not overwritten the shared physical
+register assigned to that temporary.
+
+The proof deliberately models the stricter two-operand x86-64 instruction
+order. A forwarded argument may be the LHS of the leaf operation that reuses
+its register, because the destination move is then a no-op. A RHS-only use at
+that operation is rejected because x86-64 would overwrite it before the
+arithmetic instruction consumes it. Uses after the overwrite and leaf outputs
+observed after the overwrite are rejected as well. This conservative shared
+rule keeps ARM64 and x86-64 behavior identical even though ARM64's
+three-operand instructions could admit a few additional cases.
+
+Both native emitters use the mask to omit only proven-redundant dynamic
+argument stores and remap matching leaf inputs to the resident argument
+temporary. Invariant arguments, unsafe live ranges and all unsupported shapes
+continue through the existing bounded working buffer. No new runtime guard or
+side-exit state is required: the proof is derived from the already guarded,
+immutable argument and leaf IR. Permanent tests cover successful forwarding,
+the x86-64 RHS overwrite conflict, native buffer fallback, composed invariant
+dependencies, division side exits and complete loop state.
+
+Nine native-CPU `max-perf --all-features` runs preserve the exact benchmark
+outputs and produce these medians:
+
+| Host | Dynamic expression before | Register composition | Invariant leaf control |
+|---|---:|---:|---:|
+| ARM64 | 3.392 ms | 3.434 ms | 3.209 ms |
+| Ryzen x86-64 | 16.835 ms | 8.371 ms | 5.164 ms |
+
+ARM64 remains unchanged within run-to-run noise because its load/store path was
+already almost completely hidden. On x86-64, direct composition removes
+`8.464 ms`, or `50.3%`, from the complete expression workload and eliminates
+about `72.7%` of the previous gap to the invariant control. The remaining
+roughly `3.2 ms` is dominated by useful per-iteration work: signed Long-to-
+Double conversion and the dynamic multiply.
+
+The complete final matrix passes 176 ARM64 and 193 x86-64 library tests, 91
+ARM64 and 23 x86-64 JIT integration tests, all 45 loop end-to-end tests, and
+all four application corpus tests on both targets. The next Double composition
+step is nested target-neutral scalar callees. It should reuse this same source
+remapping and liveness proof before extending dispatch to monomorphic scalar
+methods guarded by receiver class and method cache.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

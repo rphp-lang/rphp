@@ -111,6 +111,45 @@ fn dependent_argument_plan() -> QuickDoubleArgumentProgram {
     }
 }
 
+fn rhs_overwrite_argument_plan() -> QuickDoubleArgumentProgram {
+    QuickDoubleArgumentProgram {
+        operations: vec![QuickDoubleArgumentOp {
+            kind: ScalarDoubleOpKind::Add,
+            lhs: QuickDoubleSource::Induction,
+            rhs: QuickDoubleSource::Constant(0.5),
+        }]
+        .into_boxed_slice(),
+        outputs: [
+            QuickDoubleSource::Temporary(0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+        ],
+        output_count: 1,
+        input_slots: [u16::MAX; 8],
+        input_count: 0,
+    }
+}
+
+fn rhs_overwrite_leaf_plan() -> ScalarDoubleFunctionPlan {
+    ScalarDoubleFunctionPlan::new(
+        1,
+        ScalarDoubleProgram {
+            operations: vec![ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Subtract,
+                lhs: ScalarDoubleSource::Constant(10.0),
+                rhs: ScalarDoubleSource::Input(0),
+            }]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Temporary(0),
+        },
+    )
+}
+
 #[test]
 fn encoder_produces_exact_scalar_double_bytes() {
     let mut assembler = X86_64Assembler::new();
@@ -309,6 +348,7 @@ fn composed_double_loop_retains_invariant_dependencies_of_dynamic_arguments() {
         &arithmetic_plan(),
     )
     .unwrap();
+    assert_eq!(program.forwarded_argument_mask(), 1);
     let mut state = NativeDoubleCallAccumulateState {
         induction: 0,
         bound: 5,
@@ -322,4 +362,27 @@ fn composed_double_loop_retains_invariant_dependencies_of_dynamic_arguments() {
     assert_eq!(state.induction, 5);
     assert_eq!(state.accumulator, 76.0);
     assert_eq!(state.last_term, 27.0);
+}
+
+#[test]
+fn composed_double_loop_buffers_rhs_that_conflicts_with_leaf_destination() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &rhs_overwrite_argument_plan(),
+        &rhs_overwrite_leaf_plan(),
+    )
+    .unwrap();
+    assert_eq!(program.forwarded_argument_mask(), 0);
+    let mut state = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 3,
+        accumulator: 0.0,
+        last_term: -1.0,
+    };
+    assert_eq!(
+        program.call(&mut state, &[], &false).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Completed
+    );
+    assert_eq!(state.induction, 3);
+    assert_eq!(state.accumulator, 25.5);
+    assert_eq!(state.last_term, 7.5);
 }
