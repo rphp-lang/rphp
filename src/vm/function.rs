@@ -110,6 +110,87 @@ pub enum ScalarLongSource {
     Temporary(u8),
 }
 
+/// One scalar input to a frame-elidable floating-point function plan.
+///
+/// The runtime adapter admits only raw Double values. Long-to-Double coercion
+/// remains on the canonical call path so a failed guard cannot change weak or
+/// strict parameter semantics.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum ScalarDoubleSource {
+    Input(u16),
+    Constant(f64),
+    Temporary(u8),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScalarDoubleOpKind {
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct ScalarDoubleOp {
+    pub kind: ScalarDoubleOpKind,
+    pub lhs: ScalarDoubleSource,
+    pub rhs: ScalarDoubleSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct ScalarDoubleProgram {
+    pub operations: Box<[ScalarDoubleOp]>,
+    pub output: ScalarDoubleSource,
+}
+
+/// Compile-time proof for a straight-line floating-point leaf.
+///
+/// IEEE-754 add/subtract/multiply results are authoritative, including NaN
+/// and infinities. Division by positive or negative zero side-exits before the
+/// transactional output is written so the baseline raises the canonical PHP
+/// error.
+pub struct ScalarDoubleFunctionPlan {
+    pub public_args: u8,
+    pub program: ScalarDoubleProgram,
+    #[cfg(all(
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
+    native_jit: crate::jit::ScalarDoubleJitCache,
+}
+
+impl ScalarDoubleFunctionPlan {
+    pub fn new(public_args: u8, program: ScalarDoubleProgram) -> Self {
+        Self {
+            public_args,
+            program,
+            #[cfg(all(
+                feature = "jit-prototype",
+                any(
+                    all(target_arch = "aarch64", target_os = "macos"),
+                    all(target_arch = "x86_64", target_os = "linux")
+                )
+            ))]
+            native_jit: crate::jit::ScalarDoubleJitCache::new(),
+        }
+    }
+
+    #[cfg(all(
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
+    #[inline(always)]
+    pub fn native_jit(&self) -> &crate::jit::ScalarDoubleJitCache {
+        &self.native_jit
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScalarLongOpKind {
     Add,
@@ -829,6 +910,22 @@ impl FunctionCommon {
             )
     }
 
+    /// Whether this signature can enter an exact raw-Double frame-free plan.
+    /// Weak `float` parameters may also accept Long values, but those calls
+    /// deliberately fail the runtime Double guard and retain normal coercion.
+    #[inline(always)]
+    pub fn supports_scalar_double_plan(&self) -> bool {
+        self.plan.call.is_compact_user_call()
+            && self.sig.ref_args == 0
+            && self.sig.param_type_hints.iter().all(|hint| {
+                matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Float)
+            })
+            && matches!(
+                self.sig.return_type_hint,
+                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Float
+            )
+    }
+
     /// Whether this function is eligible for hot executor promotion.
     ///
     /// **Single source of truth** — all promotion paths must use this.
@@ -869,6 +966,7 @@ pub struct UserFunction {
     pub property_init_plan: Option<Box<PropertyInitMethodPlan>>,
     pub binary_long_recursion_plan: Option<BinaryLongRecursionPlan>,
     pub scalar_long_plan: Option<Box<ScalarLongFunctionPlan>>,
+    pub scalar_double_plan: Option<Box<ScalarDoubleFunctionPlan>>,
     pub object_long_plan: Option<Box<ObjectLongFunctionPlan>>,
     pub object_array_plan: Option<Box<ObjectArrayFunctionPlan>>,
     pub scalar_string_plan: Option<Box<ScalarStringFunctionPlan>>,

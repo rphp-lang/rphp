@@ -19,7 +19,7 @@ use crate::jit::{
     NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
     NativeStraightLongConditionOperand,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
-    ScalarLongJitDispatch,
+    ScalarDoubleJitDispatch, ScalarLongJitDispatch,
 };
 #[cfg(all(
     feature = "jit-prototype",
@@ -38,7 +38,7 @@ use super::instruction::{
     NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
 };
 use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
+use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarDoubleFunctionPlan, ScalarDoubleOpKind, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
@@ -1397,6 +1397,59 @@ fn evaluate_scalar_long_plan(
 }
 
 #[inline(always)]
+fn resolve_scalar_double_source(
+    source: ScalarDoubleSource,
+    arguments: &[f64; 8],
+    temporaries: &[f64; 8],
+) -> Option<f64> {
+    match source {
+        ScalarDoubleSource::Input(index) => arguments.get(index as usize).copied(),
+        ScalarDoubleSource::Constant(value) => Some(value),
+        ScalarDoubleSource::Temporary(index) => temporaries.get(index as usize).copied(),
+    }
+}
+
+#[inline(always)]
+fn apply_scalar_double_op(kind: ScalarDoubleOpKind, lhs: f64, rhs: f64) -> Option<f64> {
+    match kind {
+        ScalarDoubleOpKind::Add => Some(lhs + rhs),
+        ScalarDoubleOpKind::Subtract => Some(lhs - rhs),
+        ScalarDoubleOpKind::Multiply => Some(lhs * rhs),
+        ScalarDoubleOpKind::Divide if rhs == 0.0 => None,
+        ScalarDoubleOpKind::Divide => Some(lhs / rhs),
+    }
+}
+
+#[inline(always)]
+fn evaluate_scalar_double_plan(
+    plan: &ScalarDoubleFunctionPlan,
+    arguments: &[f64; 8],
+) -> Option<f64> {
+    if plan.program.operations.len() > 8 {
+        return None;
+    }
+    #[cfg(all(
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
+    match plan.native_jit().dispatch(plan, arguments) {
+        ScalarDoubleJitDispatch::Interpret => {}
+        ScalarDoubleJitDispatch::Value(value) => return Some(value),
+        ScalarDoubleJitDispatch::SideExit => return None,
+    }
+    let mut temporaries = [0.0_f64; 8];
+    for (index, operation) in plan.program.operations.iter().copied().enumerate() {
+        let lhs = resolve_scalar_double_source(operation.lhs, arguments, &temporaries)?;
+        let rhs = resolve_scalar_double_source(operation.rhs, arguments, &temporaries)?;
+        temporaries[index] = apply_scalar_double_op(operation.kind, lhs, rhs)?;
+    }
+    resolve_scalar_double_source(plan.program.output, arguments, &temporaries)
+}
+
+#[inline(always)]
 fn evaluate_scalar_string_plan<'a>(
     plan: &'a ScalarStringFunctionPlan,
     arguments: &[i64; 8],
@@ -1534,6 +1587,44 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
         record_scalar_call(&*called);
     }
     Some(result)
+}
+
+/// Execute an already-captured positional activation through the exact
+/// Double leaf ABI. Raw Long arguments intentionally fail this guard so the
+/// canonical frame performs declared-float coercion and diagnostics.
+#[inline(always)]
+pub(crate) unsafe fn try_execute_deferred_scalar_double_call(
+    call: *mut ExecuteData,
+) -> Option<f64> {
+    let common = &*(*call).func;
+    if !(*call).deferred_scalar_call
+        || common.fn_type != FunctionType::User
+        || !common.supports_scalar_double_plan()
+        || (*call).num_args != common.sig.public_arity()
+        || (*call).named_args_used
+    {
+        return None;
+    }
+    let user = &*((*call).func as *const UserFunction);
+    let plan = user.scalar_double_plan.as_deref()?;
+    if plan.public_args as u32 != common.sig.public_arity() {
+        return None;
+    }
+
+    let mut arguments = [0.0_f64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(plan.public_args as usize)
+    {
+        let cv_index = common.sig.param_cv_index(index as u32);
+        let value = (*call).cv(cv_index);
+        if value.value_type() != ValueType::Double || value.is_reference() {
+            return None;
+        }
+        *argument = value.raw_double();
+    }
+    evaluate_scalar_double_plan(plan, &arguments)
 }
 
 /// Consume a deferred method activation after all argument expressions have
@@ -1727,22 +1818,28 @@ pub(crate) unsafe fn resolve_deferred_scalar_call(
         return std::ptr::null_mut();
     }
 
-    let evaluated = if matches!(
+    let accepts_scalar_result = matches!(
         do_fcall.result_type,
         OpType::Tmp | OpType::Var | OpType::Unused
-    ) {
+    );
+    let evaluated_long = if accepts_scalar_result {
         try_execute_deferred_object_long_call(eg, compact)
             .or_else(|| try_execute_deferred_scalar_long_call(eg, compact))
     } else {
         None
     };
-    let Some(result) = evaluated else {
-        return materialize_deferred_scalar_call(eg, compact);
-    };
-
     let common = &*(*compact).func;
-    record_scalar_call(common);
-    complete_direct_scalar_long_call(caller, do_fcall_ptr, result);
+    if let Some(result) = evaluated_long {
+        record_scalar_call(common);
+        complete_direct_scalar_long_call(caller, do_fcall_ptr, result);
+    } else if accepts_scalar_result
+        && let Some(result) = try_execute_deferred_scalar_double_call(compact)
+    {
+        record_scalar_call(common);
+        complete_direct_scalar_double_call(caller, do_fcall_ptr, result);
+    } else {
+        return materialize_deferred_scalar_call(eg, compact);
+    }
     if (*compact).has_heap_slots {
         cleanup_frame_slots(compact);
     }
@@ -1869,6 +1966,61 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
         return None;
     }
     let result = evaluate_scalar_long_plan(plan, &arguments)?;
+    Some((result, do_fcall_ptr))
+}
+
+/// Borrow a contiguous positional Send sequence and enter the exact-Double
+/// leaf ABI without allocating an ExecuteData frame. Long values deliberately
+/// fail this guard so weak float coercion remains on the canonical PHP path.
+#[inline(never)]
+pub(crate) unsafe fn try_execute_direct_scalar_double_call(
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    sends: *const Instruction,
+    common: &FunctionCommon,
+    plan: &ScalarDoubleFunctionPlan,
+) -> Option<(f64, *const Instruction)> {
+    if !common.supports_scalar_double_plan()
+        || common.sig.public_arity() != plan.public_args as u32
+    {
+        return None;
+    }
+
+    let mut arguments = [0.0_f64; 8];
+    for (index, argument) in arguments
+        .iter_mut()
+        .enumerate()
+        .take(plan.public_args as usize)
+    {
+        let send = &*sends.add(index);
+        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || send.op2 as u32 != common.sig.param_cv_index(index as u32)
+        {
+            return None;
+        }
+        let value = match send.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
+            OpType::Unused => return None,
+        };
+        if value.value_type() != ValueType::Double || value.is_reference() {
+            return None;
+        }
+        *argument = value.raw_double();
+    }
+
+    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let do_fcall = &*do_fcall_ptr;
+    if do_fcall.opcode != OpCode::DoFcall
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
+    {
+        return None;
+    }
+    let result = evaluate_scalar_double_plan(plan, &arguments)?;
     Some((result, do_fcall_ptr))
 }
 
@@ -3438,6 +3590,21 @@ pub(crate) unsafe fn complete_direct_scalar_long_call(
         let result_ptr = (caller as *mut Value)
             .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         frame_tmp_set_long(caller, result_ptr, result);
+    }
+    (*caller).opline = do_fcall_ptr.add(1);
+}
+
+#[inline(always)]
+pub(crate) unsafe fn complete_direct_scalar_double_call(
+    caller: *mut ExecuteData,
+    do_fcall_ptr: *const Instruction,
+    result: f64,
+) {
+    let do_fcall = &*do_fcall_ptr;
+    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
+        let result_ptr = (caller as *mut Value)
+            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        frame_tmp_set(caller, result_ptr, Value::double(result));
     }
     (*caller).opline = do_fcall_ptr.add(1);
 }

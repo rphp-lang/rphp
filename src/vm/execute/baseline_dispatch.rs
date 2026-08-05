@@ -1241,7 +1241,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && num_args == common.sig.public_arity()
                 {
                     let user = unsafe { &*(func_ptr as *const UserFunction) };
-                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some();
+                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some()
+                        || user.scalar_double_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
                         if let Some((result, do_fcall_ptr)) = unsafe {
@@ -1279,6 +1280,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } {
                             unsafe {
                                 complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            continue 'vm;
+                        }
+                    }
+                    if let Some(plan) = user.scalar_double_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            try_execute_direct_scalar_double_call(
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                common,
+                                plan,
+                            )
+                        } {
+                            stats::inc_do_fcall_fast();
+                            stats::inc_return_fast();
+                            let count = common.call_count.get();
+                            if count < u32::MAX {
+                                common.call_count.set(count + 1);
+                            }
+                            unsafe {
+                                complete_direct_scalar_double_call(
                                     frame,
                                     do_fcall_ptr,
                                     result,
@@ -2448,7 +2476,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             scalar_plan_eligible =
                                 scalar_plan_eligible
                                     || user.composed_scalar_long_plan.is_some()
-                                    || user.long_property_plan.is_some();
+                                    || user.long_property_plan.is_some()
+                                    || user.scalar_double_plan.is_some();
                             if let Some(plan) = user.scalar_long_plan.as_deref() {
                                 scalar_plan_eligible = true;
                                 if let Some((result, do_fcall_ptr)) = unsafe {
@@ -2486,6 +2515,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 } {
                                     unsafe {
                                         complete_direct_scalar_long_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
+                                }
+                            }
+                            if let Some(plan) = user.scalar_double_plan.as_deref() {
+                                scalar_plan_eligible = true;
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_scalar_double_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        common,
+                                        plan,
+                                    )
+                                } {
+                                    stats::inc_do_fcall_fast();
+                                    stats::inc_return_fast();
+                                    let count = common.call_count.get();
+                                    if count < u32::MAX {
+                                        common.call_count.set(count + 1);
+                                    }
+                                    unsafe {
+                                        complete_direct_scalar_double_call(
                                             frame,
                                             do_fcall_ptr,
                                             result,

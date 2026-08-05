@@ -3504,6 +3504,55 @@ x86-64 performance claims require native hardware. Emulation may validate
 encoding and semantics but is not accepted for benchmark comparisons. Windows
 x86-64 remains a later ABI backend rather than part of this first parity slice.
 
+### Exact Double scalar leaf vertical slice
+
+The first floating-point JIT slice is target-neutral above instruction
+selection. The compiler recognizes straight leaf functions and methods with up
+to eight raw Double inputs and eight `+`, `-`, `*`, or `/` operations. Both the
+direct adjacent-Send boundary and the compact deferred-call boundary guard
+every argument as an exact non-reference Double. Weakly accepted Long values
+therefore replay the canonical frame and retain normal `int -> float` coercion,
+strictness and diagnostics.
+
+ARM64 keeps all intermediates in D16-D23 and emits `FADD`, `FSUB`, `FMUL` and
+`FDIV` directly. x86-64 uses mandatory SSE2 and keeps the same eight values in
+XMM2-XMM9. Both ABIs publish one result transactionally. Division compares the
+raw divisor against positive and negative zero before publication; NaN remains
+an ordinary IEEE-754 input. A zero divisor side-exits and the unchanged PHP
+operation raises the canonical `Division by zero` error. One-operation leaves
+remain in the Rust adapter because isolated measurements show no native-entry
+benefit; two or more operations compile lazily after 64 calls.
+
+The same path is used by ordinary functions and monomorphic methods. Method
+execution is admitted only after the receiver class and method inline cache
+match; the plan builder cannot describe `$this`-dependent bodies, so eliding
+the body frame does not erase receiver semantics. Architecture-specific tests
+cover exact instruction bytes, native execution, NaN, `-0.0`, transactional
+side exit and cache profitability. Real PHP tests prove native entry, Long
+fallback, method-cache dispatch and canonical zero-division replay on both
+targets.
+
+The permanent five-million-call `bench_typed_float_leaf.php` workload contains
+a general five-operation typed expression. Nine interleaved `max-perf` runs on
+ARM64 measure 138.778 ms in the frame-free Rust adapter and 119.153 ms with the
+Double JIT, a 14.1 percent reduction. PHP 8.5.9 records 121.202 ms without JIT
+and 25.699 ms with CLI tracing JIT. On the pinned Ryzen x86-64 host, RPHP moves
+from 214.214 to 180.383 ms, a 15.8 percent reduction; the currently installed
+PHP 8.4.24 records 149.821 and 27.054 ms respectively. Outputs are identical.
+
+An ARM64 profitability matrix makes the remaining boundary visible: one
+operation is flat at 89.48 ms, two improve from 99.82 to 96.71 ms, three from
+104.29 to 98.51 ms and five from 138.78 to 119.15 ms. The largest remaining
+gap is therefore not scalar Double instruction selection. PHP tracing JIT
+inlines the leaf into its caller loop, while RPHP still performs one VM/native
+transition per call. The next Double milestone is a shared composed-call
+lowering that imports a proven `ScalarDoubleProgram` into a surrounding typed
+region, followed by scalar argument-expression composition. It must reuse the
+same IR and side-exit contract rather than add a benchmark-shaped loop kernel.
+The completed checkpoint passes 167 ARM64 and 184 x86-64 library tests, 89
+ARM64 and 21 x86-64 JIT integration tests, plus the four application corpus
+tests on each target.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

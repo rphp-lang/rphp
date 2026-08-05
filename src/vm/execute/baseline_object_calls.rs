@@ -621,13 +621,15 @@ fn op_init_method_call<'a>(
             ));
         }
         let scalar_plan_eligible = common.fn_type == FunctionType::User
-            && common.supports_scalar_long_plan()
             && num_args == common.sig.public_arity()
             && {
                 let user = unsafe { &*(func_ptr as *const UserFunction) };
-                user.scalar_long_plan.is_some()
-                    || user.composed_scalar_long_plan.is_some()
-                    || user.long_property_plan.is_some()
+                (common.supports_scalar_long_plan()
+                    && (user.scalar_long_plan.is_some()
+                        || user.composed_scalar_long_plan.is_some()
+                        || user.long_property_plan.is_some()))
+                    || (common.supports_scalar_double_plan()
+                        && user.scalar_double_plan.is_some())
             };
         let deferred = should_defer_scalar_call(opline, scalar_plan_eligible);
         let call = if deferred {
@@ -670,7 +672,6 @@ fn op_init_method_call<'a>(
     }
     Ok(ColdResult::Done)
 }
-
 #[inline(never)]
 fn op_init_static_call<'a>(
     eg: &mut ExecutorGlobals,
@@ -987,4 +988,3 @@ fn op_init_dynamic_call(
     }
     Ok(())
 }
-

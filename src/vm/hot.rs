@@ -444,7 +444,8 @@ pub fn execute_hot_frame(
                     && num_args == func_common.sig.public_arity()
                 {
                     let user = unsafe { &*(func_ptr as *const UserFunction) };
-                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some();
+                    scalar_plan_eligible = user.composed_scalar_long_plan.is_some()
+                        || user.scalar_double_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
                         let evaluated = if plan.select.is_none()
@@ -498,6 +499,34 @@ pub fn execute_hot_frame(
                         } {
                             unsafe {
                                 super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+                    if let Some(plan) = user.scalar_double_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_direct_scalar_double_call(
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                func_common,
+                                plan,
+                            )
+                        } {
+                            stats::inc_do_fcall_fast();
+                            stats::inc_return_fast();
+                            let count = func_common.call_count.get();
+                            if count < u32::MAX {
+                                func_common.call_count.set(count + 1);
+                            }
+                            unsafe {
+                                super::execute::complete_direct_scalar_double_call(
                                     frame,
                                     do_fcall_ptr,
                                     result,
@@ -1307,7 +1336,8 @@ pub fn execute_hot_frame(
 
                     scalar_plan_eligible = scalar_plan_eligible
                         || user.composed_scalar_long_plan.is_some()
-                        || user.long_property_plan.is_some();
+                        || user.long_property_plan.is_some()
+                        || user.scalar_double_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
                         let evaluated = if plan.select.is_none()
@@ -1361,6 +1391,34 @@ pub fn execute_hot_frame(
                         } {
                             unsafe {
                                 super::execute::complete_direct_scalar_long_call(
+                                    frame,
+                                    do_fcall_ptr,
+                                    result,
+                                );
+                            }
+                            opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                            continue;
+                        }
+                    }
+                    if let Some(plan) = user.scalar_double_plan.as_deref() {
+                        scalar_plan_eligible = true;
+                        if let Some((result, do_fcall_ptr)) = unsafe {
+                            super::execute::try_execute_direct_scalar_double_call(
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                func_common,
+                                plan,
+                            )
+                        } {
+                            stats::inc_do_fcall_fast();
+                            stats::inc_return_fast();
+                            let count = func_common.call_count.get();
+                            if count < u32::MAX {
+                                func_common.call_count.set(count + 1);
+                            }
+                            unsafe {
+                                super::execute::complete_direct_scalar_double_call(
                                     frame,
                                     do_fcall_ptr,
                                     result,

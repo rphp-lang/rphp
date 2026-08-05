@@ -27,6 +27,16 @@ use std::mem::MaybeUninit;
 mod branch;
 #[path = "x86_64_affine.rs"]
 mod affine;
+#[path = "x86_64_double.rs"]
+mod double;
+#[cfg(test)]
+#[path = "x86_64_double_tests.rs"]
+mod double_tests;
+
+pub use double::{
+    CompiledScalarDoubleProgram, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitCache,
+    ScalarDoubleJitDispatch, ScalarDoubleJitError, ScalarDoubleJitOutcome,
+};
 
 use affine::{X86StraightAffineFusion, x86_straight_affine_fusion};
 
@@ -56,6 +66,27 @@ impl X86_64Register {
     const R13: Self = Self(13);
     const R14: Self = Self(14);
     const R15: Self = Self(15);
+
+    #[inline]
+    const fn low_bits(self) -> u8 {
+        self.0 & 7
+    }
+
+    #[inline]
+    const fn extension(self) -> u8 {
+        (self.0 >> 3) & 1
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct X86_64FloatRegister(u8);
+
+impl X86_64FloatRegister {
+    #[inline]
+    pub const fn from_code(code: u8) -> Self {
+        debug_assert!(code < 16);
+        Self(code)
+    }
 
     #[inline]
     const fn low_bits(self) -> u8 {
@@ -139,6 +170,106 @@ impl X86_64Assembler {
         self.emit_rex_w(destination, source);
         self.bytes.extend_from_slice(&[0x0f, 0xaf]);
         self.emit_register_modrm(destination, source);
+    }
+
+    /// Encode the SSE2 scalar-Double arithmetic forms. SSE2 is mandatory on
+    /// x86-64, so this path needs no runtime CPU-feature probe.
+    pub fn add_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_scalar_double_register(0x58, destination, source);
+    }
+
+    pub fn subtract_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_scalar_double_register(0x5c, destination, source);
+    }
+
+    pub fn multiply_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_scalar_double_register(0x59, destination, source);
+    }
+
+    pub fn divide_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_scalar_double_register(0x5e, destination, source);
+    }
+
+    fn move_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64FloatRegister,
+    ) {
+        if destination == source {
+            return;
+        }
+        self.emit_scalar_double_register(0x10, destination, source);
+    }
+
+    fn load_f64(
+        &mut self,
+        destination: X86_64FloatRegister,
+        base: X86_64Register,
+        displacement: i32,
+    ) {
+        self.emit_legacy_rex(0xf2, false, destination.extension(), base.extension());
+        self.bytes.extend_from_slice(&[0x0f, 0x10]);
+        self.bytes
+            .push(0x80 | (destination.low_bits() << 3) | base.low_bits());
+        self.bytes.extend_from_slice(&displacement.to_le_bytes());
+    }
+
+    fn store_f64(
+        &mut self,
+        base: X86_64Register,
+        source: X86_64FloatRegister,
+        displacement: i32,
+    ) {
+        self.emit_legacy_rex(0xf2, false, source.extension(), base.extension());
+        self.bytes.extend_from_slice(&[0x0f, 0x11]);
+        self.bytes
+            .push(0x80 | (source.low_bits() << 3) | base.low_bits());
+        self.bytes.extend_from_slice(&displacement.to_le_bytes());
+    }
+
+    fn move_gpr_bits_to_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64Register,
+    ) {
+        self.emit_legacy_rex(0x66, true, destination.extension(), source.extension());
+        self.bytes.extend_from_slice(&[0x0f, 0x6e]);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
+    fn move_double_bits_to_gpr(
+        &mut self,
+        destination: X86_64Register,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_legacy_rex(0x66, true, source.extension(), destination.extension());
+        self.bytes.extend_from_slice(&[0x0f, 0x7e]);
+        self.bytes
+            .push(0xc0 | (source.low_bits() << 3) | destination.low_bits());
+    }
+
+    fn shift_left_immediate8(&mut self, destination: X86_64Register, immediate: u8) {
+        self.bytes.push(0x48 | destination.extension());
+        self.bytes.push(0xc1);
+        self.bytes.push(0xe0 | destination.low_bits());
+        self.bytes.push(immediate);
     }
 
     /// Encode `ADD destination, immediate` when x86 can sign-extend the
@@ -451,6 +582,26 @@ impl X86_64Assembler {
     fn emit_rex_w(&mut self, reg: X86_64Register, rm: X86_64Register) {
         self.bytes
             .push(0x48 | (reg.extension() << 2) | rm.extension());
+    }
+
+    fn emit_scalar_double_register(
+        &mut self,
+        opcode: u8,
+        destination: X86_64FloatRegister,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_legacy_rex(0xf2, false, destination.extension(), source.extension());
+        self.bytes.extend_from_slice(&[0x0f, opcode]);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
+    fn emit_legacy_rex(&mut self, legacy: u8, wide: bool, reg_extension: u8, rm_extension: u8) {
+        self.bytes.push(legacy);
+        let rex = 0x40 | ((wide as u8) << 3) | (reg_extension << 2) | rm_extension;
+        if rex != 0x40 {
+            self.bytes.push(rex);
+        }
     }
 
     fn emit_register_modrm(&mut self, reg: X86_64Register, rm: X86_64Register) {

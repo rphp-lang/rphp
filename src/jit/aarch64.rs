@@ -24,9 +24,14 @@ use std::mem::MaybeUninit;
 
 #[path = "aarch64_affine.rs"]
 mod affine;
+#[path = "aarch64_double.rs"]
+mod double;
 #[cfg(test)]
 #[path = "aarch64_affine_tests.rs"]
 mod affine_tests;
+#[cfg(test)]
+#[path = "aarch64_double_tests.rs"]
+mod double_tests;
 #[cfg(test)]
 #[path = "aarch64_residency_tests.rs"]
 mod residency_tests;
@@ -34,6 +39,10 @@ mod residency_tests;
 use affine::{
     Arm64StraightMultiplyAccumulateFusion, arm64_straight_multiply_accumulate_fusion,
     emit_arm64_straight_multiply_accumulate,
+};
+pub use double::{
+    CompiledScalarDoubleProgram, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitCache,
+    ScalarDoubleJitDispatch, ScalarDoubleJitError, ScalarDoubleJitOutcome,
 };
 
 /// General-purpose ARM64 register accepted by the prototype encoder.
@@ -57,6 +66,23 @@ impl Arm64Register {
     #[inline]
     pub(super) const fn from_code(code: u8) -> Self {
         debug_assert!(code < 31);
+        Self(code)
+    }
+}
+
+/// Scalar IEEE-754 register accepted by the ARM64 Double prototype.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Arm64FloatRegister(u8);
+
+impl Arm64FloatRegister {
+    #[inline]
+    const fn bits(self) -> u32 {
+        self.0 as u32
+    }
+
+    #[inline]
+    pub const fn from_code(code: u8) -> Self {
+        debug_assert!(code < 32);
         Self(code)
     }
 }
@@ -95,6 +121,69 @@ impl Arm64Assembler {
     ) {
         let instruction = 0x8b00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
         self.words.push(instruction);
+    }
+
+    /// Encode scalar `FADD Dd, Dn, Dm`.
+    pub fn add_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        lhs: Arm64FloatRegister,
+        rhs: Arm64FloatRegister,
+    ) {
+        let instruction =
+            0x1e60_2800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode scalar `FSUB Dd, Dn, Dm`.
+    pub fn subtract_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        lhs: Arm64FloatRegister,
+        rhs: Arm64FloatRegister,
+    ) {
+        let instruction =
+            0x1e60_3800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode scalar `FMUL Dd, Dn, Dm`.
+    pub fn multiply_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        lhs: Arm64FloatRegister,
+        rhs: Arm64FloatRegister,
+    ) {
+        let instruction =
+            0x1e60_0800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode scalar `FDIV Dd, Dn, Dm`.
+    pub fn divide_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        lhs: Arm64FloatRegister,
+        rhs: Arm64FloatRegister,
+    ) {
+        let instruction =
+            0x1e60_1800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `FCMP Dn, #0.0`. Unordered NaN inputs do not satisfy EQ.
+    fn compare_double_with_zero(&mut self, value: Arm64FloatRegister) {
+        self.words.push(0x1e60_2008 | (value.bits() << 5));
+    }
+
+    /// Encode `FMOV Dd, Xn`, preserving all IEEE-754 payload bits.
+    fn move_register_bits_to_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        source: Arm64Register,
+    ) {
+        self.words
+            .push(0x9e67_0000 | (source.bits() << 5) | destination.bits());
     }
 
     /// Encode `ADD Xd, Xn, Xm, LSL #shift`.
@@ -349,6 +438,21 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `LDR Dt, [Xn, #offset]` using the scaled unsigned-immediate form.
+    fn load_f64(
+        &mut self,
+        destination: Arm64FloatRegister,
+        base: Arm64Register,
+        offset: u16,
+    ) {
+        debug_assert_eq!(offset % 8, 0);
+        let scaled_offset = u32::from(offset / 8);
+        debug_assert!(scaled_offset < 4096);
+        let instruction =
+            0xfd40_0000 | (scaled_offset << 10) | (base.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode `LDRB Wt, [Xn, #imm12]` for a byte-sized runtime flag.
     fn load_u8(&mut self, destination: Arm64Register, base: Arm64Register, offset: u16) {
         debug_assert!(offset < 4_096);
@@ -365,6 +469,16 @@ impl Arm64Assembler {
         let scaled_offset = u32::from(offset / 8);
         debug_assert!(scaled_offset < 4096);
         let instruction = 0xf900_0000 | (scaled_offset << 10) | (base.bits() << 5) | source.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `STR Dt, [Xn, #offset]` using the scaled unsigned-immediate form.
+    fn store_f64(&mut self, source: Arm64FloatRegister, base: Arm64Register, offset: u16) {
+        debug_assert_eq!(offset % 8, 0);
+        let scaled_offset = u32::from(offset / 8);
+        debug_assert!(scaled_offset < 4096);
+        let instruction =
+            0xfd00_0000 | (scaled_offset << 10) | (base.bits() << 5) | source.bits();
         self.words.push(instruction);
     }
 

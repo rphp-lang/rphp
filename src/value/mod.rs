@@ -2186,6 +2186,13 @@ impl Value {
         }
     }
 
+    /// Read the raw f64 without a type check. SAFETY: caller must guarantee
+    /// that this value has the Double tag.
+    #[inline(always)]
+    pub unsafe fn raw_double(&self) -> f64 {
+        self.data.double
+    }
+
     /// Convert to f64 for arithmetic (type juggling)
     pub fn to_double(&self) -> Option<f64> {
         match self.value_type() {

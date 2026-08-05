@@ -240,6 +240,7 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
             common.plan.call = scalar_strategy.unwrap();
         }
         function.scalar_long_plan = super::build_scalar_long_function_plan(function);
+        function.scalar_double_plan = super::build_scalar_double_function_plan(function);
         function.scalar_string_plan = super::build_scalar_string_function_plan(function);
         function.composed_scalar_long_plan =
             super::build_composed_scalar_long_function_plan(function);

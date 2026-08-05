@@ -18,9 +18,12 @@ mod x86_64;
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub use x86_64::{
-    CompiledScalarLongProgram, CompiledX86AddMultiply, CompiledX86StraightLongLoop,
-    SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError,
-    ScalarLongJitOutcome, X86_64Assembler, X86_64Register,
+    CompiledScalarDoubleProgram, CompiledScalarLongProgram, CompiledX86AddMultiply,
+    CompiledX86StraightLongLoop, SCALAR_DOUBLE_JIT_HOT_THRESHOLD,
+    SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarDoubleJitCache, ScalarDoubleJitDispatch,
+    ScalarDoubleJitError, ScalarDoubleJitOutcome, ScalarLongJitCache, ScalarLongJitDispatch,
+    ScalarLongJitError, ScalarLongJitOutcome, X86_64Assembler, X86_64Register,
+    X86_64FloatRegister,
     X86QuickLongOpsJitCache as QuickLongAccumulateJitCache,
     X86QuickLongOpsJitCache as QuickLongOpsJitCache, X86StraightLongLoopError,
 };
@@ -45,13 +48,15 @@ mod aarch64;
     target_os = "macos"
 ))]
 pub use aarch64::{
-    Arm64Assembler, Arm64Register, CompiledAddMultiply,
+    Arm64Assembler, Arm64FloatRegister, Arm64Register, CompiledAddMultiply,
     CompiledQuickLongAccumulateLoop, CompiledQuickLongConditionalAccumulateLoop,
-    CompiledQuickLongStraightLoop, CompiledScalarLongProgram,
+    CompiledQuickLongStraightLoop, CompiledScalarDoubleProgram, CompiledScalarLongProgram,
     NativeConditionalLongLoopCondition,
     NativeConditionalLongLoopConfig, NativeConditionalLongLoopResult,
     NativeLongAccumulateState, QuickLongAccumulateJitCache, QuickLongAccumulateJitError,
     QuickLongAccumulateJitOutcome,
-    QuickLongOpsJitCache, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitCache,
-    ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
+    QuickLongOpsJitCache, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, SCALAR_LONG_JIT_HOT_THRESHOLD,
+    ScalarDoubleJitCache, ScalarDoubleJitDispatch, ScalarDoubleJitError,
+    ScalarDoubleJitOutcome, ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError,
+    ScalarLongJitOutcome,
 };

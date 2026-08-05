@@ -4,7 +4,7 @@ mod common;
 
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
-use rphp::jit::SCALAR_LONG_JIT_HOT_THRESHOLD;
+use rphp::jit::{SCALAR_DOUBLE_JIT_HOT_THRESHOLD, SCALAR_LONG_JIT_HOT_THRESHOLD};
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 use rphp::vm::execute;
@@ -14,6 +14,129 @@ use rphp::vm::quick::QuickLongOp;
 
 fn captured_output(output: &std::sync::Arc<std::sync::Mutex<Vec<u8>>>) -> String {
     String::from_utf8(output.lock().unwrap().clone()).unwrap()
+}
+
+#[test]
+fn real_php_exact_float_calls_enter_double_jit_and_long_inputs_fallback() {
+    let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
+    let mut source = String::from(
+        "<?php function blend(float $a, float $b, float $c): float { return (($a + 1.5) * $b) / $c; } $total = 0.0;",
+    );
+    for _ in 0..call_count {
+        source.push_str("$total = $total + blend(2.5, 4.0, 2.0);");
+    }
+    source.push_str("echo $total . ':' . blend(2, 4, 2);");
+
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(captured_output(&output), "576:7");
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("blend"))
+        .map(|(_, function)| function)
+        .expect("compiled blend function");
+    let plan = function
+        .scalar_double_plan
+        .as_deref()
+        .expect("Double scalar plan");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 9);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn monomorphic_float_method_uses_class_cache_and_double_jit() {
+    let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
+    let source = format!(
+        "<?php class FloatModel {{ public function blend(float $a, float $b, float $c): float {{ return (($a + 1.5) * $b) / $c; }} }} $model = new FloatModel(); $total = 0.0; for ($i = 0; $i < {call_count}; $i++) {{ $total += $model->blend(2.5, 4.0, 2.0); }} echo $total;"
+    );
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    assert_eq!(captured_output(&output), "576");
+
+    let class = globals
+        .class_table
+        .values()
+        .find(|class| class.name.eq_ignore_ascii_case("FloatModel"))
+        .expect("registered FloatModel");
+    let method = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name.eq_ignore_ascii_case("blend"))
+        .map(|(_, _, _, _, method)| method)
+        .expect("compiled blend method");
+    let plan = method
+        .scalar_double_plan
+        .as_deref()
+        .expect("Double scalar method plan");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 8);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn double_jit_zero_divisor_replays_canonical_php_error() {
+    let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
+    let mut source = String::from(
+        "<?php function divideFloat(float $value, float $divisor): float { return ($value + 1.0) / $divisor; }",
+    );
+    for _ in 0..call_count {
+        source.push_str("divideFloat(7.0, 2.0);");
+    }
+    source.push_str("divideFloat(7.0, 0.0);");
+
+    let tokens = Lexer::new(&source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, _output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    let error = execute::execute(&mut globals, &main).unwrap_err();
+    assert!(matches!(
+        error,
+        rphp::vm::execute::VmError::Fatal(message) if message == "Division by zero"
+    ));
+
+    let function = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("divideFloat"))
+        .map(|(_, function)| function)
+        .expect("compiled divideFloat function");
+    let plan = function
+        .scalar_double_plan
+        .as_deref()
+        .expect("Double scalar plan");
+    assert!(plan.native_jit().is_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 10);
+    assert_eq!(plan.native_jit().side_exits(), 1);
 }
 
 #[test]

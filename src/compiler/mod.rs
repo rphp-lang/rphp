@@ -18,6 +18,8 @@ use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
     ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource,
+    ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind,
+    ScalarDoubleProgram, ScalarDoubleSource,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
     ObjectLongModuloEqualTerm, ObjectLongObjectSource, ObjectLongOp,
     ObjectLongSource, ObjectLongStringAdjustment, ObjectLongStringIntDivCase,
@@ -623,6 +625,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         property_init_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
+        scalar_double_plan: None,
         object_long_plan: None,
         object_array_plan: None,
         scalar_string_plan: None,
@@ -635,6 +638,7 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.scalar_double_plan = build_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
@@ -738,6 +742,7 @@ pub fn make_user_function_typed(
         property_init_plan: None,
         binary_long_recursion_plan: None,
         scalar_long_plan: None,
+        scalar_double_plan: None,
         object_long_plan: None,
         object_array_plan: None,
         scalar_string_plan: None,
@@ -750,6 +755,7 @@ pub fn make_user_function_typed(
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.scalar_double_plan = build_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
@@ -884,6 +890,181 @@ fn build_scalar_long_function_plan(
     build_straight_scalar_long_function_plan(function).or_else(|| {
         build_conditional_scalar_long_function_plan(function)
     })
+}
+
+#[derive(Clone, Copy)]
+struct ProvenScalarDoubleSource {
+    source: ScalarDoubleSource,
+    is_double: bool,
+}
+
+fn scalar_double_source(
+    op_array: &OpArray,
+    temporary_results: &HashMap<u16, ProvenScalarDoubleSource>,
+    this_offset: u32,
+    public_args: u32,
+    op_type: OpType,
+    operand: u16,
+) -> Option<ProvenScalarDoubleSource> {
+    match op_type {
+        OpType::Cv => {
+            if operand as u32 >= this_offset
+                && (operand as u32) < this_offset + public_args
+            {
+                Some(ProvenScalarDoubleSource {
+                    source: ScalarDoubleSource::Input(
+                        (operand as u32 - this_offset) as u16,
+                    ),
+                    // The frame-free adapter admits this plan only after an
+                    // exact raw-Double tag guard succeeds.
+                    is_double: true,
+                })
+            } else {
+                temporary_results.get(&operand).copied()
+            }
+        }
+        OpType::Const => {
+            let value = op_array.literals.get(operand as usize)?;
+            match value.value_type() {
+                crate::value::ValueType::Double => Some(ProvenScalarDoubleSource {
+                    source: ScalarDoubleSource::Constant(value.as_double()?),
+                    is_double: true,
+                }),
+                crate::value::ValueType::Long => Some(ProvenScalarDoubleSource {
+                    source: ScalarDoubleSource::Constant(value.as_long()? as f64),
+                    is_double: false,
+                }),
+                _ => None,
+            }
+        }
+        OpType::Tmp | OpType::Var => temporary_results.get(&operand).copied(),
+        OpType::Unused => None,
+    }
+}
+
+fn scalar_double_op_kind(opcode: OpCode) -> Option<ScalarDoubleOpKind> {
+    match opcode {
+        OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
+            Some(ScalarDoubleOpKind::Add)
+        }
+        OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+            Some(ScalarDoubleOpKind::Subtract)
+        }
+        OpCode::Mul => Some(ScalarDoubleOpKind::Multiply),
+        OpCode::Div => Some(ScalarDoubleOpKind::Divide),
+        _ => None,
+    }
+}
+
+/// Recognize a straight-line expression whose runtime arguments are all exact
+/// Double values. Every operation must already have a Double operand, which
+/// excludes constant-only Long subexpressions whose overflow/type behavior
+/// would differ from IEEE-754 arithmetic.
+fn build_scalar_double_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarDoubleFunctionPlan>> {
+    let common = &function.common;
+    let op_array = &function.op_array;
+    let public_args = common.sig.public_arity();
+    if !common.supports_scalar_double_plan()
+        || common.plan.ret != ReturnStrategy::Fast
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || op_array.instructions.len() > SCALAR_LONG_PLAN_MAX_OPS + 6
+    {
+        return None;
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut operations = Vec::new();
+    for instruction in &op_array.instructions {
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 {
+                return None;
+            }
+            let output = scalar_double_source(
+                op_array,
+                &temporary_results,
+                common.sig.this_offset,
+                public_args,
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            if !output.is_double {
+                return None;
+            }
+            return Some(Box::new(ScalarDoubleFunctionPlan::new(
+                public_args as u8,
+                ScalarDoubleProgram {
+                    operations: operations.into_boxed_slice(),
+                    output: output.source,
+                },
+            )));
+        }
+
+        if instruction.opcode == OpCode::AssignCv {
+            if instruction.op1_type != OpType::Cv {
+                return None;
+            }
+            let destination = instruction.op1 as u32;
+            let first_argument = common.sig.this_offset;
+            let argument_end = first_argument + public_args;
+            if destination < first_argument
+                || (destination >= first_argument && destination < argument_end)
+            {
+                return None;
+            }
+            let source = scalar_double_source(
+                op_array,
+                &temporary_results,
+                common.sig.this_offset,
+                public_args,
+                instruction.op2_type,
+                instruction.op2,
+            )?;
+            temporary_results.insert(instruction.op1, source);
+            continue;
+        }
+
+        let kind = scalar_double_op_kind(instruction.opcode)?;
+        if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            return None;
+        }
+        let lhs = scalar_double_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = scalar_double_source(
+            op_array,
+            &temporary_results,
+            common.sig.this_offset,
+            public_args,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        if !lhs.is_double && !rhs.is_double {
+            return None;
+        }
+        let result_index = operations.len() as u8;
+        operations.push(ScalarDoubleOp {
+            kind,
+            lhs: lhs.source,
+            rhs: rhs.source,
+        });
+        temporary_results.insert(
+            instruction.result,
+            ProvenScalarDoubleSource {
+                source: ScalarDoubleSource::Temporary(result_index),
+                is_double: true,
+            },
+        );
+    }
+    None
 }
 
 fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
@@ -4093,6 +4274,7 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     function.binary_long_recursion_plan =
         build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
+    function.scalar_double_plan = build_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
