@@ -308,6 +308,12 @@ impl QuickDoubleArgumentProgram {
         &self,
         leaf: &crate::vm::function::ScalarDoubleFunctionPlan,
     ) -> u8 {
+        // Conditional leaves may consume an input in the predicate or either
+        // edge. Keep the first vertical slice conservative and materialize
+        // every dynamic argument before entering the leaf branch.
+        if leaf.select.is_some() {
+            return 0;
+        }
         let mut mask = 0_u8;
         for (argument, output) in self.outputs[..self.output_count as usize]
             .iter()

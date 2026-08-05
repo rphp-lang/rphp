@@ -235,6 +235,30 @@ impl X86_64Assembler {
         self.emit_scalar_double_register(0x5e, destination, source);
     }
 
+    /// Encode ordered/unordered scalar `UCOMISD lhs, rhs` flags.
+    fn compare_doubles(
+        &mut self,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_legacy_rex(0x66, false, lhs.extension(), rhs.extension());
+        self.bytes.extend_from_slice(&[0x0f, 0x2e]);
+        self.bytes
+            .push(0xc0 | (lhs.low_bits() << 3) | rhs.low_bits());
+    }
+
+    /// AVX form of `UCOMISD`; reserved VEX.vvvv remains 1111b.
+    fn compare_doubles_avx(
+        &mut self,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_vex_0f(0x01, false, lhs.extension(), rhs.extension(), 0x0f);
+        self.bytes.push(0x2e);
+        self.bytes
+            .push(0xc0 | (lhs.low_bits() << 3) | rhs.low_bits());
+    }
+
     fn add_double_avx(
         &mut self,
         destination: X86_64FloatRegister,
@@ -697,6 +721,18 @@ impl X86_64Assembler {
 
     fn jump_not_equal_rel32(&mut self) -> usize {
         self.emit_conditional_jump_rel32(0x85)
+    }
+
+    fn jump_above_or_equal_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x83)
+    }
+
+    fn jump_above_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x87)
+    }
+
+    fn jump_parity_rel32(&mut self) -> usize {
+        self.emit_conditional_jump_rel32(0x8a)
     }
 
     fn jump_overflow_rel32(&mut self) -> usize {

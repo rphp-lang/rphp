@@ -56,6 +56,50 @@ fn test_e2e_typed_double_call_accumulation() {
 }
 
 #[test]
+fn test_e2e_conditional_typed_double_call_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php function conditionalFloat(float $value, float $pivot): float { if ($value < $pivot) { return ($value * 1.5) + 2.0; } return ($value * 0.5) - 1.0; } $total = 0.0; for ($i = 0; $i < 100; $i++) { $total += conditionalFloat($i * 0.5, 25.0); } echo $i . ':' . $total;"
+        ),
+        "100:1900"
+    );
+}
+
+#[test]
+fn test_e2e_conditional_typed_double_method_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php class ConditionalFloat { public function apply(float $value, float $pivot): float { $scaled = $value * 1.0; if ($scaled < $pivot) { $result = ($scaled * 1.5) + 2.0; return $result; } $result = ($scaled * 0.5) - 1.0; return $result; } } $calculator = new ConditionalFloat(); $total = 0.0; for ($i = 0; $i < 100; $i++) { $total += $calculator->apply($i * 0.5, 25.0); } echo $i . ':' . $total;"
+        ),
+        "100:1900"
+    );
+}
+
+#[test]
+fn test_e2e_conditional_typed_double_relations_and_truthiness() {
+    assert_eq!(
+        run_php(
+            "<?php function eqFloat(float $a, float $b): float { if ($a == $b) { return 1.0; } return -1.0; } function neFloat(float $a, float $b): float { if ($a != $b) { return 2.0; } return -2.0; } function leFloat(float $a, float $b): float { if ($a <= $b) { return 3.0; } return -3.0; } function truthyFloat(float $value): float { if ($value) { return 4.0; } return -4.0; } echo eqFloat(2.0, 2.0) . ':' . eqFloat(2.0, 3.0) . '|' . neFloat(2.0, 3.0) . ':' . neFloat(2.0, 2.0) . '|' . leFloat(2.0, 2.0) . ':' . leFloat(3.0, 2.0) . '|' . truthyFloat(1.0) . ':' . truthyFloat(-0.0);"
+        ),
+        "1:-1|2:-2|3:-3|4:-4"
+    );
+}
+
+#[test]
+fn test_e2e_conditional_typed_double_side_exit_replays_only_selected_edge() {
+    assert_eq!(
+        run_php(
+            "<?php function selectiveDivide(float $value, float $divisor): float { if ($value < 0.0) { return 8.0 / $divisor; } return 3.0; } echo selectiveDivide(1.0, 0.0);"
+        ),
+        "3"
+    );
+    let error = run_php_expect_error(
+        "<?php function selectiveDivide(float $value, float $divisor): float { if ($value < 0.0) { return 8.0 / $divisor; } return 3.0; } $total = 0.0; for ($i = 0; $i < 100; $i++) { $value = $i == 99 ? -1.0 : 1.0; $total += selectiveDivide($value, 0.0); }",
+    );
+    assert!(format!("{error:?}").contains("Division by zero"));
+}
+
+#[test]
 fn test_e2e_typed_double_method_accumulation() {
     assert_eq!(
         run_php(

@@ -1455,12 +1455,54 @@ fn evaluate_scalar_double_plan_rust(
         return None;
     }
     let mut temporaries = [0.0_f64; 8];
-    for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-        let lhs = resolve_scalar_double_source(operation.lhs, arguments, &temporaries)?;
-        let rhs = resolve_scalar_double_source(operation.rhs, arguments, &temporaries)?;
-        temporaries[index] = apply_scalar_double_op(operation.kind, lhs, rhs)?;
+    let evaluate_operations = |start: usize, end: usize, temporaries: &mut [f64; 8]| {
+        for index in start..end {
+            let operation = plan.program.operations[index];
+            let lhs = resolve_scalar_double_source(operation.lhs, arguments, temporaries)?;
+            let rhs = resolve_scalar_double_source(operation.rhs, arguments, temporaries)?;
+            temporaries[index] = apply_scalar_double_op(operation.kind, lhs, rhs)?;
+        }
+        Some(())
+    };
+    let output = if let Some(select) = plan.select {
+        let shared_end = select.shared_operation_count as usize;
+        let true_end = shared_end.checked_add(select.when_true_operation_count as usize)?;
+        if true_end > plan.program.operations.len() {
+            return None;
+        }
+        evaluate_operations(0, shared_end, &mut temporaries)?;
+        let lhs = resolve_scalar_double_source(select.lhs, arguments, &temporaries)?;
+        let rhs = resolve_scalar_double_source(select.rhs, arguments, &temporaries)?;
+        if apply_scalar_double_condition(select.kind, lhs, rhs) {
+            evaluate_operations(shared_end, true_end, &mut temporaries)?;
+            select.when_true
+        } else {
+            evaluate_operations(
+                true_end,
+                plan.program.operations.len(),
+                &mut temporaries,
+            )?;
+            select.when_false
+        }
+    } else {
+        evaluate_operations(0, plan.program.operations.len(), &mut temporaries)?;
+        plan.program.output
+    };
+    resolve_scalar_double_source(output, arguments, &temporaries)
+}
+
+#[inline(always)]
+fn apply_scalar_double_condition(
+    kind: ScalarLongConditionKind,
+    lhs: f64,
+    rhs: f64,
+) -> bool {
+    match kind {
+        ScalarLongConditionKind::Equal => lhs == rhs,
+        ScalarLongConditionKind::NotEqual => lhs != rhs,
+        ScalarLongConditionKind::LessThan => lhs < rhs,
+        ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
     }
-    resolve_scalar_double_source(plan.program.output, arguments, &temporaries)
 }
 
 #[inline(always)]

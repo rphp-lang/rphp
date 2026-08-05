@@ -143,6 +143,20 @@ pub struct ScalarDoubleProgram {
     pub output: ScalarDoubleSource,
 }
 
+/// A side-effect-free exact-Double predicate whose two return arms occupy
+/// disjoint ranges in one bounded scalar program. NaN behavior follows Rust's
+/// IEEE comparisons, matching PHP's numeric comparisons for guarded Doubles.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ScalarDoubleSelect {
+    pub kind: ScalarLongConditionKind,
+    pub lhs: ScalarDoubleSource,
+    pub rhs: ScalarDoubleSource,
+    pub shared_operation_count: u8,
+    pub when_true_operation_count: u8,
+    pub when_true: ScalarDoubleSource,
+    pub when_false: ScalarDoubleSource,
+}
+
 /// Compile-time proof for a straight-line floating-point leaf.
 ///
 /// IEEE-754 add/subtract/multiply results are authoritative, including NaN
@@ -152,6 +166,9 @@ pub struct ScalarDoubleProgram {
 pub struct ScalarDoubleFunctionPlan {
     pub public_args: u8,
     pub program: ScalarDoubleProgram,
+    /// Present for one pure `if`/guard-clause with an exact-Double return on
+    /// each edge. `None` retains the compact straight-line representation.
+    pub select: Option<ScalarDoubleSelect>,
     #[cfg(all(
         feature = "jit-prototype",
         any(
@@ -191,6 +208,7 @@ impl ScalarDoubleFunctionPlan {
         Self {
             public_args,
             program,
+            select: None,
             #[cfg(all(
                 feature = "jit-prototype",
                 any(
@@ -200,6 +218,106 @@ impl ScalarDoubleFunctionPlan {
             ))]
             native_jit: crate::jit::ScalarDoubleJitCache::new(),
         }
+    }
+
+    pub fn new_conditional(
+        public_args: u8,
+        program: ScalarDoubleProgram,
+        select: ScalarDoubleSelect,
+    ) -> Self {
+        let mut plan = Self::new(public_args, program);
+        plan.select = Some(select);
+        plan
+    }
+
+    /// Validate the target-neutral dataflow before a native backend assigns
+    /// physical registers. False-edge validation deliberately excludes
+    /// temporaries defined only by the true edge.
+    #[cfg(all(
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
+    pub(crate) fn validate_register_program(
+        &self,
+        max_inputs: usize,
+        max_operations: usize,
+    ) -> Result<(), &'static str> {
+        if self.public_args as usize > max_inputs {
+            return Err("too many public inputs for the register ABI");
+        }
+        if self.program.operations.len() > max_operations {
+            return Err("too many operations for the register ABI");
+        }
+        let Some(select) = self.select else {
+            for (index, operation) in self.program.operations.iter().enumerate() {
+                validate_scalar_double_register_source(operation.lhs, index, self.public_args)?;
+                validate_scalar_double_register_source(operation.rhs, index, self.public_args)?;
+            }
+            return validate_scalar_double_register_source(
+                self.program.output,
+                self.program.operations.len(),
+                self.public_args,
+            );
+        };
+
+        let operation_count = self.program.operations.len();
+        let shared_end = select.shared_operation_count as usize;
+        let true_end = shared_end
+            .checked_add(select.when_true_operation_count as usize)
+            .ok_or("conditional operation ranges overflow")?;
+        if shared_end > operation_count || true_end > operation_count {
+            return Err("conditional operation range is outside the program");
+        }
+        for (index, operation) in self.program.operations[..shared_end].iter().enumerate() {
+            validate_scalar_double_register_source(operation.lhs, index, self.public_args)?;
+            validate_scalar_double_register_source(operation.rhs, index, self.public_args)?;
+        }
+        validate_scalar_double_register_source(select.lhs, shared_end, self.public_args)?;
+        validate_scalar_double_register_source(select.rhs, shared_end, self.public_args)?;
+        for (index, operation) in self.program.operations[shared_end..true_end]
+            .iter()
+            .enumerate()
+        {
+            let absolute_index = shared_end + index;
+            validate_scalar_double_register_source(
+                operation.lhs,
+                absolute_index,
+                self.public_args,
+            )?;
+            validate_scalar_double_register_source(
+                operation.rhs,
+                absolute_index,
+                self.public_args,
+            )?;
+        }
+        validate_scalar_double_register_source(select.when_true, true_end, self.public_args)?;
+        for (index, operation) in self.program.operations[true_end..].iter().enumerate() {
+            let absolute_index = true_end + index;
+            validate_scalar_double_false_edge_source(
+                operation.lhs,
+                shared_end,
+                true_end,
+                absolute_index,
+                self.public_args,
+            )?;
+            validate_scalar_double_false_edge_source(
+                operation.rhs,
+                shared_end,
+                true_end,
+                absolute_index,
+                self.public_args,
+            )?;
+        }
+        validate_scalar_double_false_edge_source(
+            select.when_false,
+            shared_end,
+            true_end,
+            operation_count,
+            self.public_args,
+        )
     }
 
     #[cfg(all(
@@ -212,6 +330,59 @@ impl ScalarDoubleFunctionPlan {
     #[inline(always)]
     pub fn native_jit(&self) -> &crate::jit::ScalarDoubleJitCache {
         &self.native_jit
+    }
+}
+
+#[cfg(all(
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+fn validate_scalar_double_register_source(
+    source: ScalarDoubleSource,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), &'static str> {
+    match source {
+        ScalarDoubleSource::Input(index) if index >= u16::from(input_count) => {
+            Err("input index is outside the public ABI")
+        }
+        ScalarDoubleSource::Temporary(index) if index as usize >= available_temporaries => {
+            Err("temporary is used before it is defined")
+        }
+        _ => Ok(()),
+    }
+}
+
+#[cfg(all(
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+fn validate_scalar_double_false_edge_source(
+    source: ScalarDoubleSource,
+    shared_end: usize,
+    false_start: usize,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), &'static str> {
+    match source {
+        ScalarDoubleSource::Temporary(index)
+            if !((index as usize) < shared_end
+                || ((index as usize) >= false_start
+                    && (index as usize) < available_temporaries)) =>
+        {
+            Err("false edge references a true-edge temporary")
+        }
+        _ => validate_scalar_double_register_source(
+            source,
+            available_temporaries,
+            input_count,
+        ),
     }
 }
 

@@ -6,7 +6,7 @@ use super::{
 };
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
-    ScalarDoubleSource,
+    ScalarDoubleSelect, ScalarDoubleSource, ScalarLongConditionKind,
 };
 use crate::vm::quick::{QuickDoubleArgumentOp, QuickDoubleArgumentProgram, QuickDoubleSource};
 
@@ -35,6 +35,133 @@ fn arithmetic_plan() -> ScalarDoubleFunctionPlan {
             output: ScalarDoubleSource::Temporary(2),
         },
     )
+}
+
+fn conditional_plan(kind: ScalarLongConditionKind) -> ScalarDoubleFunctionPlan {
+    ScalarDoubleFunctionPlan::new_conditional(
+        2,
+        ScalarDoubleProgram {
+            operations: Vec::new().into_boxed_slice(),
+            output: ScalarDoubleSource::Constant(-1.0),
+        },
+        ScalarDoubleSelect {
+            kind,
+            lhs: ScalarDoubleSource::Input(0),
+            rhs: ScalarDoubleSource::Input(1),
+            shared_operation_count: 0,
+            when_true_operation_count: 0,
+            when_true: ScalarDoubleSource::Constant(1.0),
+            when_false: ScalarDoubleSource::Constant(-1.0),
+        },
+    )
+}
+
+fn conditional_arithmetic_plan() -> ScalarDoubleFunctionPlan {
+    ScalarDoubleFunctionPlan::new_conditional(
+        2,
+        ScalarDoubleProgram {
+            operations: vec![
+                ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Multiply,
+                    lhs: ScalarDoubleSource::Input(0),
+                    rhs: ScalarDoubleSource::Constant(1.5),
+                },
+                ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Add,
+                    lhs: ScalarDoubleSource::Temporary(0),
+                    rhs: ScalarDoubleSource::Constant(2.0),
+                },
+                ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Multiply,
+                    lhs: ScalarDoubleSource::Input(0),
+                    rhs: ScalarDoubleSource::Constant(0.5),
+                },
+                ScalarDoubleOp {
+                    kind: ScalarDoubleOpKind::Subtract,
+                    lhs: ScalarDoubleSource::Temporary(2),
+                    rhs: ScalarDoubleSource::Constant(1.0),
+                },
+            ]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Temporary(3),
+        },
+        ScalarDoubleSelect {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: ScalarDoubleSource::Input(0),
+            rhs: ScalarDoubleSource::Input(1),
+            shared_operation_count: 0,
+            when_true_operation_count: 2,
+            when_true: ScalarDoubleSource::Temporary(1),
+            when_false: ScalarDoubleSource::Temporary(3),
+        },
+    )
+}
+
+fn conditional_argument_plan() -> QuickDoubleArgumentProgram {
+    QuickDoubleArgumentProgram {
+        operations: vec![QuickDoubleArgumentOp {
+            kind: ScalarDoubleOpKind::Multiply,
+            lhs: QuickDoubleSource::Induction,
+            rhs: QuickDoubleSource::Constant(0.5),
+        }]
+        .into_boxed_slice(),
+        outputs: [
+            QuickDoubleSource::Temporary(0),
+            QuickDoubleSource::Constant(2.5),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+        ],
+        output_count: 2,
+        input_slots: [u16::MAX; 8],
+        input_count: 0,
+    }
+}
+
+fn selective_division_plan() -> ScalarDoubleFunctionPlan {
+    ScalarDoubleFunctionPlan::new_conditional(
+        2,
+        ScalarDoubleProgram {
+            operations: vec![ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Divide,
+                lhs: ScalarDoubleSource::Constant(8.0),
+                rhs: ScalarDoubleSource::Input(1),
+            }]
+            .into_boxed_slice(),
+            output: ScalarDoubleSource::Constant(3.0),
+        },
+        ScalarDoubleSelect {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: ScalarDoubleSource::Input(0),
+            rhs: ScalarDoubleSource::Constant(0.0),
+            shared_operation_count: 0,
+            when_true_operation_count: 1,
+            when_true: ScalarDoubleSource::Temporary(0),
+            when_false: ScalarDoubleSource::Constant(3.0),
+        },
+    )
+}
+
+fn two_input_argument_plan() -> QuickDoubleArgumentProgram {
+    QuickDoubleArgumentProgram {
+        operations: Vec::new().into_boxed_slice(),
+        outputs: [
+            QuickDoubleSource::Input(0),
+            QuickDoubleSource::Input(1),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+        ],
+        output_count: 2,
+        input_slots: [0, 1, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX],
+        input_count: 2,
+    }
 }
 
 fn identity_argument_plan() -> QuickDoubleArgumentProgram {
@@ -195,6 +322,99 @@ fn native_double_program_executes_and_division_zero_side_exits_transactionally()
     );
     let nan = program.call(&[2.5, 4.0, f64::NAN]).unwrap();
     assert!(matches!(nan, ScalarDoubleJitOutcome::Value(value) if value.is_nan()));
+}
+
+#[test]
+fn conditional_double_program_preserves_ordered_and_nan_semantics() {
+    let cases = [
+        (ScalarLongConditionKind::Equal, [2.0, 2.0], 1.0),
+        (ScalarLongConditionKind::Equal, [2.0, 3.0], -1.0),
+        (ScalarLongConditionKind::Equal, [f64::NAN, 3.0], -1.0),
+        (ScalarLongConditionKind::Equal, [0.0, -0.0], 1.0),
+        (ScalarLongConditionKind::NotEqual, [2.0, 2.0], -1.0),
+        (ScalarLongConditionKind::NotEqual, [2.0, 3.0], 1.0),
+        (ScalarLongConditionKind::NotEqual, [f64::NAN, 3.0], 1.0),
+        (ScalarLongConditionKind::LessThan, [2.0, 3.0], 1.0),
+        (ScalarLongConditionKind::LessThan, [3.0, 2.0], -1.0),
+        (ScalarLongConditionKind::LessThan, [f64::NAN, 3.0], -1.0),
+        (ScalarLongConditionKind::LessThanOrEqual, [2.0, 2.0], 1.0),
+        (ScalarLongConditionKind::LessThanOrEqual, [2.0, 3.0], 1.0),
+        (ScalarLongConditionKind::LessThanOrEqual, [3.0, 2.0], -1.0),
+        (
+            ScalarLongConditionKind::LessThanOrEqual,
+            [f64::NAN, 3.0],
+            -1.0,
+        ),
+    ];
+    for (kind, inputs, expected) in cases {
+        let program = CompiledScalarDoubleProgram::compile(&conditional_plan(kind)).unwrap();
+        assert_eq!(
+            program.call(&inputs).unwrap(),
+            ScalarDoubleJitOutcome::Value(expected)
+        );
+    }
+}
+
+#[test]
+fn conditional_double_loop_executes_both_arithmetic_edges() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &conditional_argument_plan(),
+        &conditional_arithmetic_plan(),
+    )
+    .unwrap();
+    let mut state = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 10,
+        accumulator: 0.0,
+        last_term: -1.0,
+    };
+    assert_eq!(
+        program.call(&mut state, &[], &false).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Completed
+    );
+    assert_eq!(state.induction, 10);
+    assert_eq!(state.accumulator, 21.25);
+    assert_eq!(state.last_term, 1.25);
+}
+
+#[test]
+fn conditional_double_loop_side_exits_only_on_the_selected_edge() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &two_input_argument_plan(),
+        &selective_division_plan(),
+    )
+    .unwrap();
+    let mut false_edge = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 1,
+        accumulator: 0.0,
+        last_term: -1.0,
+    };
+    assert_eq!(
+        program.call(&mut false_edge, &[1.0, 0.0], &false).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Completed
+    );
+    assert_eq!(false_edge.accumulator, 3.0);
+
+    let mut true_edge = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 1,
+        accumulator: 7.0,
+        last_term: 2.0,
+    };
+    assert_eq!(
+        program.call(&mut true_edge, &[-1.0, 0.0], &false).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::SideExit
+    );
+    assert_eq!(
+        true_edge,
+        NativeDoubleCallAccumulateState {
+            induction: 0,
+            bound: 1,
+            accumulator: 7.0,
+            last_term: 2.0,
+        }
+    );
 }
 
 #[test]

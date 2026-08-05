@@ -3,7 +3,8 @@
 use super::super::memory::ExecutableMemory;
 use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register, X86DoubleInstructionSet};
 use crate::vm::function::{
-    ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
+    ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSelect,
+    ScalarDoubleSource, ScalarLongConditionKind,
 };
 use std::cell::{Cell, OnceCell};
 use std::fmt;
@@ -29,17 +30,45 @@ pub(super) struct X86ScalarDoubleRegisterMap {
 }
 
 impl X86ScalarDoubleRegisterMap {
+    #[cfg(test)]
     pub(super) fn new(program: &crate::vm::function::ScalarDoubleProgram) -> Self {
+        Self::new_with_select(program, None)
+    }
+
+    pub(super) fn for_plan(plan: &ScalarDoubleFunctionPlan) -> Self {
+        Self::new_with_select(&plan.program, plan.select)
+    }
+
+    fn new_with_select(
+        program: &crate::vm::function::ScalarDoubleProgram,
+        select: Option<ScalarDoubleSelect>,
+    ) -> Self {
         let mut last_use = [None; MAX_SCALAR_DOUBLE_OPERATIONS];
+        let mark_source = |last_use: &mut [Option<usize>; MAX_SCALAR_DOUBLE_OPERATIONS],
+                           source,
+                           operation_index| {
+            if let ScalarDoubleSource::Temporary(index) = source {
+                last_use[index as usize] = Some(operation_index);
+            }
+        };
         for (operation_index, operation) in program.operations.iter().enumerate() {
             for source in [operation.lhs, operation.rhs] {
-                if let ScalarDoubleSource::Temporary(index) = source {
-                    last_use[index as usize] = Some(operation_index);
-                }
+                mark_source(&mut last_use, source, operation_index);
             }
         }
-        if let ScalarDoubleSource::Temporary(index) = program.output {
-            last_use[index as usize] = Some(program.operations.len());
+        if let Some(select) = select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end + select.when_true_operation_count as usize;
+            mark_source(&mut last_use, select.lhs, shared_end);
+            mark_source(&mut last_use, select.rhs, shared_end);
+            mark_source(&mut last_use, select.when_true, true_end);
+            mark_source(&mut last_use, select.when_false, program.operations.len());
+        } else {
+            mark_source(
+                &mut last_use,
+                program.output,
+                program.operations.len(),
+            );
         }
 
         let mut temporaries = std::array::from_fn(|index| {
@@ -209,29 +238,120 @@ impl CompiledScalarDoubleProgram {
         instruction_set: X86DoubleInstructionSet,
     ) -> Result<Self, ScalarDoubleJitError> {
         validate_scalar_double_plan(plan)?;
-        let registers = X86ScalarDoubleRegisterMap::new(&plan.program);
+        let registers = X86ScalarDoubleRegisterMap::for_plan(plan);
         let mut assembler = X86_64Assembler::new();
         let mut side_exit_jumps = Vec::new();
-        for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-            emit_scalar_double_operation(
+        let mut selected_true_join = None;
+        if let Some(select) = plan.select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end + select.when_true_operation_count as usize;
+            emit_scalar_double_operations(
                 &mut assembler,
                 instruction_set,
                 registers,
-                index,
-                operation,
+                &plan.program.operations,
+                0,
+                shared_end,
                 &mut side_exit_jumps,
             );
+            let lhs = emit_scalar_double_source(
+                &mut assembler,
+                instruction_set,
+                registers,
+                select.lhs,
+                X86_64FloatRegister::from_code(0),
+            );
+            let rhs = emit_scalar_double_source(
+                &mut assembler,
+                instruction_set,
+                registers,
+                select.rhs,
+                X86_64FloatRegister::from_code(1),
+            );
+            match instruction_set {
+                X86DoubleInstructionSet::Sse2 => assembler.compare_doubles(lhs, rhs),
+                X86DoubleInstructionSet::Avx => assembler.compare_doubles_avx(lhs, rhs),
+            }
+            let mut selected_false = Vec::with_capacity(2);
+            let mut selected_true = None;
+            match select.kind {
+                ScalarLongConditionKind::Equal => {
+                    selected_false.push(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_not_equal_rel32());
+                }
+                ScalarLongConditionKind::NotEqual => {
+                    selected_true = Some(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_equal_rel32());
+                }
+                ScalarLongConditionKind::LessThan => {
+                    selected_false.push(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_above_or_equal_rel32());
+                }
+                ScalarLongConditionKind::LessThanOrEqual => {
+                    selected_false.push(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_above_rel32());
+                }
+            }
+            let true_offset = assembler.bytes.len();
+            if let Some(jump) = selected_true {
+                assembler.patch_rel32(jump, true_offset);
+            }
+            emit_scalar_double_operations(
+                &mut assembler,
+                instruction_set,
+                registers,
+                &plan.program.operations,
+                shared_end,
+                true_end,
+                &mut side_exit_jumps,
+            );
+            emit_scalar_double_output(
+                &mut assembler,
+                instruction_set,
+                registers,
+                select.when_true,
+            );
+            selected_true_join = Some(assembler.jump_rel32());
+
+            let false_offset = assembler.bytes.len();
+            for jump in selected_false {
+                assembler.patch_rel32(jump, false_offset);
+            }
+            emit_scalar_double_operations(
+                &mut assembler,
+                instruction_set,
+                registers,
+                &plan.program.operations,
+                true_end,
+                plan.program.operations.len(),
+                &mut side_exit_jumps,
+            );
+            emit_scalar_double_output(
+                &mut assembler,
+                instruction_set,
+                registers,
+                select.when_false,
+            );
+        } else {
+            emit_scalar_double_operations(
+                &mut assembler,
+                instruction_set,
+                registers,
+                &plan.program.operations,
+                0,
+                plan.program.operations.len(),
+                &mut side_exit_jumps,
+            );
+            emit_scalar_double_output(
+                &mut assembler,
+                instruction_set,
+                registers,
+                plan.program.output,
+            );
         }
-        let output = emit_scalar_double_source(
-            &mut assembler,
-            instruction_set,
-            registers,
-            plan.program.output,
-            X86_64FloatRegister::from_code(0),
-        );
-        match instruction_set {
-            X86DoubleInstructionSet::Sse2 => assembler.store_f64(X86_64Register::RSI, output, 0),
-            X86DoubleInstructionSet::Avx => assembler.store_f64_avx(X86_64Register::RSI, output, 0),
+        let success = assembler.bytes.len();
+        if let Some(jump) = selected_true_join {
+            assembler.patch_rel32(jump, success);
         }
         if instruction_set == X86DoubleInstructionSet::Avx {
             assembler.vzeroupper();
@@ -286,40 +406,50 @@ impl CompiledScalarDoubleProgram {
 fn validate_scalar_double_plan(
     plan: &ScalarDoubleFunctionPlan,
 ) -> Result<(), ScalarDoubleJitError> {
-    if plan.public_args as usize > MAX_SCALAR_DOUBLE_INPUTS {
-        return Err(ScalarDoubleJitError::InvalidProgram(
-            "too many public inputs for the prototype ABI",
-        ));
-    }
-    if plan.program.operations.len() > MAX_SCALAR_DOUBLE_OPERATIONS {
-        return Err(ScalarDoubleJitError::InvalidProgram(
-            "too many operations for the prototype register allocator",
-        ));
-    }
-    for (index, operation) in plan.program.operations.iter().enumerate() {
-        validate_scalar_double_source(operation.lhs, index, plan.public_args)?;
-        validate_scalar_double_source(operation.rhs, index, plan.public_args)?;
-    }
-    validate_scalar_double_source(
-        plan.program.output,
-        plan.program.operations.len(),
-        plan.public_args,
+    plan.validate_register_program(
+        MAX_SCALAR_DOUBLE_INPUTS,
+        MAX_SCALAR_DOUBLE_OPERATIONS,
     )
+    .map_err(ScalarDoubleJitError::InvalidProgram)
 }
 
-fn validate_scalar_double_source(
+fn emit_scalar_double_operations(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    registers: X86ScalarDoubleRegisterMap,
+    operations: &[ScalarDoubleOp],
+    start: usize,
+    end: usize,
+    side_exit_jumps: &mut Vec<usize>,
+) {
+    for (relative_index, operation) in operations[start..end].iter().copied().enumerate() {
+        emit_scalar_double_operation(
+            assembler,
+            instruction_set,
+            registers,
+            start + relative_index,
+            operation,
+            side_exit_jumps,
+        );
+    }
+}
+
+fn emit_scalar_double_output(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    registers: X86ScalarDoubleRegisterMap,
     source: ScalarDoubleSource,
-    available_temporaries: usize,
-    input_count: u8,
-) -> Result<(), ScalarDoubleJitError> {
-    match source {
-        ScalarDoubleSource::Input(index) if index >= u16::from(input_count) => Err(
-            ScalarDoubleJitError::InvalidProgram("input index is outside the public ABI"),
-        ),
-        ScalarDoubleSource::Temporary(index) if index as usize >= available_temporaries => Err(
-            ScalarDoubleJitError::InvalidProgram("temporary is used before it is defined"),
-        ),
-        _ => Ok(()),
+) {
+    let output = emit_scalar_double_source(
+        assembler,
+        instruction_set,
+        registers,
+        source,
+        X86_64FloatRegister::from_code(0),
+    );
+    match instruction_set {
+        X86DoubleInstructionSet::Sse2 => assembler.store_f64(X86_64Register::RSI, output, 0),
+        X86DoubleInstructionSet::Avx => assembler.store_f64_avx(X86_64Register::RSI, output, 0),
     }
 }
 

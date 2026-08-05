@@ -4,6 +4,7 @@ use super::super::memory::ExecutableMemory;
 use super::{Arm64Assembler, Arm64Condition, Arm64FloatRegister, Arm64Register};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
+    ScalarLongConditionKind,
 };
 use std::cell::{Cell, OnceCell};
 use std::fmt;
@@ -159,15 +160,77 @@ impl CompiledScalarDoubleProgram {
         validate_scalar_double_plan(plan)?;
         let mut assembler = Arm64Assembler::new();
         let mut side_exit_branches = Vec::new();
-        for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-            emit_scalar_double_operation(&mut assembler, index, operation, &mut side_exit_branches);
+        let mut selected_true_join = None;
+        if let Some(select) = plan.select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end + select.when_true_operation_count as usize;
+            emit_scalar_double_operations(
+                &mut assembler,
+                &plan.program.operations,
+                0,
+                shared_end,
+                &mut side_exit_branches,
+            );
+            let lhs = emit_scalar_double_source(
+                &mut assembler,
+                select.lhs,
+                Arm64FloatRegister::from_code(0),
+            );
+            let rhs = emit_scalar_double_source(
+                &mut assembler,
+                select.rhs,
+                Arm64FloatRegister::from_code(1),
+            );
+            assembler.compare_doubles(lhs, rhs);
+            let false_condition = match select.kind {
+                ScalarLongConditionKind::Equal => Arm64Condition::NotEqual,
+                ScalarLongConditionKind::NotEqual => Arm64Condition::Equal,
+                // FCMP unordered sets N=0, so PL rejects equality, greater and
+                // unordered while accepting only an ordered less-than result.
+                ScalarLongConditionKind::LessThan => Arm64Condition::Plus,
+                // HI rejects ordered less/equal and also rejects unordered.
+                ScalarLongConditionKind::LessThanOrEqual => Arm64Condition::Higher,
+            };
+            let selected_false = assembler.conditional_branch_placeholder(false_condition);
+
+            emit_scalar_double_operations(
+                &mut assembler,
+                &plan.program.operations,
+                shared_end,
+                true_end,
+                &mut side_exit_branches,
+            );
+            emit_scalar_double_output(&mut assembler, select.when_true);
+            selected_true_join = Some(assembler.branch_placeholder());
+
+            let false_word = assembler.word_count();
+            if !assembler.patch_conditional_branch(selected_false, false_word) {
+                return Err(ScalarDoubleJitError::BranchOutOfRange);
+            }
+            emit_scalar_double_operations(
+                &mut assembler,
+                &plan.program.operations,
+                true_end,
+                plan.program.operations.len(),
+                &mut side_exit_branches,
+            );
+            emit_scalar_double_output(&mut assembler, select.when_false);
+        } else {
+            emit_scalar_double_operations(
+                &mut assembler,
+                &plan.program.operations,
+                0,
+                plan.program.operations.len(),
+                &mut side_exit_branches,
+            );
+            emit_scalar_double_output(&mut assembler, plan.program.output);
         }
-        let output = emit_scalar_double_source(
-            &mut assembler,
-            plan.program.output,
-            Arm64FloatRegister::from_code(0),
-        );
-        assembler.store_f64(output, Arm64Register::X1, 0);
+        let success_word = assembler.word_count();
+        if let Some(branch) = selected_true_join
+            && !assembler.patch_branch(branch, success_word)
+        {
+            return Err(ScalarDoubleJitError::BranchOutOfRange);
+        }
         assembler.move_immediate(Arm64Register::X0, i64::from(NATIVE_DOUBLE_STATUS_SUCCESS));
         assembler.ret();
 
@@ -217,41 +280,33 @@ impl CompiledScalarDoubleProgram {
 fn validate_scalar_double_plan(
     plan: &ScalarDoubleFunctionPlan,
 ) -> Result<(), ScalarDoubleJitError> {
-    if plan.public_args as usize > MAX_SCALAR_DOUBLE_INPUTS {
-        return Err(ScalarDoubleJitError::InvalidProgram(
-            "too many public inputs for the prototype ABI",
-        ));
-    }
-    if plan.program.operations.len() > MAX_SCALAR_DOUBLE_OPERATIONS {
-        return Err(ScalarDoubleJitError::InvalidProgram(
-            "too many operations for the prototype register allocator",
-        ));
-    }
-    for (index, operation) in plan.program.operations.iter().enumerate() {
-        validate_scalar_double_source(operation.lhs, index, plan.public_args)?;
-        validate_scalar_double_source(operation.rhs, index, plan.public_args)?;
-    }
-    validate_scalar_double_source(
-        plan.program.output,
-        plan.program.operations.len(),
-        plan.public_args,
+    plan.validate_register_program(
+        MAX_SCALAR_DOUBLE_INPUTS,
+        MAX_SCALAR_DOUBLE_OPERATIONS,
     )
+    .map_err(ScalarDoubleJitError::InvalidProgram)
 }
 
-fn validate_scalar_double_source(
-    source: ScalarDoubleSource,
-    available_temporaries: usize,
-    input_count: u8,
-) -> Result<(), ScalarDoubleJitError> {
-    match source {
-        ScalarDoubleSource::Input(index) if index >= u16::from(input_count) => Err(
-            ScalarDoubleJitError::InvalidProgram("input index is outside the public ABI"),
-        ),
-        ScalarDoubleSource::Temporary(index) if index as usize >= available_temporaries => Err(
-            ScalarDoubleJitError::InvalidProgram("temporary is used before it is defined"),
-        ),
-        _ => Ok(()),
+fn emit_scalar_double_operations(
+    assembler: &mut Arm64Assembler,
+    operations: &[ScalarDoubleOp],
+    start: usize,
+    end: usize,
+    side_exit_branches: &mut Vec<usize>,
+) {
+    for (relative_index, operation) in operations[start..end].iter().copied().enumerate() {
+        emit_scalar_double_operation(
+            assembler,
+            start + relative_index,
+            operation,
+            side_exit_branches,
+        );
     }
+}
+
+fn emit_scalar_double_output(assembler: &mut Arm64Assembler, source: ScalarDoubleSource) {
+    let output = emit_scalar_double_source(assembler, source, Arm64FloatRegister::from_code(0));
+    assembler.store_f64(output, Arm64Register::X1, 0);
 }
 
 fn emit_scalar_double_operation(

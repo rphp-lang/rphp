@@ -297,6 +297,25 @@ echo gettype($exact) . ':' . $exact . '|' . gettype($coerced) . ':' . $coerced;
 }
 
 #[test]
+fn test_e2e_composed_double_body_falls_back_for_conditional_leaf() {
+    assert_eq!(
+        run_php(r#"<?php
+function conditionalLeaf(float $value, float $pivot): float {
+    if ($value < $pivot) {
+        return ($value * 1.5) + 2.0;
+    }
+    return ($value * 0.5) - 1.0;
+}
+function conditionalOuter(float $value, float $pivot): float {
+    return conditionalLeaf($value, $pivot) + 3.0;
+}
+echo conditionalOuter(2.0, 3.0) . ':' . conditionalOuter(4.0, 3.0);
+"#),
+        "8:4"
+    );
+}
+
+#[test]
 fn test_e2e_recursive_composed_double_depth_budget_falls_back() {
     assert_eq!(
         run_php(r#"<?php

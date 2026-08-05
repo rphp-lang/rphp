@@ -99,7 +99,9 @@ impl Arm64FloatRegister {
 enum Arm64Condition {
     Equal = 0,
     NotEqual = 1,
+    Plus = 5,
     Overflow = 6,
+    Higher = 8,
     LowerOrSame = 9,
     GreaterOrEqual = 10,
     LessThan = 11,
@@ -181,6 +183,13 @@ impl Arm64Assembler {
     /// Encode `FCMP Dn, #0.0`. Unordered NaN inputs do not satisfy EQ.
     fn compare_double_with_zero(&mut self, value: Arm64FloatRegister) {
         self.words.push(0x1e60_2008 | (value.bits() << 5));
+    }
+
+    /// Encode `FCMP Dn, Dm`, preserving IEEE ordered/unordered flags for the
+    /// exact-Double predicate lowerings.
+    fn compare_doubles(&mut self, lhs: Arm64FloatRegister, rhs: Arm64FloatRegister) {
+        self.words
+            .push(0x1e60_2000 | (rhs.bits() << 16) | (lhs.bits() << 5));
     }
 
     /// Encode `FMOV Dd, Dn` without changing any IEEE-754 payload bits.

@@ -5,6 +5,7 @@ use super::double::X86ScalarDoubleRegisterMap;
 use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register, X86DoubleInstructionSet};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
+    ScalarLongConditionKind,
 };
 use crate::vm::quick::{
     QuickDoubleArgumentOp, QuickDoubleArgumentProgram, QuickDoubleSource,
@@ -98,7 +99,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
         let forwarded_argument_mask = argument_plan.register_forwardable_output_mask(plan);
-        let scalar_registers = X86ScalarDoubleRegisterMap::new(&plan.program);
+        let scalar_registers = X86ScalarDoubleRegisterMap::for_plan(plan);
 
         let mut assembler = X86_64Assembler::new();
         let state = X86_64Register::R10;
@@ -156,8 +157,11 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             forwarded_argument_mask,
             &mut side_exits,
         );
-        for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-            emit_operation(
+        let mut selected_true_join = None;
+        if let Some(select) = plan.select {
+            let shared_end = select.shared_operation_count as usize;
+            let true_end = shared_end + select.when_true_operation_count as usize;
+            emit_operations(
                 &mut assembler,
                 working_arguments,
                 bits,
@@ -165,23 +169,145 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 forwarded_argument_mask,
                 scalar_registers,
                 instruction_set,
-                index,
-                operation,
+                &plan.program.operations,
+                0,
+                shared_end,
                 &mut side_exits,
             );
+            let lhs = emit_source(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                select.lhs,
+                X86_64FloatRegister::from_code(0),
+            );
+            let rhs = emit_source(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                select.rhs,
+                X86_64FloatRegister::from_code(1),
+            );
+            match instruction_set {
+                X86DoubleInstructionSet::Sse2 => assembler.compare_doubles(lhs, rhs),
+                X86DoubleInstructionSet::Avx => assembler.compare_doubles_avx(lhs, rhs),
+            }
+            let mut selected_false = Vec::with_capacity(2);
+            let mut selected_true = None;
+            match select.kind {
+                ScalarLongConditionKind::Equal => {
+                    selected_false.push(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_not_equal_rel32());
+                }
+                ScalarLongConditionKind::NotEqual => {
+                    selected_true = Some(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_equal_rel32());
+                }
+                ScalarLongConditionKind::LessThan => {
+                    selected_false.push(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_above_or_equal_rel32());
+                }
+                ScalarLongConditionKind::LessThanOrEqual => {
+                    selected_false.push(assembler.jump_parity_rel32());
+                    selected_false.push(assembler.jump_above_rel32());
+                }
+            }
+            let true_offset = assembler.bytes.len();
+            if let Some(jump) = selected_true {
+                assembler.patch_rel32(jump, true_offset);
+            }
+            emit_operations(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                &plan.program.operations,
+                shared_end,
+                true_end,
+                &mut side_exits,
+            );
+            emit_selected_output(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                select.when_true,
+                last_term,
+            );
+            selected_true_join = Some(assembler.jump_rel32());
+
+            let false_offset = assembler.bytes.len();
+            for jump in selected_false {
+                assembler.patch_rel32(jump, false_offset);
+            }
+            emit_operations(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                &plan.program.operations,
+                true_end,
+                plan.program.operations.len(),
+                &mut side_exits,
+            );
+            emit_selected_output(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                select.when_false,
+                last_term,
+            );
+        } else {
+            emit_operations(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                &plan.program.operations,
+                0,
+                plan.program.operations.len(),
+                &mut side_exits,
+            );
+            emit_selected_output(
+                &mut assembler,
+                working_arguments,
+                bits,
+                argument_plan,
+                forwarded_argument_mask,
+                scalar_registers,
+                instruction_set,
+                plan.program.output,
+                last_term,
+            );
         }
-        let output = emit_source(
-            &mut assembler,
-            working_arguments,
-            bits,
-            argument_plan,
-            forwarded_argument_mask,
-            scalar_registers,
-            instruction_set,
-            plan.program.output,
-            X86_64FloatRegister::from_code(0),
-        );
-        emit_move_double(&mut assembler, instruction_set, last_term, output);
+        let accumulate = assembler.bytes.len();
+        if let Some(jump) = selected_true_join {
+            assembler.patch_rel32(jump, accumulate);
+        }
         match instruction_set {
             X86DoubleInstructionSet::Sse2 => assembler.add_double(accumulator, last_term),
             X86DoubleInstructionSet::Avx => {
@@ -413,20 +539,8 @@ impl fmt::Debug for QuickDoubleCallAccumulateJitCache {
 }
 
 fn validate(plan: &ScalarDoubleFunctionPlan) -> Result<(), QuickDoubleCallAccumulateJitError> {
-    if plan.public_args as usize > MAX_INPUTS || plan.program.operations.len() > MAX_OPERATIONS {
-        return Err(QuickDoubleCallAccumulateJitError::InvalidProgram(
-            "program exceeds the register ABI",
-        ));
-    }
-    for (index, operation) in plan.program.operations.iter().enumerate() {
-        validate_source(operation.lhs, index, plan.public_args)?;
-        validate_source(operation.rhs, index, plan.public_args)?;
-    }
-    validate_source(
-        plan.program.output,
-        plan.program.operations.len(),
-        plan.public_args,
-    )
+    plan.validate_register_program(MAX_INPUTS, MAX_OPERATIONS)
+        .map_err(QuickDoubleCallAccumulateJitError::InvalidProgram)
 }
 
 fn validate_argument_plan(
@@ -615,24 +729,6 @@ fn emit_argument_source(
     }
 }
 
-fn validate_source(
-    source: ScalarDoubleSource,
-    available_temporaries: usize,
-    inputs: u8,
-) -> Result<(), QuickDoubleCallAccumulateJitError> {
-    match source {
-        ScalarDoubleSource::Input(index) if index >= u16::from(inputs) => Err(
-            QuickDoubleCallAccumulateJitError::InvalidProgram("input is outside the public ABI"),
-        ),
-        ScalarDoubleSource::Temporary(index) if index as usize >= available_temporaries => {
-            Err(QuickDoubleCallAccumulateJitError::InvalidProgram(
-                "temporary is used before definition",
-            ))
-        }
-        _ => Ok(()),
-    }
-}
-
 fn emit_operation(
     assembler: &mut X86_64Assembler,
     inputs: X86_64Register,
@@ -678,6 +774,62 @@ fn emit_operation(
         operation.kind,
         side_exits,
     );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_operations(
+    assembler: &mut X86_64Assembler,
+    inputs: X86_64Register,
+    bits: X86_64Register,
+    argument_plan: &QuickDoubleArgumentProgram,
+    forwarded_argument_mask: u8,
+    scalar_registers: X86ScalarDoubleRegisterMap,
+    instruction_set: X86DoubleInstructionSet,
+    operations: &[ScalarDoubleOp],
+    start: usize,
+    end: usize,
+    side_exits: &mut Vec<usize>,
+) {
+    for (relative_index, operation) in operations[start..end].iter().copied().enumerate() {
+        emit_operation(
+            assembler,
+            inputs,
+            bits,
+            argument_plan,
+            forwarded_argument_mask,
+            scalar_registers,
+            instruction_set,
+            start + relative_index,
+            operation,
+            side_exits,
+        );
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_selected_output(
+    assembler: &mut X86_64Assembler,
+    inputs: X86_64Register,
+    bits: X86_64Register,
+    argument_plan: &QuickDoubleArgumentProgram,
+    forwarded_argument_mask: u8,
+    scalar_registers: X86ScalarDoubleRegisterMap,
+    instruction_set: X86DoubleInstructionSet,
+    source: ScalarDoubleSource,
+    destination: X86_64FloatRegister,
+) {
+    let output = emit_source(
+        assembler,
+        inputs,
+        bits,
+        argument_plan,
+        forwarded_argument_mask,
+        scalar_registers,
+        instruction_set,
+        source,
+        X86_64FloatRegister::from_code(0),
+    );
+    emit_move_double(assembler, instruction_set, destination, output);
 }
 
 fn emit_source(

@@ -20,7 +20,7 @@ use crate::vm::function::{
     ScalarStringSelect, ScalarStringSource,
     ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ScalarDoubleCall,
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
-    ScalarDoubleSource,
+    ScalarDoubleSelect, ScalarDoubleSource,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
     ObjectLongModuloEqualTerm, ObjectLongObjectSource, ObjectLongOp,
     ObjectLongSource, ObjectLongStringAdjustment, ObjectLongStringIntDivCase,
@@ -975,7 +975,7 @@ fn scalar_double_op_kind(opcode: OpCode) -> Option<ScalarDoubleOpKind> {
 /// Double values. Every operation must already have a Double operand, which
 /// excludes constant-only Long subexpressions whose overflow/type behavior
 /// would differ from IEEE-754 arithmetic.
-fn build_scalar_double_function_plan(
+fn build_straight_scalar_double_function_plan(
     function: &UserFunction,
 ) -> Option<Box<ScalarDoubleFunctionPlan>> {
     let common = &function.common;
@@ -1080,6 +1080,300 @@ fn build_scalar_double_function_plan(
         );
     }
     None
+}
+
+fn append_scalar_double_operation(
+    function: &UserFunction,
+    instruction: &Instruction,
+    temporary_results: &mut HashMap<u16, ProvenScalarDoubleSource>,
+    operations: &mut Vec<ScalarDoubleOp>,
+) -> Option<()> {
+    let kind = scalar_double_op_kind(instruction.opcode)?;
+    if operations.len() == SCALAR_LONG_PLAN_MAX_OPS
+        || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+    {
+        return None;
+    }
+    let public_args = function.common.sig.public_arity();
+    let lhs = scalar_double_source(
+        &function.op_array,
+        temporary_results,
+        function.common.sig.this_offset,
+        public_args,
+        instruction.op1_type,
+        instruction.op1,
+    )?;
+    let rhs = scalar_double_source(
+        &function.op_array,
+        temporary_results,
+        function.common.sig.this_offset,
+        public_args,
+        instruction.op2_type,
+        instruction.op2,
+    )?;
+    if !lhs.is_double && !rhs.is_double {
+        return None;
+    }
+    let result_index = operations.len() as u8;
+    operations.push(ScalarDoubleOp {
+        kind,
+        lhs: lhs.source,
+        rhs: rhs.source,
+    });
+    temporary_results.insert(
+        instruction.result,
+        ProvenScalarDoubleSource {
+            source: ScalarDoubleSource::Temporary(result_index),
+            is_double: true,
+        },
+    );
+    Some(())
+}
+
+fn bind_scalar_double_local(
+    function: &UserFunction,
+    instruction: &Instruction,
+    temporary_results: &mut HashMap<u16, ProvenScalarDoubleSource>,
+) -> Option<()> {
+    if instruction.opcode != OpCode::AssignCv || instruction.op1_type != OpType::Cv {
+        return None;
+    }
+    let public_args = function.common.sig.public_arity();
+    let destination = instruction.op1 as u32;
+    let first_argument = function.common.sig.this_offset;
+    let argument_end = first_argument + public_args;
+    if destination < first_argument
+        || (destination >= first_argument && destination < argument_end)
+    {
+        return None;
+    }
+    let source = scalar_double_source(
+        &function.op_array,
+        temporary_results,
+        first_argument,
+        public_args,
+        instruction.op2_type,
+        instruction.op2,
+    )?;
+    temporary_results.insert(instruction.op1, source);
+    Some(())
+}
+
+fn scalar_double_return_arm(
+    function: &UserFunction,
+    start: usize,
+    limit: usize,
+    temporary_results: &mut HashMap<u16, ProvenScalarDoubleSource>,
+    operations: &mut Vec<ScalarDoubleOp>,
+) -> Option<ScalarDoubleSource> {
+    for instruction in function.op_array.instructions.get(start..limit)? {
+        if instruction.opcode == OpCode::Return {
+            if instruction.extended_value == 0 {
+                return None;
+            }
+            let output = scalar_double_source(
+                &function.op_array,
+                temporary_results,
+                function.common.sig.this_offset,
+                function.common.sig.public_arity(),
+                instruction.op1_type,
+                instruction.op1,
+            )?;
+            return output.is_double.then_some(output.source);
+        }
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_double_local(function, instruction, temporary_results)?;
+            continue;
+        }
+        append_scalar_double_operation(function, instruction, temporary_results, operations)?;
+    }
+    None
+}
+
+/// Recognize one pure exact-Double guard clause or `if/else` whose two edges
+/// return scalar arithmetic expressions. The two arm ranges stay disjoint so
+/// the Rust evaluator and both native backends execute only the selected arm.
+fn build_conditional_scalar_double_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarDoubleFunctionPlan>> {
+    let instructions = &function.op_array.instructions;
+    let public_args = function.common.sig.public_arity();
+    if !function.common.supports_scalar_double_plan()
+        || function.common.plan.ret != ReturnStrategy::Fast
+        || public_args > SCALAR_LONG_PLAN_MAX_ARGS
+        || instructions.len() > 32
+    {
+        return None;
+    }
+
+    let mut temporary_results = HashMap::new();
+    let mut operations = Vec::new();
+    let mut ip = 0usize;
+    while let Some(instruction) = instructions.get(ip) {
+        if scalar_double_op_kind(instruction.opcode).is_some() {
+            append_scalar_double_operation(
+                function,
+                instruction,
+                &mut temporary_results,
+                &mut operations,
+            )?;
+            ip += 1;
+            continue;
+        }
+        if instruction.opcode == OpCode::AssignCv {
+            bind_scalar_double_local(function, instruction, &mut temporary_results)?;
+            ip += 1;
+            continue;
+        }
+        break;
+    }
+
+    let condition_instruction = *instructions.get(ip)?;
+    let condition_sources = |instruction: Instruction| {
+        let lhs = scalar_double_source(
+            &function.op_array,
+            &temporary_results,
+            function.common.sig.this_offset,
+            public_args,
+            instruction.op1_type,
+            instruction.op1,
+        )?;
+        let rhs = scalar_double_source(
+            &function.op_array,
+            &temporary_results,
+            function.common.sig.this_offset,
+            public_args,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        (lhs.is_double || rhs.is_double).then_some((lhs.source, rhs.source))
+    };
+    let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
+        OpCode::IsEqual => {
+            let (lhs, rhs) = condition_sources(condition_instruction)?;
+            (ScalarLongConditionKind::Equal, lhs, rhs, ip + 1, None)
+        }
+        OpCode::IsNotEqual => {
+            let (lhs, rhs) = condition_sources(condition_instruction)?;
+            (ScalarLongConditionKind::NotEqual, lhs, rhs, ip + 1, None)
+        }
+        OpCode::IsSmaller | OpCode::IsSmaller_CvConst => {
+            let (lhs, rhs) = condition_sources(condition_instruction)?;
+            (ScalarLongConditionKind::LessThan, lhs, rhs, ip + 1, None)
+        }
+        OpCode::IsSmallerOrEqual | OpCode::IsSmallerOrEqual_CvConst => {
+            let (lhs, rhs) = condition_sources(condition_instruction)?;
+            (
+                ScalarLongConditionKind::LessThanOrEqual,
+                lhs,
+                rhs,
+                ip + 1,
+                None,
+            )
+        }
+        OpCode::JmpZ => {
+            let lhs = scalar_double_source(
+                &function.op_array,
+                &temporary_results,
+                function.common.sig.this_offset,
+                public_args,
+                condition_instruction.op1_type,
+                condition_instruction.op1,
+            )?;
+            if !lhs.is_double {
+                return None;
+            }
+            (
+                ScalarLongConditionKind::NotEqual,
+                lhs.source,
+                ScalarDoubleSource::Constant(0.0),
+                ip,
+                None,
+            )
+        }
+        OpCode::JmpZ_Eq_CvConst
+        | OpCode::JmpZ_Lt_CvConst
+        | OpCode::JmpZ_Le_CvConst => {
+            let (lhs, rhs) = condition_sources(condition_instruction)?;
+            (
+                match condition_instruction.opcode {
+                    OpCode::JmpZ_Eq_CvConst => ScalarLongConditionKind::Equal,
+                    OpCode::JmpZ_Lt_CvConst => ScalarLongConditionKind::LessThan,
+                    OpCode::JmpZ_Le_CvConst => ScalarLongConditionKind::LessThanOrEqual,
+                    _ => unreachable!(),
+                },
+                lhs,
+                rhs,
+                ip,
+                Some(condition_instruction.result as usize),
+            )
+        }
+        _ => return None,
+    };
+
+    let (when_true_ip, when_false_ip) = if let Some(target) = fused_jump_target {
+        (ip + 2, target)
+    } else {
+        let branch = instructions.get(branch_ip)?;
+        if branch.opcode != OpCode::JmpZ {
+            return None;
+        }
+        if branch_ip != ip
+            && (!matches!(condition_instruction.result_type, OpType::Tmp | OpType::Var)
+                || branch.op1_type != condition_instruction.result_type
+                || branch.op1 != condition_instruction.result)
+        {
+            return None;
+        }
+        (branch_ip + 1, branch.op2 as usize)
+    };
+    if when_true_ip >= when_false_ip || when_false_ip >= instructions.len() {
+        return None;
+    }
+
+    let shared_operation_count = operations.len();
+    let branch_results = temporary_results;
+    let mut when_true_results = branch_results.clone();
+    let when_true = scalar_double_return_arm(
+        function,
+        when_true_ip,
+        when_false_ip,
+        &mut when_true_results,
+        &mut operations,
+    )?;
+    let when_true_operation_count = operations.len() - shared_operation_count;
+    let mut when_false_results = branch_results;
+    let when_false = scalar_double_return_arm(
+        function,
+        when_false_ip,
+        instructions.len(),
+        &mut when_false_results,
+        &mut operations,
+    )?;
+
+    Some(Box::new(ScalarDoubleFunctionPlan::new_conditional(
+        public_args as u8,
+        ScalarDoubleProgram {
+            operations: operations.into_boxed_slice(),
+            output: when_true,
+        },
+        ScalarDoubleSelect {
+            kind,
+            lhs,
+            rhs,
+            shared_operation_count: shared_operation_count as u8,
+            when_true_operation_count: when_true_operation_count as u8,
+            when_true,
+            when_false,
+        },
+    )))
+}
+
+fn build_scalar_double_function_plan(
+    function: &UserFunction,
+) -> Option<Box<ScalarDoubleFunctionPlan>> {
+    build_straight_scalar_double_function_plan(function)
+        .or_else(|| build_conditional_scalar_double_function_plan(function))
 }
 
 const COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS: usize = 16;

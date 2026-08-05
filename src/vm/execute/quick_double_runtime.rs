@@ -245,7 +245,7 @@ unsafe fn resolve_composed_double_program_inner(
         *target_count += 1;
 
         callees[operation_index] = Some(if let Some(leaf) = user.scalar_double_plan.as_deref() {
-            if leaf.public_args as usize != call.arguments.len() {
+            if leaf.public_args as usize != call.arguments.len() || leaf.select.is_some() {
                 return None;
             }
             ResolvedDoubleCallee::Flat(leaf)

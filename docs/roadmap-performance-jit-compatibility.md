@@ -4009,6 +4009,54 @@ receiver. That should remain separate from this zero-object-ABI `$this`
 vertical slice and must prove equivalent class/cache identity and aliasing
 guards before admission.
 
+### Conditional exact-Double region checkpoint
+
+The exact-Double function plan now represents one pure `if`/guard-clause with
+two exact-Double return edges (2026-08-05). A target-neutral
+`ScalarDoubleSelect` stores the predicate, a shared arithmetic prefix and two
+disjoint operation ranges. The first bounded slice accepts `==`, `!=`, `<`,
+`<=` and direct Double truthiness, local scalar assignments and up to eight
+public arguments/eight arithmetic operations. Calls with non-Double runtime
+tags, side effects, references, unsupported control flow or an edge without an
+exact-Double return retain canonical execution.
+
+The Rust evaluator, standalone leaf JIT and composed call/accumulate loop all
+consume the same select representation. ARM64 lowers comparisons with `FCMP`
+and condition-code branches; x86-64 uses `UCOMISD`/`VUCOMISD` and explicit
+parity branches so unordered `NaN` results preserve PHP behavior. The x86
+implementation is covered under both forced SSE2 and AVX. Only the selected
+operation range executes: a zero divisor on the inactive edge cannot side
+exit, while a zero divisor on the active edge publishes no partial iteration
+and replays the canonical PHP error. Conditional leaves nested inside a
+composed Double call tree remain deliberately excluded until the composer can
+represent control-flow remapping instead of flattening both edges linearly.
+
+The new five-million-iteration
+`bench_typed_float_conditional.php` holdout returns the identical
+`4687501250000` value and keeps both arithmetic edges hot. Seven serial
+`max-perf` runs per mode produced these medians; the PHP JIT lane was verified
+as enabled tracing JIT (`kind=5`, `opt_level=4`):
+
+| Host | Previous RPHP | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 221.877 ms | 3.849 ms | 61.214 ms | 29.527 ms | 85.646 ms |
+| Ryzen x86-64, PHP 8.4.24 | 334.352 ms | 5.930 ms | 63.165 ms | 31.762 ms | 85.844 ms |
+
+The shared target-neutral change removes about 98.3%/98.2% of the previous
+RPHP time on ARM64/x86-64. RPHP JIT is about 7.7x/5.4x faster than PHP tracing
+JIT, while RPHP without JIT is about 1.40x/1.36x faster than PHP without JIT.
+Permanent tests cover all four relations, signed zero, unordered `NaN`, both
+arithmetic edges, inactive/active division side exits, no-JIT evaluation and a
+real PHP loop entering one native region. The full local all-target/all-feature
+matrix passes with the test harness stack enlarged for the pre-existing
+Ackermann debug test; no product stack setting changed.
+
+The next structural Double step is to let the bounded composed-call IR contain
+a conditional callee without duplicating or linearly executing its arms. That
+requires explicit block/edge remapping plus the existing target identity and
+method-class guards, but should not require a new architecture-specific
+recognizer or a workload-specific loop kernel.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
