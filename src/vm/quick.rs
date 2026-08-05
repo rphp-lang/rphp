@@ -217,9 +217,73 @@ impl QuickLongAccumulateLoop {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
-pub enum QuickDoubleOperand {
-    Slot(u16),
+pub enum QuickDoubleSource {
+    Input(u8),
+    Induction,
     Constant(f64),
+    Temporary(u8),
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct QuickDoubleArgumentOp {
+    pub kind: crate::vm::function::ScalarDoubleOpKind,
+    pub lhs: QuickDoubleSource,
+    pub rhs: QuickDoubleSource,
+}
+
+#[derive(Debug, Clone)]
+pub struct QuickDoubleArgumentProgram {
+    pub operations: Box<[QuickDoubleArgumentOp]>,
+    pub outputs: [QuickDoubleSource; 8],
+    pub output_count: u8,
+    /// Exact-Double caller CVs bound to `QuickDoubleSource::Input` indices.
+    pub input_slots: [u16; 8],
+    pub input_count: u8,
+}
+
+impl QuickDoubleArgumentProgram {
+    #[inline]
+    pub(crate) fn source_depends_on_induction(&self, source: QuickDoubleSource) -> bool {
+        match source {
+            QuickDoubleSource::Induction => true,
+            QuickDoubleSource::Temporary(index) => self
+                .operations
+                .get(index as usize)
+                .is_some_and(|operation| {
+                    self.source_depends_on_induction(operation.lhs)
+                        || self.source_depends_on_induction(operation.rhs)
+                }),
+            QuickDoubleSource::Input(_) | QuickDoubleSource::Constant(_) => false,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn operation_is_needed_by_output_phase(
+        &self,
+        operation: usize,
+        induction_dependent: bool,
+    ) -> bool {
+        self.outputs[..self.output_count as usize]
+            .iter()
+            .copied()
+            .filter(|output| {
+                self.source_depends_on_induction(*output) == induction_dependent
+            })
+            .any(|output| self.source_uses_operation(output, operation))
+    }
+
+    #[inline]
+    fn source_uses_operation(&self, source: QuickDoubleSource, expected: usize) -> bool {
+        let QuickDoubleSource::Temporary(index) = source else {
+            return false;
+        };
+        let index = index as usize;
+        index == expected
+            || self.operations.get(index).is_some_and(|operation| {
+                self.source_uses_operation(operation.lhs, expected)
+                    || self.source_uses_operation(operation.rhs, expected)
+            })
+    }
 }
 
 /// A mixed Long-control/Double-data loop whose hot body is one exact-Double
@@ -235,8 +299,7 @@ pub struct QuickDoubleCallAccumulateLoop {
     pub accumulator_cv: u16,
     pub condition_tmp: Option<u16>,
     pub guard: ScalarLongCallGuard,
-    pub arguments: [QuickDoubleOperand; 8],
-    pub argument_count: u8,
+    pub argument_program: QuickDoubleArgumentProgram,
     pub term_tmp: u16,
     pub sum_tmp: u16,
     pub increment_kind: QuickIncrementKind,
@@ -1248,18 +1311,80 @@ fn long_literal(op_array: &OpArray, index: u16) -> Option<i64> {
         .and_then(Value::as_long)
 }
 
-fn double_literal(op_array: &OpArray, index: u16) -> Option<f64> {
-    op_array
-        .literals
-        .get(index as usize)
-        .filter(|value| value.value_type() == crate::value::ValueType::Double)
-        .and_then(Value::as_double)
+#[derive(Clone, Copy)]
+struct ProvenQuickDoubleSource {
+    source: QuickDoubleSource,
+    is_double: bool,
+}
+
+fn quick_double_argument_source(
+    op_array: &OpArray,
+    op_type: OpType,
+    operand: u16,
+    induction_cv: u16,
+    produced_temporary_slots: &[u16; 8],
+    produced_temporary_count: usize,
+    input_slots: &mut [u16; 8],
+    input_count: &mut usize,
+    double_input_mask: &mut u64,
+    total_slots: u32,
+) -> Option<ProvenQuickDoubleSource> {
+    match op_type {
+        OpType::Cv if operand == induction_cv => Some(ProvenQuickDoubleSource {
+            source: QuickDoubleSource::Induction,
+            is_double: false,
+        }),
+        OpType::Cv => {
+            add_mask_slot(double_input_mask, operand, total_slots)?;
+            let input = if let Some(index) = input_slots[..*input_count]
+                .iter()
+                .position(|slot| *slot == operand)
+            {
+                index
+            } else {
+                if *input_count == input_slots.len() {
+                    return None;
+                }
+                let index = *input_count;
+                input_slots[index] = operand;
+                *input_count += 1;
+                index
+            };
+            Some(ProvenQuickDoubleSource {
+                source: QuickDoubleSource::Input(input as u8),
+                is_double: true,
+            })
+        }
+        OpType::Const => {
+            let value = op_array.literals.get(operand as usize)?;
+            match value.value_type() {
+                crate::value::ValueType::Double => Some(ProvenQuickDoubleSource {
+                    source: QuickDoubleSource::Constant(value.as_double()?),
+                    is_double: true,
+                }),
+                crate::value::ValueType::Long => Some(ProvenQuickDoubleSource {
+                    source: QuickDoubleSource::Constant(value.as_long()? as f64),
+                    is_double: false,
+                }),
+                _ => None,
+            }
+        }
+        OpType::Tmp | OpType::Var => produced_temporary_slots
+            [..produced_temporary_count]
+            .iter()
+            .position(|slot| *slot == operand)
+            .map(|index| ProvenQuickDoubleSource {
+                source: QuickDoubleSource::Temporary(index as u8),
+                is_double: true,
+            }),
+        OpType::Unused => None,
+    }
 }
 
 /// Recognize a closed `Long induction + Double scalar leaf + Double
-/// accumulation` loop. Only invariant exact-Double arguments are admitted in
-/// this first target-neutral slice; expressions and induction conversion are
-/// deliberately left for the composed argument-program extension.
+/// accumulation` loop. Caller argument expressions are retained as a small
+/// target-neutral Double program; exact-Double CVs are guarded at entry and
+/// the Long induction value is converted by the selected execution tier.
 pub fn detect_double_call_accumulate_loop(
     op_array: &OpArray,
     header_ip: usize,
@@ -1330,28 +1455,96 @@ pub fn detect_double_call_accumulate_loop(
         return None;
     }
     let argument_count = initializer.op1 as usize;
-    let mut arguments = [QuickDoubleOperand::Constant(0.0); 8];
+    let mut outputs = [QuickDoubleSource::Constant(0.0); 8];
+    let mut operations = Vec::with_capacity(8);
+    let mut produced_temporary_slots = [u16::MAX; 8];
+    let mut expression_count = 0usize;
+    let mut sent_arguments = 0usize;
+    let mut input_slots = [u16::MAX; 8];
+    let mut input_count = 0usize;
     let mut double_input_mask = 0u64;
     let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
     if total_slots > 64 {
         return None;
     }
     let mut cursor = initializer_ip + 1;
-    for (index, argument) in arguments.iter_mut().enumerate().take(argument_count) {
+    while sent_arguments < argument_count {
         let send = *op_array.instructions.get(cursor)?;
-        if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
-            || send.op2 as usize != index
+        if matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            if send.op2 as usize != sent_arguments {
+                return None;
+            }
+            let output = quick_double_argument_source(
+                op_array,
+                send.op1_type,
+                send.op1,
+                induction_cv,
+                &produced_temporary_slots,
+                expression_count,
+                &mut input_slots,
+                &mut input_count,
+                &mut double_input_mask,
+                total_slots,
+            )?;
+            if !output.is_double {
+                return None;
+            }
+            outputs[sent_arguments] = output.source;
+            sent_arguments += 1;
+            cursor += 1;
+            continue;
+        }
+        let kind = match send.opcode {
+            OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp => {
+                crate::vm::function::ScalarDoubleOpKind::Add
+            }
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
+                crate::vm::function::ScalarDoubleOpKind::Subtract
+            }
+            OpCode::Mul => crate::vm::function::ScalarDoubleOpKind::Multiply,
+            OpCode::Div => crate::vm::function::ScalarDoubleOpKind::Divide,
+            _ => return None,
+        };
+        if expression_count == 8
+            || !matches!(send.result_type, OpType::Tmp | OpType::Var)
+            || produced_temporary_slots[..expression_count].contains(&send.result)
         {
             return None;
         }
-        *argument = match send.op1_type {
-            OpType::Const => QuickDoubleOperand::Constant(double_literal(op_array, send.op1)?),
-            OpType::Cv => {
-                add_mask_slot(&mut double_input_mask, send.op1, total_slots)?;
-                QuickDoubleOperand::Slot(send.op1)
-            }
-            _ => return None,
-        };
+        let lhs = quick_double_argument_source(
+            op_array,
+            send.op1_type,
+            send.op1,
+            induction_cv,
+            &produced_temporary_slots,
+            expression_count,
+            &mut input_slots,
+            &mut input_count,
+            &mut double_input_mask,
+            total_slots,
+        )?;
+        let rhs = quick_double_argument_source(
+            op_array,
+            send.op2_type,
+            send.op2,
+            induction_cv,
+            &produced_temporary_slots,
+            expression_count,
+            &mut input_slots,
+            &mut input_count,
+            &mut double_input_mask,
+            total_slots,
+        )?;
+        if !lhs.is_double && !rhs.is_double {
+            return None;
+        }
+        operations.push(QuickDoubleArgumentOp {
+            kind,
+            lhs: lhs.source,
+            rhs: rhs.source,
+        });
+        produced_temporary_slots[expression_count] = send.result;
+        expression_count += 1;
         cursor += 1;
     }
 
@@ -1397,6 +1590,7 @@ pub fn detect_double_call_accumulate_loop(
     if accumulator_cv == induction_cv
         || matches!(bound, QuickLongBound::Cv(slot) if slot == induction_cv || slot == accumulator_cv)
         || double_input_mask & ((1u64 << induction_cv) | (1u64 << accumulator_cv)) != 0
+        || matches!(bound, QuickLongBound::Cv(slot) if double_input_mask & (1u64 << slot) != 0)
         || induction_cv as u32 >= op_array.num_cvs
         || accumulator_cv as u32 >= op_array.num_cvs
         || matches!(bound, QuickLongBound::Cv(slot) if slot as u32 >= op_array.num_cvs)
@@ -1415,9 +1609,17 @@ pub fn detect_double_call_accumulate_loop(
     {
         add_mask_slot(&mut temporary_mask, slot, total_slots)?;
     }
+    for slot in produced_temporary_slots
+        .iter()
+        .copied()
+        .take(expression_count)
+    {
+        add_mask_slot(&mut temporary_mask, slot, total_slots)?;
+    }
     let expected_temporary_count = usize::from(condition_tmp.is_some())
         + 2
-        + usize::from(increment_tmp.is_some());
+        + usize::from(increment_tmp.is_some())
+        + expression_count;
     if temporary_mask.count_ones() as usize != expected_temporary_count {
         return None;
     }
@@ -1432,8 +1634,13 @@ pub fn detect_double_call_accumulate_loop(
         guard: ScalarLongCallGuard::FunctionCache {
             cache_ip: u32::try_from(initializer_ip).ok()?,
         },
-        arguments,
-        argument_count: argument_count as u8,
+        argument_program: QuickDoubleArgumentProgram {
+            operations: operations.into_boxed_slice(),
+            outputs,
+            output_count: argument_count as u8,
+            input_slots,
+            input_count: input_count as u8,
+        },
         term_tmp: do_fcall.result,
         sum_tmp: sum.result,
         increment_kind,
@@ -4461,6 +4668,7 @@ mod tests {
     use crate::compiler::make_user_function;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
+    use crate::vm::function::ScalarDoubleOpKind;
     use crate::vm::planner::BlockPlan;
 
     fn compile_main(source: &str) -> crate::vm::function::UserFunction {
@@ -4520,12 +4728,67 @@ for ($i = 0; $i < 100; $i++) {
                 _ => None,
             })
             .expect("compiler should select the Double call-accumulate loop");
-        assert_eq!(plan.argument_count, 3);
-        assert!(matches!(plan.arguments[0], QuickDoubleOperand::Constant(1.5)));
-        assert!(matches!(plan.arguments[1], QuickDoubleOperand::Constant(2.5)));
-        assert!(matches!(plan.arguments[2], QuickDoubleOperand::Slot(0)));
+        assert_eq!(plan.argument_program.output_count, 3);
+        assert_eq!(plan.argument_program.input_count, 1);
+        assert_eq!(plan.argument_program.input_slots[0], 0);
+        assert!(matches!(
+            plan.argument_program.outputs[0],
+            QuickDoubleSource::Constant(1.5)
+        ));
+        assert!(matches!(
+            plan.argument_program.outputs[1],
+            QuickDoubleSource::Constant(2.5)
+        ));
+        assert!(matches!(
+            plan.argument_program.outputs[2],
+            QuickDoubleSource::Input(0)
+        ));
         assert_eq!(plan.accumulator_cv, 1);
         assert_eq!(plan.induction_cv, 2);
+    }
+
+    #[test]
+    fn detects_induction_and_invariant_double_argument_expressions() {
+        let main = compile_main(
+            "<?php
+function calculateFloat(float $a, float $b, float $c): float {
+    return (($a + $b) * $c) - 2.0;
+}
+$scale = 2.0;
+$total = 0.0;
+for ($i = 0; $i < 100; $i++) {
+    $total += calculateFloat($i * 0.5, $scale + 1.0, 2.0);
+}
+",
+        );
+        let plan = main
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                _ => None,
+            })
+            .expect("compiler should retain scalar argument expressions");
+        let arguments = &plan.argument_program;
+        assert_eq!(arguments.operations.len(), 2);
+        assert_eq!(arguments.input_count, 1);
+        assert_eq!(arguments.input_slots[0], 0);
+        assert_eq!(arguments.operations[0].kind, ScalarDoubleOpKind::Multiply);
+        assert_eq!(arguments.operations[0].lhs, QuickDoubleSource::Induction);
+        assert_eq!(
+            arguments.operations[0].rhs,
+            QuickDoubleSource::Constant(0.5)
+        );
+        assert_eq!(arguments.operations[1].kind, ScalarDoubleOpKind::Add);
+        assert_eq!(arguments.operations[1].lhs, QuickDoubleSource::Input(0));
+        assert_eq!(
+            arguments.operations[1].rhs,
+            QuickDoubleSource::Constant(1.0)
+        );
+        assert_eq!(arguments.outputs[0], QuickDoubleSource::Temporary(0));
+        assert_eq!(arguments.outputs[1], QuickDoubleSource::Temporary(1));
+        assert_eq!(arguments.outputs[2], QuickDoubleSource::Constant(2.0));
     }
 
     fn induction_plan(source: &str) -> QuickLongInductionLoop {

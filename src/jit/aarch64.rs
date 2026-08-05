@@ -206,6 +206,17 @@ impl Arm64Assembler {
             .push(0x9e67_0000 | (source.bits() << 5) | destination.bits());
     }
 
+    /// Encode `SCVTF Dd, Xn`, matching PHP's signed Long-to-Double numeric
+    /// promotion for a mixed scalar expression.
+    fn convert_signed_to_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        source: Arm64Register,
+    ) {
+        self.words
+            .push(0x9e62_0000 | (source.bits() << 5) | destination.bits());
+    }
+
     /// Encode `ADD Xd, Xn, Xm, LSL #shift`.
     fn add_shifted_register(
         &mut self,

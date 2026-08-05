@@ -1,7 +1,7 @@
 /// E2E tests: for, do...while, break, continue, inc/dec, nested loops.
 
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error};
 
 // === for loop ===
 
@@ -52,6 +52,34 @@ fn test_e2e_typed_double_call_accumulation() {
             "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $limit = 100; $scale = 2.0; $total = 0.0; for ($i = 0; $i < $limit; ++$i) { $total += calculateFloat(1.5, 2.5, $scale); } echo $i . ':' . $total;"
         ),
         "100:600"
+    );
+}
+
+#[test]
+fn test_e2e_typed_double_call_argument_expressions() {
+    assert_eq!(
+        run_php(
+            "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $limit = 100; $scale = 2.0; $total = 0.0; for ($i = 0; $i < $limit; ++$i) { $total += calculateFloat($i * 0.5, $scale + 1.0, 2.0); } echo $i . ':' . $total;"
+        ),
+        "100:5350"
+    );
+}
+
+#[test]
+fn test_e2e_typed_double_argument_division_replays_canonical_error() {
+    let error = run_php_expect_error(
+        "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $total = 0.0; for ($i = 0; $i < 5; $i++) { $total += calculateFloat(1.0 / ($i - 2.0), 2.0, 3.0); }",
+    );
+    assert!(format!("{error:?}").contains("Division by zero"));
+}
+
+#[test]
+fn test_e2e_empty_typed_double_loop_skips_argument_evaluation() {
+    assert_eq!(
+        run_php(
+            "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $total = 0.0; for ($i = 0; $i < 0; $i++) { $total += calculateFloat(1.0 / 0.0, 2.0, 3.0); } echo $total;"
+        ),
+        "0"
     );
 }
 

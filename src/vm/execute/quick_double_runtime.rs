@@ -26,6 +26,101 @@ unsafe fn publish_quick_double_call_state(
     }
 }
 
+#[inline(always)]
+fn resolve_quick_double_argument_source(
+    source: QuickDoubleSource,
+    inputs: &[f64; 8],
+    induction: i64,
+    temporaries: &[f64; 8],
+) -> Option<f64> {
+    match source {
+        QuickDoubleSource::Input(index) => inputs.get(index as usize).copied(),
+        QuickDoubleSource::Induction => Some(induction as f64),
+        QuickDoubleSource::Constant(value) => Some(value),
+        QuickDoubleSource::Temporary(index) => temporaries.get(index as usize).copied(),
+    }
+}
+
+#[inline(always)]
+fn quick_double_argument_phase_masks(
+    program: &QuickDoubleArgumentProgram,
+) -> ((u8, u8), (u8, u8)) {
+    let mut operation_masks = [0u8; 2];
+    let mut output_masks = [0u8; 2];
+    for index in 0..program.operations.len() {
+        for phase in 0..=1 {
+            if program.operation_is_needed_by_output_phase(index, phase != 0) {
+                operation_masks[phase] |= 1 << index;
+            }
+        }
+    }
+    for (index, output) in program.outputs[..program.output_count as usize]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        output_masks[usize::from(program.source_depends_on_induction(output))] |= 1 << index;
+    }
+    (
+        (operation_masks[0], output_masks[0]),
+        (operation_masks[1], output_masks[1]),
+    )
+}
+
+#[inline(always)]
+fn evaluate_quick_double_argument_phase(
+    program: &QuickDoubleArgumentProgram,
+    inputs: &[f64; 8],
+    induction: i64,
+    operation_mask: u8,
+    output_mask: u8,
+    arguments: &mut [f64; 8],
+) -> bool {
+    let mut temporaries = [0.0_f64; 8];
+    for (index, operation) in program.operations.iter().copied().enumerate() {
+        if operation_mask & (1 << index) == 0 {
+            continue;
+        }
+        let Some(lhs) = resolve_quick_double_argument_source(
+            operation.lhs,
+            inputs,
+            induction,
+            &temporaries,
+        ) else {
+            return false;
+        };
+        let Some(rhs) = resolve_quick_double_argument_source(
+            operation.rhs,
+            inputs,
+            induction,
+            &temporaries,
+        ) else {
+            return false;
+        };
+        let Some(result) = apply_scalar_double_op(operation.kind, lhs, rhs) else {
+            return false;
+        };
+        temporaries[index] = result;
+    }
+    for (index, output) in program.outputs
+        [..program.output_count as usize]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        if output_mask & (1 << index) == 0 {
+            continue;
+        }
+        let Some(value) =
+            resolve_quick_double_argument_source(output, inputs, induction, &temporaries)
+        else {
+            return false;
+        };
+        arguments[index] = value;
+    }
+    true
+}
+
 #[inline(never)]
 #[cfg(all(
     feature = "quick-loops",
@@ -43,7 +138,7 @@ unsafe fn run_native_quick_double_call_accumulate_loop(
     plan: &QuickDoubleCallAccumulateLoop,
     target: *const FunctionCommon,
     call_plan: &ScalarDoubleFunctionPlan,
-    arguments: &[f64; 8],
+    inputs: &[f64; 8],
     induction_ptr: *mut Value,
     accumulator_ptr: *mut Value,
     condition_ptr: Option<*mut Value>,
@@ -69,9 +164,10 @@ unsafe fn run_native_quick_double_call_accumulate_loop(
         let before_induction = state.induction;
         let Some(result) = plan.native_jit().dispatch(
             target as usize,
+            &plan.argument_program,
             call_plan,
             &mut state,
-            &arguments[..plan.argument_count as usize],
+            &inputs[..plan.argument_program.input_count as usize],
             eg.vm_interrupt.as_ptr() as *const bool,
         ) else {
             return Ok(None);
@@ -211,7 +307,12 @@ unsafe fn run_quick_double_call_accumulate_loop(
     }
 
     let Some((target, user)) =
-        guarded_quick_scalar_call_target(op_array, slot_base, plan.guard, plan.argument_count)
+        guarded_quick_scalar_call_target(
+            op_array,
+            slot_base,
+            plan.guard,
+            plan.argument_program.output_count,
+        )
     else {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
@@ -221,31 +322,29 @@ unsafe fn run_quick_double_call_accumulate_loop(
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
     };
-    if call_plan.public_args != plan.argument_count || !user.common.supports_scalar_double_plan() {
+    if call_plan.public_args != plan.argument_program.output_count
+        || !user.common.supports_scalar_double_plan()
+    {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);
     }
 
-    let mut arguments = [0.0_f64; 8];
-    for (index, argument) in arguments
+    let mut inputs = [0.0_f64; 8];
+    for (index, input) in inputs
         .iter_mut()
         .enumerate()
-        .take(plan.argument_count as usize)
+        .take(plan.argument_program.input_count as usize)
     {
-        *argument = match plan.arguments[index] {
-            QuickDoubleOperand::Constant(value) => value,
-            QuickDoubleOperand::Slot(slot) => {
-                let value = &*slot_base.add(slot as usize);
-                if quick_loop_slot_has_heap(frame, slot)
-                    || value.value_type() != ValueType::Double
-                    || value.is_reference()
-                {
-                    stats::inc_quick_loop_guard_failed();
-                    return Ok(QuickLoopOutcome::GuardFailed);
-                }
-                value.raw_double()
-            }
-        };
+        let slot = plan.argument_program.input_slots[index];
+        let value = &*slot_base.add(slot as usize);
+        if quick_loop_slot_has_heap(frame, slot)
+            || value.value_type() != ValueType::Double
+            || value.is_reference()
+        {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+        *input = value.raw_double();
     }
 
     let mut induction = (*induction_ptr).raw_long();
@@ -269,7 +368,7 @@ unsafe fn run_quick_double_call_accumulate_loop(
         plan,
         target,
         call_plan,
-        &arguments,
+        &inputs,
         induction_ptr,
         accumulator_ptr,
         condition_ptr,
@@ -285,7 +384,39 @@ unsafe fn run_quick_double_call_accumulate_loop(
         return Ok(outcome);
     }
 
+    let (invariant_argument_masks, dynamic_argument_masks) =
+        quick_double_argument_phase_masks(&plan.argument_program);
+    let mut arguments = [0.0_f64; 8];
     let mut iterations = 0u64;
+
+    if induction < bound
+        && !evaluate_quick_double_argument_phase(
+            &plan.argument_program,
+            &inputs,
+            induction,
+            invariant_argument_masks.0,
+            invariant_argument_masks.1,
+            &mut arguments,
+        )
+    {
+        publish_quick_double_call_state(
+            induction_ptr,
+            accumulator_ptr,
+            condition_ptr,
+            term_ptr,
+            sum_ptr,
+            increment_ptr,
+            induction,
+            accumulator,
+            true,
+            last_term,
+            last_increment,
+        );
+        (*frame).opline = op_array.instructions.as_ptr().add(plan.guard.cache_ip());
+        record_scalar_calls_bulk(&*target, iterations);
+        stats::inc_quick_loop_deoptimized(iterations);
+        return Ok(QuickLoopOutcome::Deoptimized);
+    }
 
     loop {
         if induction >= bound {
@@ -308,6 +439,34 @@ unsafe fn run_quick_double_call_accumulate_loop(
             return Ok(QuickLoopOutcome::Completed);
         }
 
+        if (dynamic_argument_masks.0 != 0 || dynamic_argument_masks.1 != 0)
+            && !evaluate_quick_double_argument_phase(
+                &plan.argument_program,
+                &inputs,
+                induction,
+                dynamic_argument_masks.0,
+                dynamic_argument_masks.1,
+                &mut arguments,
+            )
+        {
+            publish_quick_double_call_state(
+                induction_ptr,
+                accumulator_ptr,
+                condition_ptr,
+                term_ptr,
+                sum_ptr,
+                increment_ptr,
+                induction,
+                accumulator,
+                true,
+                last_term,
+                last_increment,
+            );
+            (*frame).opline = op_array.instructions.as_ptr().add(plan.guard.cache_ip());
+            record_scalar_calls_bulk(&*target, iterations);
+            stats::inc_quick_loop_deoptimized(iterations);
+            return Ok(QuickLoopOutcome::Deoptimized);
+        }
         let Some(term) = evaluate_scalar_double_plan_rust(call_plan, &arguments) else {
             publish_quick_double_call_state(
                 induction_ptr,

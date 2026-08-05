@@ -41,9 +41,9 @@ use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarDoubleFunctionPlan, ScalarDoubleOpKind, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
-    QuickDoubleCallAccumulateLoop, QuickDoubleOperand, QuickLongAccumulateLoop, QuickLongBound,
-    QuickLongCondition, QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop,
-    QuickLongTarget, QuickLongTerm,
+    QuickDoubleArgumentProgram, QuickDoubleCallAccumulateLoop, QuickDoubleSource,
+    QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
+    QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QuickObjectLongArgument, QuickObjectLongMethodCall, QuickTypedMethodCall,
     QuickObjectArrayConsumer, QuickStringAppendSource, QuickVirtualValueSource,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,

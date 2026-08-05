@@ -8,6 +8,7 @@ use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
     ScalarDoubleSource,
 };
+use crate::vm::quick::{QuickDoubleArgumentOp, QuickDoubleArgumentProgram, QuickDoubleSource};
 
 fn arithmetic_plan() -> ScalarDoubleFunctionPlan {
     ScalarDoubleFunctionPlan::new(
@@ -34,6 +35,80 @@ fn arithmetic_plan() -> ScalarDoubleFunctionPlan {
             output: ScalarDoubleSource::Temporary(2),
         },
     )
+}
+
+fn identity_argument_plan() -> QuickDoubleArgumentProgram {
+    QuickDoubleArgumentProgram {
+        operations: Vec::new().into_boxed_slice(),
+        outputs: [
+            QuickDoubleSource::Input(0),
+            QuickDoubleSource::Input(1),
+            QuickDoubleSource::Input(2),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+        ],
+        output_count: 3,
+        input_slots: [0, 1, 2, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX],
+        input_count: 3,
+    }
+}
+
+fn zero_divisor_argument_plan() -> QuickDoubleArgumentProgram {
+    QuickDoubleArgumentProgram {
+        operations: vec![crate::vm::quick::QuickDoubleArgumentOp {
+            kind: ScalarDoubleOpKind::Divide,
+            lhs: QuickDoubleSource::Constant(1.0),
+            rhs: QuickDoubleSource::Constant(-0.0),
+        }]
+        .into_boxed_slice(),
+        outputs: [
+            QuickDoubleSource::Temporary(0),
+            QuickDoubleSource::Constant(4.0),
+            QuickDoubleSource::Constant(2.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+        ],
+        output_count: 3,
+        input_slots: [u16::MAX; 8],
+        input_count: 0,
+    }
+}
+
+fn dependent_argument_plan() -> QuickDoubleArgumentProgram {
+    QuickDoubleArgumentProgram {
+        operations: vec![
+            QuickDoubleArgumentOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: QuickDoubleSource::Input(0),
+                rhs: QuickDoubleSource::Constant(1.0),
+            },
+            QuickDoubleArgumentOp {
+                kind: ScalarDoubleOpKind::Multiply,
+                lhs: QuickDoubleSource::Temporary(0),
+                rhs: QuickDoubleSource::Induction,
+            },
+        ]
+        .into_boxed_slice(),
+        outputs: [
+            QuickDoubleSource::Temporary(1),
+            QuickDoubleSource::Constant(4.0),
+            QuickDoubleSource::Constant(2.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+            QuickDoubleSource::Constant(0.0),
+        ],
+        output_count: 3,
+        input_slots: [0, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX],
+        input_count: 1,
+    }
 }
 
 #[test]
@@ -124,7 +199,11 @@ fn single_operation_leaf_stays_in_the_rust_adapter() {
 
 #[test]
 fn composed_double_loop_completes_and_preserves_empty_state() {
-    let program = CompiledQuickDoubleCallAccumulateLoop::compile(&arithmetic_plan()).unwrap();
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &identity_argument_plan(),
+        &arithmetic_plan(),
+    )
+    .unwrap();
     let mut state = NativeDoubleCallAccumulateState {
         induction: 0,
         bound: 5,
@@ -151,7 +230,11 @@ fn composed_double_loop_completes_and_preserves_empty_state() {
 
 #[test]
 fn composed_double_loop_polls_and_side_exits_transactionally() {
-    let program = CompiledQuickDoubleCallAccumulateLoop::compile(&arithmetic_plan()).unwrap();
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &identity_argument_plan(),
+        &arithmetic_plan(),
+    )
+    .unwrap();
     let mut state = NativeDoubleCallAccumulateState {
         induction: 0,
         bound: 2_000,
@@ -189,4 +272,54 @@ fn composed_double_loop_polls_and_side_exits_transactionally() {
             last_term: 2.0,
         }
     );
+}
+
+#[test]
+fn composed_double_loop_argument_division_side_exits_before_the_iteration() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &zero_divisor_argument_plan(),
+        &arithmetic_plan(),
+    )
+    .unwrap();
+    let mut state = NativeDoubleCallAccumulateState {
+        induction: 3,
+        bound: 10,
+        accumulator: 7.0,
+        last_term: 2.0,
+    };
+    assert_eq!(
+        program.call(&mut state, &[], &false).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::SideExit
+    );
+    assert_eq!(
+        state,
+        NativeDoubleCallAccumulateState {
+            induction: 3,
+            bound: 10,
+            accumulator: 7.0,
+            last_term: 2.0,
+        }
+    );
+}
+
+#[test]
+fn composed_double_loop_retains_invariant_dependencies_of_dynamic_arguments() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(
+        &dependent_argument_plan(),
+        &arithmetic_plan(),
+    )
+    .unwrap();
+    let mut state = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 5,
+        accumulator: 1.0,
+        last_term: -1.0,
+    };
+    assert_eq!(
+        program.call(&mut state, &[2.0], &false).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Completed
+    );
+    assert_eq!(state.induction, 5);
+    assert_eq!(state.accumulator, 76.0);
+    assert_eq!(state.last_term, 27.0);
 }

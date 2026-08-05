@@ -3595,6 +3595,60 @@ receiver-class plus method-cache guards. These extensions must reuse the same
 loop ABI and side-exit protocol; unsupported bodies, mutable arguments and
 polymorphic targets remain canonical.
 
+### Composed Double argument-expression checkpoint
+
+The caller binding layer now accepts up to eight target-neutral scalar Double
+operations (`+`, `-`, `*`, `/`) before a proven typed-Double leaf
+(2026-08-05). Sources may be exact-Double caller CVs, Double or Long constants,
+the Long loop induction value converted to Double, or prior argument
+temporaries. At least one operand of each admitted operation must already be
+proven Double, so ordinary Long arithmetic and its overflow semantics remain
+canonical. Direct Long arguments are likewise still handled by the regular PHP
+coercion path.
+
+`QuickDoubleArgumentProgram` is shared by the detector, frame-free Rust tier,
+ARM64 and x86-64. It records compact guarded Double inputs independently from
+the public callee arguments. Its dependency analysis divides work into an
+invariant preheader and an induction-dependent loop phase, including transitive
+dependencies through temporaries. Thus one dynamic argument does not force
+constants or unrelated invariant expressions back into every iteration. ARM64
+uses `SCVTF`; x86-64 uses `CVTSI2SD`. Both backends write the resulting public
+arguments through the same bounded working ABI before executing the existing
+callee IR.
+
+The side-exit contract remains transactional. Argument division by positive or
+negative zero commits none of the failing iteration and resumes the canonical
+`InitFcall`; an empty loop evaluates no arguments at all. Permanent tests cover
+the Rust and native paths, invariant dependencies feeding dynamic expressions,
+interrupt/completion state, the canonical division error and empty-loop
+behavior. The final matrix passes 173 ARM64 and 190 x86-64 library tests, 91
+ARM64 and 23 x86-64 JIT integration tests, all 45 loop end-to-end tests, and all
+four application corpus tests on both targets.
+
+Nine interleaved `max-perf`, native-CPU runs of the new five-million-iteration
+`bench_typed_float_argument_expr.php` workload produce identical
+`6250023750000` output and these medians:
+
+| Host | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 3.392 ms | 58.090 ms | 35.165 ms | 126.976 ms |
+| Ryzen x86-64, PHP 8.4.24 | 16.835 ms | 67.947 ms | 37.464 ms | 142.154 ms |
+
+RPHP is therefore about 10.4x/2.2x faster than PHP JIT/no-JIT on ARM64 and
+2.2x/2.1x on x86-64 for this shape. The unchanged invariant-argument control
+remains at approximately 3.181 ms JIT and 32.050 ms no-JIT on ARM64, and 5.084
+ms JIT and roughly 41 ms no-JIT on x86-64. The native ARM64 expression cost is
+almost completely hidden, while x86-64 still spends most of its new delta
+storing a dynamic public argument to the working buffer and immediately
+loading it into the leaf program.
+
+The next structural step is therefore direct argument/leaf IR composition with
+liveness-aware source remapping. It should forward dynamic argument values in
+registers when their leaf uses permit it, while retaining the working buffer as
+the general fallback. That same composition machinery should then admit nested
+scalar callees, followed by monomorphic scalar methods guarded by receiver
+class and method cache. It must not introduce a workload-specific float loop.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

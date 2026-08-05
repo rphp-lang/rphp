@@ -272,6 +272,18 @@ impl X86_64Assembler {
             .push(0xc0 | (source.low_bits() << 3) | destination.low_bits());
     }
 
+    /// Encode `CVTSI2SD destination, source` for a signed 64-bit Long.
+    fn convert_signed_to_double(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64Register,
+    ) {
+        self.emit_legacy_rex(0xf2, true, destination.extension(), source.extension());
+        self.bytes.extend_from_slice(&[0x0f, 0x2a]);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
     fn shift_left_immediate8(&mut self, destination: X86_64Register, immediate: u8) {
         self.bytes.push(0x48 | destination.extension());
         self.bytes.push(0xc1);

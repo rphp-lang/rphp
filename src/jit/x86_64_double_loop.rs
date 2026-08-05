@@ -5,6 +5,9 @@ use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
 };
+use crate::vm::quick::{
+    QuickDoubleArgumentOp, QuickDoubleArgumentProgram, QuickDoubleSource,
+};
 use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::io;
@@ -67,9 +70,10 @@ impl From<io::Error> for QuickDoubleCallAccumulateJitError {
     }
 }
 
-/// SysV ABI: RDI is state, RSI exact-Double inputs, RDX interrupt flag; EAX
-/// returns the outcome. XMM2-XMM9 hold the target-neutral IR temporaries,
-/// while XMM10 and XMM11 keep accumulator and last committed term resident.
+/// SysV ABI: RDI is state, RSI compact exact-Double inputs, RDX is the
+/// interrupt flag and RCX is the writable argument buffer; EAX returns the
+/// outcome. XMM2-XMM9 hold the target-neutral IR temporaries, while XMM10 and
+/// XMM11 keep accumulator and last committed term resident.
 pub struct CompiledQuickDoubleCallAccumulateLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -78,14 +82,17 @@ pub struct CompiledQuickDoubleCallAccumulateLoop {
 
 impl CompiledQuickDoubleCallAccumulateLoop {
     pub fn compile(
+        argument_plan: &QuickDoubleArgumentProgram,
         plan: &ScalarDoubleFunctionPlan,
     ) -> Result<Self, QuickDoubleCallAccumulateJitError> {
+        validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
 
         let mut assembler = X86_64Assembler::new();
         let state = X86_64Register::R10;
         let inputs = X86_64Register::R11;
         let interrupt = X86_64Register::R9;
+        let working_arguments = X86_64Register::RDI;
         let induction = X86_64Register::RCX;
         let bound = X86_64Register::R8;
         let polling = X86_64Register::RDX;
@@ -96,6 +103,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         assembler.move_register(state, X86_64Register::RDI);
         assembler.move_register(inputs, X86_64Register::RSI);
         assembler.move_register(interrupt, X86_64Register::RDX);
+        assembler.move_register(working_arguments, X86_64Register::RCX);
         assembler.move_from_base_disp32(induction, state, 0);
         assembler.move_from_base_disp32(bound, state, 8);
         assembler.load_f64(accumulator, state, 16);
@@ -104,12 +112,32 @@ impl CompiledQuickDoubleCallAccumulateLoop {
 
         assembler.compare_register(induction, bound);
         let empty_completed = assembler.jump_greater_or_equal_rel32();
-        let loop_start = assembler.bytes.len();
         let mut side_exits = Vec::new();
+        emit_argument_program(
+            &mut assembler,
+            inputs,
+            working_arguments,
+            induction,
+            bits,
+            argument_plan,
+            false,
+            &mut side_exits,
+        );
+        let loop_start = assembler.bytes.len();
+        emit_argument_program(
+            &mut assembler,
+            inputs,
+            working_arguments,
+            induction,
+            bits,
+            argument_plan,
+            true,
+            &mut side_exits,
+        );
         for (index, operation) in plan.program.operations.iter().copied().enumerate() {
             emit_operation(
                 &mut assembler,
-                inputs,
+                working_arguments,
                 bits,
                 index,
                 operation,
@@ -118,7 +146,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         }
         let output = emit_source(
             &mut assembler,
-            inputs,
+            working_arguments,
             bits,
             plan.program.output,
             X86_64FloatRegister::from_code(0),
@@ -166,7 +194,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         Ok(Self {
             memory,
             code,
-            input_count: plan.public_args as usize,
+            input_count: argument_plan.input_count as usize,
         })
     }
 
@@ -194,9 +222,16 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             *mut NativeDoubleCallAccumulateState,
             *const f64,
             *const bool,
+            *mut f64,
         ) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
-        match function(state, inputs.as_ptr(), interrupt) {
+        let mut working_arguments = [0.0_f64; 8];
+        match function(
+            state,
+            inputs.as_ptr(),
+            interrupt,
+            working_arguments.as_mut_ptr(),
+        ) {
             STATUS_COMPLETED => Ok(QuickDoubleCallAccumulateJitOutcome::Completed),
             STATUS_INTERRUPTED => Ok(QuickDoubleCallAccumulateJitOutcome::Interrupted),
             STATUS_SIDE_EXIT => Ok(QuickDoubleCallAccumulateJitOutcome::SideExit),
@@ -231,6 +266,7 @@ impl QuickDoubleCallAccumulateJitCache {
     pub(crate) unsafe fn dispatch(
         &self,
         target_identity: usize,
+        argument_plan: &QuickDoubleArgumentProgram,
         plan: &ScalarDoubleFunctionPlan,
         state: &mut NativeDoubleCallAccumulateState,
         inputs: &[f64],
@@ -244,7 +280,9 @@ impl QuickDoubleCallAccumulateJitCache {
         }
         let program = self
             .compiled
-            .get_or_init(|| CompiledQuickDoubleCallAccumulateLoop::compile(plan).ok())
+            .get_or_init(|| {
+                CompiledQuickDoubleCallAccumulateLoop::compile(argument_plan, plan).ok()
+            })
             .as_ref()?;
         self.native_entries
             .set(self.native_entries.get().saturating_add(1));
@@ -309,6 +347,158 @@ fn validate(plan: &ScalarDoubleFunctionPlan) -> Result<(), QuickDoubleCallAccumu
         plan.program.operations.len(),
         plan.public_args,
     )
+}
+
+fn validate_argument_plan(
+    plan: &QuickDoubleArgumentProgram,
+    public_args: u8,
+) -> Result<(), QuickDoubleCallAccumulateJitError> {
+    if plan.operations.len() > MAX_OPERATIONS
+        || plan.output_count != public_args
+        || plan.output_count as usize > plan.outputs.len()
+        || plan.input_count as usize > plan.input_slots.len()
+    {
+        return Err(QuickDoubleCallAccumulateJitError::InvalidProgram(
+            "argument program exceeds the native ABI",
+        ));
+    }
+    for (index, operation) in plan.operations.iter().enumerate() {
+        validate_argument_source(operation.lhs, index, plan.input_count)?;
+        validate_argument_source(operation.rhs, index, plan.input_count)?;
+    }
+    for output in plan.outputs[..plan.output_count as usize].iter().copied() {
+        validate_argument_source(output, plan.operations.len(), plan.input_count)?;
+    }
+    Ok(())
+}
+
+fn validate_argument_source(
+    source: QuickDoubleSource,
+    available_temporaries: usize,
+    input_count: u8,
+) -> Result<(), QuickDoubleCallAccumulateJitError> {
+    match source {
+        QuickDoubleSource::Input(index) if index >= input_count => Err(
+            QuickDoubleCallAccumulateJitError::InvalidProgram("argument input is outside the ABI"),
+        ),
+        QuickDoubleSource::Temporary(index) if index as usize >= available_temporaries => Err(
+            QuickDoubleCallAccumulateJitError::InvalidProgram(
+                "argument temporary is used before definition",
+            ),
+        ),
+        _ => Ok(()),
+    }
+}
+
+fn emit_argument_program(
+    assembler: &mut X86_64Assembler,
+    inputs: X86_64Register,
+    outputs: X86_64Register,
+    induction: X86_64Register,
+    bits: X86_64Register,
+    plan: &QuickDoubleArgumentProgram,
+    induction_dependent: bool,
+    side_exits: &mut Vec<usize>,
+) {
+    for (index, operation) in plan.operations.iter().copied().enumerate() {
+        if !plan.operation_is_needed_by_output_phase(index, induction_dependent) {
+            continue;
+        }
+        emit_argument_operation(
+            assembler,
+            inputs,
+            induction,
+            bits,
+            index,
+            operation,
+            side_exits,
+        );
+    }
+    for (index, output) in plan.outputs[..plan.output_count as usize]
+        .iter()
+        .copied()
+        .enumerate()
+    {
+        if plan.source_depends_on_induction(output) != induction_dependent {
+            continue;
+        }
+        let output = emit_argument_source(
+            assembler,
+            inputs,
+            induction,
+            bits,
+            output,
+            X86_64FloatRegister::from_code(0),
+        );
+        assembler.store_f64(outputs, output, index as i32 * 8);
+    }
+}
+
+fn emit_argument_operation(
+    assembler: &mut X86_64Assembler,
+    inputs: X86_64Register,
+    induction: X86_64Register,
+    bits: X86_64Register,
+    index: usize,
+    operation: QuickDoubleArgumentOp,
+    side_exits: &mut Vec<usize>,
+) {
+    let lhs = emit_argument_source(
+        assembler,
+        inputs,
+        induction,
+        bits,
+        operation.lhs,
+        X86_64FloatRegister::from_code(0),
+    );
+    let rhs = emit_argument_source(
+        assembler,
+        inputs,
+        induction,
+        bits,
+        operation.rhs,
+        X86_64FloatRegister::from_code(1),
+    );
+    let destination = temporary(index);
+    assembler.move_double(destination, lhs);
+    match operation.kind {
+        ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
+        ScalarDoubleOpKind::Subtract => assembler.subtract_double(destination, rhs),
+        ScalarDoubleOpKind::Multiply => assembler.multiply_double(destination, rhs),
+        ScalarDoubleOpKind::Divide => {
+            assembler.move_double_bits_to_gpr(bits, rhs);
+            assembler.shift_left_immediate8(bits, 1);
+            assembler.compare_immediate8(bits, 0);
+            side_exits.push(assembler.jump_equal_rel32());
+            assembler.divide_double(destination, rhs);
+        }
+    }
+}
+
+fn emit_argument_source(
+    assembler: &mut X86_64Assembler,
+    inputs: X86_64Register,
+    induction: X86_64Register,
+    bits: X86_64Register,
+    source: QuickDoubleSource,
+    scratch: X86_64FloatRegister,
+) -> X86_64FloatRegister {
+    match source {
+        QuickDoubleSource::Input(index) => {
+            assembler.load_f64(scratch, inputs, i32::from(index) * 8);
+            scratch
+        }
+        QuickDoubleSource::Induction => {
+            assembler.convert_signed_to_double(scratch, induction);
+            scratch
+        }
+        QuickDoubleSource::Constant(value) => {
+            assembler.move_immediate64(bits, value.to_bits() as i64);
+            assembler.move_gpr_bits_to_double(scratch, bits);
+            scratch
+        }
+        QuickDoubleSource::Temporary(index) => temporary(index as usize),
+    }
 }
 
 fn validate_source(

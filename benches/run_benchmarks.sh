@@ -64,6 +64,7 @@ BENCHMARKS=(
     "bench_scalar_loop.php:Scalar quick loop 50M"
     "bench_scalar_call_loop.php:Scalar call quick loop 10M"
     "bench_typed_float_leaf.php:Typed float leaf calls 5M"
+    "bench_typed_float_argument_expr.php:Typed float argument expressions 5M"
     "bench_scalar_function_tree.php:Scalar function tree 5M"
     "bench_scalar_call_branch_standalone.php:Standalone scalar branch calls 10M"
     "bench_branch_loop.php:Branched scalar loop 10M"
