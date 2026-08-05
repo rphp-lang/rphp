@@ -47,6 +47,67 @@ pub(crate) fn straight_long_linear_final_publication_masks(
     final_masks
 }
 
+/// Find the earliest normal-body operation before which a range-proven
+/// backend may increment the loop induction value. Every complete forward path
+/// must cross the insertion point exactly once, the remaining suffix must be
+/// pure scalar code, and that suffix must not observe the old induction value.
+///
+/// Backends still decide which unchecked entry can use this schedule. Checked
+/// and guard-bearing suffixes retain the canonical tail increment so a side
+/// exit always publishes the failing iteration.
+#[cfg(any(target_arch = "x86_64", test))]
+pub(crate) fn straight_long_early_induction_increment_operation(
+    config: &NativeStraightLongLoopConfig,
+) -> Option<usize> {
+    if config.post_result.is_some() {
+        return None;
+    }
+    let operation_count = config.operation_count as usize;
+    let induction_mask = 1u64 << config.induction_slot;
+    (1..operation_count).find(|&candidate| {
+        config.operations[candidate..operation_count]
+            .iter()
+            .copied()
+            .all(|operation| {
+                matches!(
+                    operation,
+                    NativeStraightLongOperation::Modulo { .. }
+                        | NativeStraightLongOperation::Move { .. }
+                        | NativeStraightLongOperation::Binary { .. }
+                        | NativeStraightLongOperation::BinaryAssign { .. }
+                ) && straight_long_operation_input_mask(operation) & induction_mask == 0
+            })
+            && straight_long_operation_dominates_exit(config, candidate)
+    })
+}
+
+#[cfg(any(target_arch = "x86_64", test))]
+fn straight_long_operation_dominates_exit(
+    config: &NativeStraightLongLoopConfig,
+    candidate: usize,
+) -> bool {
+    let operation_count = config.operation_count as usize;
+    let mut reachable_without_candidate =
+        [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    reachable_without_candidate[0] = true;
+    for index in 0..operation_count {
+        if !reachable_without_candidate[index] || index == candidate {
+            continue;
+        }
+        match config.operations[index] {
+            NativeStraightLongOperation::BranchUnless { false_target, .. } => {
+                reachable_without_candidate[index + 1] = true;
+                reachable_without_candidate[false_target as usize] = true;
+            }
+            NativeStraightLongOperation::Jump { target } => {
+                reachable_without_candidate[target as usize] = true;
+            }
+            _ => reachable_without_candidate[index + 1] = true,
+        }
+    }
+    !reachable_without_candidate[operation_count]
+}
+
 pub(crate) fn straight_long_structured_block_starts(
     config: &NativeStraightLongLoopConfig,
 ) -> [bool; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1] {
@@ -260,6 +321,104 @@ mod tests {
         assert_eq!(final_publications[0], 0);
         assert_eq!(final_publications[2], 1u64 << 2);
         assert_eq!(final_publications[3], 1u64 << 4);
+    }
+
+    #[test]
+    fn early_induction_increment_requires_a_pure_dominating_suffix() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(90)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 3,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(3),
+            rhs: QuickLongOperand::Const(1),
+            result: 4,
+            destination: 1,
+        };
+        operations[3] = NativeStraightLongOperation::Jump { target: 6 };
+        operations[4] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 5,
+        };
+        operations[5] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(5),
+            rhs: QuickLongOperand::Const(2),
+            result: 6,
+            destination: 1,
+        };
+        operations[6] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(3),
+            result: 7,
+            destination: 2,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(100),
+            operations,
+            operation_count: 7,
+            post_result: None,
+        };
+        assert_eq!(straight_long_early_induction_increment_operation(&config), Some(6));
+
+        let mut materializes_post_increment = config;
+        materializes_post_increment.post_result = Some(8);
+        assert_eq!(
+            straight_long_early_induction_increment_operation(&materializes_post_increment),
+            None
+        );
+
+        let mut suffix_reads_induction = config;
+        suffix_reads_induction.operations[6] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 7,
+            destination: 2,
+        };
+        assert_eq!(
+            straight_long_early_induction_increment_operation(&suffix_reads_induction),
+            None
+        );
+
+        let mut suffix_has_side_exit = config;
+        suffix_has_side_exit.operations[6] = NativeStraightLongOperation::Guard {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(1)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(1_000)),
+            expected: true,
+        };
+        assert_eq!(
+            straight_long_early_induction_increment_operation(&suffix_has_side_exit),
+            None
+        );
+
+        let mut bypasses_join = config;
+        bypasses_join.operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: super::super::ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(90)),
+            false_target: 7,
+        };
+        assert_eq!(
+            straight_long_early_induction_increment_operation(&bypasses_join),
+            None
+        );
     }
 
     #[test]

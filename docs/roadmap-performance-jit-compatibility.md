@@ -3300,6 +3300,42 @@ aware, or driven by measured hardware profiles; the nearer opportunity is
 instruction scheduling around deferred fixed-register publications rather
 than physical cold-arm outlining by itself.
 
+The follow-up x86 instruction-scheduling checkpoint retains source-order
+diamonds and fills the exposed fixed-register dependency gap instead. A shared
+CFG/liveness query finds the earliest operation that dominates every normal
+body exit. The suffix from that point must contain only pure scalar operations,
+must not read the induction slot and must not materialize a post-increment
+result. Only the unchecked range-proven polling entry currently consumes this
+answer: it moves the existing induction increment to the selected join without
+adding or removing an instruction. Checked, budgeted and post-result entries,
+plus bodies without a pure dominating suffix, retain their canonical tail
+increment and exact side-exit state.
+
+Generated-code coverage requires the x86 `ADD R11, 1` immediately before the
+common fixed-register suffix, while execution coverage interrupts at iteration
+1,024, resumes, takes both diamond arms and verifies the exact induction,
+carried and result publications. Across fixed-CPU, order-alternated A/B pairs,
+the warmed narrow 90/10 holdout remains flat at 5.877018 versus 5.876780 ms,
+while the wider 90/10 holdout falls from 6.571531 to 5.837917 ms (-11.16
+percent). The unwarmed variant improves from 5.867720 to 5.715370 ms (-2.60
+percent), the balanced branch expression from 6.469250 to 5.737066 ms (-11.32
+percent), conditional recurrence from 3.803968 to 3.379107 ms (-11.17 percent)
+and carried-condition recurrence from 3.460884 to 3.368378 ms (-2.67 percent).
+
+Simple branch, conditional-composed, dependent, reverse-dependent, expression
+chain and modulo controls stay between a 0.09 percent improvement and a 0.03
+percent regression. In 101-pair application checks, order, typed order, ledger,
+typed ledger and routing regress by 0.17, 0.27, 0.08, 0.02 and 0.33 percent
+respectively, all with overlapping p10/p90 ranges. Supplementary wide-holdout
+hardware counters keep retired instructions effectively unchanged
+(171.151/171.185 million) while sampled IPC moves from 4.23 to 4.30; the timing
+win therefore comes from scheduling independent work across a dependency
+chain, not from benchmark-specific work elimination. x86-64 passes 175 library
+tests, 18 JIT integration tests, the four-test corpus and
+`cargo check --all-features`; ARM64 passes 153 library tests and the same
+check. The target-neutral query can be consumed by another backend later, but
+each target must separately prove that its physical schedule is profitable.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

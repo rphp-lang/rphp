@@ -7,10 +7,10 @@ use super::memory::ExecutableMemory;
 use super::straight::{
     NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
-    straight_long_best_invariant_slot_masks, straight_long_linear_live_after,
-    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
-    straight_long_remaining_range_proof, straight_long_structured_block_starts,
-    straight_long_structured_definitely_written,
+    straight_long_best_invariant_slot_masks, straight_long_early_induction_increment_operation,
+    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
+    straight_long_operation_input_mask, straight_long_remaining_range_proof,
+    straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
 use crate::vm::function::{
@@ -1119,6 +1119,13 @@ fn emit_scalar_straight_loop(
         && supports_structured_scalar_residency(config);
     let keeps_structured_carried_values_resident =
         keeps_structured_scalar_values_resident && carried_mask != 0;
+    // Only the range-proven polling entry may move the increment across body
+    // operations; all potentially failing entries retain canonical state.
+    let early_induction_increment_operation = if !checked && polling_interval.is_some() {
+        straight_long_early_induction_increment_operation(config)
+    } else {
+        None
+    };
     let keeps_carried_values_resident = (keeps_linear_scalar_values_resident
         || keeps_structured_carried_values_resident)
         && carried_mask != 0;
@@ -1327,6 +1334,9 @@ fn emit_scalar_straight_loop(
         .enumerate()
     {
         operation_offsets[operation_index] = assembler.bytes.len();
+        if early_induction_increment_operation == Some(operation_index) {
+            assembler.add_immediate8(induction, 1);
+        }
         if keeps_structured_scalar_values_resident && structured_block_starts[operation_index] {
             latest_output_mask = 0;
         }
@@ -1762,7 +1772,9 @@ fn emit_scalar_straight_loop(
     if let Some(post_result) = config.post_result {
         assembler.move_to_base_disp32(slots, induction, displacement(post_result));
     }
-    assembler.add_immediate8(induction, 1);
+    if early_induction_increment_operation.is_none() {
+        assembler.add_immediate8(induction, 1);
+    }
     emit_x86_loop_bound_compare(&mut assembler, induction, bound, embedded_bound);
     let completed_after_iteration_jump =
         (budgeted || polling_interval.is_some()).then(|| assembler.jump_greater_or_equal_rel32());
@@ -4014,6 +4026,50 @@ mod tests {
         assert_eq!(slots[2], 524_810);
         assert_eq!(slots[4], 1_024);
         assert_eq!(slots[5], 1_023);
+    }
+
+    #[test]
+    fn range_proven_polling_schedules_induction_before_a_common_scalar_suffix() {
+        let config = structured_recurrence(5_000);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                config,
+                config.body_output_mask(),
+                1u64 << 1,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+
+        let interrupted = program.call_proven_polling(&mut slots, &true).unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(&slots[..3], &[1_024, 103_244, 103_244]);
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[5_000, 504_820, 504_820]);
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        let induction_increment = [0x49, 0x83, 0xc3, 0x01];
+        let common_suffix_add = [0x49, 0x83, 0xc5, 0x01];
+        assert_eq!(
+            polling_code
+                .windows(induction_increment.len())
+                .filter(|window| *window == induction_increment)
+                .count(),
+            1
+        );
+        let increment_offset = polling_code
+            .windows(induction_increment.len())
+            .position(|window| window == induction_increment)
+            .unwrap();
+        assert_eq!(
+            &polling_code[increment_offset + induction_increment.len()
+                ..increment_offset + induction_increment.len() + common_suffix_add.len()],
+            &common_suffix_add
+        );
     }
 
     #[test]
