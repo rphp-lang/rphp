@@ -2,7 +2,7 @@
 
 use super::super::memory::ExecutableMemory;
 use super::double::X86ScalarDoubleRegisterMap;
-use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register};
+use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register, X86DoubleInstructionSet};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
 };
@@ -87,6 +87,14 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         argument_plan: &QuickDoubleArgumentProgram,
         plan: &ScalarDoubleFunctionPlan,
     ) -> Result<Self, QuickDoubleCallAccumulateJitError> {
+        Self::compile_with_instruction_set(argument_plan, plan, X86DoubleInstructionSet::detected())
+    }
+
+    pub(super) fn compile_with_instruction_set(
+        argument_plan: &QuickDoubleArgumentProgram,
+        plan: &ScalarDoubleFunctionPlan,
+        instruction_set: X86DoubleInstructionSet,
+    ) -> Result<Self, QuickDoubleCallAccumulateJitError> {
         validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
         let forwarded_argument_mask = argument_plan.register_forwardable_output_mask(plan);
@@ -103,6 +111,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         let bits = X86_64Register::RAX;
         let accumulator = X86_64FloatRegister::from_code(10);
         let last_term = X86_64FloatRegister::from_code(11);
+        let avx_upper_zero = X86_64FloatRegister::from_code(12);
 
         assembler.move_register(state, X86_64Register::RDI);
         assembler.move_register(inputs, X86_64Register::RSI);
@@ -110,8 +119,11 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         assembler.move_register(working_arguments, X86_64Register::RCX);
         assembler.move_from_base_disp32(induction, state, 0);
         assembler.move_from_base_disp32(bound, state, 8);
-        assembler.load_f64(accumulator, state, 16);
-        assembler.load_f64(last_term, state, 24);
+        emit_load_f64(&mut assembler, instruction_set, accumulator, state, 16);
+        emit_load_f64(&mut assembler, instruction_set, last_term, state, 24);
+        if instruction_set == X86DoubleInstructionSet::Avx {
+            assembler.zero_double_register_avx(avx_upper_zero);
+        }
         assembler.move_immediate64(polling, SAFEPOINT_INTERVAL);
 
         assembler.compare_register(induction, bound);
@@ -123,6 +135,8 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             working_arguments,
             induction,
             bits,
+            avx_upper_zero,
+            instruction_set,
             argument_plan,
             false,
             forwarded_argument_mask,
@@ -135,6 +149,8 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             working_arguments,
             induction,
             bits,
+            avx_upper_zero,
+            instruction_set,
             argument_plan,
             true,
             forwarded_argument_mask,
@@ -148,6 +164,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 argument_plan,
                 forwarded_argument_mask,
                 scalar_registers,
+                instruction_set,
                 index,
                 operation,
                 &mut side_exits,
@@ -160,11 +177,17 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             argument_plan,
             forwarded_argument_mask,
             scalar_registers,
+            instruction_set,
             plan.program.output,
             X86_64FloatRegister::from_code(0),
         );
-        assembler.move_double(last_term, output);
-        assembler.add_double(accumulator, last_term);
+        emit_move_double(&mut assembler, instruction_set, last_term, output);
+        match instruction_set {
+            X86DoubleInstructionSet::Sse2 => assembler.add_double(accumulator, last_term),
+            X86DoubleInstructionSet::Avx => {
+                assembler.add_double_avx(accumulator, accumulator, last_term)
+            }
+        }
         assembler.add_immediate8(induction, 1);
         assembler.compare_register(induction, bound);
         let active_completed = assembler.jump_greater_or_equal_rel32();
@@ -177,17 +200,47 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         let polled_backedge = assembler.jump_rel32();
 
         let completed = assembler.bytes.len();
-        emit_publication(&mut assembler, state, induction, accumulator, last_term);
+        emit_publication(
+            &mut assembler,
+            instruction_set,
+            state,
+            induction,
+            accumulator,
+            last_term,
+        );
+        if instruction_set == X86DoubleInstructionSet::Avx {
+            assembler.vzeroupper();
+        }
         assembler.move_immediate32_eax(STATUS_COMPLETED);
         assembler.return_near();
 
         let interrupted_target = assembler.bytes.len();
-        emit_publication(&mut assembler, state, induction, accumulator, last_term);
+        emit_publication(
+            &mut assembler,
+            instruction_set,
+            state,
+            induction,
+            accumulator,
+            last_term,
+        );
+        if instruction_set == X86DoubleInstructionSet::Avx {
+            assembler.vzeroupper();
+        }
         assembler.move_immediate32_eax(STATUS_INTERRUPTED);
         assembler.return_near();
 
         let side_exit = assembler.bytes.len();
-        emit_publication(&mut assembler, state, induction, accumulator, last_term);
+        emit_publication(
+            &mut assembler,
+            instruction_set,
+            state,
+            induction,
+            accumulator,
+            last_term,
+        );
+        if instruction_set == X86DoubleInstructionSet::Avx {
+            assembler.vzeroupper();
+        }
         assembler.move_immediate32_eax(STATUS_SIDE_EXIT);
         assembler.return_near();
 
@@ -423,6 +476,8 @@ fn emit_argument_program(
     outputs: X86_64Register,
     induction: X86_64Register,
     bits: X86_64Register,
+    avx_upper_zero: X86_64FloatRegister,
+    instruction_set: X86DoubleInstructionSet,
     plan: &QuickDoubleArgumentProgram,
     induction_dependent: bool,
     forwarded_argument_mask: u8,
@@ -437,6 +492,8 @@ fn emit_argument_program(
             inputs,
             induction,
             bits,
+            avx_upper_zero,
+            instruction_set,
             index,
             operation,
             side_exits,
@@ -458,10 +515,18 @@ fn emit_argument_program(
             inputs,
             induction,
             bits,
+            avx_upper_zero,
+            instruction_set,
             output,
             X86_64FloatRegister::from_code(0),
         );
-        assembler.store_f64(outputs, output, index as i32 * 8);
+        emit_store_f64(
+            assembler,
+            instruction_set,
+            outputs,
+            output,
+            index as i32 * 8,
+        );
     }
 }
 
@@ -470,6 +535,8 @@ fn emit_argument_operation(
     inputs: X86_64Register,
     induction: X86_64Register,
     bits: X86_64Register,
+    avx_upper_zero: X86_64FloatRegister,
+    instruction_set: X86DoubleInstructionSet,
     index: usize,
     operation: QuickDoubleArgumentOp,
     side_exits: &mut Vec<usize>,
@@ -479,6 +546,8 @@ fn emit_argument_operation(
         inputs,
         induction,
         bits,
+        avx_upper_zero,
+        instruction_set,
         operation.lhs,
         X86_64FloatRegister::from_code(0),
     );
@@ -487,23 +556,22 @@ fn emit_argument_operation(
         inputs,
         induction,
         bits,
+        avx_upper_zero,
+        instruction_set,
         operation.rhs,
         X86_64FloatRegister::from_code(1),
     );
     let destination = argument_temporary(index);
-    assembler.move_double(destination, lhs);
-    match operation.kind {
-        ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
-        ScalarDoubleOpKind::Subtract => assembler.subtract_double(destination, rhs),
-        ScalarDoubleOpKind::Multiply => assembler.multiply_double(destination, rhs),
-        ScalarDoubleOpKind::Divide => {
-            assembler.move_double_bits_to_gpr(bits, rhs);
-            assembler.shift_left_immediate8(bits, 1);
-            assembler.compare_immediate8(bits, 0);
-            side_exits.push(assembler.jump_equal_rel32());
-            assembler.divide_double(destination, rhs);
-        }
-    }
+    emit_double_operation(
+        assembler,
+        instruction_set,
+        bits,
+        destination,
+        lhs,
+        rhs,
+        operation.kind,
+        side_exits,
+    );
 }
 
 fn emit_argument_source(
@@ -511,21 +579,36 @@ fn emit_argument_source(
     inputs: X86_64Register,
     induction: X86_64Register,
     bits: X86_64Register,
+    avx_upper_zero: X86_64FloatRegister,
+    instruction_set: X86DoubleInstructionSet,
     source: QuickDoubleSource,
     scratch: X86_64FloatRegister,
 ) -> X86_64FloatRegister {
     match source {
         QuickDoubleSource::Input(index) => {
-            assembler.load_f64(scratch, inputs, i32::from(index) * 8);
+            emit_load_f64(
+                assembler,
+                instruction_set,
+                scratch,
+                inputs,
+                i32::from(index) * 8,
+            );
             scratch
         }
         QuickDoubleSource::Induction => {
-            assembler.convert_signed_to_double(scratch, induction);
+            match instruction_set {
+                X86DoubleInstructionSet::Sse2 => {
+                    assembler.convert_signed_to_double(scratch, induction)
+                }
+                X86DoubleInstructionSet::Avx => {
+                    assembler.convert_signed_to_double_avx(scratch, avx_upper_zero, induction)
+                }
+            }
             scratch
         }
         QuickDoubleSource::Constant(value) => {
             assembler.move_immediate64(bits, value.to_bits() as i64);
-            assembler.move_gpr_bits_to_double(scratch, bits);
+            emit_gpr_bits_to_double(assembler, instruction_set, scratch, bits);
             scratch
         }
         QuickDoubleSource::Temporary(index) => argument_temporary(index as usize),
@@ -557,6 +640,7 @@ fn emit_operation(
     argument_plan: &QuickDoubleArgumentProgram,
     forwarded_argument_mask: u8,
     scalar_registers: X86ScalarDoubleRegisterMap,
+    instruction_set: X86DoubleInstructionSet,
     index: usize,
     operation: ScalarDoubleOp,
     side_exits: &mut Vec<usize>,
@@ -568,6 +652,7 @@ fn emit_operation(
         argument_plan,
         forwarded_argument_mask,
         scalar_registers,
+        instruction_set,
         operation.lhs,
         X86_64FloatRegister::from_code(0),
     );
@@ -578,23 +663,21 @@ fn emit_operation(
         argument_plan,
         forwarded_argument_mask,
         scalar_registers,
+        instruction_set,
         operation.rhs,
         X86_64FloatRegister::from_code(1),
     );
     let destination = scalar_registers.temporary(index);
-    assembler.move_double(destination, lhs);
-    match operation.kind {
-        ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
-        ScalarDoubleOpKind::Subtract => assembler.subtract_double(destination, rhs),
-        ScalarDoubleOpKind::Multiply => assembler.multiply_double(destination, rhs),
-        ScalarDoubleOpKind::Divide => {
-            assembler.move_double_bits_to_gpr(bits, rhs);
-            assembler.shift_left_immediate8(bits, 1);
-            assembler.compare_immediate8(bits, 0);
-            side_exits.push(assembler.jump_equal_rel32());
-            assembler.divide_double(destination, rhs);
-        }
-    }
+    emit_double_operation(
+        assembler,
+        instruction_set,
+        bits,
+        destination,
+        lhs,
+        rhs,
+        operation.kind,
+        side_exits,
+    );
 }
 
 fn emit_source(
@@ -604,6 +687,7 @@ fn emit_source(
     argument_plan: &QuickDoubleArgumentProgram,
     forwarded_argument_mask: u8,
     scalar_registers: X86ScalarDoubleRegisterMap,
+    instruction_set: X86DoubleInstructionSet,
     source: ScalarDoubleSource,
     scratch: X86_64FloatRegister,
 ) -> X86_64FloatRegister {
@@ -615,12 +699,18 @@ fn emit_source(
             argument_temporary(index as usize)
         }
         ScalarDoubleSource::Input(index) => {
-            assembler.load_f64(scratch, inputs, i32::from(index) * 8);
+            emit_load_f64(
+                assembler,
+                instruction_set,
+                scratch,
+                inputs,
+                i32::from(index) * 8,
+            );
             scratch
         }
         ScalarDoubleSource::Constant(value) => {
             assembler.move_immediate64(bits, value.to_bits() as i64);
-            assembler.move_gpr_bits_to_double(scratch, bits);
+            emit_gpr_bits_to_double(assembler, instruction_set, scratch, bits);
             scratch
         }
         ScalarDoubleSource::Temporary(index) => scalar_registers.temporary(index as usize),
@@ -632,14 +722,111 @@ fn argument_temporary(index: usize) -> X86_64FloatRegister {
     X86_64FloatRegister::from_code(FIRST_TEMPORARY + index as u8)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_double_operation(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    bits: X86_64Register,
+    destination: X86_64FloatRegister,
+    lhs: X86_64FloatRegister,
+    rhs: X86_64FloatRegister,
+    kind: ScalarDoubleOpKind,
+    side_exits: &mut Vec<usize>,
+) {
+    if kind == ScalarDoubleOpKind::Divide {
+        match instruction_set {
+            X86DoubleInstructionSet::Sse2 => assembler.move_double_bits_to_gpr(bits, rhs),
+            X86DoubleInstructionSet::Avx => assembler.move_double_bits_to_gpr_avx(bits, rhs),
+        }
+        assembler.shift_left_immediate8(bits, 1);
+        assembler.compare_immediate8(bits, 0);
+        side_exits.push(assembler.jump_equal_rel32());
+    }
+
+    match (instruction_set, kind) {
+        (X86DoubleInstructionSet::Sse2, kind) => {
+            assembler.move_double(destination, lhs);
+            match kind {
+                ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
+                ScalarDoubleOpKind::Subtract => assembler.subtract_double(destination, rhs),
+                ScalarDoubleOpKind::Multiply => assembler.multiply_double(destination, rhs),
+                ScalarDoubleOpKind::Divide => assembler.divide_double(destination, rhs),
+            }
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Add) => {
+            assembler.add_double_avx(destination, lhs, rhs)
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Subtract) => {
+            assembler.subtract_double_avx(destination, lhs, rhs)
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Multiply) => {
+            assembler.multiply_double_avx(destination, lhs, rhs)
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Divide) => {
+            assembler.divide_double_avx(destination, lhs, rhs)
+        }
+    }
+}
+
+fn emit_move_double(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    destination: X86_64FloatRegister,
+    source: X86_64FloatRegister,
+) {
+    match instruction_set {
+        X86DoubleInstructionSet::Sse2 => assembler.move_double(destination, source),
+        X86DoubleInstructionSet::Avx => assembler.move_double_avx(destination, source),
+    }
+}
+
+fn emit_load_f64(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    destination: X86_64FloatRegister,
+    base: X86_64Register,
+    displacement: i32,
+) {
+    match instruction_set {
+        X86DoubleInstructionSet::Sse2 => assembler.load_f64(destination, base, displacement),
+        X86DoubleInstructionSet::Avx => assembler.load_f64_avx(destination, base, displacement),
+    }
+}
+
+fn emit_store_f64(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    base: X86_64Register,
+    source: X86_64FloatRegister,
+    displacement: i32,
+) {
+    match instruction_set {
+        X86DoubleInstructionSet::Sse2 => assembler.store_f64(base, source, displacement),
+        X86DoubleInstructionSet::Avx => assembler.store_f64_avx(base, source, displacement),
+    }
+}
+
+fn emit_gpr_bits_to_double(
+    assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
+    destination: X86_64FloatRegister,
+    source: X86_64Register,
+) {
+    match instruction_set {
+        X86DoubleInstructionSet::Sse2 => assembler.move_gpr_bits_to_double(destination, source),
+        X86DoubleInstructionSet::Avx => assembler.move_gpr_bits_to_double_avx(destination, source),
+    }
+}
+
 fn emit_publication(
     assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
     state: X86_64Register,
     induction: X86_64Register,
     accumulator: X86_64FloatRegister,
     last_term: X86_64FloatRegister,
 ) {
     assembler.move_to_base_disp32(state, induction, 0);
-    assembler.store_f64(state, accumulator, 16);
-    assembler.store_f64(state, last_term, 24);
+    emit_store_f64(assembler, instruction_set, state, accumulator, 16);
+    emit_store_f64(assembler, instruction_set, state, last_term, 24);
 }

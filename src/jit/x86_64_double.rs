@@ -1,7 +1,7 @@
 //! Exact-Double scalar leaf lowering for Linux x86-64.
 
 use super::super::memory::ExecutableMemory;
-use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register};
+use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register, X86DoubleInstructionSet};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
 };
@@ -201,6 +201,13 @@ pub struct CompiledScalarDoubleProgram {
 
 impl CompiledScalarDoubleProgram {
     pub fn compile(plan: &ScalarDoubleFunctionPlan) -> Result<Self, ScalarDoubleJitError> {
+        Self::compile_with_instruction_set(plan, X86DoubleInstructionSet::detected())
+    }
+
+    pub(super) fn compile_with_instruction_set(
+        plan: &ScalarDoubleFunctionPlan,
+        instruction_set: X86DoubleInstructionSet,
+    ) -> Result<Self, ScalarDoubleJitError> {
         validate_scalar_double_plan(plan)?;
         let registers = X86ScalarDoubleRegisterMap::new(&plan.program);
         let mut assembler = X86_64Assembler::new();
@@ -208,6 +215,7 @@ impl CompiledScalarDoubleProgram {
         for (index, operation) in plan.program.operations.iter().copied().enumerate() {
             emit_scalar_double_operation(
                 &mut assembler,
+                instruction_set,
                 registers,
                 index,
                 operation,
@@ -216,15 +224,25 @@ impl CompiledScalarDoubleProgram {
         }
         let output = emit_scalar_double_source(
             &mut assembler,
+            instruction_set,
             registers,
             plan.program.output,
             X86_64FloatRegister::from_code(0),
         );
-        assembler.store_f64(X86_64Register::RSI, output, 0);
+        match instruction_set {
+            X86DoubleInstructionSet::Sse2 => assembler.store_f64(X86_64Register::RSI, output, 0),
+            X86DoubleInstructionSet::Avx => assembler.store_f64_avx(X86_64Register::RSI, output, 0),
+        }
+        if instruction_set == X86DoubleInstructionSet::Avx {
+            assembler.vzeroupper();
+        }
         assembler.move_immediate32_eax(NATIVE_DOUBLE_STATUS_SUCCESS);
         assembler.return_near();
 
         let side_exit = assembler.bytes.len();
+        if instruction_set == X86DoubleInstructionSet::Avx {
+            assembler.vzeroupper();
+        }
         assembler.move_immediate32_eax(NATIVE_DOUBLE_STATUS_SIDE_EXIT);
         assembler.return_near();
         for jump in side_exit_jumps {
@@ -307,6 +325,7 @@ fn validate_scalar_double_source(
 
 fn emit_scalar_double_operation(
     assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
     registers: X86ScalarDoubleRegisterMap,
     index: usize,
     operation: ScalarDoubleOp,
@@ -314,48 +333,85 @@ fn emit_scalar_double_operation(
 ) {
     let lhs = emit_scalar_double_source(
         assembler,
+        instruction_set,
         registers,
         operation.lhs,
         X86_64FloatRegister::from_code(0),
     );
     let rhs = emit_scalar_double_source(
         assembler,
+        instruction_set,
         registers,
         operation.rhs,
         X86_64FloatRegister::from_code(1),
     );
     let destination = registers.temporary(index);
-    assembler.move_double(destination, lhs);
-    match operation.kind {
-        ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
-        ScalarDoubleOpKind::Subtract => assembler.subtract_double(destination, rhs),
-        ScalarDoubleOpKind::Multiply => assembler.multiply_double(destination, rhs),
-        ScalarDoubleOpKind::Divide => {
+    match (instruction_set, operation.kind) {
+        (X86DoubleInstructionSet::Sse2, kind) => {
+            assembler.move_double(destination, lhs);
+            match kind {
+                ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
+                ScalarDoubleOpKind::Subtract => assembler.subtract_double(destination, rhs),
+                ScalarDoubleOpKind::Multiply => assembler.multiply_double(destination, rhs),
+                ScalarDoubleOpKind::Divide => {
+                    assembler.move_double_bits_to_gpr(X86_64Register::RAX, rhs);
+                    assembler.shift_left_immediate8(X86_64Register::RAX, 1);
+                    assembler.compare_immediate8(X86_64Register::RAX, 0);
+                    side_exit_jumps.push(assembler.jump_equal_rel32());
+                    assembler.divide_double(destination, rhs);
+                }
+            }
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Add) => {
+            assembler.add_double_avx(destination, lhs, rhs)
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Subtract) => {
+            assembler.subtract_double_avx(destination, lhs, rhs)
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Multiply) => {
+            assembler.multiply_double_avx(destination, lhs, rhs)
+        }
+        (X86DoubleInstructionSet::Avx, ScalarDoubleOpKind::Divide) => {
             // Strip the sign bit without disturbing NaNs: only +0.0 and -0.0
             // become zero after this shift and therefore require PHP fallback.
-            assembler.move_double_bits_to_gpr(X86_64Register::RAX, rhs);
+            assembler.move_double_bits_to_gpr_avx(X86_64Register::RAX, rhs);
             assembler.shift_left_immediate8(X86_64Register::RAX, 1);
             assembler.compare_immediate8(X86_64Register::RAX, 0);
             side_exit_jumps.push(assembler.jump_equal_rel32());
-            assembler.divide_double(destination, rhs);
+            assembler.divide_double_avx(destination, lhs, rhs);
         }
     }
 }
 
 fn emit_scalar_double_source(
     assembler: &mut X86_64Assembler,
+    instruction_set: X86DoubleInstructionSet,
     registers: X86ScalarDoubleRegisterMap,
     source: ScalarDoubleSource,
     scratch: X86_64FloatRegister,
 ) -> X86_64FloatRegister {
     match source {
         ScalarDoubleSource::Input(index) => {
-            assembler.load_f64(scratch, X86_64Register::RDI, i32::from(index) * 8);
+            match instruction_set {
+                X86DoubleInstructionSet::Sse2 => {
+                    assembler.load_f64(scratch, X86_64Register::RDI, i32::from(index) * 8)
+                }
+                X86DoubleInstructionSet::Avx => {
+                    assembler.load_f64_avx(scratch, X86_64Register::RDI, i32::from(index) * 8)
+                }
+            }
             scratch
         }
         ScalarDoubleSource::Constant(value) => {
             assembler.move_immediate64(X86_64Register::RAX, value.to_bits() as i64);
-            assembler.move_gpr_bits_to_double(scratch, X86_64Register::RAX);
+            match instruction_set {
+                X86DoubleInstructionSet::Sse2 => {
+                    assembler.move_gpr_bits_to_double(scratch, X86_64Register::RAX)
+                }
+                X86DoubleInstructionSet::Avx => {
+                    assembler.move_gpr_bits_to_double_avx(scratch, X86_64Register::RAX)
+                }
+            }
             scratch
         }
         ScalarDoubleSource::Temporary(index) => registers.temporary(index as usize),

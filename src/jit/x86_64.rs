@@ -104,6 +104,28 @@ impl X86_64FloatRegister {
     const fn extension(self) -> u8 {
         (self.0 >> 3) & 1
     }
+
+    #[inline]
+    const fn code(self) -> u8 {
+        self.0
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum X86DoubleInstructionSet {
+    Sse2,
+    Avx,
+}
+
+impl X86DoubleInstructionSet {
+    #[inline]
+    fn detected() -> Self {
+        if std::is_x86_feature_detected!("avx") {
+            Self::Avx
+        } else {
+            Self::Sse2
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -213,6 +235,42 @@ impl X86_64Assembler {
         self.emit_scalar_double_register(0x5e, destination, source);
     }
 
+    fn add_double_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_avx_scalar_double_register(0x58, destination, lhs, rhs);
+    }
+
+    fn subtract_double_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_avx_scalar_double_register(0x5c, destination, lhs, rhs);
+    }
+
+    fn multiply_double_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_avx_scalar_double_register(0x59, destination, lhs, rhs);
+    }
+
+    fn divide_double_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_avx_scalar_double_register(0x5e, destination, lhs, rhs);
+    }
+
     fn move_double(
         &mut self,
         destination: X86_64FloatRegister,
@@ -237,6 +295,22 @@ impl X86_64Assembler {
             .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
     }
 
+    fn move_double_avx(&mut self, destination: X86_64FloatRegister, source: X86_64FloatRegister) {
+        if destination == source {
+            return;
+        }
+        self.emit_vex_0f(
+            0x01,
+            false,
+            destination.extension(),
+            source.extension(),
+            0x0f,
+        );
+        self.bytes.extend_from_slice(&[0x28]);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
     fn load_f64(
         &mut self,
         destination: X86_64FloatRegister,
@@ -245,6 +319,19 @@ impl X86_64Assembler {
     ) {
         self.emit_legacy_rex(0xf2, false, destination.extension(), base.extension());
         self.bytes.extend_from_slice(&[0x0f, 0x10]);
+        self.bytes
+            .push(0x80 | (destination.low_bits() << 3) | base.low_bits());
+        self.bytes.extend_from_slice(&displacement.to_le_bytes());
+    }
+
+    fn load_f64_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        base: X86_64Register,
+        displacement: i32,
+    ) {
+        self.emit_vex_0f(0x03, false, destination.extension(), base.extension(), 0x0f);
+        self.bytes.push(0x10);
         self.bytes
             .push(0x80 | (destination.low_bits() << 3) | base.low_bits());
         self.bytes.extend_from_slice(&displacement.to_le_bytes());
@@ -263,6 +350,19 @@ impl X86_64Assembler {
         self.bytes.extend_from_slice(&displacement.to_le_bytes());
     }
 
+    fn store_f64_avx(
+        &mut self,
+        base: X86_64Register,
+        source: X86_64FloatRegister,
+        displacement: i32,
+    ) {
+        self.emit_vex_0f(0x03, false, source.extension(), base.extension(), 0x0f);
+        self.bytes.push(0x11);
+        self.bytes
+            .push(0x80 | (source.low_bits() << 3) | base.low_bits());
+        self.bytes.extend_from_slice(&displacement.to_le_bytes());
+    }
+
     fn move_gpr_bits_to_double(
         &mut self,
         destination: X86_64FloatRegister,
@@ -270,6 +370,23 @@ impl X86_64Assembler {
     ) {
         self.emit_legacy_rex(0x66, true, destination.extension(), source.extension());
         self.bytes.extend_from_slice(&[0x0f, 0x6e]);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
+    fn move_gpr_bits_to_double_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        source: X86_64Register,
+    ) {
+        self.emit_vex_0f(
+            0x01,
+            true,
+            destination.extension(),
+            source.extension(),
+            0x0f,
+        );
+        self.bytes.push(0x6e);
         self.bytes
             .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
     }
@@ -285,6 +402,23 @@ impl X86_64Assembler {
             .push(0xc0 | (source.low_bits() << 3) | destination.low_bits());
     }
 
+    fn move_double_bits_to_gpr_avx(
+        &mut self,
+        destination: X86_64Register,
+        source: X86_64FloatRegister,
+    ) {
+        self.emit_vex_0f(
+            0x01,
+            true,
+            source.extension(),
+            destination.extension(),
+            0x0f,
+        );
+        self.bytes.push(0x7e);
+        self.bytes
+            .push(0xc0 | (source.low_bits() << 3) | destination.low_bits());
+    }
+
     /// Encode `CVTSI2SD destination, source` for a signed 64-bit Long.
     fn convert_signed_to_double(
         &mut self,
@@ -295,6 +429,41 @@ impl X86_64Assembler {
         self.bytes.extend_from_slice(&[0x0f, 0x2a]);
         self.bytes
             .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
+    fn convert_signed_to_double_avx(
+        &mut self,
+        destination: X86_64FloatRegister,
+        upper: X86_64FloatRegister,
+        source: X86_64Register,
+    ) {
+        self.emit_vex_0f(
+            0x03,
+            true,
+            destination.extension(),
+            source.extension(),
+            (!upper.code()) & 0x0f,
+        );
+        self.bytes.push(0x2a);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
+    fn zero_double_register_avx(&mut self, register: X86_64FloatRegister) {
+        self.emit_vex_0f(
+            0x01,
+            false,
+            register.extension(),
+            register.extension(),
+            (!register.code()) & 0x0f,
+        );
+        self.bytes.push(0x57);
+        self.bytes
+            .push(0xc0 | (register.low_bits() << 3) | register.low_bits());
+    }
+
+    fn vzeroupper(&mut self) {
+        self.bytes.extend_from_slice(&[0xc5, 0xf8, 0x77]);
     }
 
     fn shift_left_immediate8(&mut self, destination: X86_64Register, immediate: u8) {
@@ -626,6 +795,48 @@ impl X86_64Assembler {
         self.bytes.extend_from_slice(&[0x0f, opcode]);
         self.bytes
             .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
+    }
+
+    fn emit_avx_scalar_double_register(
+        &mut self,
+        opcode: u8,
+        destination: X86_64FloatRegister,
+        lhs: X86_64FloatRegister,
+        rhs: X86_64FloatRegister,
+    ) {
+        self.emit_vex_0f(
+            0x03,
+            false,
+            destination.extension(),
+            rhs.extension(),
+            (!lhs.code()) & 0x0f,
+        );
+        self.bytes.push(opcode);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | rhs.low_bits());
+    }
+
+    fn emit_vex_0f(
+        &mut self,
+        prefix: u8,
+        wide: bool,
+        reg_extension: u8,
+        rm_extension: u8,
+        encoded_vvvv: u8,
+    ) {
+        debug_assert!(prefix < 4);
+        debug_assert!(encoded_vvvv < 16);
+        if !wide && rm_extension == 0 {
+            self.bytes.push(0xc5);
+            self.bytes
+                .push(((reg_extension ^ 1) << 7) | (encoded_vvvv << 3) | prefix);
+        } else {
+            self.bytes.push(0xc4);
+            self.bytes
+                .push(((reg_extension ^ 1) << 7) | 0x40 | ((rm_extension ^ 1) << 5) | 0x01);
+            self.bytes
+                .push(((wide as u8) << 7) | (encoded_vvvv << 3) | prefix);
+        }
     }
 
     fn emit_legacy_rex(&mut self, legacy: u8, wide: bool, reg_extension: u8, rm_extension: u8) {

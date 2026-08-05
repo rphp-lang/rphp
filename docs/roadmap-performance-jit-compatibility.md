@@ -3857,6 +3857,46 @@ three-operand fast path may remove the initial copy too, but should be attempted
 only behind a runtime CPU/OS feature guard with the now-optimized SSE2 path
 retained as the universal fallback.
 
+### Runtime-guarded x86 AVX Double lowering checkpoint
+
+The x86 Double leaf and composed-loop emitters now select a complete AVX scalar
+lowering when the runtime CPU and operating-system state support AVX
+(2026-08-05). The standard Rust feature probe includes the OSXSAVE/XCR0 safety
+check; hosts without usable AVX retain the preceding liveness-aware SSE2 path,
+which remains the universal x86-64 implementation. This is a lowering choice
+for the same target-neutral typed IR, not a separate source recognizer.
+
+The AVX path uses three-operand `VADDSD`, `VSUBSD`, `VMULSD` and `VDIVSD`, VEX
+loads/stores and bit moves, and `VCVTSI2SD` with an explicitly zeroed upper
+source. It therefore removes the initial destructive LHS copy and avoids
+mixing legacy SSE with VEX instructions inside the native region. Every
+successful, interrupted and transactional side-exit return executes
+`VZEROUPPER` before returning to Rust. Permanent encoder tests compare exact
+bytes for both two- and three-byte VEX forms, including high XMM registers;
+forced SSE2/AVX execution tests preserve results and signed-zero division side
+exits, while an automatic-selection test verifies that production code emits
+the AVX return marker only on a supported host.
+
+One hundred and one order-alternated pairs pinned to Ryzen CPU 2 compared the
+new native-CPU `max-perf` build with the preceding XMM-reuse SSE2 binary. All
+PHP results remained identical:
+
+| Workload | SSE2/XMM reuse | AVX | Change |
+|---|---:|---:|---:|
+| Typed Double leaf | 2.891 ms | 2.889 ms | -0.07% |
+| Double argument expression | 4.674 ms | 4.257 ms | -8.93% |
+| Nested Double leaf | 7.380 ms | 7.083 ms | -4.03% |
+| Recursive Double tree | 8.964 ms | 8.488 ms | -5.31% |
+
+The identity-argument leaf is deliberately treated as neutral rather than a
+benchmark win. The retained benefit appears in the general composed dataflow:
+dynamic conversion and longer operation chains no longer need the same
+destructive-copy scheduling. ARM64 is unchanged because its scalar floating
+instructions already have independent destination operands. The complete
+all-feature matrix passes 178 ARM64 and 203 x86-64 library tests, 93 ARM64 and
+25 x86-64 native-JIT integration tests, all 27 function and 48 loop end-to-end
+tests, and all four corpus tests.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

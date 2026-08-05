@@ -3,7 +3,7 @@ use super::{
     CompiledQuickDoubleCallAccumulateLoop, CompiledScalarDoubleProgram,
     NativeDoubleCallAccumulateState, QuickDoubleCallAccumulateJitOutcome,
     SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitDispatch, ScalarDoubleJitOutcome,
-    X86_64Assembler, X86_64FloatRegister,
+    X86_64Assembler, X86_64FloatRegister, X86DoubleInstructionSet,
 };
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
@@ -162,6 +162,10 @@ fn register_to_register_double_move_count(code: &[u8]) -> usize {
         .count()
 }
 
+fn contains_vzeroupper(code: &[u8]) -> bool {
+    code.windows(3).any(|bytes| bytes == [0xc5, 0xf8, 0x77])
+}
+
 #[test]
 fn encoder_produces_exact_scalar_double_bytes() {
     let mut assembler = X86_64Assembler::new();
@@ -198,6 +202,71 @@ fn encoder_uses_a_full_width_double_register_move() {
         X86_64FloatRegister::from_code(3),
     );
     assert_eq!(assembler.finish().as_ref(), [0x66, 0x0f, 0x28, 0xd3]);
+}
+
+#[test]
+fn encoder_produces_exact_avx_double_slice_bytes() {
+    let mut assembler = X86_64Assembler::new();
+    assembler.add_double_avx(
+        X86_64FloatRegister::from_code(1),
+        X86_64FloatRegister::from_code(2),
+        X86_64FloatRegister::from_code(3),
+    );
+    assembler.subtract_double_avx(
+        X86_64FloatRegister::from_code(4),
+        X86_64FloatRegister::from_code(5),
+        X86_64FloatRegister::from_code(6),
+    );
+    assembler.multiply_double_avx(
+        X86_64FloatRegister::from_code(7),
+        X86_64FloatRegister::from_code(8),
+        X86_64FloatRegister::from_code(9),
+    );
+    assembler.divide_double_avx(
+        X86_64FloatRegister::from_code(10),
+        X86_64FloatRegister::from_code(11),
+        X86_64FloatRegister::from_code(2),
+    );
+    assembler.move_double_avx(
+        X86_64FloatRegister::from_code(2),
+        X86_64FloatRegister::from_code(3),
+    );
+    assembler.load_f64_avx(
+        X86_64FloatRegister::from_code(1),
+        super::X86_64Register::RDI,
+        8,
+    );
+    assembler.store_f64_avx(
+        super::X86_64Register::RSI,
+        X86_64FloatRegister::from_code(1),
+        16,
+    );
+    assembler.move_gpr_bits_to_double_avx(
+        X86_64FloatRegister::from_code(1),
+        super::X86_64Register::RAX,
+    );
+    assembler.move_double_bits_to_gpr_avx(
+        super::X86_64Register::RAX,
+        X86_64FloatRegister::from_code(1),
+    );
+    let zero = X86_64FloatRegister::from_code(12);
+    assembler.zero_double_register_avx(zero);
+    assembler.convert_signed_to_double_avx(
+        X86_64FloatRegister::from_code(0),
+        zero,
+        super::X86_64Register::RCX,
+    );
+    assembler.vzeroupper();
+    assert_eq!(
+        assembler.finish().as_ref(),
+        [
+            0xc5, 0xeb, 0x58, 0xcb, 0xc5, 0xd3, 0x5c, 0xe6, 0xc4, 0xc1, 0x3b, 0x59, 0xf9, 0xc5,
+            0x23, 0x5e, 0xd2, 0xc5, 0xf9, 0x28, 0xd3, 0xc5, 0xfb, 0x10, 0x8f, 0x08, 0x00, 0x00,
+            0x00, 0xc5, 0xfb, 0x11, 0x8e, 0x10, 0x00, 0x00, 0x00, 0xc4, 0xe1, 0xf9, 0x6e, 0xc8,
+            0xc4, 0xe1, 0xf9, 0x7e, 0xc8, 0xc4, 0x41, 0x19, 0x57, 0xe4, 0xc4, 0xe1, 0x9b, 0x2a,
+            0xc1, 0xc5, 0xf8, 0x77,
+        ]
+    );
 }
 
 #[test]
@@ -253,9 +322,30 @@ fn branched_double_temporaries_preserve_live_values() {
 }
 
 #[test]
-fn native_linear_double_program_emits_only_the_initial_lhs_copy() {
+fn linear_double_program_preserves_sse2_copy_and_removes_it_with_avx() {
+    let plan = arithmetic_plan();
+    let sse2 = CompiledScalarDoubleProgram::compile_with_instruction_set(
+        &plan,
+        X86DoubleInstructionSet::Sse2,
+    )
+    .unwrap();
+    assert_eq!(register_to_register_double_move_count(sse2.code()), 1);
+
+    let avx = CompiledScalarDoubleProgram::compile_with_instruction_set(
+        &plan,
+        X86DoubleInstructionSet::Avx,
+    )
+    .unwrap();
+    assert_eq!(register_to_register_double_move_count(avx.code()), 0);
+}
+
+#[test]
+fn native_double_program_selects_avx_only_when_the_host_supports_it() {
     let program = CompiledScalarDoubleProgram::compile(&arithmetic_plan()).unwrap();
-    assert_eq!(register_to_register_double_move_count(program.code()), 1);
+    assert_eq!(
+        contains_vzeroupper(program.code()),
+        std::is_x86_feature_detected!("avx")
+    );
 }
 
 #[test]
@@ -271,6 +361,28 @@ fn native_double_program_executes_and_division_zero_side_exits_transactionally()
     );
     let nan = program.call(&[2.5, 4.0, f64::NAN]).unwrap();
     assert!(matches!(nan, ScalarDoubleJitOutcome::Value(value) if value.is_nan()));
+}
+
+#[test]
+fn scalar_double_program_executes_with_forced_sse2_and_avx() {
+    let plan = arithmetic_plan();
+    for instruction_set in [X86DoubleInstructionSet::Sse2, X86DoubleInstructionSet::Avx] {
+        let program =
+            CompiledScalarDoubleProgram::compile_with_instruction_set(&plan, instruction_set)
+                .unwrap();
+        if instruction_set == X86DoubleInstructionSet::Avx && !std::is_x86_feature_detected!("avx")
+        {
+            continue;
+        }
+        assert_eq!(
+            program.call(&[2.5, 4.0, 2.0]).unwrap(),
+            ScalarDoubleJitOutcome::Value(8.0)
+        );
+        assert_eq!(
+            program.call(&[2.5, 4.0, -0.0]).unwrap(),
+            ScalarDoubleJitOutcome::SideExit
+        );
+    }
 }
 
 #[test]
@@ -345,6 +457,35 @@ fn composed_double_loop_completes_and_preserves_empty_state() {
         QuickDoubleCallAccumulateJitOutcome::Completed
     );
     assert_eq!(state.last_term, 6.0);
+}
+
+#[test]
+fn composed_double_loop_executes_with_forced_sse2_and_avx() {
+    for instruction_set in [X86DoubleInstructionSet::Sse2, X86DoubleInstructionSet::Avx] {
+        let program = CompiledQuickDoubleCallAccumulateLoop::compile_with_instruction_set(
+            &identity_argument_plan(),
+            &arithmetic_plan(),
+            instruction_set,
+        )
+        .unwrap();
+        if instruction_set == X86DoubleInstructionSet::Avx && !std::is_x86_feature_detected!("avx")
+        {
+            continue;
+        }
+        let mut state = NativeDoubleCallAccumulateState {
+            induction: 0,
+            bound: 5,
+            accumulator: 1.0,
+            last_term: -1.0,
+        };
+        assert_eq!(
+            program.call(&mut state, &[2.5, 4.0, 2.0], &false).unwrap(),
+            QuickDoubleCallAccumulateJitOutcome::Completed
+        );
+        assert_eq!(state.induction, 5);
+        assert_eq!(state.accumulator, 41.0);
+        assert_eq!(state.last_term, 8.0);
+    }
 }
 
 #[test]
