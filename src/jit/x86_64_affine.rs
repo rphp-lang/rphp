@@ -4,10 +4,11 @@
 //! intact. This module identifies only the unchecked pairs that one x86 SIB
 //! address can represent without making an observable intermediate disappear.
 
-use super::{
-    NativeStraightLongLoopConfig, NativeStraightLongOperation, QuickLongOperand, ScalarLongOpKind,
-    straight_long_operation_input_mask,
+use super::super::straight::{
+    NativeStraightLongLoopConfig, StraightLongProductCombination,
+    straight_long_multiply_consumer_pair,
 };
+use crate::vm::quick::QuickLongOperand;
 
 #[derive(Debug, Clone, Copy)]
 pub(super) struct X86StraightAffineFusion {
@@ -25,85 +26,32 @@ pub(super) fn x86_straight_affine_fusion(
     config: &NativeStraightLongLoopConfig,
     producer: usize,
 ) -> Option<X86StraightAffineFusion> {
-    let consumer = producer.checked_add(1)?;
-    if consumer >= config.operation_count as usize {
-        return None;
-    }
-    let (source, scale, intermediate) = match config.operations[producer] {
-        NativeStraightLongOperation::Binary {
-            kind: ScalarLongOpKind::Multiply,
-            lhs: QuickLongOperand::Slot(source),
-            rhs: QuickLongOperand::Const(scale),
-            result,
+    let pair = straight_long_multiply_consumer_pair(config, producer)?;
+    let (source, scale) = match (pair.lhs, pair.rhs) {
+        (QuickLongOperand::Slot(source), QuickLongOperand::Const(scale))
+        | (QuickLongOperand::Const(scale), QuickLongOperand::Slot(source))
+            if matches!(scale, 3 | 5 | 9) =>
+        {
+            (QuickLongOperand::Slot(source), scale)
         }
-        | NativeStraightLongOperation::Binary {
-            kind: ScalarLongOpKind::Multiply,
-            lhs: QuickLongOperand::Const(scale),
-            rhs: QuickLongOperand::Slot(source),
-            result,
-        } if matches!(scale, 3 | 5 | 9) => (QuickLongOperand::Slot(source), scale, result),
         _ => return None,
     };
-    let (bias, result, destination) = match config.operations[consumer] {
-        NativeStraightLongOperation::Binary {
-            kind: ScalarLongOpKind::Add,
-            lhs: QuickLongOperand::Slot(value),
-            rhs: QuickLongOperand::Const(bias),
-            result,
+    let bias = match pair.combination {
+        StraightLongProductCombination::Add(QuickLongOperand::Const(bias)) => bias,
+        StraightLongProductCombination::ProductMinus(QuickLongOperand::Const(bias)) => {
+            0i64.checked_sub(bias)?
         }
-        | NativeStraightLongOperation::Binary {
-            kind: ScalarLongOpKind::Add,
-            lhs: QuickLongOperand::Const(bias),
-            rhs: QuickLongOperand::Slot(value),
-            result,
-        } if value == intermediate => (bias, result, None),
-        NativeStraightLongOperation::BinaryAssign {
-            kind: ScalarLongOpKind::Add,
-            lhs: QuickLongOperand::Slot(value),
-            rhs: QuickLongOperand::Const(bias),
-            result,
-            destination,
-        }
-        | NativeStraightLongOperation::BinaryAssign {
-            kind: ScalarLongOpKind::Add,
-            lhs: QuickLongOperand::Const(bias),
-            rhs: QuickLongOperand::Slot(value),
-            result,
-            destination,
-        } if value == intermediate => (bias, result, Some(destination)),
-        NativeStraightLongOperation::Binary {
-            kind: ScalarLongOpKind::Subtract,
-            lhs: QuickLongOperand::Slot(value),
-            rhs: QuickLongOperand::Const(bias),
-            result,
-        } if value == intermediate => (0i64.checked_sub(bias)?, result, None),
-        NativeStraightLongOperation::BinaryAssign {
-            kind: ScalarLongOpKind::Subtract,
-            lhs: QuickLongOperand::Slot(value),
-            rhs: QuickLongOperand::Const(bias),
-            result,
-            destination,
-        } if value == intermediate => (0i64.checked_sub(bias)?, result, Some(destination)),
         _ => return None,
     };
     i32::try_from(bias).ok()?;
-    let intermediate_mask = 1u64 << intermediate;
-    if config.operations[consumer].output_mask() & intermediate_mask == 0
-        && config.operations[consumer + 1..config.operation_count as usize]
-            .iter()
-            .copied()
-            .any(|operation| straight_long_operation_input_mask(operation) & intermediate_mask != 0)
-    {
-        return None;
-    }
     Some(X86StraightAffineFusion {
-        producer,
-        consumer,
+        producer: pair.producer,
+        consumer: pair.consumer,
         source,
         scale,
         bias,
-        intermediate,
-        result,
-        destination,
+        intermediate: pair.intermediate,
+        result: pair.result,
+        destination: pair.destination,
     })
 }

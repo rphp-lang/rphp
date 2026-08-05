@@ -1498,6 +1498,8 @@ fn emit_scalar_straight_loop(
             && let Some(fusion) = x86_straight_affine_fusion(config, operation_index)
             && (!keeps_structured_scalar_values_resident
                 || !structured_block_starts[fusion.consumer])
+            && (early_induction_increment_operation != Some(fusion.consumer)
+                || fusion.source != QuickLongOperand::Slot(config.induction_slot))
             && shadow_store_mask & (1u64 << fusion.intermediate) == 0
             && deferred_publication_mask & (1u64 << fusion.intermediate) == 0
         {
@@ -3809,6 +3811,38 @@ mod tests {
         }
     }
 
+    fn scheduled_increment_between_affine_pair(bound: i64) -> NativeStraightLongLoopConfig {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(0)),
+            false_target: 2,
+        };
+        operations[1] = NativeStraightLongOperation::Jump { target: 2 };
+        operations[2] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 4,
+        };
+        operations[3] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(4),
+            rhs: QuickLongOperand::Const(11),
+            result: 5,
+            destination: 1,
+        };
+        NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(bound),
+            operations,
+            operation_count: 4,
+            post_result: None,
+        }
+    }
+
     fn scalar_plan(
         public_args: u8,
         operations: Vec<ScalarLongOp>,
@@ -4339,6 +4373,24 @@ mod tests {
         assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!(&slots[..3], &[5_000, 14_997, 15_008]);
 
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        assert!(polling_code.windows(2).all(|window| window != [0x4f, 0x8d]));
+    }
+
+    #[test]
+    fn range_proven_polling_does_not_fuse_across_scheduled_induction_increment() {
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                scheduled_increment_between_affine_pair(5_000),
+                (1u64 << 1) | (1u64 << 5),
+                0,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!((slots[0], slots[1], slots[5]), (5_000, 15_008, 15_008));
         let polling_code = &program.code()[program.polling_entry_offset..];
         assert!(polling_code.windows(2).all(|window| window != [0x4f, 0x8d]));
     }

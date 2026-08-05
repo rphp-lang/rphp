@@ -34,6 +34,13 @@ pub(crate) use liveness::{
 #[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 pub(crate) use liveness::straight_long_early_induction_increment_operation;
 
+#[path = "straight_affine.rs"]
+mod affine;
+pub(crate) use affine::{
+    StraightLongMultiplyConsumerPair, StraightLongProductCombination,
+    straight_long_multiply_consumer_pair,
+};
+
 #[path = "straight_range.rs"]
 mod range;
 pub(crate) use range::{StraightLongRangeProof, straight_long_remaining_range_proof};

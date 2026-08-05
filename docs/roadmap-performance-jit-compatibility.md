@@ -3401,14 +3401,55 @@ passes 177 library tests, 18 JIT integration tests, the four-test corpus and
 `cargo check --all-features`; ARM64 passes 153 library tests and the same
 check.
 
-The mathematical pattern is architecture-neutral, but the profitable lowering
-is deliberately x86-specific. ARM64 already lowers these constant-scale cases
-as a shifted `ADD` followed by an immediate `ADD`/`SUB`; it has no one-
-instruction equivalent of this `LEA`. Replacing that pair with `MADD` would
-first have to materialize the scale or bias and would not reduce the instruction
-count. A future ARM64 `MADD` experiment should instead start from a variable
-multiply-add shape and pass its own native-CPU acceptance matrix rather than
-copying x86 policy.
+The mathematical pattern is architecture-neutral, but that constant-scale
+lowering is deliberately x86-specific. ARM64 already emits a shifted `ADD`
+followed by an immediate `ADD`/`SUB`; it has no one-instruction equivalent of
+this `LEA`. Replacing that pair with `MADD` would first have to materialize the
+scale or bias and would not reduce the instruction count.
+
+The follow-up therefore starts from a genuinely variable multiply/consumer
+shape. A shared affine analysis now recognizes an adjacent multiply followed
+by product-plus-operand, product-minus-operand or operand-minus-product. It
+rejects a self-consuming combination and any multiply intermediate read after
+the consumer. The x86 SIB recognizer consumes this same proof and applies its
+existing constant scale/bias filter. The ARM64 profitability module separately
+admits only three-slot `product + addend` and `minuend - product` forms, which
+one `MADD` or `MSUB` replaces without materializing a constant. x86-64 has no
+equivalent general integer instruction and deliberately retains `IMUL + ADD`.
+
+As with the x86 fusion, only the unchecked range-proven polling entry can erase
+the operation boundary. Checked code retains independent overflow side exits;
+a separately reachable consumer, shadow-stored intermediate or deferred
+intermediate publication rejects the fusion. Moving the producer to its
+consumer must also not cross a scheduled induction increment when a fused
+operand reads the induction value; dedicated ARM64 and x86-64 regressions prove
+that this case retains the old value and remains unfused. Exact encoder tests
+cover `MADD` and `MSUB`; execution tests interrupt/resume the fused add, execute
+the fused reverse subtract, and prove that publishing the multiply intermediate
+restores the separate instructions. Pattern discovery and both backend
+profitability filters live in small dedicated modules rather than expanding
+the main encoder files.
+
+The ARM measurements use 100-million-iteration holdouts to suppress the short
+macOS performance/efficiency-core split, with a baseline rebuilt directly from
+git commit `acc23b9`. One variable multiply-add feeding a recurrence moves from
+28.104067 to 28.005123 ms (-0.35 percent); one independent result moves from
+27.897835 to 27.788877 ms (-0.39 percent). Two independent affine results make
+the instruction-density benefit visible: the final source build moves
+32.276869 to 31.621933 ms (-2.03 percent), and paired p10/median/p90 reductions
+are 0.19/2.06/3.68 percent. Constant branch-expression, wide-skewed and
+expression-chain controls
+stay between a 0.27 percent regression and a 0.33 percent improvement with
+overlapping ranges. The five application corpus medians remain between a 0.40
+percent regression and a 0.05 percent improvement, also with overlapping
+ranges.
+
+On the Ryzen 9 7950X the three variable holdouts remain neutral within 0.01 to
+0.02 percent, confirming that shared discovery does not imply shared lowering;
+the prior x86 generated-`LEA` assertion remains green. ARM64 passes 160 library
+tests, 86 JIT integration tests, the four-test corpus and
+`cargo check --all-features`; x86-64 passes 180 library tests, 18 JIT
+integration tests, the four-test corpus and the same check.
 
 The frozen workstream is:
 

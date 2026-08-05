@@ -22,6 +22,17 @@ use std::fmt;
 use std::io;
 use std::mem::MaybeUninit;
 
+#[path = "aarch64_affine.rs"]
+mod affine;
+#[cfg(test)]
+#[path = "aarch64_affine_tests.rs"]
+mod affine_tests;
+
+use affine::{
+    Arm64StraightMultiplyAccumulateFusion, arm64_straight_multiply_accumulate_fusion,
+    emit_arm64_straight_multiply_accumulate,
+};
+
 /// General-purpose ARM64 register accepted by the prototype encoder.
 ///
 /// Register 31 is deliberately excluded because its meaning depends on the
@@ -125,6 +136,22 @@ impl Arm64Assembler {
         const XZR: u32 = 31;
         let instruction =
             0x9b00_0000 | (rhs.bits() << 16) | (XZR << 10) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
+    /// Encode `MADD Xd, Xn, Xm, Xa`: `(Xn * Xm) + Xa`.
+    fn multiply_add(
+        &mut self,
+        destination: Arm64Register,
+        multiplicand: Arm64Register,
+        multiplier: Arm64Register,
+        addend: Arm64Register,
+    ) {
+        let instruction = 0x9b00_0000
+            | (multiplier.bits() << 16)
+            | (addend.bits() << 10)
+            | (multiplicand.bits() << 5)
+            | destination.bits();
         self.words.push(instruction);
     }
 
@@ -2730,6 +2757,7 @@ impl CompiledQuickLongStraightLoop {
         {
             loop_word = assembler.word_count();
         }
+        let mut pending_multiply_accumulate: Option<Arm64StraightMultiplyAccumulateFusion> = None;
         for (index, operation) in config
             .operations
             .iter()
@@ -2836,7 +2864,43 @@ impl CompiledQuickLongStraightLoop {
             // fixed group, generate the scalar result in its final register.
             // Otherwise x8 remains the path-local forwarding register.
             let result = structured_direct_result_register.unwrap_or(result);
-            match operation {
+            let emitted_multiply_accumulate = if let Some(fusion) = pending_multiply_accumulate
+                && fusion.consumer == index
+            {
+                emit_arm64_straight_multiply_accumulate(
+                    &mut assembler,
+                    fusion,
+                    result,
+                    [lhs, rhs, interrupt_value],
+                    config.induction_slot,
+                    induction,
+                    &resident_values,
+                    shadow_store_mask,
+                );
+                pending_multiply_accumulate = None;
+                true
+            } else {
+                false
+            };
+            if !emitted_multiply_accumulate
+                && polling_interval.is_some()
+                && let Some(fusion) =
+                    arm64_straight_multiply_accumulate_fusion(&config, index)
+                && (!keeps_structured_scalar_temporaries_resident
+                    || !structured_block_starts[fusion.consumer])
+                && (early_induction_increment_operation != Some(fusion.consumer)
+                    || (fusion.lhs != QuickLongOperand::Slot(config.induction_slot)
+                        && fusion.rhs != QuickLongOperand::Slot(config.induction_slot)
+                        && fusion.addend != QuickLongOperand::Slot(config.induction_slot)))
+                && shadow_store_mask & (1u64 << fusion.intermediate) == 0
+                && deferred_exit_publication_mask & (1u64 << fusion.intermediate) == 0
+            {
+                debug_assert_eq!(fusion.producer, index);
+                pending_multiply_accumulate = Some(fusion);
+                continue;
+            }
+            if !emitted_multiply_accumulate {
+                match operation {
                 NativeStraightLongOperation::Unused => {
                     unreachable!("validated straight operation cannot be unused")
                 }
@@ -3246,6 +3310,7 @@ impl CompiledQuickLongStraightLoop {
                 }
                 NativeStraightLongOperation::Jump { target } => {
                     structured_jumps.push((assembler.branch_placeholder(), target));
+                }
                 }
             }
             if keeps_linear_scalar_values_resident {
