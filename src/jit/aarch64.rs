@@ -11,9 +11,10 @@ use super::straight::{
     NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
     StraightLongRangeProof, straight_long_best_invariant_slot_masks,
     straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
-    straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
-    straight_long_operation_input_mask, straight_long_remaining_range_proof,
-    straight_long_structured_block_starts, straight_long_structured_definitely_written,
+    straight_long_early_induction_increment_operation, straight_long_linear_live_after,
+    straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
+    straight_long_remaining_range_proof, straight_long_structured_block_starts,
+    straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
 use std::cell::{Cell, OnceCell};
@@ -2437,6 +2438,15 @@ impl CompiledQuickLongStraightLoop {
                 });
         let keeps_structured_carried_values_resident =
             keeps_structured_scalar_temporaries_resident && carried_mask != 0;
+        // ARM64 benefits at structured joins where source-order branch work
+        // separates a fixed-register dependency chain. Linear bodies retain
+        // their canonical tail schedule; moving the increment there competes
+        // with rather than fills the existing instruction-level parallelism.
+        let early_induction_increment_operation = if keeps_structured_scalar_temporaries_resident {
+            straight_long_early_induction_increment_operation(&config)
+        } else {
+            None
+        };
         let keeps_carried_values_resident = keeps_linear_scalar_values_resident
             || keeps_structured_carried_values_resident;
 
@@ -2728,6 +2738,9 @@ impl CompiledQuickLongStraightLoop {
             .enumerate()
         {
             operation_words[index] = assembler.word_count();
+            if early_induction_increment_operation == Some(index) {
+                assembler.add_immediate(induction, induction, 1);
+            }
             if keeps_linear_scalar_values_resident {
                 let live_before = if index == 0 {
                     0
@@ -3284,7 +3297,9 @@ impl CompiledQuickLongStraightLoop {
                         long_slot_offset(post_result),
                     );
                 }
-                assembler.add_immediate(induction, induction, 1);
+                if early_induction_increment_operation.is_none() {
+                    assembler.add_immediate(induction, induction, 1);
+                }
                 let backedge = emit_native_polling_backedge(
                     &mut assembler,
                     loop_word,

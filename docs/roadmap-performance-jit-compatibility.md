@@ -3333,8 +3333,35 @@ win therefore comes from scheduling independent work across a dependency
 chain, not from benchmark-specific work elimination. x86-64 passes 175 library
 tests, 18 JIT integration tests, the four-test corpus and
 `cargo check --all-features`; ARM64 passes 153 library tests and the same
-check. The target-neutral query can be consumed by another backend later, but
-each target must separately prove that its physical schedule is profitable.
+check. The target-neutral query is shared, but each target separately decides
+whether its physical schedule is profitable.
+
+The ARM64 follow-up consumes the same proof only for structured scalar polling
+bodies. The first symmetric candidate also scheduled linear bodies; although
+branch joins improved, the scalar expression-chain control regressed from
+3.208160 to 3.252029 ms (+1.37 percent). ARM therefore retains canonical tail
+placement for linear code instead of inheriting x86 policy. With that
+target-specific gate, 201 order-alternated native-CPU pairs improve the narrow
+90/10 holdout from 3.672838 to 3.545046 ms (-3.48 percent), the wider holdout
+from 3.695011 to 3.556013 ms (-3.76 percent), balanced branch expression from
+4.110813 to 4.036903 ms (-1.80 percent), and conditional recurrence from
+3.593206 to 3.560066 ms (-0.92 percent). The linear expression-chain control
+returns to 3.242970/3.239870 ms (-0.10 percent); dependent, reverse-dependent,
+simple-branch and modulo controls remain between a 0.38 percent improvement and
+a 0.21 percent regression.
+
+Longer ARM corpus batches avoid the unstable performance/efficiency-core split
+seen in short macOS process samples. Order, typed order, ledger, typed ledger
+and routing aggregate medians remain between a 0.18 percent regression and a
+0.15 percent improvement, with paired medians between a 0.13 percent regression
+and a 0.24 percent improvement.
+
+The ARM generated-code test requires `ADD x3, x3, #1` immediately before the
+common fixed-register multiply, while its existing interrupt/resume assertions
+continue to validate both arms and exact publications. ARM64 passes 153 library
+tests, 86 JIT integration tests, the four-test corpus and
+`cargo check --all-features`; the unchanged x86 scheduling test and build also
+remain green.
 
 The frozen workstream is:
 

@@ -31,7 +31,7 @@ pub(crate) use liveness::{
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
-#[cfg(target_arch = "x86_64")]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
 pub(crate) use liveness::straight_long_early_induction_increment_operation;
 
 #[path = "straight_range.rs"]

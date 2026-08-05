@@ -55,7 +55,7 @@ pub(crate) fn straight_long_linear_final_publication_masks(
 /// Backends still decide which unchecked entry can use this schedule. Checked
 /// and guard-bearing suffixes retain the canonical tail increment so a side
 /// exit always publishes the failing iteration.
-#[cfg(any(target_arch = "x86_64", test))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64", test))]
 pub(crate) fn straight_long_early_induction_increment_operation(
     config: &NativeStraightLongLoopConfig,
 ) -> Option<usize> {
@@ -81,7 +81,7 @@ pub(crate) fn straight_long_early_induction_increment_operation(
     })
 }
 
-#[cfg(any(target_arch = "x86_64", test))]
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64", test))]
 fn straight_long_operation_dominates_exit(
     config: &NativeStraightLongLoopConfig,
     candidate: usize,
@@ -1222,6 +1222,19 @@ mod tests {
         assert!(words.contains(&0x8b03_0468)); // ADD x8, x3, x3, LSL #1: i * 3
         assert!(words.contains(&0x8b03_0868)); // ADD x8, x3, x3, LSL #2: i * 5
         assert!(words.contains(&0x8b04_0488)); // ADD x8, x4, x4, LSL #1: selected * 3
+        let induction_increment = 0x9100_0463; // ADD x3, x3, #1
+        assert_eq!(
+            words
+                .iter()
+                .filter(|&&word| word == induction_increment)
+                .count(),
+            1
+        );
+        let increment_word = words
+            .iter()
+            .position(|&word| word == induction_increment)
+            .unwrap();
+        assert_eq!(words[increment_word + 1], 0x8b04_0488);
         assert!(!words.contains(&0xf900_0408)); // no loop STR x8, selected
         assert!(!words.contains(&0xf900_0808)); // no loop STR x8, folded
         assert!(words.contains(&0xf900_0404)); // exit STR x4, selected
