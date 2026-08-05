@@ -3553,6 +3553,48 @@ The completed checkpoint passes 167 ARM64 and 184 x86-64 library tests, 89
 ARM64 and 21 x86-64 JIT integration tests, plus the four application corpus
 tests on each target.
 
+### Composed exact Double call-loop checkpoint
+
+The first caller/callee composition slice is complete on ARM64 and x86-64
+(2026-08-05). The compiler recognizes a Long-controlled loop whose body calls
+one proven `ScalarDoubleProgram` with invariant exact-Double CV or constant
+arguments and accumulates its result into an exact-Double CV. A target-neutral
+`QuickDoubleCallAccumulateLoop` owns the function-cache guard, argument
+bindings, typed state and exact baseline resume points. The no-JIT runtime
+executes the same plan frame-free in Rust, so semantic coverage does not depend
+on native code generation.
+
+Both native backends import the existing scalar callee IR into one surrounding
+loop. Their shared ABI contains only Long induction/bound state, Double
+accumulator/last-term state, an exact-Double input array and an interrupt flag.
+The hot region therefore performs no PHP frame construction and no per-call
+VM/native transition. It polls every 1,024 completed iterations. Completion,
+interrupt and division-by-zero side exit publish identical state on both
+architectures; a zero divisor commits none of the failing iteration and resumes
+the canonical `InitFcall`.
+
+Seven-run medians on the permanent five-million-call workload are:
+
+| Host | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 3.977 ms | 34.656 ms | 25.791 ms | 122.081 ms |
+| Ryzen x86-64, PHP 8.4.24 | 5.211 ms | 39.805 ms | 26.908 ms | 143.421 ms |
+
+Thus the composed native region is approximately 6.5x faster than PHP tracing
+JIT on ARM64 and 5.2x on x86-64 for this shape. More importantly, a real-PHP
+integration test proves the loop cache compiles once while the standalone leaf
+cache remains cold: the result comes from region composition rather than a
+special benchmark entry point. The checkpoint passes 170 ARM64 and 187 x86-64
+library tests, 90 ARM64 and 22 x86-64 JIT integration tests, and all 42 loop
+end-to-end tests on ARM64. All four application corpus tests also pass on both
+targets.
+
+The next Double work should generalize the caller bindings to scalar argument
+expressions, then admit composed scalar callees and monomorphic methods under
+receiver-class plus method-cache guards. These extensions must reuse the same
+loop ABI and side-exit protocol; unsupported bodies, mutable arguments and
+polymorphic targets remain canonical.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

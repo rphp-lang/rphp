@@ -29,6 +29,8 @@ mod branch;
 mod affine;
 #[path = "x86_64_double.rs"]
 mod double;
+#[path = "x86_64_double_loop.rs"]
+mod double_loop;
 #[cfg(test)]
 #[path = "x86_64_double_tests.rs"]
 mod double_tests;
@@ -36,6 +38,11 @@ mod double_tests;
 pub use double::{
     CompiledScalarDoubleProgram, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitCache,
     ScalarDoubleJitDispatch, ScalarDoubleJitError, ScalarDoubleJitOutcome,
+};
+pub use double_loop::{
+    CompiledQuickDoubleCallAccumulateLoop, NativeDoubleCallAccumulateState,
+    QuickDoubleCallAccumulateJitCache, QuickDoubleCallAccumulateJitError,
+    QuickDoubleCallAccumulateJitOutcome,
 };
 
 use affine::{X86StraightAffineFusion, x86_straight_affine_fusion};

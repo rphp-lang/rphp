@@ -46,6 +46,16 @@ fn test_e2e_for_with_function() {
 }
 
 #[test]
+fn test_e2e_typed_double_call_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $limit = 100; $scale = 2.0; $total = 0.0; for ($i = 0; $i < $limit; ++$i) { $total += calculateFloat(1.5, 2.5, $scale); } echo $i . ':' . $total;"
+        ),
+        "100:600"
+    );
+}
+
+#[test]
 fn test_e2e_for_nested() {
     assert_eq!(
         run_php("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 2; $j++) { echo $i . $j; } }"),

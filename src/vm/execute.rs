@@ -41,8 +41,9 @@ use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
 use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarDoubleFunctionPlan, ScalarDoubleOpKind, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
 use super::quick::{
     compose_quick_scalar_leaf_program, QuickArrayIndex, QuickIncrementKind,
-    QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
-    QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
+    QuickDoubleCallAccumulateLoop, QuickDoubleOperand, QuickLongAccumulateLoop, QuickLongBound,
+    QuickLongCondition, QuickLongInductionLoop, QuickLongOp, QuickLongOperand, QuickLongOpsLoop,
+    QuickLongTarget, QuickLongTerm,
     QuickObjectLongArgument, QuickObjectLongMethodCall, QuickTypedMethodCall,
     QuickObjectArrayConsumer, QuickStringAppendSource, QuickVirtualValueSource,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
@@ -1439,6 +1440,17 @@ fn evaluate_scalar_double_plan(
         ScalarDoubleJitDispatch::Interpret => {}
         ScalarDoubleJitDispatch::Value(value) => return Some(value),
         ScalarDoubleJitDispatch::SideExit => return None,
+    }
+    evaluate_scalar_double_plan_rust(plan, arguments)
+}
+
+#[inline(always)]
+fn evaluate_scalar_double_plan_rust(
+    plan: &ScalarDoubleFunctionPlan,
+    arguments: &[f64; 8],
+) -> Option<f64> {
+    if plan.program.operations.len() > 8 {
+        return None;
     }
     let mut temporaries = [0.0_f64; 8];
     for (index, operation) in plan.program.operations.iter().copied().enumerate() {
@@ -4962,6 +4974,7 @@ pub(super) unsafe fn quick_loop_slot_has_heap(frame: *mut ExecuteData, slot: u16
 
 include!("execute/quick_induction_runtime.rs");
 include!("execute/quick_scalar_runtime.rs");
+include!("execute/quick_double_runtime.rs");
 
 include!("execute/quick_object_resolution.rs");
 
@@ -5900,6 +5913,9 @@ unsafe fn execute_quick_loop_backedge(
                 }
                 super::planner::BlockPlan::QuickLongAccumulate(plan) => {
                     run_quick_long_accumulate_loop(eg, frame, op_array, plan)?
+                }
+                super::planner::BlockPlan::QuickDoubleCallAccumulate(plan) => {
+                    run_quick_double_call_accumulate_loop(eg, frame, op_array, plan)?
                 }
                 super::planner::BlockPlan::QuickForeachLongAccumulate(plan) => {
                     super::quick_foreach::run_quick_foreach_long_accumulate_loop(

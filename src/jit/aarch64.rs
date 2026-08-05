@@ -26,6 +26,8 @@ use std::mem::MaybeUninit;
 mod affine;
 #[path = "aarch64_double.rs"]
 mod double;
+#[path = "aarch64_double_loop.rs"]
+mod double_loop;
 #[cfg(test)]
 #[path = "aarch64_affine_tests.rs"]
 mod affine_tests;
@@ -43,6 +45,11 @@ use affine::{
 pub use double::{
     CompiledScalarDoubleProgram, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitCache,
     ScalarDoubleJitDispatch, ScalarDoubleJitError, ScalarDoubleJitOutcome,
+};
+pub use double_loop::{
+    CompiledQuickDoubleCallAccumulateLoop, NativeDoubleCallAccumulateState,
+    QuickDoubleCallAccumulateJitCache, QuickDoubleCallAccumulateJitError,
+    QuickDoubleCallAccumulateJitOutcome,
 };
 
 /// General-purpose ARM64 register accepted by the prototype encoder.
@@ -174,6 +181,19 @@ impl Arm64Assembler {
     /// Encode `FCMP Dn, #0.0`. Unordered NaN inputs do not satisfy EQ.
     fn compare_double_with_zero(&mut self, value: Arm64FloatRegister) {
         self.words.push(0x1e60_2008 | (value.bits() << 5));
+    }
+
+    /// Encode `FMOV Dd, Dn` without changing any IEEE-754 payload bits.
+    fn move_double(
+        &mut self,
+        destination: Arm64FloatRegister,
+        source: Arm64FloatRegister,
+    ) {
+        if destination == source {
+            return;
+        }
+        self.words
+            .push(0x1e60_4000 | (source.bits() << 5) | destination.bits());
     }
 
     /// Encode `FMOV Dd, Xn`, preserving all IEEE-754 payload bits.

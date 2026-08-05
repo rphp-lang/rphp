@@ -1,6 +1,8 @@
 use super::{
-    CompiledScalarDoubleProgram, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitDispatch,
-    ScalarDoubleJitOutcome, X86_64Assembler, X86_64FloatRegister,
+    CompiledQuickDoubleCallAccumulateLoop, CompiledScalarDoubleProgram,
+    NativeDoubleCallAccumulateState, QuickDoubleCallAccumulateJitOutcome,
+    SCALAR_DOUBLE_JIT_HOT_THRESHOLD, ScalarDoubleJitDispatch, ScalarDoubleJitOutcome,
+    X86_64Assembler, X86_64FloatRegister,
 };
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
@@ -118,4 +120,73 @@ fn single_operation_leaf_stays_in_the_rust_adapter() {
     }
     assert!(!plan.native_jit().is_compiled());
     assert_eq!(plan.native_jit().native_entries(), 0);
+}
+
+#[test]
+fn composed_double_loop_completes_and_preserves_empty_state() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(&arithmetic_plan()).unwrap();
+    let mut state = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 5,
+        accumulator: 1.0,
+        last_term: -1.0,
+    };
+    let interrupt = false;
+    assert_eq!(
+        program.call(&mut state, &[2.5, 4.0, 2.0], &interrupt).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Completed
+    );
+    assert_eq!(state.induction, 5);
+    assert_eq!(state.accumulator, 41.0);
+    assert_eq!(state.last_term, 8.0);
+
+    state.bound = 5;
+    state.last_term = 6.0;
+    assert_eq!(
+        program.call(&mut state, &[2.5, 4.0, 2.0], &interrupt).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Completed
+    );
+    assert_eq!(state.last_term, 6.0);
+}
+
+#[test]
+fn composed_double_loop_polls_and_side_exits_transactionally() {
+    let program = CompiledQuickDoubleCallAccumulateLoop::compile(&arithmetic_plan()).unwrap();
+    let mut state = NativeDoubleCallAccumulateState {
+        induction: 0,
+        bound: 2_000,
+        accumulator: 0.0,
+        last_term: -1.0,
+    };
+    let interrupt = true;
+    assert_eq!(
+        program.call(&mut state, &[2.5, 4.0, 2.0], &interrupt).unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::Interrupted
+    );
+    assert_eq!(state.induction, 1_024);
+    assert_eq!(state.accumulator, 8_192.0);
+    assert_eq!(state.last_term, 8.0);
+
+    let mut side_exit_state = NativeDoubleCallAccumulateState {
+        induction: 3,
+        bound: 10,
+        accumulator: 7.0,
+        last_term: 2.0,
+    };
+    let no_interrupt = false;
+    assert_eq!(
+        program
+            .call(&mut side_exit_state, &[2.5, 4.0, -0.0], &no_interrupt)
+            .unwrap(),
+        QuickDoubleCallAccumulateJitOutcome::SideExit
+    );
+    assert_eq!(
+        side_exit_state,
+        NativeDoubleCallAccumulateState {
+            induction: 3,
+            bound: 10,
+            accumulator: 7.0,
+            last_term: 2.0,
+        }
+    );
 }

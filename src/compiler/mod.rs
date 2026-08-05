@@ -366,6 +366,14 @@ impl OpArray {
             )
             .map(BlockPlan::QuickLongInduction)
             .or_else(|| {
+                crate::vm::quick::detect_double_call_accumulate_loop(
+                    self,
+                    header_ip,
+                    backedge_ip,
+                )
+                .map(BlockPlan::QuickDoubleCallAccumulate)
+            })
+            .or_else(|| {
                 crate::vm::quick::detect_long_accumulate_loop(
                     self,
                     header_ip,

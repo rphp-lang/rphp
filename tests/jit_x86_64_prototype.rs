@@ -58,6 +58,46 @@ fn real_php_exact_float_calls_enter_double_jit_and_long_inputs_fallback() {
 }
 
 #[test]
+fn real_php_typed_double_call_accumulation_enters_one_native_region() {
+    let source = "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateFloat(1.5, 2.5, $scale); } echo $i . ':' . $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    drop(globals);
+    assert_eq!(captured_output(&output), "100000:600000");
+
+    let loop_plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a Double call/accumulate loop");
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 0);
+
+    let leaf = functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("calculateFloat"))
+        .and_then(|(_, function)| function.scalar_double_plan.as_deref())
+        .expect("Double leaf plan");
+    assert!(!leaf.native_jit().is_compiled());
+}
+
+#[test]
 fn monomorphic_float_method_uses_class_cache_and_double_jit() {
     let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
     let source = format!(
