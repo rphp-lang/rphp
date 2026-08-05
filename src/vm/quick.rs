@@ -1644,10 +1644,30 @@ pub fn detect_double_call_accumulate_loop(
 
     let initializer_ip = header_ip + 2;
     let initializer = *op_array.instructions.get(initializer_ip)?;
-    if initializer.opcode != OpCode::InitFcall || initializer.op1 > 8 {
-        return None;
-    }
-    let argument_count = initializer.op1 as usize;
+    let (argument_count, argument_offset, guard, receiver_slot) = match initializer.opcode {
+        OpCode::InitFcall if initializer.op1 <= 8 => (
+            initializer.op1 as usize,
+            0usize,
+            ScalarLongCallGuard::FunctionCache {
+                cache_ip: u32::try_from(initializer_ip).ok()?,
+            },
+            None,
+        ),
+        OpCode::InitMethodCall
+            if initializer.op1_type == OpType::Cv && initializer.extended_value <= 8 =>
+        {
+            (
+                initializer.extended_value as usize,
+                1usize,
+                ScalarLongCallGuard::MethodCache {
+                    cache_ip: u32::try_from(initializer_ip).ok()?,
+                    receiver_slot: initializer.op1,
+                },
+                Some(initializer.op1),
+            )
+        }
+        _ => return None,
+    };
     let mut outputs = [QuickDoubleSource::Constant(0.0); 8];
     let mut operations = Vec::with_capacity(8);
     let mut produced_temporary_slots = [u16::MAX; 8];
@@ -1664,7 +1684,7 @@ pub fn detect_double_call_accumulate_loop(
     while sent_arguments < argument_count {
         let send = *op_array.instructions.get(cursor)?;
         if matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx) {
-            if send.op2 as usize != sent_arguments {
+            if send.op2 as usize != sent_arguments + argument_offset {
                 return None;
             }
             let output = quick_double_argument_source(
@@ -1784,6 +1804,13 @@ pub fn detect_double_call_accumulate_loop(
         || matches!(bound, QuickLongBound::Cv(slot) if slot == induction_cv || slot == accumulator_cv)
         || double_input_mask & ((1u64 << induction_cv) | (1u64 << accumulator_cv)) != 0
         || matches!(bound, QuickLongBound::Cv(slot) if double_input_mask & (1u64 << slot) != 0)
+        || receiver_slot.is_some_and(|slot| {
+            slot == induction_cv
+                || slot == accumulator_cv
+                || slot as u32 >= op_array.num_cvs
+                || double_input_mask & (1u64 << slot) != 0
+                || matches!(bound, QuickLongBound::Cv(bound) if bound == slot)
+        })
         || induction_cv as u32 >= op_array.num_cvs
         || accumulator_cv as u32 >= op_array.num_cvs
         || matches!(bound, QuickLongBound::Cv(slot) if slot as u32 >= op_array.num_cvs)
@@ -1824,9 +1851,7 @@ pub fn detect_double_call_accumulate_loop(
         bound,
         accumulator_cv,
         condition_tmp,
-        guard: ScalarLongCallGuard::FunctionCache {
-            cache_ip: u32::try_from(initializer_ip).ok()?,
-        },
+        guard,
         argument_program: QuickDoubleArgumentProgram {
             operations: operations.into_boxed_slice(),
             outputs,
@@ -5117,6 +5142,47 @@ for ($i = 0; $i < 100; $i++) {
             plan.argument_program.outputs[2],
             QuickDoubleSource::Input(0)
         ));
+        assert_eq!(plan.accumulator_cv, 1);
+        assert_eq!(plan.induction_cv, 2);
+    }
+
+    #[test]
+    fn detects_monomorphic_double_method_accumulation() {
+        let main = compile_main(
+            "<?php
+class FloatCalculator {
+    public function calculate(float $a, float $b, float $c): float {
+        return (($a + $b) * $c) - 2.0;
+    }
+}
+$calculator = new FloatCalculator();
+$total = 0.0;
+for ($i = 0; $i < 100; $i++) {
+    $total += $calculator->calculate(1.5, 2.5, 2.0);
+}
+",
+        );
+        let plan = main
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                _ => None,
+            })
+            .expect("compiler should select the Double method/accumulate loop");
+        assert!(matches!(
+            plan.guard,
+            ScalarLongCallGuard::MethodCache {
+                receiver_slot: 0,
+                ..
+            }
+        ));
+        assert_eq!(plan.argument_program.output_count, 3);
+        assert_eq!(plan.argument_program.input_count, 0);
+        assert_eq!(plan.argument_program.outputs[0], QuickDoubleSource::Constant(1.5));
+        assert_eq!(plan.argument_program.outputs[1], QuickDoubleSource::Constant(2.5));
+        assert_eq!(plan.argument_program.outputs[2], QuickDoubleSource::Constant(2.0));
         assert_eq!(plan.accumulator_cv, 1);
         assert_eq!(plan.induction_cv, 2);
     }

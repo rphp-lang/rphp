@@ -290,6 +290,33 @@ unsafe fn record_quick_double_call_targets(
     }
 }
 
+/// Resolve either a direct function or a monomorphic method for the exact
+/// Double region. Dispatch identity remains owned by the canonical inline
+/// cache; the caller validates the resolved user's Double ABI and plan.
+#[inline(always)]
+unsafe fn guarded_quick_double_call_target(
+    op_array: &crate::compiler::OpArray,
+    slot_base: *mut Value,
+    guard: ScalarLongCallGuard,
+    argument_count: u8,
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    if !direct_user_calls_enabled() {
+        return None;
+    }
+    let receiver = match guard {
+        ScalarLongCallGuard::FunctionCache { .. } => None,
+        ScalarLongCallGuard::MethodCache { receiver_slot, .. } => {
+            Some(&*slot_base.add(receiver_slot as usize))
+        }
+    };
+    guarded_cached_user_call_target(
+        op_array,
+        guard,
+        receiver,
+        argument_count as usize,
+    )
+}
+
 #[inline(never)]
 #[cfg(all(
     feature = "quick-loops",
@@ -479,13 +506,12 @@ unsafe fn run_quick_double_call_accumulate_loop(
         return Ok(QuickLoopOutcome::GuardFailed);
     }
 
-    let Some((target, user)) =
-        guarded_quick_scalar_call_target(
-            op_array,
-            slot_base,
-            plan.guard,
-            plan.argument_program.output_count,
-        )
+    let Some((target, user)) = guarded_quick_double_call_target(
+        op_array,
+        slot_base,
+        plan.guard,
+        plan.argument_program.output_count,
+    )
     else {
         stats::inc_quick_loop_guard_failed();
         return Ok(QuickLoopOutcome::GuardFailed);

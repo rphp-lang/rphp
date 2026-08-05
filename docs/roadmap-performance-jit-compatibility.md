@@ -3897,6 +3897,63 @@ all-feature matrix passes 178 ARM64 and 203 x86-64 library tests, 93 ARM64 and
 25 x86-64 native-JIT integration tests, all 27 function and 48 loop end-to-end
 tests, and all four corpus tests.
 
+### Guarded monomorphic Double method composition checkpoint
+
+The target-neutral Double call/accumulate detector now accepts a direct
+`InitMethodCall` in addition to `InitFcall` (2026-08-05). It records the
+existing `MethodCache` guard with the receiver CV and normalizes the hidden
+`$this` argument offset before building the same `QuickDoubleArgumentProgram`.
+Constants, exact-Double CVs, induction-dependent expressions, forwarding,
+recursive function callees and the established eight-operation budgets are
+therefore unchanged. No ARM64 or x86-64 instruction emitter was added for
+methods.
+
+At region entry, a dedicated exact-Double resolver validates that the receiver
+is a non-reference Object, its current class id matches the canonical method
+inline cache, the cached function identity and public arity still match, and
+the selected user method has the compact Double ABI plus a proven flat or
+composed Double plan. The receiver and dispatch guard do not execute inside
+the native loop. The native cache remains bound to the resolved target tuple;
+a different receiver class at the same bytecode call site cannot reuse the
+compiled method body and falls back to the target-neutral Rust plan or
+canonical bytecode. Methods that depend on `$this`, accept references, use
+named arguments or lack a pure Double plan remain unsupported.
+
+Completion, interrupt and division side exits retain the existing
+transactional state contract. A signed-zero divisor resumes at the original
+`InitMethodCall`, so normal method dispatch raises the canonical PHP error.
+Permanent tests cover plan selection and hidden-argument normalization, a
+single native region with the standalone method leaf cache still cold, a
+changed receiver class at the same call site, and division-by-zero replay.
+The preceding standalone method test now uses one stable method site outside a
+recognizable loop, preserving independent coverage of the leaf JIT.
+
+The new five-million-iteration
+`bench_typed_float_method_accumulate.php` holdout returns the identical
+`30000000` value. One hundred and one order-alternated native-CPU A/B runs
+(x86 pinned to Ryzen CPU 2) compare the preceding per-call build with method
+composition; 21 interleaved runs provide the PHP and no-JIT controls:
+
+| Host | Previous RPHP JIT | Composed RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 141.550 ms | 3.280 ms | 36.241 ms | 32.060 ms | 130.260 ms |
+| Ryzen x86-64, PHP 8.4.24 | 199.692 ms | 2.886 ms | 41.016 ms | 27.678 ms | 157.102 ms |
+
+Removing five million method boundaries makes the native region about 43.2x
+faster than the preceding ARM64 path and 69.2x faster on x86-64. It is also
+about 9.7x/9.6x faster than PHP tracing JIT. Because method dispatch is a
+target-neutral plan feature, RPHP without JIT is approximately 3.6x/3.8x
+faster than PHP without JIT on the same holdout. The complete all-feature
+matrix passes 179 ARM64 and 204 x86-64 library tests, 94 ARM64 and 26 x86-64
+native-JIT integration tests, all 27 function and 51 loop end-to-end tests,
+and all four corpus tests.
+
+The next object/Double extension should be nested monomorphic method calls
+only after receiver-source mapping and every inner class/cache identity can be
+represented in the same bounded composer. General conditional Double regions
+are an independent alternative; neither direction should introduce an
+object-only backend kernel.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

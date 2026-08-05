@@ -98,6 +98,58 @@ fn real_php_typed_double_call_accumulation_enters_one_native_region() {
 }
 
 #[test]
+fn monomorphic_typed_double_method_enters_one_native_region() {
+    let source = "<?php class FloatCalculator { public function calculate(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } } $calculator = new FloatCalculator(); $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += $calculator->calculate(1.5, 2.5, 2.0); } echo $i . ':' . $total;";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let compilation = Compiler::new().compile(&statements).unwrap();
+    let main = make_user_function(compilation.main);
+    let class_defs = compilation.class_defs;
+    let (mut globals, output) = common::make_eg_with_capture();
+    for class_def in class_defs {
+        globals.register_class(class_def).unwrap();
+    }
+
+    execute::execute(&mut globals, &main).unwrap();
+    assert_eq!(captured_output(&output), "100000:600000");
+
+    let loop_plan = main
+        .op_array
+        .block_plans
+        .iter()
+        .find_map(|plan| match plan {
+            BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+            _ => None,
+        })
+        .expect("compiler should select a guarded Double method loop");
+    assert!(matches!(
+        loop_plan.guard,
+        rphp::vm::function::ScalarLongCallGuard::MethodCache { .. }
+    ));
+    assert!(loop_plan.native_jit().is_compiled());
+    assert_eq!(loop_plan.native_jit().native_entries(), 1);
+    assert_eq!(loop_plan.native_jit().side_exits(), 0);
+
+    let class = globals
+        .class_table
+        .values()
+        .find(|class| class.name.eq_ignore_ascii_case("FloatCalculator"))
+        .expect("registered FloatCalculator");
+    let method = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name.eq_ignore_ascii_case("calculate"))
+        .map(|(_, _, _, _, method)| method)
+        .expect("compiled calculate method");
+    assert_eq!(method.common.call_count.get(), 100000);
+    let leaf = method
+        .scalar_double_plan
+        .as_deref()
+        .expect("Double method leaf plan");
+    assert!(!leaf.native_jit().is_compiled());
+}
+
+#[test]
 fn typed_double_argument_expressions_enter_one_native_region() {
     let source = "<?php function calculateFloat(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100000; $i++) { $total += calculateFloat($i * 0.5, $scale + 1.0, 2.0); } echo $i . ':' . $total;";
     let tokens = Lexer::new(source).tokenize().unwrap();
@@ -231,15 +283,25 @@ fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
 #[test]
 fn monomorphic_float_method_uses_class_cache_and_double_jit() {
     let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
-    let source = format!(
-        "<?php class FloatModel {{ public function blend(float $a, float $b, float $c): float {{ return (($a + 1.5) * $b) / $c; }} }} $model = new FloatModel(); $total = 0.0; for ($i = 0; $i < {call_count}; $i++) {{ $total += $model->blend(2.5, 4.0, 2.0); }} echo $total;"
+    let mut source = String::from(
+        "<?php class FloatModel { public function blend(float $a, float $b, float $c): float { return (($a + 1.5) * $b) / $c; } } function callBlend($model): float { return $model->blend(2.5, 4.0, 2.0); } $model = new FloatModel(); $total = 0.0;"
     );
+    for _ in 0..call_count {
+        source.push_str("$total = $total + callBlend($model);");
+    }
+    source.push_str("echo $total;");
     let tokens = Lexer::new(&source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
     let main = make_user_function(compilation.main);
+    let functions = compilation.functions;
     let class_defs = compilation.class_defs;
     let (mut globals, output) = common::make_eg_with_capture();
+    for (name, function) in &functions {
+        globals
+            .register_function(name, &function.common as *const FunctionCommon)
+            .unwrap();
+    }
     for class_def in class_defs {
         globals.register_class(class_def).unwrap();
     }

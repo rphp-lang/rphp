@@ -56,6 +56,34 @@ fn test_e2e_typed_double_call_accumulation() {
 }
 
 #[test]
+fn test_e2e_typed_double_method_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php class FloatCalculator { public function calculate(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } } $calculator = new FloatCalculator(); $total = 0.0; for ($i = 0; $i < 100; ++$i) { $total += $calculator->calculate(1.5, 2.5, 2.0); } echo $i . ':' . $total;"
+        ),
+        "100:600"
+    );
+}
+
+#[test]
+fn test_e2e_typed_double_method_rejects_changed_receiver_class() {
+    assert_eq!(
+        run_php(
+            "<?php class FloatA { public function calculate(float $a, float $b, float $c): float { return (($a + $b) * $c) - 2.0; } } class FloatB { public function calculate(float $a, float $b, float $c): float { return (($a + $b) * $c) - 1.0; } } function accumulateFloat($calculator): float { $total = 0.0; for ($i = 0; $i < 100; ++$i) { $total += $calculator->calculate(1.5, 2.5, 2.0); } return $total; } echo accumulateFloat(new FloatA()) . ':' . accumulateFloat(new FloatB());"
+        ),
+        "600:700"
+    );
+}
+
+#[test]
+fn test_e2e_typed_double_method_division_replays_canonical_error() {
+    let error = run_php_expect_error(
+        "<?php class FloatDivider { public function divide(float $value, float $divisor): float { return ($value + 1.0) / $divisor; } } $divider = new FloatDivider(); $total = 0.0; for ($i = 0; $i < 5; $i++) { $total += $divider->divide(4.0, $i - 2.0); }",
+    );
+    assert!(format!("{error:?}").contains("Division by zero"));
+}
+
+#[test]
 fn test_e2e_typed_double_call_argument_expressions() {
     assert_eq!(
         run_php(
