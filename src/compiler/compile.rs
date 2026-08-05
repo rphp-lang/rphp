@@ -7,7 +7,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-use crate::value::{ObjectLayout, Value, ValueType};
+use crate::value::{
+    canonical_decimal_array_key as canonical_string_literal_array_key, ObjectLayout, Value,
+    ValueType,
+};
 use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
 use crate::vm::opcode::OpCode;
 use crate::vm::instruction::{
@@ -27,14 +30,6 @@ pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
-}
-
-/// PHP normalizes only canonical decimal string array keys to integers.
-fn canonical_string_literal_array_key(value: &str) -> Option<i64> {
-    value
-        .parse::<i64>()
-        .ok()
-        .filter(|parsed| parsed.to_string() == value)
 }
 
 enum ArrayLiteralStorageHint {

@@ -11,6 +11,24 @@ use crate::vm::stats;
 use crate::vm::generator::GeneratorRef;
 use crate::vm::function::FunctionCommon;
 
+/// PHP converts only canonical decimal strings that fit in `i64` to integer
+/// array keys. Syntax-first validation avoids an allocating parse/format
+/// round-trip for ordinary string keys.
+#[inline]
+pub(crate) fn canonical_decimal_array_key(value: &str) -> Option<i64> {
+    let bytes = value.as_bytes();
+    let digits = match bytes {
+        [b'0'] => return Some(0),
+        [b'1'..=b'9', rest @ ..] => rest,
+        [b'-', b'1'..=b'9', rest @ ..] => rest,
+        _ => return None,
+    };
+    if !digits.iter().all(u8::is_ascii_digit) {
+        return None;
+    }
+    value.parse().ok()
+}
+
 /// Shared declared-property layout for all instances of a class.
 ///
 /// Names are resolved only on cold/cache-miss paths. Hot property access stores
@@ -328,6 +346,11 @@ impl SharedStringKey {
     #[inline]
     fn new(value: &str) -> Self {
         Self(Rc::new(value.to_string()))
+    }
+
+    #[inline]
+    fn from_owned(value: String) -> Self {
+        Self(Rc::new(value))
     }
 
     /// Share the immutable Rc-backed storage already owned by a PHP string.
@@ -662,6 +685,40 @@ impl PhpArray {
             } else {
                 // New key — one shared allocation for both entry and index.
                 let owned = SharedStringKey::new(key);
+                let idx = entries.len();
+                entries.push((ArrayEntryKey::String(owned.clone()), val));
+                str_index.insert(owned, idx);
+            }
+        }
+    }
+
+    /// Set a non-numeric string key while taking ownership of its existing
+    /// allocation. Streaming decoders use this to move parsed object keys
+    /// directly into PHP array storage instead of copying their bytes.
+    pub(crate) fn set_owned_str(&mut self, key: String, val: Value) {
+        if matches!(&self.storage, ArrayStorage::Packed(_)) {
+            self.transition_to_hash();
+        }
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+            if let Some(index) = small.find_str(&key) {
+                small.entries[index].as_mut().unwrap().1 = val;
+                return;
+            }
+            if small.len() < SMALL_HASH_CAPACITY {
+                let inserted = small.push(
+                    ArrayEntryKey::String(SharedStringKey::from_owned(key)),
+                    val,
+                );
+                debug_assert!(inserted);
+                return;
+            }
+        }
+        self.promote_small_hash(1, 0);
+        if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
+            if let Some(&idx) = str_index.get(key.as_str()) {
+                entries[idx].1 = val;
+            } else {
+                let owned = SharedStringKey::from_owned(key);
                 let idx = entries.len();
                 entries.push((ArrayEntryKey::String(owned.clone()), val));
                 str_index.insert(owned, idx);

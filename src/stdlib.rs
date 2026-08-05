@@ -24,6 +24,8 @@ use crate::vm::function::InternalFunction;
 use crate::vm::execute::{call_function, call_function_iter, call_function_owned_iter, call_function_readback_arg0_iter, VmError};
 use crate::parser::Visibility;
 
+mod json_decode;
+
 // ============================================================================
 // Helper macros — zero-cost abstractions for stdlib handlers
 // ============================================================================
@@ -2349,55 +2351,8 @@ fn json_encode_value(val: &Value) -> String {
     serde_json::to_string(&value_to_json(val)).unwrap_or_else(|_| "null".to_string())
 }
 
-/// Convert serde_json::Value to PHP Value.
-fn json_to_value(jv: serde_json::Value, assoc: bool) -> Value {
-    match jv {
-        serde_json::Value::Null => Value::null(),
-        serde_json::Value::Bool(b) => Value::bool(b),
-        serde_json::Value::Number(n) => {
-            if let Some(i) = n.as_i64() {
-                Value::long(i)
-            } else {
-                Value::double(n.as_f64().unwrap_or(0.0))
-            }
-        }
-        serde_json::Value::String(s) => Value::string(s),
-        serde_json::Value::Array(items) => {
-            let mut arr = PhpArray::new();
-            for item in items {
-                arr.push(json_to_value(item, assoc));
-            }
-            Value::array(arr)
-        }
-        serde_json::Value::Object(map) => {
-            if assoc {
-                let mut arr = PhpArray::new();
-                for (k, v) in map {
-                    arr.set_str(&k, json_to_value(v, assoc));
-                }
-                Value::array(arr)
-            } else {
-                use crate::value::PhpObject;
-                use std::collections::HashMap;
-                let mut props = HashMap::new();
-                for (k, v) in map {
-                    props.insert(k, json_to_value(v, false));
-                }
-                Value::object(PhpObject::dynamic(
-                    "stdClass".to_string(),
-                    0,
-                    props,
-                ))
-            }
-        }
-    }
-}
-
 pub(crate) fn json_decode_string(s: &str, assoc: bool) -> Value {
-    match serde_json::from_str::<serde_json::Value>(s) {
-        Ok(jv) => json_to_value(jv, assoc),
-        Err(_) => Value::null(),
-    }
+    json_decode::decode_php_value(s, assoc).unwrap_or_else(|_| Value::null())
 }
 
 // ============================================================================

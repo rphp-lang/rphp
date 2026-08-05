@@ -3,7 +3,7 @@ use std::sync::atomic::Ordering;
 #[cfg(feature = "vm-stats")]
 use std::sync::OnceLock;
 
-use crate::value::{Value, PhpArray, PhpClosure, PhpObject, ArrayKey, ValueType, make_error_value};
+use crate::value::{canonical_decimal_array_key, Value, PhpArray, PhpClosure, PhpObject, ArrayKey, ValueType, make_error_value};
 use crate::runtime::ExecutorGlobals;
 use crate::parser::Visibility;
 use crate::vm::stats;
@@ -6508,24 +6508,6 @@ fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, VmError> {
         ValueType::Double => Ok(ArrayKeyRef::Int(val.as_double().unwrap() as i64)),
         other => Err(VmError::Fatal(format!("Illegal offset type {:?}", other))),
     }
-}
-
-/// PHP converts only canonical decimal strings that fit in `i64` to integer
-/// array keys. Checking the syntax first avoids allocating `i64::to_string()`
-/// merely to reject leading zeroes, a plus sign, whitespace, or `-0`.
-#[inline]
-fn canonical_decimal_array_key(value: &str) -> Option<i64> {
-    let bytes = value.as_bytes();
-    let digits = match bytes {
-        [b'0'] => return Some(0),
-        [b'1'..=b'9', rest @ ..] => rest,
-        [b'-', b'1'..=b'9', rest @ ..] => rest,
-        _ => return None,
-    };
-    if !digits.iter().all(u8::is_ascii_digit) {
-        return None;
-    }
-    value.parse().ok()
 }
 
 #[cfg(test)]

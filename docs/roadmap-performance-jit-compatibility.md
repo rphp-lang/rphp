@@ -4282,6 +4282,61 @@ functions and callback consumers; arbitrary String computation and Double
 expression leaves should be admitted only through the same typed projection
 and guard model.
 
+### Canonical streaming JSON decode checkpoint
+
+The ordinary changing-input `json_decode` path now streams parser events
+directly into canonical RPHP values (2026-08-05). A shared Serde seed/visitor
+constructs packed arrays, associative PHP arrays and dynamic objects while the
+document is parsed. It no longer allocates a recursive `serde_json::Value`
+tree, stores every object in an intermediate B-tree, walks that tree a second
+time and immediately destroys it. This is a canonical runtime improvement:
+it applies to every supported dynamic decode, independently of warm-up,
+profiles, invariant-source admission or native JIT availability.
+
+Parsed object keys move their existing String allocation into associative
+array storage. Canonical decimal array-key recognition is now one shared,
+syntax-first helper used by compilation, runtime array access and JSON
+materialization; canonical numeric keys become integers while leading-zero,
+out-of-range and otherwise non-canonical strings remain strings. Direct
+materialization also retains JSON input order and updates a duplicate key in
+its first position, matching PHP array behavior. Invalid or trailing input
+still returns the canonical null result, and associative/object mode is
+selected recursively as before.
+
+Sampling the changing document workload identified JSON tree construction,
+recursive conversion, B-tree insertion and their malloc/free traffic as the
+dominant decode cost. The direct visitor removes that complete intermediate
+phase. Dedicated tests cover scalar tags, integer overflow to Double, escaped
+strings and surrogate pairs, nested associative/object modes, duplicate-key
+order, numeric-key normalization, invalid/trailing documents and surrounding
+whitespace.
+
+Nine order-rotated native-CPU `max-perf` runs on ARM64 with PHP 8.5.9 produced
+these internal-time medians; PHP tracing JIT was verified active:
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Invariant fixed Long projections, 2M | 6.184 ms | 55.235 ms | 882.232 ms | 920.617 ms |
+| Invariant exact Double call projection, 2M | 1.399 ms | 7.701 ms | 182.353 ms | 218.802 ms |
+| Invariant String-to-`strlen` projection, 2M | 0.567 ms | 15.626 ms | 225.564 ms | 237.134 ms |
+| Changing-input Long control, 200k | 26.016 ms | 25.228 ms | 19.078 ms | 21.406 ms |
+| Changing-input typed control, 200k | 53.579 ms | 53.261 ms | 32.746 ms | 38.670 ms |
+
+Against the preceding checkpoint, RPHP no-JIT improves by 34.2% on the
+changing Long control (38.352 -> 25.228 ms) and by 25.2% on the changing typed
+control (71.164 -> 53.261 ms). The no-JIT gap to PHP narrows from 1.81x to
+1.18x and from 1.85x to 1.38x respectively. Invariant projections retain their
+separate parse-once architecture; this change deliberately does not introduce
+schema caching or a JSON-specific machine-code kernel.
+
+The remaining canonical cost is dominated by unavoidable result ownership and
+lifecycle work: String/Rc allocation, PHP array/object insertion, Value
+clone/drop, parser string/number handling and allocator traffic. Further work
+should therefore be justified by real corpus shapes and allocation telemetry.
+The planned fused `json_encode`, collection and callback pipeline remains the
+next architectural extension rather than weakening canonical PHP values to
+win a decode-only benchmark.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -10,6 +10,7 @@ vm-stats = []
 jit-prototype = []
 
 [dependencies]
+serde = "1.0.228"
 serde_json = "1.0.149"
 
 [dev-dependencies]
