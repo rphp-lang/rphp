@@ -34,11 +34,11 @@ unsafe fn run_quick_long_ops_loop(
 
     let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     let mut slots = [0i64; 64];
-    let json_output_mask = plan
-        .json_decode_projection
+    let invariant_long_output_mask = plan
+        .typed_invariant_source
         .as_ref()
-        .map_or(0, |projection| projection.output_mask);
-    let mut input_mask = plan.long_input_mask & !json_output_mask;
+        .map_or(0, |source| source.long_output_mask);
+    let mut input_mask = plan.long_input_mask & !invariant_long_output_mask;
     while input_mask != 0 {
         let slot = input_mask.trailing_zeros() as usize;
         input_mask &= input_mask - 1;
@@ -60,17 +60,6 @@ unsafe fn run_quick_long_ops_loop(
         }
     }
 
-    if !prepare_quick_json_decode_projection(
-        frame,
-        op_array,
-        plan,
-        slot_base,
-        &mut slots,
-    ) {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    }
-
     let mut object_mask = plan.object_input_mask;
     while object_mask != 0 {
         let slot = object_mask.trailing_zeros() as usize;
@@ -83,6 +72,22 @@ unsafe fn run_quick_long_ops_loop(
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         }
+    }
+
+    if !prepare_quick_typed_invariant_source(
+        frame,
+        op_array,
+        plan.typed_invariant_source.as_ref(),
+        slot_base,
+    ) {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+    let mut invariant_outputs = invariant_long_output_mask;
+    while invariant_outputs != 0 {
+        let slot = invariant_outputs.trailing_zeros() as usize;
+        invariant_outputs &= invariant_outputs - 1;
+        slots[slot] = (*slot_base.add(slot)).raw_long();
     }
 
     if let Some(kernel) = quick_long_branch_only_kernel(plan) {

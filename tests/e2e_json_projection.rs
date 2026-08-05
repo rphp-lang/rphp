@@ -63,6 +63,84 @@ echo $sum . '|' . $row['name'] . '|' . $row['scores'][1];
 }
 
 #[test]
+fn invariant_string_projection_derives_length_once_and_preserves_the_leaf() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$json = '{"name":"hyper-optimized"}';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $sum = $sum + strlen($row['name']);
+}
+echo $sum . '|' . $row['name'];
+"#,
+        ),
+        "1500|hyper-optimized"
+    );
+}
+
+#[test]
+fn invariant_double_projection_feeds_the_existing_scalar_call_plan() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function scaleJsonProjection(float $value): float {
+    return $value * 1.5;
+}
+$json = '{"value":1.25}';
+$sum = 0.0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $sum += scaleJsonProjection($row['value']);
+}
+echo $sum . '|' . $row['value'];
+"#,
+        ),
+        "187.5|1.25"
+    );
+}
+
+#[test]
+fn non_double_call_projection_falls_back_to_php_coercion() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function scaleJsonCoercion(float $value): float {
+    return $value * 1.5;
+}
+$json = '{"value":2}';
+$sum = 0.0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $sum += scaleJsonCoercion($row['value']);
+}
+echo $sum . '|' . $row['value'];
+"#,
+        ),
+        "300|2"
+    );
+}
+
+#[test]
+fn non_string_length_projection_falls_back_to_canonical_strlen() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$json = '{"name":123}';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $sum = $sum + strlen($row['name']);
+}
+echo $sum . '|' . $row['name'];
+"#,
+        ),
+        "300|123"
+    );
+}
+
+#[test]
 fn literal_json_input_uses_the_same_projection_contract() {
     assert_eq!(
         run_php(

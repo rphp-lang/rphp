@@ -537,6 +537,7 @@ pub struct QuickDoubleCallAccumulateLoop {
     pub condition_tmp: Option<u16>,
     pub guard: ScalarLongCallGuard,
     pub argument_program: QuickDoubleArgumentProgram,
+    pub typed_invariant_source: Option<QuickTypedInvariantSource>,
     pub term_tmp: u16,
     pub sum_tmp: u16,
     pub increment_kind: QuickIncrementKind,
@@ -712,33 +713,51 @@ impl QuickLongTarget {
     }
 }
 
-/// Input source retained by a loop-invariant JSON projection prelude.
+/// Input source retained by a loop-invariant typed producer.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuickJsonInput {
+pub enum QuickInvariantInput {
     StringSlot(u16),
     StringLiteral(u16),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum QuickJsonPathElement {
+pub enum QuickInvariantPathElement {
     StringLiteral(u16),
     Integer(i64),
 }
 
-#[derive(Debug, Clone)]
-pub struct QuickJsonLongProjection {
-    pub path: Box<[QuickJsonPathElement]>,
-    pub result: u16,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickInvariantValueKind {
+    Long,
+    Double,
+    String,
+    /// Byte length derived from an exact String projection. The projected
+    /// frame result is a Long, so scalar consumers need no string operation.
+    StringLength,
 }
 
-/// One loop-invariant `json_decode(..., true)` whose non-escaping result is
-/// consumed through fixed Long projections inside the same typed region.
 #[derive(Debug, Clone)]
-pub struct QuickJsonDecodeProjection {
-    pub input: QuickJsonInput,
+pub struct QuickTypedInvariantProjection {
+    pub path: Box<[QuickInvariantPathElement]>,
+    pub result: u16,
+    pub kind: QuickInvariantValueKind,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickTypedInvariantProducer {
+    JsonDecodeAssociative { input: QuickInvariantInput },
+}
+
+/// One loop-invariant producer whose non-escaping result is consumed through
+/// fixed, exactly typed projections inside a guarded region.
+#[derive(Debug, Clone)]
+pub struct QuickTypedInvariantSource {
+    pub producer: QuickTypedInvariantProducer,
     pub destination: u16,
-    pub projections: Vec<QuickJsonLongProjection>,
-    pub output_mask: u64,
+    pub projections: Vec<QuickTypedInvariantProjection>,
+    pub long_output_mask: u64,
+    pub double_output_mask: u64,
+    pub string_output_mask: u64,
 }
 
 /// A typed operation in a guarded scalar loop region.
@@ -1063,7 +1082,7 @@ pub struct QuickLongOpsLoop {
     pub string_output_mask: u64,
     pub string_append_mask: u64,
     pub object_input_mask: u64,
-    pub json_decode_projection: Option<QuickJsonDecodeProjection>,
+    pub typed_invariant_source: Option<QuickTypedInvariantSource>,
     pub string_cache_capacity: u8,
     pub involved_mask: u64,
     pub straight_array_kernel: Option<QuickStraightArrayRegionKernel>,
@@ -1723,7 +1742,30 @@ pub fn detect_double_call_accumulate_loop(
         return None;
     }
 
-    let initializer_ip = header_ip + 2;
+    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+    if total_slots > 64 {
+        return None;
+    }
+    let region = &op_array.instructions[header_ip..=backedge_ip];
+    let mut initializer_ip = header_ip + 2;
+    let mut typed_invariant_source = None;
+    let mut json_paths: Vec<Option<Vec<QuickInvariantPathElement>>> =
+        vec![None; total_slots as usize];
+    let mut json_fetch_mask = 0u64;
+    let mut json_parent_mask = 0u64;
+    let possible_producer = *op_array.instructions.get(initializer_ip)?;
+    if possible_producer.opcode == OpCode::DirectInternalCall2
+        && crate::builtin_metadata::DirectInternalKind::from_id(
+            possible_producer.extended_value,
+        ) == Some(crate::builtin_metadata::DirectInternalKind::JsonDecode)
+    {
+        let source = detect_json_typed_invariant_source(op_array, region, initializer_ip)?;
+        json_paths
+            .get_mut(source.destination as usize)?
+            .replace(Vec::new());
+        typed_invariant_source = Some(source);
+        initializer_ip += 2;
+    }
     let initializer = *op_array.instructions.get(initializer_ip)?;
     let (argument_count, argument_offset, guard, receiver_slot) = match initializer.opcode {
         OpCode::InitFcall if initializer.op1 <= 8 => (
@@ -1757,29 +1799,87 @@ pub fn detect_double_call_accumulate_loop(
     let mut input_slots = [u16::MAX; 8];
     let mut input_count = 0usize;
     let mut double_input_mask = 0u64;
-    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
-    if total_slots > 64 {
-        return None;
-    }
     let mut cursor = initializer_ip + 1;
     while sent_arguments < argument_count {
         let send = *op_array.instructions.get(cursor)?;
+        if send.opcode == OpCode::FetchDimR
+            && matches!(send.op1_type, OpType::Cv | OpType::Tmp | OpType::Var)
+            && send.result_type == OpType::Tmp
+        {
+            let Some(mut path) = json_paths
+                .get(send.op1 as usize)
+                .and_then(|path| path.as_ref())
+                .cloned()
+            else {
+                return None;
+            };
+            let element = fixed_invariant_path_element(op_array, send.op2_type, send.op2)?;
+            if path.len() == 8 {
+                return None;
+            }
+            path.push(element);
+            json_paths.get_mut(send.result as usize)?.replace(path);
+            add_mask_slot(&mut json_fetch_mask, send.result, total_slots)?;
+            add_mask_slot(&mut json_parent_mask, send.op1, total_slots)?;
+            cursor += 1;
+            continue;
+        }
         if matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx) {
             if send.op2 as usize != sent_arguments + argument_offset {
                 return None;
             }
-            let output = quick_double_argument_source(
-                op_array,
-                send.op1_type,
-                send.op1,
-                induction_cv,
-                &produced_temporary_slots,
-                expression_count,
-                &mut input_slots,
-                &mut input_count,
-                &mut double_input_mask,
-                total_slots,
-            )?;
+            let output = if matches!(send.op1_type, OpType::Tmp | OpType::Var)
+                && json_paths
+                    .get(send.op1 as usize)
+                    .and_then(|path| path.as_ref())
+                    .is_some()
+            {
+                let path = json_paths.get(send.op1 as usize)?.as_ref()?.clone();
+                if path.is_empty() {
+                    return None;
+                }
+                add_mask_slot(&mut double_input_mask, send.op1, total_slots)?;
+                let input = if let Some(index) = input_slots[..input_count]
+                    .iter()
+                    .position(|slot| *slot == send.op1)
+                {
+                    index
+                } else {
+                    if input_count == input_slots.len() {
+                        return None;
+                    }
+                    let index = input_count;
+                    input_slots[index] = send.op1;
+                    input_count += 1;
+                    index
+                };
+                let source = typed_invariant_source.as_mut()?;
+                if source.double_output_mask & (1u64 << send.op1) == 0 {
+                    source.double_output_mask |= 1u64 << send.op1;
+                    source.projections.push(QuickTypedInvariantProjection {
+                        path: path.into_boxed_slice(),
+                        result: send.op1,
+                        kind: QuickInvariantValueKind::Double,
+                    });
+                }
+                ProvenQuickDoubleSource {
+                    source: QuickDoubleSource::Input(input as u8),
+                    is_double: true,
+                }
+            } else {
+                quick_double_argument_source(
+                    op_array,
+                    send.op1_type,
+                    send.op1,
+                    induction_cv,
+                    &produced_temporary_slots,
+                    expression_count,
+                    &mut input_slots,
+                    &mut input_count,
+                    &mut double_input_mask,
+                    total_slots,
+                )?
+            };
             if !output.is_double {
                 return None;
             }
@@ -1898,6 +1998,34 @@ pub fn detect_double_call_accumulate_loop(
     {
         return None;
     }
+    if let Some(source) = typed_invariant_source.as_ref() {
+        let input_slot = match source.producer {
+            QuickTypedInvariantProducer::JsonDecodeAssociative {
+                input: QuickInvariantInput::StringSlot(slot),
+            } => Some(slot),
+            QuickTypedInvariantProducer::JsonDecodeAssociative {
+                input: QuickInvariantInput::StringLiteral(_),
+            } => None,
+        };
+        if source.projections.is_empty()
+            || json_fetch_mask
+                & !(json_parent_mask | source.double_output_mask)
+                != 0
+            || source.destination == induction_cv
+            || source.destination == accumulator_cv
+            || matches!(bound, QuickLongBound::Cv(slot) if source.destination == slot)
+            || receiver_slot == Some(source.destination)
+            || input_slot.is_some_and(|slot| {
+                slot == induction_cv
+                    || slot == accumulator_cv
+                    || matches!(bound, QuickLongBound::Cv(bound) if bound == slot)
+                    || receiver_slot == Some(slot)
+                    || double_input_mask & (1u64 << slot) != 0
+            })
+        {
+            return None;
+        }
+    }
     let mut temporary_mask = 0u64;
     for slot in [
         condition_tmp,
@@ -1917,10 +2045,17 @@ pub fn detect_double_call_accumulate_loop(
     {
         add_mask_slot(&mut temporary_mask, slot, total_slots)?;
     }
+    let mut json_temporaries = json_fetch_mask;
+    while json_temporaries != 0 {
+        let slot = json_temporaries.trailing_zeros() as u16;
+        json_temporaries &= json_temporaries - 1;
+        add_mask_slot(&mut temporary_mask, slot, total_slots)?;
+    }
     let expected_temporary_count = usize::from(condition_tmp.is_some())
         + 2
         + usize::from(increment_tmp.is_some())
-        + expression_count;
+        + expression_count
+        + json_fetch_mask.count_ones() as usize;
     if temporary_mask.count_ones() as usize != expected_temporary_count {
         return None;
     }
@@ -1940,6 +2075,7 @@ pub fn detect_double_call_accumulate_loop(
             input_slots,
             input_count: input_count as u8,
         },
+        typed_invariant_source,
         term_tmp: do_fcall.result,
         sum_tmp: sum.result,
         increment_kind,
@@ -3179,6 +3315,77 @@ fn cv_unmodified_in_region(
         .all(|instruction| !instruction_writes_cv(instruction, cv))
 }
 
+/// Recognize the shared loop-invariant associative JSON producer. Consumers
+/// own path/use validation, but input stability and the canonical materialized
+/// destination are identical for Long, Double and String regions.
+fn detect_json_typed_invariant_source(
+    op_array: &OpArray,
+    region: &[crate::vm::instruction::Instruction],
+    producer_ip: usize,
+) -> Option<QuickTypedInvariantSource> {
+    let producer = *op_array.instructions.get(producer_ip)?;
+    if producer.opcode != OpCode::DirectInternalCall2
+        || crate::builtin_metadata::DirectInternalKind::from_id(producer.extended_value)
+            != Some(crate::builtin_metadata::DirectInternalKind::JsonDecode)
+        || !matches!(producer.op1_type, OpType::Cv | OpType::Const)
+        || producer.op2_type != OpType::Const
+        || !matches!(producer.result_type, OpType::Tmp | OpType::Var)
+        || op_array
+            .literals
+            .get(producer.op2 as usize)?
+            .value_type()
+            != crate::value::ValueType::True
+    {
+        return None;
+    }
+    let input = match producer.op1_type {
+        OpType::Cv if cv_unmodified_in_region(region, producer.op1) => {
+            QuickInvariantInput::StringSlot(producer.op1)
+        }
+        OpType::Const => {
+            op_array
+                .literals
+                .get(producer.op1 as usize)?
+                .as_str()?;
+            QuickInvariantInput::StringLiteral(producer.op1)
+        }
+        _ => return None,
+    };
+    let assignment = *op_array.instructions.get(producer_ip + 1)?;
+    if assignment.opcode != OpCode::AssignCv
+        || assignment.op1_type != OpType::Cv
+        || assignment.op2_type != producer.result_type
+        || assignment.op2 != producer.result
+        || assignment.result_type != OpType::Unused
+    {
+        return None;
+    }
+    Some(QuickTypedInvariantSource {
+        producer: QuickTypedInvariantProducer::JsonDecodeAssociative { input },
+        destination: assignment.op1,
+        projections: Vec::new(),
+        long_output_mask: 0,
+        double_output_mask: 0,
+        string_output_mask: 0,
+    })
+}
+
+fn fixed_invariant_path_element(
+    op_array: &OpArray,
+    op_type: OpType,
+    operand: u16,
+) -> Option<QuickInvariantPathElement> {
+    if op_type != OpType::Const {
+        return None;
+    }
+    let value = op_array.literals.get(operand as usize)?;
+    Some(if value.as_str().is_some() {
+        QuickInvariantPathElement::StringLiteral(operand)
+    } else {
+        QuickInvariantPathElement::Integer(value.as_long()?)
+    })
+}
+
 fn long_add(instruction: crate::vm::instruction::Instruction) -> Option<(u16, u16, u16)> {
     if !matches!(
         instruction.opcode,
@@ -3456,11 +3663,14 @@ fn detect_long_ops_region_inner(
     let mut string_output_mask = 0u64;
     let mut string_append_mask = 0u64;
     let mut object_input_mask = 0u64;
-    let mut json_decode_projection = None;
-    let mut json_paths: Vec<Option<Vec<QuickJsonPathElement>>> =
+    let mut typed_invariant_source = None;
+    let mut json_paths: Vec<Option<Vec<QuickInvariantPathElement>>> =
         vec![None; total_slots as usize];
     let mut json_fetch_mask = 0u64;
     let mut json_parent_mask = 0u64;
+    let mut json_string_source_mask = 0u64;
+    let mut json_string_length_paths: Vec<Option<Vec<QuickInvariantPathElement>>> =
+        vec![None; total_slots as usize];
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_object_call = false;
@@ -3766,56 +3976,22 @@ fn detect_long_ops_region_inner(
                         _ => false,
                     }
                 });
-                if json_decode_projection.is_some()
+                if typed_invariant_source.is_some()
                     || skipped_by_prior_edge
-                    || !matches!(instruction.op1_type, OpType::Cv | OpType::Const)
-                    || instruction.op2_type != OpType::Const
-                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
-                    || op_array
-                        .literals
-                        .get(instruction.op2 as usize)?
-                        .value_type()
-                        != crate::value::ValueType::True
                 {
                     return None;
                 }
-                let input = match instruction.op1_type {
-                    OpType::Cv
-                        if cv_unmodified_in_region(region, instruction.op1) =>
-                    {
-                        add_mask_slot(
-                            &mut string_input_mask,
-                            instruction.op1,
-                            total_slots,
-                        )?;
-                        QuickJsonInput::StringSlot(instruction.op1)
-                    }
-                    OpType::Const => {
-                        op_array
-                            .literals
-                            .get(instruction.op1 as usize)?
-                            .as_str()?;
-                        QuickJsonInput::StringLiteral(instruction.op1)
-                    }
-                    _ => return None,
-                };
-                let assignment = *op_array.instructions.get(ip + 1)?;
-                if assignment.opcode != OpCode::AssignCv
-                    || assignment.op1_type != OpType::Cv
-                    || assignment.op2_type != instruction.result_type
-                    || assignment.op2 != instruction.result
-                    || assignment.result_type != OpType::Unused
+                let source = detect_json_typed_invariant_source(op_array, region, ip)?;
+                if let QuickTypedInvariantProducer::JsonDecodeAssociative {
+                    input: QuickInvariantInput::StringSlot(slot),
+                } = source.producer
                 {
-                    return None;
+                    add_mask_slot(&mut string_input_mask, slot, total_slots)?;
                 }
-                let destination = assignment.op1;
-                json_paths.get_mut(destination as usize)?.replace(Vec::new());
-                json_decode_projection = Some(QuickJsonDecodeProjection {
-                    input,
-                    destination,
-                    projections: Vec::new(),
-                    output_mask: 0,
-                });
+                json_paths
+                    .get_mut(source.destination as usize)?
+                    .replace(Vec::new());
+                typed_invariant_source = Some(source);
                 has_assign = true;
                 let resume_ip = ip;
                 ip += 2;
@@ -3834,17 +4010,11 @@ fn detect_long_ops_region_inner(
                     .and_then(|path| path.as_ref())
                     .cloned()
                 {
-                    let element = match instruction.op2_type {
-                        OpType::Const => {
-                            let value = op_array.literals.get(instruction.op2 as usize)?;
-                            if value.as_str().is_some() {
-                                QuickJsonPathElement::StringLiteral(instruction.op2)
-                            } else {
-                                QuickJsonPathElement::Integer(value.as_long()?)
-                            }
-                        }
-                        _ => return None,
-                    };
+                    let element = fixed_invariant_path_element(
+                        op_array,
+                        instruction.op2_type,
+                        instruction.op2,
+                    )?;
                     if path.len() == 8 {
                         return None;
                     }
@@ -3914,6 +4084,42 @@ fn detect_long_ops_region_inner(
                         next_target: QuickLongTarget::unresolved(ip)?,
                         resume_ip,
                     }
+                }
+            }
+            OpCode::Strlen | OpCode::Strlen_String => {
+                if !matches!(instruction.op1_type, OpType::Tmp | OpType::Var)
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                {
+                    return None;
+                }
+                let Some(path) = json_paths
+                    .get(instruction.op1 as usize)
+                    .and_then(|path| path.as_ref())
+                    .cloned()
+                else {
+                    return None;
+                };
+                if path.is_empty()
+                    || json_string_length_paths
+                        .get(instruction.result as usize)?
+                        .is_some()
+                {
+                    return None;
+                }
+                add_mask_slot(
+                    &mut json_string_source_mask,
+                    instruction.op1,
+                    total_slots,
+                )?;
+                add_mask_slot(&mut long_input_mask, instruction.result, total_slots)?;
+                json_string_length_paths
+                    .get_mut(instruction.result as usize)?
+                    .replace(path);
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::JsonProjectionStep {
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
                 }
             }
             OpCode::AssignDim => {
@@ -5029,9 +5235,11 @@ fn detect_long_ops_region_inner(
     };
     long_input_mask &= !(long_output_mask & !cv_mask);
 
-    if let Some(projection) = json_decode_projection.as_mut() {
+    if let Some(source) = typed_invariant_source.as_mut() {
         if json_fetch_mask == 0
-            || json_fetch_mask & !(json_parent_mask | long_input_mask) != 0
+            || json_fetch_mask
+                & !(json_parent_mask | long_input_mask | json_string_source_mask)
+                != 0
         {
             return None;
         }
@@ -5046,13 +5254,37 @@ fn detect_long_ops_region_inner(
             if path.is_empty() {
                 return None;
             }
-            projection.output_mask |= 1u64 << result;
-            projection.projections.push(QuickJsonLongProjection {
+            source.long_output_mask |= 1u64 << result;
+            source.projections.push(QuickTypedInvariantProjection {
                 path: path.into_boxed_slice(),
                 result,
+                kind: QuickInvariantValueKind::Long,
             });
         }
-        if projection.projections.is_empty() {
+        let mut string_sources = json_string_source_mask;
+        while string_sources != 0 {
+            let result = string_sources.trailing_zeros() as u16;
+            string_sources &= string_sources - 1;
+            let path = json_paths.get(result as usize)?.as_ref()?.clone();
+            source.string_output_mask |= 1u64 << result;
+            source.projections.push(QuickTypedInvariantProjection {
+                path: path.into_boxed_slice(),
+                result,
+                kind: QuickInvariantValueKind::String,
+            });
+        }
+        for (result, path) in json_string_length_paths.iter().enumerate() {
+            let Some(path) = path else {
+                continue;
+            };
+            source.long_output_mask |= 1u64 << result;
+            source.projections.push(QuickTypedInvariantProjection {
+                path: path.clone().into_boxed_slice(),
+                result: result as u16,
+                kind: QuickInvariantValueKind::StringLength,
+            });
+        }
+        if source.projections.is_empty() {
             return None;
         }
     }
@@ -5114,7 +5346,7 @@ fn detect_long_ops_region_inner(
         string_output_mask,
         string_append_mask,
         object_input_mask,
-        json_decode_projection,
+        typed_invariant_source,
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
         straight_array_kernel: None,
@@ -5659,31 +5891,105 @@ for ($i = 0; $i < 100; $i++) {
 }
 ",
         );
-        let projection = plan
-            .json_decode_projection
+        let source = plan
+            .typed_invariant_source
             .as_ref()
             .expect("stable associative json_decode should become a prelude");
-        assert_eq!(projection.projections.len(), 3);
-        assert_eq!(projection.output_mask.count_ones(), 3);
+        assert_eq!(source.projections.len(), 3);
+        assert_eq!(source.long_output_mask.count_ones(), 3);
         assert!(plan.ops.iter().any(|operation| matches!(
             operation,
             QuickLongOp::JsonProjectionStep { .. }
         )));
-        assert!(projection.projections.iter().any(|output| {
+        assert!(source.projections.iter().any(|output| {
             matches!(
                 output.path.as_ref(),
-                [QuickJsonPathElement::StringLiteral(_)]
+                [QuickInvariantPathElement::StringLiteral(_)]
             )
         }));
-        assert!(projection.projections.iter().any(|output| {
+        assert!(source.projections.iter().any(|output| {
             matches!(
                 output.path.as_ref(),
                 [
-                    QuickJsonPathElement::StringLiteral(_),
-                    QuickJsonPathElement::Integer(0)
+                    QuickInvariantPathElement::StringLiteral(_),
+                    QuickInvariantPathElement::Integer(0)
                 ]
             )
         }));
+    }
+
+    #[test]
+    fn derives_invariant_string_length_as_a_long_projection() {
+        let plan = long_ops_plan(
+            "<?php
+$json = '{\"name\":\"hyper-optimized\"}';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $sum = $sum + strlen($row['name']);
+}
+",
+        );
+        let source = plan
+            .typed_invariant_source
+            .as_ref()
+            .expect("fixed string projection should become a typed prelude");
+        assert_eq!(source.string_output_mask.count_ones(), 1);
+        assert_eq!(source.long_output_mask.count_ones(), 1);
+        assert!(source
+            .projections
+            .iter()
+            .any(|projection| projection.kind == QuickInvariantValueKind::String));
+        assert!(source
+            .projections
+            .iter()
+            .any(|projection| projection.kind == QuickInvariantValueKind::StringLength));
+    }
+
+    #[test]
+    fn feeds_invariant_json_double_projection_into_scalar_call_ir() {
+        let main = compile_main(
+            "<?php
+function scaleJson(float $value): float {
+    return $value * 1.5;
+}
+$json = '{\"value\":1.25}';
+$total = 0.0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $total += scaleJson($row['value']);
+}
+",
+        );
+        let plan = main
+            .op_array
+            .block_plans
+            .iter()
+            .find_map(|plan| match plan {
+                BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                _ => None,
+            })
+            .unwrap_or_else(|| {
+                panic!(
+                    "compiler should select a typed Double source; instructions: {:#?}",
+                    main.op_array.instructions
+                )
+            });
+        let source = plan
+            .typed_invariant_source
+            .as_ref()
+            .expect("associative JSON source should be retained");
+        assert_eq!(source.double_output_mask.count_ones(), 1);
+        assert_eq!(source.projections.len(), 1);
+        assert_eq!(
+            source.projections[0].kind,
+            QuickInvariantValueKind::Double
+        );
+        assert_eq!(plan.argument_program.input_count, 1);
+        assert_eq!(
+            plan.argument_program.input_slots[0],
+            source.projections[0].result
+        );
     }
 
     #[test]

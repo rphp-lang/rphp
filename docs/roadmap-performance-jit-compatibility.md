@@ -4221,6 +4221,67 @@ pipelines be fused into it. In parallel, the changing-input control should be
 used to measure improvements to the canonical JSON parser/materializer, which
 benefits real non-invariant code and must remain distinct from JIT coverage.
 
+### Shared typed invariant-source checkpoint
+
+The JSON prelude is now a producer-neutral typed invariant source rather than
+metadata owned by the Long loop (2026-08-05). One guarded producer describes
+its immutable input and materialized destination; fixed projections carry an
+exact `Long`, `Double`, `String`, or derived String-length contract. The
+runtime parses once, resolves and type-checks every path into temporary values,
+and only then publishes the decoded array and all leaves. No partially valid
+projection can mutate the canonical frame. Numeric-string keys continue to use
+the ordinary PHP array-key normalization.
+
+The existing general Long region consumes exact Long leaves unchanged. An
+invariant exact String leaf may now feed `strlen`; its byte length is derived
+once as a Long projection, while the real String TMP and decoded array are
+still materialized for correct post-loop observation. This deliberately avoids
+a String token ABI or architecture-specific heap dereference in native code.
+The exact-Double call/accumulate planner accepts the same producer before its
+ordinary function initializer, maps fixed Double leaves into the existing
+`QuickDoubleArgumentProgram`, and retains all function/method-cache and callee
+plan guards. ARM64 and x86-64 therefore reuse their established Double JIT
+lowering; there is no JSON opcode in machine code and no JSON-specific loop
+kernel.
+
+Admission remains bounded to one dominant associative decode, immutable
+literal/String-CV input, fixed paths of depth at most eight and non-escaping,
+read-only output. Exact tags are guards, not coercions: an integer where a
+Double is requested or a non-String passed to `strlen` falls back to canonical
+PHP execution. Changing input, missing paths, mutation and unsupported uses are
+also rejected. Permanent unit and end-to-end tests cover planner selection,
+post-loop materialization, canonical numeric keys and positive/negative Long,
+Double and String cases.
+
+Seven order-rotated native-CPU `max-perf` runs on ARM64 with PHP 8.5.9 produced
+these internal-time medians. The PHP JIT lane was verified as active tracing
+JIT:
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Invariant fixed Long projections, 2M | 6.191 ms | 54.119 ms | 879.392 ms | 928.467 ms |
+| Invariant exact Double call projection, 2M | 1.384 ms | 7.758 ms | 184.570 ms | 228.255 ms |
+| Invariant String-to-`strlen` projection, 2M | 0.561 ms | 13.254 ms | 220.360 ms | 232.809 ms |
+| Changing-input Long control, 200k | 39.617 ms | 38.352 ms | 18.284 ms | 21.151 ms |
+| Changing-input typed control, 200k | 73.205 ms | 71.164 ms | 32.088 ms | 38.542 ms |
+
+For the new admitted shapes RPHP JIT is about 133x/393x faster than PHP
+tracing JIT for Double/String respectively. RPHP without native JIT is about
+29x/18x faster than PHP without JIT, confirming that the shared producer and
+typed executor carry most of the architectural value independently of native
+emission. Telemetry records one `double_call_accumulate` or `typed_ops_loop`
+admission and native execution, zero side exits, and only the 33 canonical
+warm-up decodes before 1,999,967 optimized iterations.
+
+Both changing-input controls remain roughly twice as slow as PHP. This is the
+intentional boundary between invariant pipeline fusion and the next canonical
+runtime task: profile and improve per-document JSON parsing, recursive value
+conversion and PHP-array materialization without relying on hoisting. The next
+pipeline extension should reuse this source for `json_encode`, chained array
+functions and callback consumers; arbitrary String computation and Double
+expression leaves should be admitted only through the same typed projection
+and guard model.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

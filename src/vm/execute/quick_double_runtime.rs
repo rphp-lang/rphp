@@ -578,12 +578,19 @@ unsafe fn run_quick_double_call_accumulate_loop(
     }
 
     let mut inputs = [0.0_f64; 8];
+    let invariant_double_output_mask = plan
+        .typed_invariant_source
+        .as_ref()
+        .map_or(0, |source| source.double_output_mask);
     for (index, input) in inputs
         .iter_mut()
         .enumerate()
         .take(plan.argument_program.input_count as usize)
     {
         let slot = plan.argument_program.input_slots[index];
+        if invariant_double_output_mask & (1u64 << slot) != 0 {
+            continue;
+        }
         let value = &*slot_base.add(slot as usize);
         if quick_loop_slot_has_heap(frame, slot)
             || value.value_type() != ValueType::Double
@@ -593,6 +600,25 @@ unsafe fn run_quick_double_call_accumulate_loop(
             return Ok(QuickLoopOutcome::GuardFailed);
         }
         *input = value.raw_double();
+    }
+    if !prepare_quick_typed_invariant_source(
+        frame,
+        op_array,
+        plan.typed_invariant_source.as_ref(),
+        slot_base,
+    ) {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+    for (index, input) in inputs
+        .iter_mut()
+        .enumerate()
+        .take(plan.argument_program.input_count as usize)
+    {
+        let slot = plan.argument_program.input_slots[index];
+        if invariant_double_output_mask & (1u64 << slot) != 0 {
+            *input = (*slot_base.add(slot as usize)).raw_double();
+        }
     }
 
     let mut induction = (*induction_ptr).raw_long();
