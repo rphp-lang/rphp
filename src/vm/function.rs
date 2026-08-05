@@ -171,8 +171,9 @@ pub struct ScalarDoubleCall {
 }
 
 /// One operation in a pure Double body that composes arithmetic with direct
-/// user-function calls. Runtime flattening turns guarded call leaves back into
-/// the established `ScalarDoubleProgram` before either native backend sees it.
+/// user-function calls. Runtime flattening turns guarded callees into
+/// the established `ScalarDoubleProgram` before either native backend sees it;
+/// a resolved callee may itself have been recursively composed.
 pub enum ComposedScalarDoubleOp {
     Arithmetic(ScalarDoubleOp),
     Call(ScalarDoubleCall),

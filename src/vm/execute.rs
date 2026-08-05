@@ -47,6 +47,7 @@ use super::quick::{
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QuickObjectLongArgument, QuickObjectLongMethodCall, QuickTypedMethodCall,
     QuickObjectArrayConsumer, QuickStringAppendSource, QuickVirtualValueSource,
+    ResolvedScalarDoubleProgram,
     QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
     QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
 };

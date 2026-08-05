@@ -1086,7 +1086,7 @@ const COMPOSED_SCALAR_DOUBLE_PLAN_MAX_OPS: usize = 16;
 
 /// Recognize a straight-line exact-Double body containing direct function
 /// calls. Calls remain guarded IR nodes here; the runtime resolves their
-/// canonical inline caches and flattens proven Double leaves before execution.
+/// canonical inline caches and flattens proven Double callees before execution.
 fn build_composed_scalar_double_function_plan(
     function: &UserFunction,
 ) -> Option<Box<ComposedScalarDoubleFunctionPlan>> {

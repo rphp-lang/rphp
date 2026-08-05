@@ -121,17 +121,53 @@ fn evaluate_quick_double_argument_phase(
     true
 }
 
-unsafe fn resolve_composed_double_program(
+// Root plus at most four recursively composed callees. The independent target
+// and operation budgets normally stop useful trees before stack depth matters.
+const MAX_COMPOSED_DOUBLE_DEPTH: usize = 4;
+const MAX_COMPOSED_DOUBLE_TARGETS: usize = 8;
+
+enum ResolvedDoubleCallee<'a> {
+    Flat(&'a ScalarDoubleFunctionPlan),
+    Composed {
+        public_args: u8,
+        program: ScalarDoubleProgram,
+    },
+}
+
+impl ResolvedDoubleCallee<'_> {
+    #[inline(always)]
+    fn program(&self) -> ResolvedScalarDoubleProgram<'_> {
+        match self {
+            Self::Flat(plan) => ResolvedScalarDoubleProgram {
+                public_args: plan.public_args,
+                program: &plan.program,
+            },
+            Self::Composed {
+                public_args,
+                program,
+            } => ResolvedScalarDoubleProgram {
+                public_args: *public_args,
+                program,
+            },
+        }
+    }
+}
+
+unsafe fn resolve_composed_double_program_inner(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
     plan: &ComposedScalarDoubleFunctionPlan,
-) -> Option<(ScalarDoubleProgram, [*const FunctionCommon; 8], usize)> {
-    if plan.operations.len() > 16 {
+    depth: usize,
+    active_targets: &mut [*const FunctionCommon; MAX_COMPOSED_DOUBLE_TARGETS + 1],
+    active_target_count: usize,
+    targets: &mut [*const FunctionCommon; MAX_COMPOSED_DOUBLE_TARGETS],
+    target_count: &mut usize,
+) -> Option<ScalarDoubleProgram> {
+    if depth > MAX_COMPOSED_DOUBLE_DEPTH || plan.operations.len() > 16 {
         return None;
     }
-    let mut leaf_plans: [Option<&ScalarDoubleFunctionPlan>; 16] = [None; 16];
-    let mut targets = [std::ptr::null(); 8];
-    let mut target_count = 0usize;
+    let mut callees: [Option<ResolvedDoubleCallee<'_>>; 16] =
+        std::array::from_fn(|_| None);
 
     for (operation_index, operation) in plan.operations.iter().enumerate() {
         let ComposedScalarDoubleOp::Call(call) = operation else {
@@ -177,18 +213,70 @@ unsafe fn resolve_composed_double_program(
         if !user.common.supports_scalar_double_plan() {
             return None;
         }
-        let leaf = user.scalar_double_plan.as_deref()?;
-        if leaf.public_args as usize != call.arguments.len()
-            || target_count == targets.len()
+        if *target_count == targets.len()
+            || active_targets[..active_target_count].contains(&target)
         {
             return None;
         }
-        leaf_plans[operation_index] = Some(leaf);
-        targets[target_count] = target;
-        target_count += 1;
+        targets[*target_count] = target;
+        *target_count += 1;
+
+        callees[operation_index] = Some(if let Some(leaf) = user.scalar_double_plan.as_deref() {
+            if leaf.public_args as usize != call.arguments.len() {
+                return None;
+            }
+            ResolvedDoubleCallee::Flat(leaf)
+        } else {
+            let composed = user.composed_scalar_double_plan.as_deref()?;
+            if composed.public_args as usize != call.arguments.len()
+                || depth == MAX_COMPOSED_DOUBLE_DEPTH
+                || active_target_count == active_targets.len()
+            {
+                return None;
+            }
+            active_targets[active_target_count] = target;
+            let program = resolve_composed_double_program_inner(
+                eg,
+                user,
+                composed,
+                depth + 1,
+                active_targets,
+                active_target_count + 1,
+                targets,
+                target_count,
+            )?;
+            ResolvedDoubleCallee::Composed {
+                public_args: composed.public_args,
+                program,
+            }
+        });
     }
 
-    let program = compose_scalar_double_program(plan, &leaf_plans)?;
+    let resolved_programs: [Option<ResolvedScalarDoubleProgram<'_>>; 16] =
+        std::array::from_fn(|index| callees[index].as_ref().map(|callee| callee.program()));
+    compose_scalar_double_program(plan, &resolved_programs)
+}
+
+unsafe fn resolve_composed_double_program(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    plan: &ComposedScalarDoubleFunctionPlan,
+) -> Option<(ScalarDoubleProgram, [*const FunctionCommon; 8], usize)> {
+    let owner_target = &owner.common as *const FunctionCommon;
+    let mut active_targets = [std::ptr::null(); MAX_COMPOSED_DOUBLE_TARGETS + 1];
+    active_targets[0] = owner_target;
+    let mut targets = [std::ptr::null(); MAX_COMPOSED_DOUBLE_TARGETS];
+    let mut target_count = 0usize;
+    let program = resolve_composed_double_program_inner(
+        eg,
+        owner,
+        plan,
+        0,
+        &mut active_targets,
+        1,
+        &mut targets,
+        &mut target_count,
+    )?;
     Some((program, targets, target_count))
 }
 

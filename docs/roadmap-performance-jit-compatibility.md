@@ -3749,12 +3749,61 @@ passes 178 ARM64 and 195 x86-64 library tests, 92 ARM64 and 24 x86-64 JIT
 integration tests, all 47 loop end-to-end tests, and all four application
 corpus tests on both targets.
 
-This checkpoint intentionally admits one composed layer whose call targets are
-flat Double leaves. The next structural step is bounded recursive flattening
-of composed scalar Double callees using the same total-operation and identity
-tuple limits. After that, direct monomorphic Double methods should reuse the
-existing receiver-class plus method-cache guard contract rather than adding a
-separate object JIT.
+This checkpoint initially admitted one composed layer whose call targets were
+flat Double leaves. The bounded recursive extension described below now closes
+that structural limitation. Direct monomorphic Double methods remain the next
+step and should reuse the existing receiver-class plus method-cache guard
+contract rather than adding a separate object JIT.
+
+### Bounded recursive Double composition checkpoint
+
+Guarded Double callees may themselves now contain guarded composed Double
+calls (2026-08-05). Runtime resolution walks the actual inline-cache target at
+each level. A flat target contributes its original `ScalarDoubleProgram`; a
+composed target is first recursively flattened and its resulting program is
+then source-remapped into its caller. The target-neutral composer consumes the
+same borrowed program view in both cases, so neither ARM64 nor x86-64 required
+a new machine instruction or architecture-specific recursive path.
+
+The recursion is deliberately bounded by three independent budgets: at most
+four recursively composed callees below the root, eight nested target identities
+and eight final arithmetic operations. An active-target chain rejects direct
+and mutual cycles. Arity,
+exact raw-Double arguments, compact ABI eligibility, function-cache identity
+and division side-exit behavior are revalidated at every level. Exceeding any
+budget abandons the complete speculative tree before publishing a result and
+replays the ordinary root call. Sibling calls may legally repeat a target, and
+each occurrence remains represented in both the identity tuple and call-count
+accounting.
+
+The same recursive resolver serves ordinary frame-free direct calls, the Rust
+quick executor without JIT, and the ARM64/x86-64 native quick-loop dispatch.
+A new three-function test (`calculateOuter` -> `calculateNested` ->
+`scaleAndShift`) enters one native region with no side exit, while all three
+functions retain exactly 100,000 recorded calls. Exact direct calls return the
+flattened result; raw Long arguments still miss the guard and pass through
+PHP's normal weak-float conversion.
+
+The new five-million-iteration
+`bench_typed_float_composed_tree.php` holdout returns the identical
+`6250026250000` value. Nine native-CPU `max-perf` measurements give:
+
+| Host | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| ARM64, PHP 8.5.9 | 4.092 ms | 47.969 ms | 60.923 ms | 228.224 ms |
+| Ryzen x86-64, PHP 8.4.24 | 10.329 ms | 58.916 ms | 65.742 ms | 210.198 ms |
+
+For this deeper call tree, RPHP JIT is about 14.9x faster than PHP tracing JIT
+on ARM64 and 6.4x faster on x86-64. Without JIT, RPHP is about 4.8x and 3.6x
+faster than the corresponding PHP no-JIT mode, and even remains ahead of PHP
+tracing JIT on both hosts. The complete all-feature matrix passes 178 ARM64
+and 195 x86-64 library tests, 93 ARM64 and 25 x86-64 native JIT integration
+tests, all 27 function and 48 loop end-to-end tests, and all four corpus tests.
+
+The next structural Double step is monomorphic method composition guarded by
+receiver class plus method-cache identity. It should feed this same bounded
+program composer and target tuple rather than creating a parallel object-only
+JIT representation.
 
 ### Nice to have: persistent compiled artifacts
 

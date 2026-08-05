@@ -276,6 +276,45 @@ echo gettype($exact) . ':' . $exact . '|' . gettype($coerced) . ':' . $coerced;
 }
 
 #[test]
+fn test_e2e_recursive_composed_double_body_uses_exact_direct_path_and_weak_fallback() {
+    assert_eq!(
+        run_php(r#"<?php
+function scaleAndShift(float $value, float $scale): float {
+    return ($value * $scale) + 1.0;
+}
+function calculateNested(float $value, float $scale): float {
+    return (scaleAndShift($value, $scale) * 0.5) + 2.0;
+}
+function calculateOuter(float $value, float $scale): float {
+    return calculateNested($value, $scale) + 3.0;
+}
+$exact = calculateOuter(2.0, 3.0);
+$coerced = calculateOuter(2, 3);
+echo gettype($exact) . ':' . $exact . '|' . gettype($coerced) . ':' . $coerced;
+"#),
+        "double:8.5|double:8.5"
+    );
+}
+
+#[test]
+fn test_e2e_recursive_composed_double_depth_budget_falls_back() {
+    assert_eq!(
+        run_php(r#"<?php
+function doubleLeaf(float $value): float { return $value * 2.0; }
+function doubleLevel1(float $value): float { return doubleLeaf($value) + 1.0; }
+function doubleLevel2(float $value): float { return doubleLevel1($value) + 1.0; }
+function doubleLevel3(float $value): float { return doubleLevel2($value) + 1.0; }
+function doubleLevel4(float $value): float { return doubleLevel3($value) + 1.0; }
+function doubleLevel5(float $value): float { return doubleLevel4($value) + 1.0; }
+function doubleLevel6(float $value): float { return doubleLevel5($value) + 1.0; }
+$result = doubleLevel6(2.0);
+echo gettype($result) . ':' . $result;
+"#),
+        "double:10"
+    );
+}
+
+#[test]
 fn test_e2e_user_function_scope_isolation() {
     assert_eq!(
         run_php("<?php $x = 10; function foo() { $x = 99; return $x; } echo foo(); echo $x;"),

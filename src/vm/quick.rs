@@ -364,19 +364,30 @@ impl QuickDoubleArgumentProgram {
     }
 }
 
-/// Flatten one guarded composed Double body after its direct call leaves have
-/// been resolved. Operation-result remapping is target-neutral: both native
+/// Borrowed view of a guarded Double callee after runtime resolution. The
+/// program may be the callee's original flat leaf or a recursively flattened
+/// composed body; the outer composer deliberately does not distinguish them.
+#[derive(Clone, Copy)]
+pub(crate) struct ResolvedScalarDoubleProgram<'a> {
+    pub public_args: u8,
+    pub program: &'a crate::vm::function::ScalarDoubleProgram,
+}
+
+/// Flatten one guarded composed Double body after its direct callees have been
+/// resolved. Operation-result remapping is target-neutral: both native
 /// backends receive the same established eight-temporary scalar program.
 pub(crate) fn compose_scalar_double_program(
     plan: &crate::vm::function::ComposedScalarDoubleFunctionPlan,
-    leaf_plans: &[Option<&crate::vm::function::ScalarDoubleFunctionPlan>],
+    resolved_programs: &[Option<ResolvedScalarDoubleProgram<'_>>],
 ) -> Option<crate::vm::function::ScalarDoubleProgram> {
     use crate::vm::function::{
         ComposedScalarDoubleOp, ScalarDoubleOp, ScalarDoubleSource,
     };
 
     const MAX_OPERATIONS: usize = 8;
-    if plan.operations.len() > 16 || plan.operations.len() > leaf_plans.len() {
+    if plan.operations.len() > 16
+        || plan.operations.len() > resolved_programs.len()
+    {
         return None;
     }
 
@@ -414,9 +425,12 @@ pub(crate) fn compose_scalar_double_program(
                 result
             }
             ComposedScalarDoubleOp::Call(call) => {
-                let leaf = leaf_plans.get(composed_index).copied().flatten()?;
-                if leaf.public_args as usize != call.arguments.len()
-                    || operations.len() + leaf.program.operations.len()
+                let resolved = resolved_programs
+                    .get(composed_index)
+                    .copied()
+                    .flatten()?;
+                if resolved.public_args as usize != call.arguments.len()
+                    || operations.len() + resolved.program.operations.len()
                         > MAX_OPERATIONS
                 {
                     return None;
@@ -441,18 +455,20 @@ pub(crate) fn compose_scalar_double_program(
                     }
                     ScalarDoubleSource::Temporary(index) => leaf_start
                         .checked_add(index as usize)
-                        .filter(|index| *index < leaf_start + leaf.program.operations.len())
+                        .filter(|index| {
+                            *index < leaf_start + resolved.program.operations.len()
+                        })
                         .and_then(|index| u8::try_from(index).ok())
                         .map(ScalarDoubleSource::Temporary),
                 };
-                for operation in leaf.program.operations.iter().copied() {
+                for operation in resolved.program.operations.iter().copied() {
                     operations.push(ScalarDoubleOp {
                         kind: operation.kind,
                         lhs: remap_leaf_source(operation.lhs)?,
                         rhs: remap_leaf_source(operation.rhs)?,
                     });
                 }
-                remap_leaf_source(leaf.program.output)?
+                remap_leaf_source(resolved.program.output)?
             }
         });
     }
@@ -4947,7 +4963,13 @@ mod tests {
 
         let flattened = compose_scalar_double_program(
             &composed,
-            &[Some(&leaf), None],
+            &[
+                Some(ResolvedScalarDoubleProgram {
+                    public_args: leaf.public_args,
+                    program: &leaf.program,
+                }),
+                None,
+            ],
         )
         .unwrap();
         assert_eq!(flattened.operations.len(), 2);
@@ -5009,7 +5031,17 @@ mod tests {
         );
 
         assert!(
-            compose_scalar_double_program(&composed, &[Some(&leaf), None]).is_none()
+            compose_scalar_double_program(
+                &composed,
+                &[
+                    Some(ResolvedScalarDoubleProgram {
+                        public_args: leaf.public_args,
+                        program: &leaf.program,
+                    }),
+                    None,
+                ],
+            )
+            .is_none()
         );
     }
 

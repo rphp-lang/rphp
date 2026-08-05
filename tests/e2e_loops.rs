@@ -76,6 +76,16 @@ fn test_e2e_nested_typed_double_leaf_accumulation() {
 }
 
 #[test]
+fn test_e2e_recursive_composed_typed_double_accumulation() {
+    assert_eq!(
+        run_php(
+            "<?php function scaleAndShift(float $value, float $scale): float { return ($value * $scale) + 1.0; } function calculateNested(float $value, float $scale): float { return (scaleAndShift($value, $scale) * 0.5) + 2.0; } function calculateOuter(float $value, float $scale): float { return calculateNested($value, $scale) + 3.0; } $scale = 2.0; $total = 0.0; for ($i = 0; $i < 100; $i++) { $total += calculateOuter($i * 0.5, $scale); } echo $i . ':' . $total;"
+        ),
+        "100:3025"
+    );
+}
+
+#[test]
 fn test_e2e_nested_typed_double_division_replays_canonical_error() {
     let error = run_php_expect_error(
         "<?php function divideNested(float $value, float $divisor): float { return $value / $divisor; } function calculateNested(float $value, float $divisor): float { return divideNested($value, $divisor) + 1.0; } $total = 0.0; for ($i = 0; $i < 5; $i++) { $total += calculateNested(4.0, $i - 2.0); }",
