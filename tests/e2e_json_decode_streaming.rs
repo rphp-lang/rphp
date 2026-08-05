@@ -104,3 +104,25 @@ echo count($v) . '|' . $v[2];
         "3|3"
     );
 }
+
+#[test]
+fn decoded_linear_hash_preserves_cow_updates_removal_and_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$source = json_decode('{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7,"h":8}', true);
+$copy = $source;
+$copy['d'] = 40;
+unset($copy['b']);
+$copy['i'] = 9;
+echo $source['b'] . '|' . $source['d'] . '|' . count($source)
+    . '|' . (isset($copy['b']) ? 'bad' : 'missing')
+    . '|' . $copy['d'] . '|' . $copy['i'] . '|' . count($copy) . '|';
+foreach ($copy as $key => $value) {
+    echo $key;
+}
+"#,
+        ),
+        "2|4|8|missing|40|9|8|acdefghi"
+    );
+}

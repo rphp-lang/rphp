@@ -113,13 +113,14 @@ impl<'de> Visitor<'de> for PhpValueVisitor {
         A: MapAccess<'de>,
     {
         if self.associative {
-            let mut array = PhpArray::with_hash_capacity(map.size_hint().unwrap_or(0));
+            let mut array =
+                PhpArray::with_deferred_hash_capacity(map.size_hint().unwrap_or(0));
             while let Some(key) = map.next_key::<String>()? {
                 let value = map.next_value_seed(PhpValueSeed::new(true))?;
                 if let Some(key) = canonical_decimal_array_key(&key) {
-                    array.set_int(key, value);
+                    array.set_streamed_int(key, value);
                 } else {
-                    array.set_owned_str(key, value);
+                    array.set_streamed_owned_str(key, value);
                 }
             }
             Ok(Value::array(array))

@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::cell::RefCell;
+use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -295,19 +295,22 @@ mod object_tests {
 /// PHP array — ordered hash map with integer and string keys.
 /// Preserves insertion order, supports auto-incrementing integer keys.
 ///
-/// Three internal representations selected dynamically:
+/// Four internal representations selected dynamically:
 /// - **Packed**: `Vec<Value>` — keys are implicit 0..N-1. No per-element key storage.
 ///   Used for sequential integer-indexed arrays (`[1,2,3]`, `$a[] = x`).
 ///   Push = `Vec::push`. Read = `Vec[i]`. Clone = clone values only (no keys).
 /// - **SmallHash**: up to three explicit entries held in the `PhpArray`
 ///   allocation. Reads are short linear scans or validated positions, with no
 ///   entry-vector or hash-index allocation.
+/// - **LinearHash**: four to eight ordered entries in one compact vector.
+///   It starts with bounded linear lookups and creates a string index only if
+///   repeated reads prove that the index will amortize its allocation.
 /// - **Hash**: ordered compact entries + split integer/string indexes.
 ///   Integer keys stay inline; string entries and their index share one key allocation.
 ///   Used when string keys, sparse int keys, or structural mutations occur.
 ///
-/// Transitions from packed to an explicit-key representation and from a full
-/// small hash to the general hash are one-way and happen automatically.
+/// Transitions from packed to an explicit-key representation, then from the
+/// bounded representations to the general hash, are one-way and automatic.
 pub struct PhpArray {
     storage: ArrayStorage,
     next_int_key: i64,
@@ -374,6 +377,9 @@ enum ArrayStorage {
     /// The first `None` terminates the dense prefix, so no separate length or
     /// heap allocation is needed.
     SmallHash(SmallHashStorage),
+    /// Four to eight explicit keys in insertion order, without secondary
+    /// indexes. Mutations and reads scan a strictly bounded entry window.
+    LinearHash(LinearHashStorage),
     /// General ordered map — explicit keys + split hash indexes.
     Hash {
         entries: Vec<(ArrayEntryKey, Value)>,
@@ -441,10 +447,89 @@ enum ArrayEntryKey {
 }
 
 const SMALL_HASH_CAPACITY: usize = 3;
+const LINEAR_HASH_CAPACITY: usize = 8;
+const LINEAR_HASH_INDEX_THRESHOLD: u8 = 4;
 
 #[derive(Clone)]
 struct SmallHashStorage {
     entries: [Option<(ArrayEntryKey, Value)>; SMALL_HASH_CAPACITY],
+}
+
+struct LinearHashStorage {
+    entries: Vec<(ArrayEntryKey, Value)>,
+    string_lookups: Cell<u8>,
+    str_index: OnceCell<HashMap<SharedStringKey, usize>>,
+}
+
+impl LinearHashStorage {
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(capacity),
+            string_lookups: Cell::new(0),
+            str_index: OnceCell::new(),
+        }
+    }
+
+    #[inline]
+    fn from_entries(entries: Vec<(ArrayEntryKey, Value)>) -> Self {
+        Self {
+            entries,
+            string_lookups: Cell::new(0),
+            str_index: OnceCell::new(),
+        }
+    }
+
+    #[inline]
+    fn find_int(&self, key: i64) -> Option<usize> {
+        linear_find_int(&self.entries, key)
+    }
+
+    #[inline]
+    fn find_str_for_update(&self, key: &str) -> Option<usize> {
+        self.str_index
+            .get()
+            .and_then(|index| index.get(key).copied())
+            .or_else(|| linear_find_str(&self.entries, key))
+    }
+
+    #[inline]
+    fn find_str(&self, key: &str) -> Option<usize> {
+        if let Some(index) = self.str_index.get() {
+            return index.get(key).copied();
+        }
+        let position = linear_find_str(&self.entries, key);
+        let lookups = self.string_lookups.get().saturating_add(1);
+        if lookups >= LINEAR_HASH_INDEX_THRESHOLD {
+            let string_keys = self
+                .entries
+                .iter()
+                .filter(|entry| matches!(&entry.0, ArrayEntryKey::String(_)))
+                .count();
+            let mut index = HashMap::with_capacity(string_keys);
+            for (position, (key, _)) in self.entries.iter().enumerate() {
+                if let ArrayEntryKey::String(key) = key {
+                    index.insert(key.clone(), position);
+                }
+            }
+            let _ = self.str_index.set(index);
+        } else {
+            self.string_lookups.set(lookups);
+        }
+        position
+    }
+
+    #[inline]
+    fn invalidate_index(&mut self) {
+        self.str_index.take();
+        self.string_lookups.set(0);
+    }
+}
+
+impl Clone for LinearHashStorage {
+    fn clone(&self) -> Self {
+        Self::from_entries(self.entries.clone())
+    }
 }
 
 impl SmallHashStorage {
@@ -516,6 +601,20 @@ impl ArrayEntryKey {
     }
 }
 
+#[inline]
+fn linear_find_int(entries: &[(ArrayEntryKey, Value)], key: i64) -> Option<usize> {
+    entries
+        .iter()
+        .position(|entry| matches!(entry.0, ArrayEntryKey::Int(found) if found == key))
+}
+
+#[inline]
+fn linear_find_str(entries: &[(ArrayEntryKey, Value)], key: &str) -> Option<usize> {
+    entries.iter().position(
+        |entry| matches!(&entry.0, ArrayEntryKey::String(found) if found.as_ref() == key),
+    )
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArrayKey {
     Int(i64),
@@ -557,6 +656,25 @@ impl PhpArray {
         }
     }
 
+    /// Create associative storage for a streaming producer that does not know
+    /// its final member count. Up to three entries remain inline, four to eight
+    /// use bounded linear storage, and wider results build the general indexes.
+    pub(crate) fn with_deferred_hash_capacity(capacity: usize) -> Self {
+        if capacity <= SMALL_HASH_CAPACITY {
+            return Self {
+                storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
+                next_int_key: 0,
+            };
+        }
+        if capacity <= LINEAR_HASH_CAPACITY {
+            return Self {
+                storage: ArrayStorage::LinearHash(LinearHashStorage::with_capacity(capacity)),
+                next_int_key: 0,
+            };
+        }
+        Self::with_hash_capacity(capacity)
+    }
+
     /// Transition from packed to hash mode. Moves values into entries with explicit keys.
     fn transition_to_hash(&mut self) {
         if let ArrayStorage::Packed(values) = &mut self.storage {
@@ -591,6 +709,50 @@ impl PhpArray {
         additional_string_capacity: usize,
         additional_int_capacity: usize,
     ) {
+        if !matches!(&self.storage, ArrayStorage::SmallHash(_)) {
+            return;
+        };
+        let small = match std::mem::replace(
+            &mut self.storage,
+            ArrayStorage::Packed(Vec::new()),
+        ) {
+            ArrayStorage::SmallHash(small) => small,
+            _ => unreachable!(),
+        };
+        let len = small.len();
+        let capacity = len
+            .saturating_add(additional_string_capacity)
+            .saturating_add(additional_int_capacity);
+        let mut entries = Vec::with_capacity(capacity);
+        entries.extend(small.entries.into_iter().flatten());
+        let string_keys = entries
+            .iter()
+            .filter(|entry| matches!(&entry.0, ArrayEntryKey::String(_)))
+            .count();
+        let mut str_index =
+            HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity));
+        let mut int_index =
+            int_index_with_capacity((len - string_keys).saturating_add(additional_int_capacity));
+        for (position, (key, _)) in entries.iter().enumerate() {
+            match key {
+                ArrayEntryKey::Int(key) => {
+                    int_index.insert(*key, position);
+                }
+                ArrayEntryKey::String(key) => {
+                    str_index.insert(key.clone(), position);
+                }
+            }
+        }
+        self.storage = ArrayStorage::Hash {
+            entries,
+            str_index,
+            int_index,
+        };
+    }
+
+    /// A streaming materializer with unknown final width may deliberately
+    /// retain four to eight entries without secondary indexes.
+    fn promote_small_hash_to_linear(&mut self) {
         let ArrayStorage::SmallHash(_) = &self.storage else {
             return;
         };
@@ -599,30 +761,59 @@ impl PhpArray {
         else {
             unreachable!();
         };
-        let len = small.len();
-        let capacity = len
+        let mut entries = Vec::with_capacity(LINEAR_HASH_CAPACITY);
+        entries.extend(small.entries.into_iter().flatten());
+        self.storage = ArrayStorage::LinearHash(LinearHashStorage::from_entries(entries));
+    }
+
+    /// Build split indexes once the bounded linear representation is full.
+    /// The ordered entry vector is retained and only reserves its next growth
+    /// step, avoiding a second move of keys and values.
+    fn promote_linear_hash(
+        &mut self,
+        additional_string_capacity: usize,
+        additional_int_capacity: usize,
+    ) {
+        let ArrayStorage::LinearHash(_) = &self.storage else {
+            return;
+        };
+        let ArrayStorage::LinearHash(linear) =
+            std::mem::replace(&mut self.storage, ArrayStorage::Packed(Vec::new()))
+        else {
+            unreachable!();
+        };
+        let LinearHashStorage {
+            mut entries,
+            str_index,
+            ..
+        } = linear;
+        let len = entries.len();
+        let requested = len
             .saturating_add(additional_string_capacity)
             .saturating_add(additional_int_capacity);
-        let string_keys = small.entries[..len]
+        let capacity = requested.next_power_of_two();
+        entries.reserve(capacity.saturating_sub(len));
+        let string_keys = entries
             .iter()
-            .filter(|entry| matches!(entry, Some((ArrayEntryKey::String(_), _))))
+            .filter(|entry| matches!(&entry.0, ArrayEntryKey::String(_)))
             .count();
-        let mut entries = Vec::with_capacity(capacity);
-        let mut str_index =
-            HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity));
+        let mut str_index = str_index.into_inner().unwrap_or_else(|| {
+            HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity))
+        });
+        str_index.reserve(additional_string_capacity);
         let mut int_index =
             int_index_with_capacity((len - string_keys).saturating_add(additional_int_capacity));
-        for entry in small.entries.into_iter().flatten() {
-            let position = entries.len();
-            match &entry.0 {
+        for (position, (key, _)) in entries.iter().enumerate() {
+            match key {
                 ArrayEntryKey::Int(key) => {
                     int_index.insert(*key, position);
                 }
                 ArrayEntryKey::String(key) => {
-                    str_index.insert(key.clone(), position);
+                    if !str_index.contains_key(key.as_ref()) {
+                        str_index.insert(key.clone(), position);
+                    }
                 }
             }
-            entries.push(entry);
         }
         self.storage = ArrayStorage::Hash {
             entries,
@@ -636,9 +827,16 @@ impl PhpArray {
     pub fn push(&mut self, val: Value) {
         let key = self.next_int_key;
         self.next_int_key = key + 1;
-        if matches!(&self.storage, ArrayStorage::SmallHash(small) if small.len() == SMALL_HASH_CAPACITY)
-        {
-            self.promote_small_hash(0, 1);
+        match &self.storage {
+            ArrayStorage::SmallHash(small) if small.len() == SMALL_HASH_CAPACITY => {
+                self.promote_small_hash(0, 1);
+            }
+            ArrayStorage::LinearHash(linear)
+                if linear.entries.len() == LINEAR_HASH_CAPACITY =>
+            {
+                self.promote_linear_hash(0, 1);
+            }
+            _ => {}
         }
         match &mut self.storage {
             ArrayStorage::Packed(values) => {
@@ -647,6 +845,10 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => {
                 let inserted = small.push(ArrayEntryKey::Int(key), val);
                 debug_assert!(inserted);
+            }
+            ArrayStorage::LinearHash(linear) => {
+                linear.invalidate_index();
+                linear.entries.push((ArrayEntryKey::Int(key), val));
             }
             ArrayStorage::Hash { entries, int_index, .. } => {
                 let idx = entries.len();
@@ -675,7 +877,9 @@ impl PhpArray {
         }
         // Need hash mode — transition if packed
         self.transition_to_hash();
-        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+        if let ArrayStorage::SmallHash(small) =
+            &mut self.storage
+        {
             if let Some(index) = small.find_int(key) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -690,7 +894,22 @@ impl PhpArray {
             }
         }
         self.promote_small_hash(0, 1);
-        // Now in hash mode
+        if let ArrayStorage::LinearHash(linear) = &mut self.storage {
+            if let Some(index) = linear.find_int(key) {
+                linear.entries[index].1 = val;
+                return;
+            }
+            if linear.entries.len() < LINEAR_HASH_CAPACITY {
+                linear.invalidate_index();
+                linear.entries.push((ArrayEntryKey::Int(key), val));
+                if key >= self.next_int_key {
+                    self.next_int_key = key + 1;
+                }
+                return;
+            }
+        }
+        self.promote_linear_hash(0, 1);
+        // Now in indexed hash mode.
         let storage = &mut self.storage;
         if let ArrayStorage::Hash { entries, int_index, .. } = storage {
             if let Some(&idx) = int_index.get(&key) {
@@ -706,13 +925,39 @@ impl PhpArray {
         }
     }
 
+    /// Insert an integer key for a streaming associative materializer whose
+    /// final width is unknown. A fourth unique entry selects bounded linear
+    /// storage; ordinary PHP array writes retain their usual indexed policy.
+    pub(crate) fn set_streamed_int(&mut self, key: i64, val: Value) {
+        let promote = matches!(
+            &self.storage,
+            ArrayStorage::SmallHash(small)
+                if small.len() == SMALL_HASH_CAPACITY && small.find_int(key).is_none()
+        );
+        if promote {
+            self.promote_small_hash_to_linear();
+        }
+        let promote_linear = matches!(
+            &self.storage,
+            ArrayStorage::LinearHash(linear)
+                if linear.entries.len() == LINEAR_HASH_CAPACITY
+                    && linear.find_int(key).is_none()
+        );
+        if promote_linear {
+            self.promote_linear_hash(0, 1);
+        }
+        self.set_int(key, val);
+    }
+
     /// Set by string key
     pub fn set_str(&mut self, key: &str, val: Value) {
         // String key → always hash mode
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+        if let ArrayStorage::SmallHash(small) =
+            &mut self.storage
+        {
             if let Some(index) = small.find_str(key) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -724,6 +969,21 @@ impl PhpArray {
             }
         }
         self.promote_small_hash(1, 0);
+        if let ArrayStorage::LinearHash(linear) = &mut self.storage {
+            if let Some(index) = linear.find_str_for_update(key) {
+                linear.entries[index].1 = val;
+                return;
+            }
+            if linear.entries.len() < LINEAR_HASH_CAPACITY {
+                linear.invalidate_index();
+                linear.entries.push((
+                    ArrayEntryKey::String(SharedStringKey::new(key)),
+                    val,
+                ));
+                return;
+            }
+        }
+        self.promote_linear_hash(1, 0);
         if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
             if let Some(&idx) = str_index.get(key) {
                 // Key exists — overwrite value, no allocation for key
@@ -745,7 +1005,9 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+        if let ArrayStorage::SmallHash(small) =
+            &mut self.storage
+        {
             if let Some(index) = small.find_str(&key) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -760,6 +1022,21 @@ impl PhpArray {
             }
         }
         self.promote_small_hash(1, 0);
+        if let ArrayStorage::LinearHash(linear) = &mut self.storage {
+            if let Some(index) = linear.find_str_for_update(&key) {
+                linear.entries[index].1 = val;
+                return;
+            }
+            if linear.entries.len() < LINEAR_HASH_CAPACITY {
+                linear.invalidate_index();
+                linear.entries.push((
+                    ArrayEntryKey::String(SharedStringKey::from_owned(key)),
+                    val,
+                ));
+                return;
+            }
+        }
+        self.promote_linear_hash(1, 0);
         if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
             if let Some(&idx) = str_index.get(key.as_str()) {
                 entries[idx].1 = val;
@@ -772,6 +1049,29 @@ impl PhpArray {
         }
     }
 
+    /// Owned-string counterpart of `set_streamed_int`. Parsed key bytes move
+    /// into canonical array storage without forcing a full index at key four.
+    pub(crate) fn set_streamed_owned_str(&mut self, key: String, val: Value) {
+        let promote = matches!(
+            &self.storage,
+            ArrayStorage::SmallHash(small)
+                if small.len() == SMALL_HASH_CAPACITY && small.find_str(&key).is_none()
+        );
+        if promote {
+            self.promote_small_hash_to_linear();
+        }
+        let promote_linear = matches!(
+            &self.storage,
+            ArrayStorage::LinearHash(linear)
+                if linear.entries.len() == LINEAR_HASH_CAPACITY
+                    && linear.find_str_for_update(&key).is_none()
+        );
+        if promote_linear {
+            self.promote_linear_hash(1, 0);
+        }
+        self.set_owned_str(key, val);
+    }
+
     /// Set a non-numeric PHP string key while sharing its Rc allocation with
     /// the source Value. This avoids materializing an intermediate ArrayKey and
     /// allocating a second copy of the same immutable key bytes.
@@ -780,7 +1080,9 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+        if let ArrayStorage::SmallHash(small) =
+            &mut self.storage
+        {
             if let Some(index) = small.find_str(key_text) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -794,6 +1096,20 @@ impl PhpArray {
             }
         }
         self.promote_small_hash(1, 0);
+        if let ArrayStorage::LinearHash(linear) = &mut self.storage {
+            if let Some(index) = linear.find_str_for_update(key_text) {
+                linear.entries[index].1 = val;
+                return;
+            }
+            if linear.entries.len() < LINEAR_HASH_CAPACITY {
+                let owned = SharedStringKey::from_value(key)
+                    .expect("set_str_value requires Rc-backed string storage");
+                linear.invalidate_index();
+                linear.entries.push((ArrayEntryKey::String(owned), val));
+                return;
+            }
+        }
+        self.promote_linear_hash(1, 0);
         if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
             if let Some(&idx) = str_index.get(key_text) {
                 entries[idx].1 = val;
@@ -818,8 +1134,11 @@ impl PhpArray {
     #[inline(always)]
     fn hash_entry_at(&self, position: usize) -> Option<&(ArrayEntryKey, Value)> {
         match &self.storage {
-            ArrayStorage::SmallHash(small) => small.get(position),
             ArrayStorage::Hash { entries, .. } => entries.get(position),
+            ArrayStorage::LinearHash(linear) => linear.entries.get(position),
+            ArrayStorage::SmallHash(small) => {
+                small.get(position)
+            }
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -827,8 +1146,11 @@ impl PhpArray {
     #[inline(always)]
     fn hash_len(&self) -> Option<usize> {
         match &self.storage {
-            ArrayStorage::SmallHash(small) => Some(small.len()),
             ArrayStorage::Hash { entries, .. } => Some(entries.len()),
+            ArrayStorage::LinearHash(linear) => Some(linear.entries.len()),
+            ArrayStorage::SmallHash(small) => {
+                Some(small.len())
+            }
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -847,6 +1169,10 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => small
                 .find_int(key)
                 .and_then(|position| small.get(position))
+                .map(|entry| &entry.1),
+            ArrayStorage::LinearHash(linear) => linear
+                .find_int(key)
+                .and_then(|position| linear.entries.get(position))
                 .map(|entry| &entry.1),
             ArrayStorage::Hash { entries, int_index, .. } => {
                 // Ordered PHP arrays commonly retain a contiguous integer run
@@ -887,6 +1213,10 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => {
                 let position = small.find_int(key)?;
                 small.entries.get_mut(position)?.as_mut().map(|entry| &mut entry.1)
+            }
+            ArrayStorage::LinearHash(linear) => {
+                let position = linear.find_int(key)?;
+                linear.entries.get_mut(position).map(|entry| &mut entry.1)
             }
             ArrayStorage::Hash { entries, int_index, .. } => {
                 let position = *int_index.get(&key)?;
@@ -1010,6 +1340,10 @@ impl PhpArray {
                 .find_int(key)
                 .and_then(|position| small.get(position))
                 .map(|entry| &entry.1),
+            ArrayStorage::LinearHash(linear) => linear
+                .find_int(key)
+                .and_then(|position| linear.entries.get(position))
+                .map(|entry| &entry.1),
             ArrayStorage::Hash { entries, int_index, .. } => {
                 int_index.get(&key).map(|&index| &entries[index].1)
             }
@@ -1027,6 +1361,10 @@ impl PhpArray {
                 .find_int(key)
                 .and_then(|position| small.get(position))
                 .map(|entry| &entry.1),
+            ArrayStorage::LinearHash(linear) => linear
+                .find_int(key)
+                .and_then(|position| linear.entries.get(position))
+                .map(|entry| &entry.1),
             ArrayStorage::Hash { entries, int_index, .. } => {
                 int_index.get(&key).map(|&idx| &entries[idx].1)
             }
@@ -1039,14 +1377,18 @@ impl PhpArray {
     #[inline]
     pub fn get_str(&self, key: &str) -> Option<&Value> {
         match &self.storage {
+            ArrayStorage::Hash { entries, str_index, .. } => {
+                str_index.get(key).map(|&idx| &entries[idx].1)
+            }
+            ArrayStorage::LinearHash(linear) => linear
+                .find_str(key)
+                .and_then(|position| linear.entries.get(position))
+                .map(|entry| &entry.1),
             ArrayStorage::Packed(_) => None, // packed arrays have no string keys
             ArrayStorage::SmallHash(small) => small
                 .find_str(key)
                 .and_then(|position| small.get(position))
                 .map(|entry| &entry.1),
-            ArrayStorage::Hash { entries, str_index, .. } => {
-                str_index.get(key).map(|&idx| &entries[idx].1)
-            }
         }
     }
 
@@ -1060,6 +1402,10 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => {
                 let position = small.find_str(key)?;
                 small.entries.get_mut(position)?.as_mut().map(|entry| &mut entry.1)
+            }
+            ArrayStorage::LinearHash(linear) => {
+                let position = linear.find_str(key)?;
+                linear.entries.get_mut(position).map(|entry| &mut entry.1)
             }
             ArrayStorage::Hash { entries, str_index, .. } => {
                 let position = *str_index.get(key)?;
@@ -1084,10 +1430,6 @@ impl PhpArray {
     #[inline]
     pub(crate) fn get_str_with_position(&self, key: &str) -> Option<(usize, &Value)> {
         match &self.storage {
-            ArrayStorage::SmallHash(small) => {
-                let position = small.find_str(key)?;
-                Some((position, &small.get(position)?.1))
-            }
             ArrayStorage::Hash {
                 entries,
                 str_index,
@@ -1095,6 +1437,14 @@ impl PhpArray {
             } => {
                 let position = *str_index.get(key)?;
                 Some((position, &entries.get(position)?.1))
+            }
+            ArrayStorage::LinearHash(linear) => {
+                let position = linear.find_str(key)?;
+                Some((position, &linear.entries.get(position)?.1))
+            }
+            ArrayStorage::SmallHash(small) => {
+                let position = small.find_str(key)?;
+                Some((position, &small.get(position)?.1))
             }
             ArrayStorage::Packed(_) => None,
         }
@@ -1105,6 +1455,7 @@ impl PhpArray {
         match &self.storage {
             ArrayStorage::Packed(values) => values.len(),
             ArrayStorage::SmallHash(small) => small.len(),
+            ArrayStorage::LinearHash(linear) => linear.entries.len(),
             ArrayStorage::Hash { entries, .. } => entries.len(),
         }
     }
@@ -1113,7 +1464,10 @@ impl PhpArray {
     pub fn is_empty(&self) -> bool {
         match &self.storage {
             ArrayStorage::Packed(values) => values.is_empty(),
-            ArrayStorage::SmallHash(small) => small.len() == 0,
+            ArrayStorage::SmallHash(small) => {
+                small.len() == 0
+            }
+            ArrayStorage::LinearHash(linear) => linear.entries.is_empty(),
             ArrayStorage::Hash { entries, .. } => entries.is_empty(),
         }
     }
@@ -1130,6 +1484,9 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => small
                 .get(pos)
                 .map(|(key, value)| (value, key.to_public())),
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get(pos).map(|(key, value)| (value, key.to_public()))
+            }
             ArrayStorage::Hash { entries, .. } => {
                 entries.get(pos).map(|(k, v)| (v, k.to_public()))
             }
@@ -1141,7 +1498,12 @@ impl PhpArray {
     pub fn get_value_at(&self, pos: usize) -> Option<&Value> {
         match &self.storage {
             ArrayStorage::Packed(values) => values.get(pos),
-            ArrayStorage::SmallHash(small) => small.get(pos).map(|entry| &entry.1),
+            ArrayStorage::SmallHash(small) => {
+                small.get(pos).map(|entry| &entry.1)
+            }
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get(pos).map(|entry| &entry.1)
+            }
             ArrayStorage::Hash { entries, .. } => entries.get(pos).map(|(_, v)| v),
         }
     }
@@ -1154,6 +1516,9 @@ impl PhpArray {
             ArrayStorage::Packed(values) => PhpArrayIterInner::Packed(values.iter().enumerate()),
             ArrayStorage::SmallHash(small) => {
                 PhpArrayIterInner::Small(small.entries[..small.len()].iter())
+            }
+            ArrayStorage::LinearHash(linear) => {
+                PhpArrayIterInner::Hash(linear.entries.iter())
             }
             ArrayStorage::Hash { entries, .. } => PhpArrayIterInner::Hash(entries.iter()),
         };
@@ -1170,6 +1535,9 @@ impl PhpArray {
             ArrayStorage::Packed(values) => PhpArrayValuesInner::Packed(values.iter()),
             ArrayStorage::SmallHash(small) => {
                 PhpArrayValuesInner::Small(small.entries[..small.len()].iter())
+            }
+            ArrayStorage::LinearHash(linear) => {
+                PhpArrayValuesInner::Hash(linear.entries.iter())
             }
             ArrayStorage::Hash { entries, .. } => PhpArrayValuesInner::Hash(entries.iter()),
         };
@@ -1188,6 +1556,9 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => small.entries[..small.len()]
                 .iter()
                 .any(|entry| matches!(entry, Some((ArrayEntryKey::String(_), _)))),
+            ArrayStorage::LinearHash(linear) => linear.entries
+                .iter()
+                .any(|entry| matches!(entry.0, ArrayEntryKey::String(_))),
             ArrayStorage::Hash { str_index, .. } => !str_index.is_empty(),
         }
     }
@@ -1209,6 +1580,10 @@ impl PhpArray {
                     (key.to_public(), value)
                 })
                 .collect(),
+            ArrayStorage::LinearHash(linear) => linear.entries
+                .iter()
+                .map(|(key, value)| (key.to_public(), value))
+                .collect(),
             ArrayStorage::Hash { entries, .. } => entries
                 .iter()
                 .map(|(key, value)| (key.to_public(), value))
@@ -1223,7 +1598,9 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+        if let ArrayStorage::SmallHash(small) =
+            &mut self.storage
+        {
             let position = match key {
                 ArrayKey::Int(key) => small.find_int(*key),
                 ArrayKey::String(key) => small.find_str(key),
@@ -1231,6 +1608,18 @@ impl PhpArray {
             return position
                 .and_then(|position| small.remove_at(position))
                 .is_some();
+        }
+        if let ArrayStorage::LinearHash(linear) = &mut self.storage {
+            let position = match key {
+                ArrayKey::Int(key) => linear.find_int(*key),
+                ArrayKey::String(key) => linear.find_str_for_update(key),
+            };
+            if let Some(position) = position {
+                linear.entries.remove(position);
+                linear.invalidate_index();
+                return true;
+            }
+            return false;
         }
         if let ArrayStorage::Hash { entries, int_index, str_index, .. } = &mut self.storage {
             let found_idx = match key {
@@ -1271,6 +1660,14 @@ impl PhpArray {
                 }
                 Some(value)
             }
+            ArrayStorage::LinearHash(linear) => {
+                let (key, value) = linear.entries.pop()?;
+                linear.invalidate_index();
+                if matches!(key, ArrayEntryKey::Int(key) if key == self.next_int_key - 1) {
+                    self.next_int_key -= 1;
+                }
+                Some(value)
+            }
             ArrayStorage::Hash { entries, int_index, str_index, .. } => {
                 if let Some((key, val)) = entries.pop() {
                     match &key {
@@ -1299,12 +1696,30 @@ impl PhpArray {
     pub fn shift(&mut self) -> Option<Value> {
         // Transition to hash — shift requires key renumbering
         self.transition_to_hash();
-        if let ArrayStorage::SmallHash(small) = &mut self.storage {
+        if let ArrayStorage::SmallHash(small) =
+            &mut self.storage
+        {
             let (_key, value) = small.remove_at(0)?;
             let mut next_int_key = 0i64;
             let len = small.len();
             for entry in &mut small.entries[..len] {
                 if let Some((ArrayEntryKey::Int(key), _)) = entry {
+                    *key = next_int_key;
+                    next_int_key += 1;
+                }
+            }
+            self.next_int_key = next_int_key;
+            return Some(value);
+        }
+        if let ArrayStorage::LinearHash(linear) = &mut self.storage {
+            if linear.entries.is_empty() {
+                return None;
+            }
+            let (_key, value) = linear.entries.remove(0);
+            linear.invalidate_index();
+            let mut next_int_key = 0i64;
+            for (key, _) in linear.entries.iter_mut() {
+                if let ArrayEntryKey::Int(key) = key {
                     *key = next_int_key;
                     next_int_key += 1;
                 }
@@ -1384,6 +1799,12 @@ impl PhpArray {
                 (
                     (&entry.1 as *const Value).cast(),
                     std::mem::size_of::<Option<(ArrayEntryKey, Value)>>(),
+                )
+            }),
+            ArrayStorage::LinearHash(linear) => linear.entries.first().map(|entry| {
+                (
+                    (&entry.1 as *const Value).cast(),
+                    std::mem::size_of::<(ArrayEntryKey, Value)>(),
                 )
             }),
             ArrayStorage::Hash { entries, .. } => entries.first().map(|entry| {
@@ -1494,6 +1915,7 @@ impl Clone for PhpArray {
         let cloned_storage = match &self.storage {
             ArrayStorage::Packed(values) => ArrayStorage::Packed(values.clone()),
             ArrayStorage::SmallHash(small) => ArrayStorage::SmallHash(small.clone()),
+            ArrayStorage::LinearHash(linear) => ArrayStorage::LinearHash(linear.clone()),
             ArrayStorage::Hash { entries, str_index, int_index } => ArrayStorage::Hash {
                 entries: entries.clone(),
                 str_index: str_index.clone(),
@@ -1520,6 +1942,12 @@ impl std::fmt::Debug for PhpArray {
                 f.debug_struct("PhpArray")
                     .field("mode", &"small-hash")
                     .field("len", &small.len())
+                    .finish()
+            }
+            ArrayStorage::LinearHash(linear) => {
+                f.debug_struct("PhpArray")
+                    .field("mode", &"linear-hash")
+                    .field("len", &linear.entries.len())
                     .finish()
             }
             ArrayStorage::Hash { entries, .. } => {
@@ -1552,7 +1980,7 @@ mod php_array_tests {
 
     #[test]
     fn hash_entry_and_string_index_share_key_allocation() {
-        let mut array = PhpArray::with_hash_capacity(4);
+        let mut array = PhpArray::with_hash_capacity(9);
         array.set_str("shared", Value::long(7));
 
         let ArrayStorage::Hash { entries, str_index, .. } = &array.storage else {
@@ -1566,21 +1994,36 @@ mod php_array_tests {
     }
 
     #[test]
-    fn small_hash_promotes_only_for_a_fourth_new_key() {
-        let mut array = PhpArray::with_hash_capacity(3);
+    fn small_hash_promotes_to_linear_before_the_general_index() {
+        let mut array = PhpArray::with_deferred_hash_capacity(3);
         array.set_str("a", Value::long(1));
         array.set_int(8, Value::long(2));
         array.set_str("c", Value::long(3));
-        assert!(matches!(&array.storage, ArrayStorage::SmallHash(_)));
+        assert!(matches!(
+            &array.storage,
+            ArrayStorage::SmallHash(_)
+        ));
 
         array.set_str("a", Value::long(10));
-        assert!(matches!(&array.storage, ArrayStorage::SmallHash(_)));
-        array.set_str("d", Value::long(4));
+        assert!(matches!(
+            &array.storage,
+            ArrayStorage::SmallHash(_)
+        ));
+        array.set_streamed_owned_str("d".to_string(), Value::long(4));
+        assert!(matches!(&array.storage, ArrayStorage::LinearHash(_)));
+        array.set_str("e", Value::long(5));
+        array.set_str("f", Value::long(6));
+        array.set_str("g", Value::long(7));
+        array.set_str("h", Value::long(8));
+        assert!(matches!(&array.storage, ArrayStorage::LinearHash(_)));
+        array.set_streamed_owned_str("d".to_string(), Value::long(40));
+        assert!(matches!(&array.storage, ArrayStorage::LinearHash(_)));
+        array.set_streamed_owned_str("i".to_string(), Value::long(9));
         assert!(matches!(&array.storage, ArrayStorage::Hash { .. }));
         assert_eq!(array.get_str("a").and_then(Value::as_long), Some(10));
         assert_eq!(array.get_int(8).and_then(Value::as_long), Some(2));
         assert_eq!(array.get_str("c").and_then(Value::as_long), Some(3));
-        assert_eq!(array.get_str("d").and_then(Value::as_long), Some(4));
+        assert_eq!(array.get_str("d").and_then(Value::as_long), Some(40));
         assert_eq!(
             array
                 .iter()
@@ -1591,8 +2034,62 @@ mod php_array_tests {
                 ArrayKey::Int(8),
                 ArrayKey::String("c".to_string()),
                 ArrayKey::String("d".to_string()),
+                ArrayKey::String("e".to_string()),
+                ArrayKey::String("f".to_string()),
+                ArrayKey::String("g".to_string()),
+                ArrayKey::String("h".to_string()),
+                ArrayKey::String("i".to_string()),
             ]
         );
+    }
+
+    #[test]
+    fn linear_hash_supports_clone_remove_shift_and_pop() {
+        let mut original = PhpArray::with_deferred_hash_capacity(6);
+        original.set_str("first", Value::long(1));
+        original.set_int(10, Value::long(2));
+        original.set_str("third", Value::long(3));
+        original.set_int(20, Value::long(4));
+        assert!(matches!(&original.storage, ArrayStorage::LinearHash(_)));
+
+        let mut changed = original.clone();
+        assert!(changed.remove(&ArrayKey::String("third".to_string())));
+        assert_eq!(changed.shift().and_then(|value| value.as_long()), Some(1));
+        assert_eq!(changed.pop().and_then(|value| value.as_long()), Some(4));
+        assert_eq!(changed.get_int(0).and_then(Value::as_long), Some(2));
+
+        assert_eq!(original.len(), 4);
+        assert_eq!(original.get_str("first").and_then(Value::as_long), Some(1));
+        assert_eq!(original.get_str("third").and_then(Value::as_long), Some(3));
+        assert_eq!(original.get_int(10).and_then(Value::as_long), Some(2));
+        assert_eq!(original.get_int(20).and_then(Value::as_long), Some(4));
+    }
+
+    #[test]
+    fn repeated_linear_string_reads_build_and_mutations_invalidate_the_lazy_index() {
+        let mut array = PhpArray::with_deferred_hash_capacity(8);
+        for key in ["a", "b", "c", "d", "e", "f", "g", "h"] {
+            array.set_str(key, Value::long(1));
+        }
+        let ArrayStorage::LinearHash(linear) = &array.storage else {
+            panic!("eight entries should retain bounded linear storage");
+        };
+        assert!(linear.str_index.get().is_none());
+
+        for _ in 0..4 {
+            assert_eq!(array.get_str("h").and_then(Value::as_long), Some(1));
+        }
+        let ArrayStorage::LinearHash(linear) = &array.storage else {
+            unreachable!();
+        };
+        assert!(linear.str_index.get().is_some());
+
+        assert!(array.remove(&ArrayKey::String("b".to_string())));
+        let ArrayStorage::LinearHash(linear) = &array.storage else {
+            unreachable!();
+        };
+        assert!(linear.str_index.get().is_none());
+        assert_eq!(array.get_str("h").and_then(Value::as_long), Some(1));
     }
 
     #[test]

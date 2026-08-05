@@ -4367,6 +4367,58 @@ fourth-key cliff in associative arrays: a compact ordered representation for
 roughly four to eight entries should avoid building and immediately destroying
 a full string hash index while retaining canonical mutation and COW behavior.
 
+### Adaptive streamed associative-array storage checkpoint
+
+Associative materializers with an unknown final width can now defer their full
+split indexes (2026-08-05). Zero to three entries remain in the existing inline
+`SmallHash`; four to eight entries use one ordered vector; a ninth unique key
+promotes that same vector to the general integer/string indexes. Known-width
+array literals and ordinary general arrays retain their existing indexed
+policy, so the optimization is a reusable storage capability selected by
+streaming producers rather than a JSON-only value representation.
+
+The bounded representation begins with linear lookup. After four repeated
+string reads it lazily creates a string index, so a short-lived decoded row
+does not pay for an index it never amortizes while a retained and repeatedly
+queried row does not remain linear indefinitely. Structural mutation clears
+the derived index; promotion, overwrite, removal, shift, pop, iteration,
+copy-on-write cloning and mixed integer/string keys all preserve the canonical
+ordered PHP-array semantics. `json_decode(..., true)` is the first producer to
+select this policy and continues to move parsed key allocations directly into
+the array.
+
+Seven paired native-CPU `max-perf` A/B runs against the preceding streaming
+decoder produced these no-JIT internal-time medians for 200,000 changing
+documents:
+
+| Associative width | Previous indexed storage | Adaptive storage | Change |
+|---|---:|---:|---:|
+| 4 keys | 82.322 ms | 69.156 ms | -16.0% |
+| 8 keys | 161.280 ms | 121.017 ms | -25.0% |
+| 12 keys, promotion control | 225.994 ms | 223.212 ms | -1.2% |
+
+The wider control is important: promoting immediately before the ninth unique
+key removes the earlier experimental regression from scanning a full bounded
+vector during general-map construction. Repeated dynamic reads of a retained
+eight-key decoded row also showed no regression once the lazy index was built.
+
+Nine order-rotated four-mode runs with PHP 8.5.9, with tracing JIT verified
+active, produced the following absolute medians. These changing-input cases do
+not admit invariant JSON projection or native loop fusion:
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Assoc decode, 4 keys | 81.120 ms | 83.918 ms | 48.007 ms | 50.427 ms |
+| Assoc decode, 8 keys | 148.094 ms | 146.677 ms | 83.141 ms | 87.031 ms |
+| Assoc decode, 12 keys | 277.109 ms | 272.568 ms | 126.903 ms | 130.413 ms |
+
+The remaining 1.7x-2.1x gap is therefore no longer evidence for building full
+indexes earlier. It lies in per-document parser work, key/String ownership,
+`Value`/array allocation and destruction, and general dynamic access. The next
+canonical checkpoints should separately profile dynamic object-property reads
+and parsed-string ownership; neither should weaken PHP array semantics or add
+a JSON-specific execution kernel.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
