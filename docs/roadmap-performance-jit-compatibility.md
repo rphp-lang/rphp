@@ -3375,6 +3375,41 @@ for the candidate was removed. x86 was not exposed to the experiment because
 its common `ADD`/`IMUL` suffixes overwrite flags, so the same schedule is not
 semantically available there without extra instructions.
 
+The next x86-64 instruction-selection checkpoint fuses an adjacent immediate
+`source * scale + bias` scalar pair into one SIB-addressing `LEA` when `scale`
+is 3, 5 or 9 and the signed bias fits `i32`. This is admitted only in the
+unchecked range-proven polling entry: checked entries retain two operations
+and therefore their exact per-operation overflow side exits. The intermediate
+must be dead after its consumer, must not require a shadow store or deferred
+publication, and the consumer must not be a separately reachable structured
+block start. The fused result still uses the ordinary direct-result,
+fixed-register, shadow-publication and safepoint machinery. A negative
+generated-code test publishes the multiply intermediate and proves that this
+observable case remains unfused; the existing structured-phi test now requires
+all three admitted affine expressions to be generated directly in their fixed
+publication registers.
+
+On the Ryzen 9 7950X, 201 fixed-CPU order-alternated pairs reduce the balanced
+branch-expression median from 5.769253 to 3.876448 ms (-32.81 percent), the
+wide 90/10 holdout from 5.812645 to 4.808903 ms (-17.27 percent), and the narrow
+90/10 holdout from 5.873919 to 4.647970 ms (-20.87 percent). Seven unrelated
+scalar controls stay within 0.11 percent of baseline. The noisier scalar-method
+control moves by -1.27 percent, but its old and new p10/p90 ranges overlap;
+this shape has no admitted immediate affine pair. Order, typed order, ledger,
+typed ledger and routing corpus medians improve by 0.28 to 0.39 percent. x86-64
+passes 177 library tests, 18 JIT integration tests, the four-test corpus and
+`cargo check --all-features`; ARM64 passes 153 library tests and the same
+check.
+
+The mathematical pattern is architecture-neutral, but the profitable lowering
+is deliberately x86-specific. ARM64 already lowers these constant-scale cases
+as a shifted `ADD` followed by an immediate `ADD`/`SUB`; it has no one-
+instruction equivalent of this `LEA`. Replacing that pair with `MADD` would
+first have to materialize the scale or bias and would not reduce the instruction
+count. A future ARM64 `MADD` experiment should instead start from a variable
+multiply-add shape and pass its own native-CPU acceptance matrix rather than
+copying x86 policy.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

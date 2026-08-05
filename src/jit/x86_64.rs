@@ -25,6 +25,10 @@ use std::mem::MaybeUninit;
 
 #[path = "x86_64_branch.rs"]
 mod branch;
+#[path = "x86_64_affine.rs"]
+mod affine;
+
+use affine::{X86StraightAffineFusion, x86_straight_affine_fusion};
 
 const X86_STRAIGHT_COMPLETED: u32 = 0;
 const X86_STRAIGHT_CHUNK_EXHAUSTED: u32 = 1;
@@ -185,6 +189,54 @@ impl X86_64Assembler {
         } else {
             false
         }
+    }
+
+    /// Encode `destination = source * scale + bias` for the affine scales
+    /// representable by one x86 SIB address.
+    fn affine_scale_add_immediate(
+        &mut self,
+        destination: X86_64Register,
+        source: X86_64Register,
+        scale: i64,
+        bias: i64,
+    ) -> bool {
+        let scale_shift = match scale {
+            3 => 1,
+            5 => 2,
+            9 => 3,
+            _ => return false,
+        };
+        let Ok(bias) = i32::try_from(bias) else {
+            return false;
+        };
+        if source.low_bits() == 4 {
+            return false;
+        }
+
+        self.bytes.push(
+            0x48
+                | (destination.extension() << 2)
+                | (source.extension() << 1)
+                | source.extension(),
+        );
+        self.bytes.push(0x8d);
+        let (addressing_mode, displacement_width) = if bias == 0 && source.low_bits() != 5 {
+            (0x00, 0)
+        } else if i8::try_from(bias).is_ok() {
+            (0x40, 1)
+        } else {
+            (0x80, 4)
+        };
+        self.bytes
+            .push(addressing_mode | (destination.low_bits() << 3) | 0x04);
+        self.bytes
+            .push((scale_shift << 6) | (source.low_bits() << 3) | source.low_bits());
+        if displacement_width == 1 {
+            self.bytes.push(bias as i8 as u8);
+        } else if displacement_width == 4 {
+            self.bytes.extend_from_slice(&bias.to_le_bytes());
+        }
+        true
     }
 
     fn move_from_base_disp32(
@@ -1327,6 +1379,7 @@ fn emit_scalar_straight_loop(
         [0; super::NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
     };
     let mut latest_output_mask = 0u64;
+    let mut pending_affine_fusion: Option<X86StraightAffineFusion> = None;
 
     for (operation_index, operation) in config.operations[..config.operation_count as usize]
         .iter()
@@ -1384,6 +1437,74 @@ fn emit_scalar_straight_loop(
                 & operation.output_mask()
                 & !deferred_publication_mask
                 != 0;
+        if let Some(fusion) = pending_affine_fusion
+            && fusion.consumer == operation_index
+        {
+            let result_register = direct_result_register.unwrap_or(lhs);
+            let source_register = emit_linear_operand_with_resident(
+                &mut assembler,
+                fusion.source,
+                result_register,
+                config.induction_slot,
+                induction,
+                &active_resident_values,
+            );
+            let encoded = assembler.affine_scale_add_immediate(
+                result_register,
+                source_register,
+                fusion.scale,
+                fusion.bias,
+            );
+            assert!(
+                encoded,
+                "validated affine fusion must have an encodable source register"
+            );
+            emit_x86_resident_output(
+                &mut assembler,
+                operation.output_mask(),
+                result_register,
+                &deferred_publication_values,
+            );
+            if keeps_linear_scalar_values_resident || keeps_structured_scalar_values_resident {
+                if direct_result_register.is_none() || direct_result_needs_local_forwarding {
+                    assembler.move_register(X86_64Register::RDX, result_register);
+                    latest_output_mask = operation.output_mask();
+                } else {
+                    latest_output_mask = 0;
+                }
+            }
+            if shadow_store_mask & (1u64 << fusion.result) != 0 {
+                assembler.move_to_base_disp32(
+                    slots,
+                    result_register,
+                    displacement(fusion.result),
+                );
+            }
+            if let Some(destination) = fusion.destination
+                && destination != fusion.result
+                && shadow_store_mask & (1u64 << destination) != 0
+            {
+                assembler.move_to_base_disp32(
+                    slots,
+                    result_register,
+                    displacement(destination),
+                );
+            }
+            pending_affine_fusion = None;
+            continue;
+        }
+        if !checked
+            && polling_interval.is_some()
+            && let Some(fusion) = x86_straight_affine_fusion(config, operation_index)
+            && (!keeps_structured_scalar_values_resident
+                || !structured_block_starts[fusion.consumer])
+            && shadow_store_mask & (1u64 << fusion.intermediate) == 0
+            && deferred_publication_mask & (1u64 << fusion.intermediate) == 0
+        {
+            debug_assert_eq!(fusion.producer, operation_index);
+            pending_affine_fusion = Some(fusion);
+            continue;
+        }
         let (kind, left, right, result, destination) = match operation {
             NativeStraightLongOperation::Move { source, result } => {
                 let result_scratch = direct_result_register.unwrap_or(lhs);
@@ -3630,6 +3751,64 @@ mod tests {
         }
     }
 
+    fn structured_affine_expression(bound: i64) -> NativeStraightLongLoopConfig {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::BranchUnless {
+            kind: ScalarLongConditionKind::LessThan,
+            lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+            rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
+            false_target: 4,
+        };
+        operations[1] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 6,
+        };
+        operations[2] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(6),
+            rhs: QuickLongOperand::Const(1),
+            result: 7,
+            destination: 1,
+        };
+        operations[3] = NativeStraightLongOperation::Jump { target: 6 };
+        operations[4] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(5),
+            result: 8,
+        };
+        operations[5] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Subtract,
+            lhs: QuickLongOperand::Slot(8),
+            rhs: QuickLongOperand::Const(2),
+            result: 9,
+            destination: 1,
+        };
+        operations[6] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(3),
+            result: 10,
+        };
+        operations[7] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(10),
+            rhs: QuickLongOperand::Const(11),
+            result: 11,
+            destination: 2,
+        };
+        NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(bound),
+            operations,
+            operation_count: 8,
+            post_result: None,
+        }
+    }
+
     fn scalar_plan(
         public_args: u8,
         operations: Vec<ScalarLongOp>,
@@ -3875,6 +4054,12 @@ mod tests {
         assert!(assembler.compare_immediate(X86_64Register::R11, -129));
         assert!(assembler.multiply_immediate(X86_64Register::R13, X86_64Register::R11, 3,));
         assert!(assembler.multiply_immediate(X86_64Register::R14, X86_64Register::R13, -129,));
+        assert!(assembler.affine_scale_add_immediate(
+            X86_64Register::R14,
+            X86_64Register::R13,
+            3,
+            11,
+        ));
         assert_eq!(
             &*assembler.finish(),
             &[
@@ -3885,6 +4070,7 @@ mod tests {
                 0x49, 0x81, 0xfb, 0x7f, 0xff, 0xff, 0xff, // CMP R11, -129 (imm32)
                 0x4d, 0x6b, 0xeb, 0x03, // IMUL R13, R11, 3 (imm8)
                 0x4d, 0x69, 0xf5, 0x7f, 0xff, 0xff, 0xff, // IMUL R14, R13, -129
+                0x4f, 0x8d, 0x74, 0x6d, 0x0b, // LEA R14, [R13 + R13*2 + 11]
             ]
         );
 
@@ -4070,6 +4256,91 @@ mod tests {
                 ..increment_offset + induction_increment.len() + common_suffix_add.len()],
             &common_suffix_add
         );
+    }
+
+    #[test]
+    fn range_proven_polling_fuses_immediate_affine_scalar_pair() {
+        let config = structured_affine_expression(5_000);
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                config,
+                (1u64 << 1) | (1u64 << 2),
+                0,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+
+        let interrupted = program.call_proven_polling(&mut slots, &true).unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(&slots[..3], &[1_024, 5_113, 15_350]);
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[5_000, 24_993, 74_990]);
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        let scheduled_affine = [
+            0x49, 0x83, 0xc3, 0x01, // ADD R11, 1
+            0x4f, 0x8d, 0x74, 0x6d, 0x0b, // LEA R14, [R13 + R13*2 + 11]
+        ];
+        assert_eq!(
+            polling_code
+                .windows(scheduled_affine.len())
+                .filter(|window| *window == scheduled_affine)
+                .count(),
+            1
+        );
+    }
+
+    #[test]
+    fn range_proven_polling_preserves_published_affine_intermediate() {
+        let mut operations =
+            [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        operations[0] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::Multiply,
+            lhs: QuickLongOperand::Slot(0),
+            rhs: QuickLongOperand::Const(3),
+            result: 1,
+        };
+        operations[1] = NativeStraightLongOperation::BinaryAssign {
+            kind: ScalarLongOpKind::Add,
+            lhs: QuickLongOperand::Slot(1),
+            rhs: QuickLongOperand::Const(11),
+            result: 2,
+            destination: 2,
+        };
+        let config = NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Const(5_000),
+            operations,
+            operation_count: 2,
+            post_result: None,
+        };
+        let program =
+            CompiledX86StraightLongLoop::compile_range_proven_polling_with_publication_and_carried(
+                config,
+                (1u64 << 1) | (1u64 << 2),
+                0,
+            )
+            .unwrap();
+        let mut slots = [0_i64; 64];
+
+        let interrupted = program.call_proven_polling(&mut slots, &true).unwrap();
+        assert_eq!(
+            interrupted.outcome,
+            NativeStraightLongLoopOutcome::ChunkExhausted
+        );
+        assert_eq!(&slots[..3], &[1_024, 3_069, 3_080]);
+
+        let completed = program.call_proven_polling(&mut slots, &false).unwrap();
+        assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+        assert_eq!(&slots[..3], &[5_000, 14_997, 15_008]);
+
+        let polling_code = &program.code()[program.polling_entry_offset..];
+        assert!(polling_code.windows(2).all(|window| window != [0x4f, 0x8d]));
     }
 
     #[test]
@@ -4427,16 +4698,16 @@ mod tests {
                 "fully represented fixed result should not be copied to RDX"
             );
         }
-        for direct_arithmetic in [
-            [0x49, 0x83, 0xc5, 0x01],
-            [0x49, 0x83, 0xed, 0x02],
-            [0x49, 0x83, 0xc6, 0x0b],
+        for direct_affine in [
+            [0x4f, 0x8d, 0x6c, 0x5b, 0x01],
+            [0x4f, 0x8d, 0x6c, 0x9b, 0xfe],
+            [0x4f, 0x8d, 0x74, 0x6d, 0x0b],
         ] {
             assert!(
                 polling_code
-                    .windows(direct_arithmetic.len())
-                    .any(|window| window == direct_arithmetic),
-                "expected immediate arithmetic with a fixed publication destination"
+                    .windows(direct_affine.len())
+                    .any(|window| window == direct_affine),
+                "expected fused affine arithmetic in its fixed publication register"
             );
         }
         for slot in [1_i32, 2_i32, 3_i32, 4_i32] {
