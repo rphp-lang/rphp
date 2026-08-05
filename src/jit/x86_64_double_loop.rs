@@ -1,6 +1,7 @@
 //! Composed exact-Double call/accumulate loop lowering for Linux x86-64.
 
 use super::super::memory::ExecutableMemory;
+use super::double::X86ScalarDoubleRegisterMap;
 use super::{X86_64Assembler, X86_64FloatRegister, X86_64Register};
 use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
@@ -72,8 +73,8 @@ impl From<io::Error> for QuickDoubleCallAccumulateJitError {
 
 /// SysV ABI: RDI is state, RSI compact exact-Double inputs, RDX is the
 /// interrupt flag and RCX is the writable argument buffer; EAX returns the
-/// outcome. XMM2-XMM9 hold the target-neutral IR temporaries, while XMM10 and
-/// XMM11 keep accumulator and last committed term resident.
+/// outcome. XMM2-XMM9 form the target-neutral temporary register bank, while
+/// XMM10 and XMM11 keep accumulator and last committed term resident.
 pub struct CompiledQuickDoubleCallAccumulateLoop {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -89,6 +90,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
         validate_argument_plan(argument_plan, plan.public_args)?;
         validate(plan)?;
         let forwarded_argument_mask = argument_plan.register_forwardable_output_mask(plan);
+        let scalar_registers = X86ScalarDoubleRegisterMap::new(&plan.program);
 
         let mut assembler = X86_64Assembler::new();
         let state = X86_64Register::R10;
@@ -145,6 +147,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
                 bits,
                 argument_plan,
                 forwarded_argument_mask,
+                scalar_registers,
                 index,
                 operation,
                 &mut side_exits,
@@ -156,6 +159,7 @@ impl CompiledQuickDoubleCallAccumulateLoop {
             bits,
             argument_plan,
             forwarded_argument_mask,
+            scalar_registers,
             plan.program.output,
             X86_64FloatRegister::from_code(0),
         );
@@ -486,7 +490,7 @@ fn emit_argument_operation(
         operation.rhs,
         X86_64FloatRegister::from_code(1),
     );
-    let destination = temporary(index);
+    let destination = argument_temporary(index);
     assembler.move_double(destination, lhs);
     match operation.kind {
         ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
@@ -524,7 +528,7 @@ fn emit_argument_source(
             assembler.move_gpr_bits_to_double(scratch, bits);
             scratch
         }
-        QuickDoubleSource::Temporary(index) => temporary(index as usize),
+        QuickDoubleSource::Temporary(index) => argument_temporary(index as usize),
     }
 }
 
@@ -552,6 +556,7 @@ fn emit_operation(
     bits: X86_64Register,
     argument_plan: &QuickDoubleArgumentProgram,
     forwarded_argument_mask: u8,
+    scalar_registers: X86ScalarDoubleRegisterMap,
     index: usize,
     operation: ScalarDoubleOp,
     side_exits: &mut Vec<usize>,
@@ -562,6 +567,7 @@ fn emit_operation(
         bits,
         argument_plan,
         forwarded_argument_mask,
+        scalar_registers,
         operation.lhs,
         X86_64FloatRegister::from_code(0),
     );
@@ -571,10 +577,11 @@ fn emit_operation(
         bits,
         argument_plan,
         forwarded_argument_mask,
+        scalar_registers,
         operation.rhs,
         X86_64FloatRegister::from_code(1),
     );
-    let destination = temporary(index);
+    let destination = scalar_registers.temporary(index);
     assembler.move_double(destination, lhs);
     match operation.kind {
         ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
@@ -596,6 +603,7 @@ fn emit_source(
     bits: X86_64Register,
     argument_plan: &QuickDoubleArgumentProgram,
     forwarded_argument_mask: u8,
+    scalar_registers: X86ScalarDoubleRegisterMap,
     source: ScalarDoubleSource,
     scratch: X86_64FloatRegister,
 ) -> X86_64FloatRegister {
@@ -604,7 +612,7 @@ fn emit_source(
             let QuickDoubleSource::Temporary(index) = argument_plan.outputs[index as usize] else {
                 unreachable!("forwarded Double argument must be a temporary")
             };
-            temporary(index as usize)
+            argument_temporary(index as usize)
         }
         ScalarDoubleSource::Input(index) => {
             assembler.load_f64(scratch, inputs, i32::from(index) * 8);
@@ -615,12 +623,12 @@ fn emit_source(
             assembler.move_gpr_bits_to_double(scratch, bits);
             scratch
         }
-        ScalarDoubleSource::Temporary(index) => temporary(index as usize),
+        ScalarDoubleSource::Temporary(index) => scalar_registers.temporary(index as usize),
     }
 }
 
 #[inline]
-fn temporary(index: usize) -> X86_64FloatRegister {
+fn argument_temporary(index: usize) -> X86_64FloatRegister {
     X86_64FloatRegister::from_code(FIRST_TEMPORARY + index as u8)
 }
 

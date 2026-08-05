@@ -3805,6 +3805,58 @@ receiver class plus method-cache identity. It should feed this same bounded
 program composer and target tuple rather than creating a parallel object-only
 JIT representation.
 
+### x86-64 destructive Double register reuse checkpoint
+
+The x86-64 SSE2 backend now assigns physical XMM registers from target-neutral
+temporary liveness instead of requiring every IR result to occupy its operation
+index forever (2026-08-05). When a temporary is the left operand at its final
+use and is not retained as the program output, the destructive SSE2 result
+reuses that same physical register. All other results keep their original
+one-slot-per-operation assignment. This conservative rule removes the copy
+chain from linear arithmetic while preserving branched values, final outputs
+and the existing argument/leaf forwarding proof.
+
+Standalone typed-Double leaves and composed quick loops use the same register
+map. Argument-program temporaries deliberately retain their identity mapping,
+so a forwarded dynamic argument still has the exact register proven by
+`register_forwardable_output_mask`. Division checks inspect the RHS before its
+destructive operation and retain the unchanged transactional side exit.
+
+Register-to-register scalar copies now use full-width SSE2 `MOVAPD` rather than
+legacy `MOVSD`. The authoritative lower Double bits are identical, but writing
+all 128 destination bits breaks the false upper-lane dependency that otherwise
+serializes a reused register across loop iterations. An experimental version
+that collapsed the registers while keeping `MOVSD` regressed the recursive
+tree from roughly 10 ms to 18 ms; it was rejected before the checkpoint. A
+separate `PXOR` before legacy `CVTSI2SD` was also measured and rejected because
+its 8.807 ms median was slightly worse than the 8.733 ms version without it.
+
+Permanent x86 tests verify exact full-width move bytes, one remaining initial
+copy in a three-operation linear program, a branched live-value map and native
+result, forwarded/buffered argument cases, polling and transactional division
+side exits. ARM64 is unchanged because its native `FADD`/`FMUL` forms already
+have independent destination registers.
+
+Twenty-one order-alternated pairs pinned to Ryzen CPU 2 returned identical PHP
+results and these native `max-perf` medians:
+
+| Workload | Previous x86 JIT | XMM reuse | Change |
+|---|---:|---:|---:|
+| Typed Double leaf | 5.167 ms | 2.877 ms | -44.3% |
+| Double argument expression | 8.449 ms | 4.675 ms | -44.7% |
+| Nested Double leaf | 8.841 ms | 7.366 ms | -16.7% |
+| Recursive Double tree | 10.311 ms | 8.793 ms | -14.7% |
+
+The recursive-tree x86/ARM ratio therefore narrows from approximately 2.52x
+to 2.15x, and RPHP's x86 JIT lead over the measured PHP tracing JIT grows from
+about 6.4x to 7.5x. The complete matrix passes 178 ARM64 and 199 x86-64 library
+tests, 93 ARM64 and 25 x86-64 native JIT integration tests, all 27 function and
+48 loop end-to-end tests, and all four corpus tests. The remaining dynamic-
+expression gap is no longer dominated by redundant leaf copies. A future AVX
+three-operand fast path may remove the initial copy too, but should be attempted
+only behind a runtime CPU/OS feature guard with the now-optimized SSE2 path
+retained as the universal fallback.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

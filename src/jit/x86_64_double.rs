@@ -16,6 +16,53 @@ const FIRST_DOUBLE_TEMPORARY_REGISTER: u8 = 2;
 const NATIVE_DOUBLE_STATUS_SUCCESS: u32 = 0;
 const NATIVE_DOUBLE_STATUS_SIDE_EXIT: u32 = 1;
 
+/// Physical XMM assignment for target-neutral Double temporaries.
+///
+/// SSE2 arithmetic is destructive, so a result may reuse its LHS register
+/// only when that temporary has no later IR use and is not the program output.
+/// Every other result keeps its original one-register-per-operation slot. This
+/// conservative fallback preserves the argument/leaf forwarding contract used
+/// by the composed loop while removing moves from ordinary linear chains.
+#[derive(Clone, Copy)]
+pub(super) struct X86ScalarDoubleRegisterMap {
+    temporaries: [X86_64FloatRegister; MAX_SCALAR_DOUBLE_OPERATIONS],
+}
+
+impl X86ScalarDoubleRegisterMap {
+    pub(super) fn new(program: &crate::vm::function::ScalarDoubleProgram) -> Self {
+        let mut last_use = [None; MAX_SCALAR_DOUBLE_OPERATIONS];
+        for (operation_index, operation) in program.operations.iter().enumerate() {
+            for source in [operation.lhs, operation.rhs] {
+                if let ScalarDoubleSource::Temporary(index) = source {
+                    last_use[index as usize] = Some(operation_index);
+                }
+            }
+        }
+        if let ScalarDoubleSource::Temporary(index) = program.output {
+            last_use[index as usize] = Some(program.operations.len());
+        }
+
+        let mut temporaries = std::array::from_fn(|index| {
+            X86_64FloatRegister::from_code(FIRST_DOUBLE_TEMPORARY_REGISTER + index as u8)
+        });
+        for (operation_index, operation) in program.operations.iter().enumerate() {
+            let ScalarDoubleSource::Temporary(lhs) = operation.lhs else {
+                continue;
+            };
+            if last_use[lhs as usize] == Some(operation_index) {
+                temporaries[operation_index] = temporaries[lhs as usize];
+            }
+        }
+        Self { temporaries }
+    }
+
+    #[inline(always)]
+    pub(super) fn temporary(self, index: usize) -> X86_64FloatRegister {
+        debug_assert!(index < MAX_SCALAR_DOUBLE_OPERATIONS);
+        self.temporaries[index]
+    }
+}
+
 pub const SCALAR_DOUBLE_JIT_HOT_THRESHOLD: u16 = 64;
 
 #[derive(Debug)]
@@ -144,7 +191,8 @@ impl Default for ScalarDoubleJitCache {
 
 /// Native ABI: RDI points to exact Double inputs, RSI points to one
 /// transactional output, and EAX returns success or side-exit status. XMM0
-/// and XMM1 are scratch; XMM2-XMM9 keep all eight IR temporaries resident.
+/// and XMM1 are scratch; XMM2-XMM9 form the resident temporary register bank.
+/// Non-overlapping IR lifetimes may share one physical register.
 pub struct CompiledScalarDoubleProgram {
     memory: ExecutableMemory,
     code: Box<[u8]>,
@@ -154,13 +202,21 @@ pub struct CompiledScalarDoubleProgram {
 impl CompiledScalarDoubleProgram {
     pub fn compile(plan: &ScalarDoubleFunctionPlan) -> Result<Self, ScalarDoubleJitError> {
         validate_scalar_double_plan(plan)?;
+        let registers = X86ScalarDoubleRegisterMap::new(&plan.program);
         let mut assembler = X86_64Assembler::new();
         let mut side_exit_jumps = Vec::new();
         for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-            emit_scalar_double_operation(&mut assembler, index, operation, &mut side_exit_jumps);
+            emit_scalar_double_operation(
+                &mut assembler,
+                registers,
+                index,
+                operation,
+                &mut side_exit_jumps,
+            );
         }
         let output = emit_scalar_double_source(
             &mut assembler,
+            registers,
             plan.program.output,
             X86_64FloatRegister::from_code(0),
         );
@@ -251,15 +307,24 @@ fn validate_scalar_double_source(
 
 fn emit_scalar_double_operation(
     assembler: &mut X86_64Assembler,
+    registers: X86ScalarDoubleRegisterMap,
     index: usize,
     operation: ScalarDoubleOp,
     side_exit_jumps: &mut Vec<usize>,
 ) {
-    let lhs =
-        emit_scalar_double_source(assembler, operation.lhs, X86_64FloatRegister::from_code(0));
-    let rhs =
-        emit_scalar_double_source(assembler, operation.rhs, X86_64FloatRegister::from_code(1));
-    let destination = scalar_double_temporary_register(index);
+    let lhs = emit_scalar_double_source(
+        assembler,
+        registers,
+        operation.lhs,
+        X86_64FloatRegister::from_code(0),
+    );
+    let rhs = emit_scalar_double_source(
+        assembler,
+        registers,
+        operation.rhs,
+        X86_64FloatRegister::from_code(1),
+    );
+    let destination = registers.temporary(index);
     assembler.move_double(destination, lhs);
     match operation.kind {
         ScalarDoubleOpKind::Add => assembler.add_double(destination, rhs),
@@ -279,6 +344,7 @@ fn emit_scalar_double_operation(
 
 fn emit_scalar_double_source(
     assembler: &mut X86_64Assembler,
+    registers: X86ScalarDoubleRegisterMap,
     source: ScalarDoubleSource,
     scratch: X86_64FloatRegister,
 ) -> X86_64FloatRegister {
@@ -292,12 +358,6 @@ fn emit_scalar_double_source(
             assembler.move_gpr_bits_to_double(scratch, X86_64Register::RAX);
             scratch
         }
-        ScalarDoubleSource::Temporary(index) => scalar_double_temporary_register(index as usize),
+        ScalarDoubleSource::Temporary(index) => registers.temporary(index as usize),
     }
-}
-
-#[inline]
-fn scalar_double_temporary_register(index: usize) -> X86_64FloatRegister {
-    debug_assert!(index < MAX_SCALAR_DOUBLE_OPERATIONS);
-    X86_64FloatRegister::from_code(FIRST_DOUBLE_TEMPORARY_REGISTER + index as u8)
 }

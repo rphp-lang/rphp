@@ -1,3 +1,4 @@
+use super::double::X86ScalarDoubleRegisterMap;
 use super::{
     CompiledQuickDoubleCallAccumulateLoop, CompiledScalarDoubleProgram,
     NativeDoubleCallAccumulateState, QuickDoubleCallAccumulateJitOutcome,
@@ -150,6 +151,17 @@ fn rhs_overwrite_leaf_plan() -> ScalarDoubleFunctionPlan {
     )
 }
 
+fn register_to_register_double_move_count(code: &[u8]) -> usize {
+    code.windows(4)
+        .filter(|bytes| {
+            bytes[0] == 0x66
+                && bytes[1] == 0x0f
+                && bytes[2] == 0x28
+                && bytes[3] & 0xc0 == 0xc0
+        })
+        .count()
+}
+
 #[test]
 fn encoder_produces_exact_scalar_double_bytes() {
     let mut assembler = X86_64Assembler::new();
@@ -176,6 +188,74 @@ fn encoder_produces_exact_scalar_double_bytes() {
             0x5e, 0xf7,
         ]
     );
+}
+
+#[test]
+fn encoder_uses_a_full_width_double_register_move() {
+    let mut assembler = X86_64Assembler::new();
+    assembler.move_double(
+        X86_64FloatRegister::from_code(2),
+        X86_64FloatRegister::from_code(3),
+    );
+    assert_eq!(assembler.finish().as_ref(), [0x66, 0x0f, 0x28, 0xd3]);
+}
+
+#[test]
+fn linear_double_temporaries_reuse_the_dead_lhs_register() {
+    let plan = arithmetic_plan();
+    let registers = X86ScalarDoubleRegisterMap::new(&plan.program);
+    let first = X86_64FloatRegister::from_code(2);
+    assert_eq!(registers.temporary(0), first);
+    assert_eq!(registers.temporary(1), first);
+    assert_eq!(registers.temporary(2), first);
+}
+
+#[test]
+fn branched_double_temporaries_preserve_live_values() {
+    let program = ScalarDoubleProgram {
+        operations: vec![
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: ScalarDoubleSource::Input(0),
+                rhs: ScalarDoubleSource::Constant(1.0),
+            },
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Multiply,
+                lhs: ScalarDoubleSource::Temporary(0),
+                rhs: ScalarDoubleSource::Constant(2.0),
+            },
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Subtract,
+                lhs: ScalarDoubleSource::Temporary(0),
+                rhs: ScalarDoubleSource::Constant(3.0),
+            },
+            ScalarDoubleOp {
+                kind: ScalarDoubleOpKind::Add,
+                lhs: ScalarDoubleSource::Temporary(1),
+                rhs: ScalarDoubleSource::Temporary(2),
+            },
+        ]
+        .into_boxed_slice(),
+        output: ScalarDoubleSource::Temporary(3),
+    };
+    let registers = X86ScalarDoubleRegisterMap::new(&program);
+    assert_eq!(registers.temporary(0), X86_64FloatRegister::from_code(2));
+    assert_eq!(registers.temporary(1), X86_64FloatRegister::from_code(3));
+    assert_eq!(registers.temporary(2), X86_64FloatRegister::from_code(2));
+    assert_eq!(registers.temporary(3), X86_64FloatRegister::from_code(3));
+
+    let plan = ScalarDoubleFunctionPlan::new(1, program);
+    let compiled = CompiledScalarDoubleProgram::compile(&plan).unwrap();
+    assert_eq!(
+        compiled.call(&[5.0]).unwrap(),
+        ScalarDoubleJitOutcome::Value(15.0)
+    );
+}
+
+#[test]
+fn native_linear_double_program_emits_only_the_initial_lhs_copy() {
+    let program = CompiledScalarDoubleProgram::compile(&arithmetic_plan()).unwrap();
+    assert_eq!(register_to_register_double_move_count(program.code()), 1);
 }
 
 #[test]

@@ -221,7 +221,20 @@ impl X86_64Assembler {
         if destination == source {
             return;
         }
-        self.emit_scalar_double_register(0x10, destination, source);
+        // A legacy register-to-register MOVSD preserves destination bits
+        // 127:64. Reusing a physical register across loop iterations would
+        // therefore create a false dependency on the preceding scalar chain.
+        // MOVAPD copies all 128 bits, keeps the authoritative low Double bits
+        // unchanged and breaks that dependency without requiring AVX.
+        self.emit_legacy_rex(
+            0x66,
+            false,
+            destination.extension(),
+            source.extension(),
+        );
+        self.bytes.extend_from_slice(&[0x0f, 0x28]);
+        self.bytes
+            .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
     }
 
     fn load_f64(
