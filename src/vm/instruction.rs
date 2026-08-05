@@ -171,6 +171,7 @@ unsafe impl Sync for InlineCache {}
 
 impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
+    const DYNAMIC_PROPERTY_READ_SLOT: usize = (u32::MAX >> 2) as usize;
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
     const METHOD_PROPERTY_GETTER_PLAN: u32 = 4;
@@ -200,6 +201,22 @@ impl InlineCache {
         debug_assert!(slot <= (u32::MAX >> 2) as usize);
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// Mark a read site that resolved to the canonical dynamic `stdClass`.
+    /// No object-local position is cached: the sentinel only proves that the
+    /// next guarded receiver can bypass declared-property visibility work and
+    /// perform its ordinary dynamic-map lookup directly.
+    #[inline]
+    pub fn set_dynamic_property_read(&mut self) {
+        self.set_property(0, Self::DYNAMIC_PROPERTY_READ_SLOT, 1);
+    }
+
+    #[inline(always)]
+    pub fn is_dynamic_property_read(&self) -> bool {
+        self.class_id == 0
+            && self.property_flags() == 1
+            && self.property_slot() == Self::DYNAMIC_PROPERTY_READ_SLOT
     }
 
     /// Last validated ordered-entry position for a `FetchDimR` string key.
@@ -295,5 +312,26 @@ impl InlineCache {
         self.func = Self::CALLBACK_CACHE_DISABLED;
         self.class_id = 0;
         self.prop_info = 0;
+    }
+}
+
+#[cfg(test)]
+mod inline_cache_tests {
+    use super::InlineCache;
+
+    #[test]
+    fn dynamic_property_marker_does_not_alias_a_declared_slot() {
+        let mut cache = InlineCache::empty();
+        assert!(!cache.is_dynamic_property_read());
+
+        cache.set_dynamic_property_read();
+        assert!(cache.is_dynamic_property_read());
+        assert_eq!(cache.class_id, 0);
+        assert_eq!(cache.property_flags(), 1);
+
+        cache.set_property(7, InlineCache::DYNAMIC_PROPERTY_READ_SLOT, 1);
+        assert!(!cache.is_dynamic_property_read());
+        cache.set_property(0, 3, 1);
+        assert!(!cache.is_dynamic_property_read());
     }
 }

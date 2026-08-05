@@ -174,6 +174,17 @@ impl PhpObject {
         }
     }
 
+    /// Exact guard for the runtime's canonical dynamic `stdClass` shape.
+    /// User-declared objects receive a non-zero class ID; other internal
+    /// class-id-zero objects must retain full visibility and magic resolution.
+    #[inline(always)]
+    pub(crate) fn is_dynamic_std_class(&self) -> bool {
+        self.class_id == 0
+            && self.class_name.as_ref() == "stdClass"
+            && self.property_layout.len() == 0
+            && self.property_values.is_empty()
+    }
+
     #[inline]
     pub fn property_slot(&self, key: &str) -> Option<usize> {
         self.property_layout.slot(key)
@@ -2560,6 +2571,32 @@ impl Value {
         debug_assert!(self.value_type() == ValueType::Object);
         let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
         (*refcell.as_ptr()).class_id
+    }
+
+    /// Check the canonical dynamic `stdClass` receiver shape without a
+    /// `RefCell` borrow. The single-threaded dispatch loop guarantees that the
+    /// object metadata cannot change concurrently.
+    /// SAFETY: Only valid when `value_type() == ValueType::Object`.
+    #[inline(always)]
+    pub unsafe fn object_is_dynamic_std_class_unchecked(&self) -> bool {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        (*refcell.as_ptr()).is_dynamic_std_class()
+    }
+
+    /// Read directly from the dynamic property map of a receiver already
+    /// guarded as canonical `stdClass`.
+    /// SAFETY: The receiver must pass `object_is_dynamic_std_class_unchecked`;
+    /// the returned pointer is invalidated by a mutable property operation.
+    #[inline(always)]
+    pub unsafe fn object_dynamic_property_unchecked(&self, name: &str) -> *const Value {
+        debug_assert!(self.object_is_dynamic_std_class_unchecked());
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &*refcell.as_ptr();
+        obj.dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.get(name))
+            .map_or(std::ptr::null(), |value| value as *const Value)
     }
 
     /// Read a property value pointer from an Object without RefCell borrow.

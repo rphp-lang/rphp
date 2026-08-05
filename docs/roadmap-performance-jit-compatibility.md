@@ -4419,6 +4419,47 @@ canonical checkpoints should separately profile dynamic object-property reads
 and parsed-string ownership; neither should weaken PHP array semantics or add
 a JSON-specific execution kernel.
 
+### Guarded dynamic-stdClass property cache checkpoint
+
+Ordinary `FetchObjR` sites now cache an exact dynamic-`stdClass` receiver shape
+(2026-08-05). A cache hit still validates the current receiver and uses the
+current property-name operand, then performs the canonical lookup in that
+object's own dynamic-property map. It caches no object-local pointer or map
+position. The marker only bypasses repeated caller-scope, inheritance,
+visibility and declared-key resolution that cannot affect canonical
+`stdClass`. A different class, missing key or unsupported receiver returns to
+the complete slow path; declared-property slot caches and magic-property
+behavior remain independent.
+
+An isolated benchmark retains one decoded object and performs five million
+pairs of `$row->value` and `$row->name` reads. Seven paired native-CPU
+`max-perf` no-JIT runs improved from 662.583 ms to 263.676 ms, or 60.2% (2.51x).
+The equivalent associative-array control changed from 189.173 to 188.223 ms in
+eleven order-rotated runs (-0.5%, within variation). This identifies property
+resolution rather than the surrounding loop, `strlen`, or result accumulation
+as the removed cost.
+
+The existing changing-input object workload, which also parses and destroys
+200,000 distinct documents, improved from 79.685 to 62.202 ms, or 21.9%. The
+smaller end-to-end percentage is expected because parsing, String/property-map
+allocation and object destruction remain canonical work. Permanent tests reuse
+one read site across multiple decoded objects, a declared class, mutation and a
+missing property, proving both cache hits and guarded fallback.
+
+Nine order-rotated native-CPU `max-perf` runs of the isolated permanent
+benchmark produced the following absolute medians with PHP 8.5.9; the PHP
+tracing JIT lane was verified active:
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Retained `stdClass` reads, 5M pairs | 254.977 ms | 250.565 ms | 61.328 ms | 64.311 ms |
+
+The RPHP native-JIT lane is intentionally level with the no-JIT lane because a
+dynamic `FetchObjR` is not yet admitted to a native typed region. The remaining
+roughly 3.9x no-JIT deficit is now the cost of VM dispatch, receiver/operand
+guards, `RefCell` object access, dynamic-map hashing and heap-value cloning,
+rather than repeated visibility resolution.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

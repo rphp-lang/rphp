@@ -256,11 +256,32 @@ fn try_cached_fetch_obj_r(
         return false;
     }
 
-    let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
     let cache = &op_array.cache[ip];
+    if cache.is_dynamic_property_read() {
+        if !unsafe { obj_val.object_is_dynamic_std_class_unchecked() } {
+            return false;
+        }
+        let prop_name = unsafe {
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+        };
+        let Some(name) = prop_name.as_str() else {
+            return false;
+        };
+        let property_ptr = unsafe { obj_val.object_dynamic_property_unchecked(name) };
+        if property_ptr.is_null() {
+            return false;
+        }
+        let result_ptr = unsafe {
+            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        };
+        unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
+        return true;
+    }
+
+    let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
     if cache.property_flags() & 1 == 0
         || cache.class_id != object_class_id
         || object_class_id == 0
@@ -347,6 +368,8 @@ fn op_fetch_obj_r_slow(
 
         // Cache only declared public properties. Dynamic properties have no
         // stable slot and remain on the cold lookup path.
+        let cache_dynamic_std_class =
+            is_public && key == name && obj.is_dynamic_std_class();
         if is_public && key == name && obj.class_id != 0 {
             if let Some(slot) = obj.property_slot(&key) {
                 let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
@@ -362,6 +385,13 @@ fn op_fetch_obj_r_slow(
         }
 
         let found_val = obj.get_property(&key).cloned();
+        if cache_dynamic_std_class && found_val.is_some() {
+            let ic_mut = unsafe {
+                &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache)
+            };
+            ic_mut.set_dynamic_property_read();
+        }
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {
             unsafe { frame_slot_set(frame, result_ptr, val) };

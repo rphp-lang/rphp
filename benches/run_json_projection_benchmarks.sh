@@ -104,6 +104,7 @@ benchmark_workload "Invariant String strlen" benches/bench_json_projection_strin
 benchmark_workload "Changing-input control" benches/bench_json_projection_dynamic.php
 benchmark_workload "Changing typed control" benches/bench_json_projection_typed_dynamic.php
 benchmark_workload "Changing object control" benches/bench_json_decode_object_dynamic.php
+benchmark_workload "Retained stdClass reads" benches/bench_stdclass_property_reads.php
 benchmark_workload "Assoc decode width 4" benches/bench_json_decode_assoc_width4.php
 benchmark_workload "Assoc decode width 8" benches/bench_json_decode_assoc_width8.php
 benchmark_workload "Assoc decode width 12" benches/bench_json_decode_assoc_width12.php

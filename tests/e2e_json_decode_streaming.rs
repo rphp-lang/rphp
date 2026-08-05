@@ -126,3 +126,29 @@ foreach ($copy as $key => $value) {
         "2|4|8|missing|40|9|8|acdefghi"
     );
 }
+
+#[test]
+fn decoded_stdclass_property_cache_guards_receiver_shape_and_missing_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DeclaredRow {
+    public $value = 31;
+}
+function value_of($row) {
+    return $row->value;
+}
+$first = json_decode('{"value":11}');
+$second = json_decode('{"value":17}');
+$declared = new DeclaredRow();
+$missing = json_decode('{"other":1}');
+echo value_of($first) . '|' . value_of($second) . '|'
+    . value_of($declared) . '|' . value_of($first) . '|';
+$first->value = 23;
+echo value_of($first) . '|'
+    . (value_of($missing) === null ? 'null' : 'bad');
+"#,
+        ),
+        "11|17|31|11|23|null"
+    );
+}
