@@ -4167,6 +4167,60 @@ conditional, but either requires a bounded multi-merge representation and
 register-pressure proof rather than silently expanding this single-selection
 contract.
 
+### Guarded invariant JSON projection checkpoint
+
+The first typed-library pipeline slice now handles one loop-invariant
+`json_decode($json, true)` followed only by fixed string/integer paths ending
+in exact Long leaves (2026-08-05). The two-argument global call first lowers to
+the frame-free direct internal ABI; both supported arities also expose the
+same borrowed handler to callback consumers. At hot-region entry a
+target-neutral JSON prelude decodes once, validates every requested path and
+Long tag without
+mutating the frame, then atomically publishes the complete decoded PHP value
+and the projected scalar slots. The ordinary quick executor and the existing
+ARM64/x86-64 Long JIT consume those slots; no JSON-specific machine-code
+emitter or workload-specific loop kernel was added.
+
+Admission requires an immutable string CV or string literal, literal
+`associative=true`, fixed paths no deeper than eight elements, and a decoded
+array that is read-only and does not escape the region. A changing input,
+object-mode decode, missing path, non-Long leaf, reference, mutation or any
+unsupported consumer retains canonical execution. Guard failure is
+transactional: it publishes neither the decoded array nor a partial set of
+leaf slots. The complete decoded result is materialized once so reads after
+the loop remain correct. This contract matches the currently supported RPHP
+JSON semantics; future `json_last_error`, throwing flags and wider PHP decode
+options must become explicit effects/guards before this optimization is
+extended to them.
+
+The permanent benchmark includes both the supported invariant form and a
+changing-input control. Seven order-rotated native-CPU `max-perf` runs on
+ARM64 with PHP 8.5.9 produced these internal-time medians; the PHP lane was
+verified as active tracing JIT (`kind=5`, `opt_level=4`):
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Invariant fixed Long projections, 2M | 5.874 ms | 52.131 ms | 820.336 ms | 871.693 ms |
+| Changing-input canonical control, 200k | 37.326 ms | 38.783 ms | 18.335 ms | 20.702 ms |
+
+For the admitted shape RPHP JIT is 139.7x faster than PHP tracing JIT and RPHP
+without native JIT is 16.7x faster than PHP without JIT. Native lowering adds
+another 8.9x over the shared quick executor. VM telemetry records one admitted
+and executed `typed_ops_loop`, one native execution, zero side exits and only
+the 33 canonical warm-up decodes before the remaining 1,999,967 iterations
+enter the optimized region. The negative control is intentionally not hoisted;
+its roughly 2x deficit against PHP identifies per-document parsing, recursive
+`serde_json::Value` conversion and PHP-array materialization as a separate
+runtime bottleneck rather than a reason to weaken the invariant guard.
+
+The next typed-library step should lift this one Long-specific prelude into a
+shared typed invariant-source representation, then add exact Double and String
+projections with the same transactional contract. Only after those leaf types
+share one planner should `json_encode`, chained array functions and callback
+pipelines be fused into it. In parallel, the changing-input control should be
+used to measure improvements to the canonical JSON parser/materializer, which
+benefits real non-invariant code and must remain distinct from JIT coverage.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

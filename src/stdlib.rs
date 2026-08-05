@@ -127,6 +127,32 @@ fn direct_arg_opt(args: &[Value], index: usize) -> Option<&Value> {
     (value.value_type() != ValueType::Undef).then_some(value)
 }
 
+#[inline(always)]
+fn json_decode_values(input: &Value, associative: Option<&Value>) -> Value {
+    let input = if input.is_reference() {
+        unsafe { &*input.as_ref_ptr() }
+    } else {
+        input
+    };
+    let associative = associative.map(|value| {
+        if value.is_reference() {
+            unsafe { &*value.as_ref_ptr() }
+        } else {
+            value
+        }
+    });
+    let json = match input.as_str() {
+        Some(json) => Cow::Borrowed(json),
+        None => Cow::Owned(input.echo_to_string()),
+    };
+    json_decode_string(&json, associative.is_some_and(Value::is_truthy))
+}
+
+#[inline(always)]
+fn direct_json_decode(args: &[Value]) -> Result<Value, VmError> {
+    Ok(json_decode_values(&args[0], args.get(1)))
+}
+
 /// Dispatch a compiler-identified pure builtin without resolving a runtime
 /// FunctionCommon or crossing the generic internal-function ABI.
 #[inline(always)]
@@ -152,9 +178,11 @@ pub(crate) fn invoke_direct_internal1(
         DirectInternalKind::Acos => direct_acos(args),
         DirectInternalKind::Atan => direct_atan(args),
         DirectInternalKind::Exp => direct_exp(args),
-        DirectInternalKind::Intdiv => Err(VmError::Fatal(
-            "Invalid unary invocation of intdiv".into(),
-        )),
+        DirectInternalKind::Intdiv | DirectInternalKind::JsonDecode => {
+            Err(VmError::Fatal(
+                "Invalid unary invocation of binary direct builtin".into(),
+            ))
+        }
     }
 }
 
@@ -169,6 +197,7 @@ pub(crate) fn invoke_direct_internal2(
 
     match kind {
         DirectInternalKind::Intdiv => direct_intdiv_values(first, second),
+        DirectInternalKind::JsonDecode => Ok(json_decode_values(first, Some(second))),
         _ => Err(VmError::Fatal(
             "Invalid binary direct internal handler ID".into(),
         )),
@@ -402,7 +431,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- JSON ---
     reg!("json_encode", fn_json_encode, 1, 1, "value");
-    reg!("json_decode", fn_json_decode, 2, 1, "json", "associative");
+    reg_direct!("json_decode", fn_json_decode, direct_json_decode, 2, 1, "json", "associative");
 
     // --- Misc ---
     reg!("isset_func", fn_isset_func, 1, 1, "value");
@@ -2364,7 +2393,7 @@ fn json_to_value(jv: serde_json::Value, assoc: bool) -> Value {
     }
 }
 
-fn json_decode_string(s: &str, assoc: bool) -> Value {
+pub(crate) fn json_decode_string(s: &str, assoc: bool) -> Value {
     match serde_json::from_str::<serde_json::Value>(s) {
         Ok(jv) => json_to_value(jv, assoc),
         Err(_) => Value::null(),

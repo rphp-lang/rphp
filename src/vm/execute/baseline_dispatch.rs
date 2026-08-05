@@ -1133,7 +1133,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     let direct_kind = callback.as_str().and_then(|name| {
                         crate::builtin_metadata::direct_internal_spec(name)
-                            .filter(|spec| spec.required_args <= 1 && spec.max_args >= 1)
+                            .filter(|spec| {
+                                spec.required_args <= 1
+                                    && spec.max_args >= 1
+                                    && spec.kind.lowering()
+                                        != crate::builtin_metadata::DirectInternalLowering::Generic2
+                            })
                             .map(|spec| spec.kind)
                     });
 

@@ -18,6 +18,7 @@ pub enum DirectInternalKind {
     Atan,
     Exp,
     Intdiv,
+    JsonDecode,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -46,6 +47,7 @@ impl DirectInternalKind {
             12 => Some(Self::Atan),
             13 => Some(Self::Exp),
             14 => Some(Self::Intdiv),
+            15 => Some(Self::JsonDecode),
             _ => None,
         }
     }
@@ -54,7 +56,10 @@ impl DirectInternalKind {
     pub fn result_may_need_cleanup(self) -> bool {
         matches!(
             self,
-            Self::Strtolower | Self::Strtoupper | Self::ChunkSplit
+            Self::Strtolower
+                | Self::Strtoupper
+                | Self::ChunkSplit
+                | Self::JsonDecode
         )
     }
 
@@ -62,7 +67,7 @@ impl DirectInternalKind {
     pub fn lowering(self) -> DirectInternalLowering {
         match self {
             Self::Strlen => DirectInternalLowering::Strlen,
-            Self::Intdiv => DirectInternalLowering::Generic2,
+            Self::Intdiv | Self::JsonDecode => DirectInternalLowering::Generic2,
             _ => DirectInternalLowering::Generic,
         }
     }
@@ -92,6 +97,7 @@ pub const DIRECT_INTERNAL_SPECS: &[DirectInternalSpec] = &[
     DirectInternalSpec { name: "atan", kind: DirectInternalKind::Atan, max_args: 1, required_args: 1 },
     DirectInternalSpec { name: "exp", kind: DirectInternalKind::Exp, max_args: 1, required_args: 1 },
     DirectInternalSpec { name: "intdiv", kind: DirectInternalKind::Intdiv, max_args: 2, required_args: 2 },
+    DirectInternalSpec { name: "json_decode", kind: DirectInternalKind::JsonDecode, max_args: 2, required_args: 1 },
 ];
 
 #[inline]
@@ -114,6 +120,7 @@ pub fn direct_internal_spec(name: &str) -> Option<DirectInternalSpec> {
         10 if name.eq_ignore_ascii_case("strtolower") => 1,
         10 if name.eq_ignore_ascii_case("strtoupper") => 2,
         11 if name.eq_ignore_ascii_case("chunk_split") => 7,
+        11 if name.eq_ignore_ascii_case("json_decode") => 15,
         6 if name.eq_ignore_ascii_case("intdiv") => 14,
         _ => return None,
     };
@@ -137,6 +144,8 @@ mod tests {
         assert!(!supports_direct_internal_call("strlen", 0));
         assert!(supports_direct_internal_call("intdiv", 2));
         assert!(!supports_direct_internal_call("intdiv", 1));
+        assert!(supports_direct_internal_call("json_decode", 2));
+        assert!(supports_direct_internal_call("json_decode", 1));
         assert!(supports_direct_internal_call("chunk_split", 3));
         assert!(!supports_direct_internal_call("chunk_split", 4));
         assert!(!supports_direct_internal_call("substr", 1));
@@ -150,5 +159,7 @@ mod tests {
         assert_eq!(DirectInternalKind::Strlen.lowering(), DirectInternalLowering::Strlen);
         assert_eq!(DirectInternalKind::Abs.lowering(), DirectInternalLowering::Generic);
         assert_eq!(DirectInternalKind::Intdiv.lowering(), DirectInternalLowering::Generic2);
+        assert_eq!(DirectInternalKind::JsonDecode.lowering(), DirectInternalLowering::Generic2);
+        assert!(DirectInternalKind::JsonDecode.result_may_need_cleanup());
     }
 }

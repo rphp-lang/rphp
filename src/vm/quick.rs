@@ -712,6 +712,35 @@ impl QuickLongTarget {
     }
 }
 
+/// Input source retained by a loop-invariant JSON projection prelude.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickJsonInput {
+    StringSlot(u16),
+    StringLiteral(u16),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum QuickJsonPathElement {
+    StringLiteral(u16),
+    Integer(i64),
+}
+
+#[derive(Debug, Clone)]
+pub struct QuickJsonLongProjection {
+    pub path: Box<[QuickJsonPathElement]>,
+    pub result: u16,
+}
+
+/// One loop-invariant `json_decode(..., true)` whose non-escaping result is
+/// consumed through fixed Long projections inside the same typed region.
+#[derive(Debug, Clone)]
+pub struct QuickJsonDecodeProjection {
+    pub input: QuickJsonInput,
+    pub destination: u16,
+    pub projections: Vec<QuickJsonLongProjection>,
+    pub output_mask: u64,
+}
+
 /// A typed operation in a guarded scalar loop region.
 ///
 /// Operations retain baseline instruction positions so arithmetic overflow can
@@ -758,6 +787,12 @@ pub enum QuickLongOp {
         value: u16,
         divisor: i64,
         result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// Baseline position consumed by the loop-invariant JSON projection
+    /// prelude. Quick/native execution treats this as a zero-cost control edge.
+    JsonProjectionStep {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
@@ -973,6 +1008,7 @@ impl QuickLongOp {
                 resolve(next_target)
             }
             Self::ModConst { next_target, .. }
+            | Self::JsonProjectionStep { next_target, .. }
             | Self::TraceGuard { next_target, .. }
             | Self::FetchArrayLong { next_target, .. }
             | Self::StoreArrayLong { next_target, .. }
@@ -1027,6 +1063,7 @@ pub struct QuickLongOpsLoop {
     pub string_output_mask: u64,
     pub string_append_mask: u64,
     pub object_input_mask: u64,
+    pub json_decode_projection: Option<QuickJsonDecodeProjection>,
     pub string_cache_capacity: u8,
     pub involved_mask: u64,
     pub straight_array_kernel: Option<QuickStraightArrayRegionKernel>,
@@ -3419,6 +3456,11 @@ fn detect_long_ops_region_inner(
     let mut string_output_mask = 0u64;
     let mut string_append_mask = 0u64;
     let mut object_input_mask = 0u64;
+    let mut json_decode_projection = None;
+    let mut json_paths: Vec<Option<Vec<QuickJsonPathElement>>> =
+        vec![None; total_slots as usize];
+    let mut json_fetch_mask = 0u64;
+    let mut json_parent_mask = 0u64;
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_object_call = false;
@@ -3708,54 +3750,183 @@ fn detect_long_ops_region_inner(
                     resume_ip,
                 }
             }
+            OpCode::DirectInternalCall2
+                if crate::builtin_metadata::DirectInternalKind::from_id(
+                    instruction.extended_value,
+                ) == Some(crate::builtin_metadata::DirectInternalKind::JsonDecode) =>
+            {
+                let skipped_by_prior_edge = ops.iter().skip(1).any(|operation| {
+                    match *operation {
+                        QuickLongOp::BranchUnlessLt { false_target, .. }
+                        | QuickLongOp::BranchUnlessEq { false_target, .. }
+                        | QuickLongOp::BranchUnlessLe { false_target, .. } => false_target
+                            .unresolved_ip()
+                            .is_some_and(|target| target > ip),
+                        QuickLongOp::TraceGuard { .. } | QuickLongOp::Jump { .. } => true,
+                        _ => false,
+                    }
+                });
+                if json_decode_projection.is_some()
+                    || skipped_by_prior_edge
+                    || !matches!(instruction.op1_type, OpType::Cv | OpType::Const)
+                    || instruction.op2_type != OpType::Const
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    || op_array
+                        .literals
+                        .get(instruction.op2 as usize)?
+                        .value_type()
+                        != crate::value::ValueType::True
+                {
+                    return None;
+                }
+                let input = match instruction.op1_type {
+                    OpType::Cv
+                        if cv_unmodified_in_region(region, instruction.op1) =>
+                    {
+                        add_mask_slot(
+                            &mut string_input_mask,
+                            instruction.op1,
+                            total_slots,
+                        )?;
+                        QuickJsonInput::StringSlot(instruction.op1)
+                    }
+                    OpType::Const => {
+                        op_array
+                            .literals
+                            .get(instruction.op1 as usize)?
+                            .as_str()?;
+                        QuickJsonInput::StringLiteral(instruction.op1)
+                    }
+                    _ => return None,
+                };
+                let assignment = *op_array.instructions.get(ip + 1)?;
+                if assignment.opcode != OpCode::AssignCv
+                    || assignment.op1_type != OpType::Cv
+                    || assignment.op2_type != instruction.result_type
+                    || assignment.op2 != instruction.result
+                    || assignment.result_type != OpType::Unused
+                {
+                    return None;
+                }
+                let destination = assignment.op1;
+                json_paths.get_mut(destination as usize)?.replace(Vec::new());
+                json_decode_projection = Some(QuickJsonDecodeProjection {
+                    input,
+                    destination,
+                    projections: Vec::new(),
+                    output_mask: 0,
+                });
+                has_assign = true;
+                let resume_ip = ip;
+                ip += 2;
+                QuickLongOp::JsonProjectionStep {
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
+                }
+            }
             OpCode::FetchDimR => {
                 let array = long_slot(instruction.op1_type, instruction.op1)?;
                 if instruction.result_type != OpType::Tmp {
                     return None;
                 }
-                let index = match instruction.op2_type {
-                    OpType::Cv | OpType::Tmp => {
-                        if instruction.op2_type == OpType::Cv
-                            && string_key_assignment_mask & (1u64 << instruction.op2) != 0
-                        {
-                            add_mask_slot(&mut string_input_mask, instruction.op2, total_slots)?;
-                            QuickArrayIndex::ValueSlot(instruction.op2)
-                        } else {
-                            add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
-                            QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
+                if let Some(mut path) = json_paths
+                    .get(array as usize)
+                    .and_then(|path| path.as_ref())
+                    .cloned()
+                {
+                    let element = match instruction.op2_type {
+                        OpType::Const => {
+                            let value = op_array.literals.get(instruction.op2 as usize)?;
+                            if value.as_str().is_some() {
+                                QuickJsonPathElement::StringLiteral(instruction.op2)
+                            } else {
+                                QuickJsonPathElement::Integer(value.as_long()?)
+                            }
                         }
+                        _ => return None,
+                    };
+                    if path.len() == 8 {
+                        return None;
                     }
-                    OpType::Const => array_literal_index(op_array, instruction.op2)?,
-                    _ => return None,
-                };
-                add_mask_slot(&mut array_input_mask, array, total_slots)?;
-                add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
-                let destination = op_array
-                    .instructions
-                    .get(ip + 1)
-                    .copied()
-                    .and_then(long_assign)
-                    .and_then(|(destination, source)| {
-                        (source == instruction.result).then_some(destination)
-                    });
-                let resume_ip = ip;
-                if let Some(destination) = destination {
-                    add_mask_slot(&mut long_output_mask, destination, total_slots)?;
-                    has_assign = true;
-                    ip += 2;
-                } else {
+                    path.push(element);
+                    json_paths
+                        .get_mut(instruction.result as usize)?
+                        .replace(path);
+                    add_mask_slot(
+                        &mut json_fetch_mask,
+                        instruction.result,
+                        total_slots,
+                    )?;
+                    add_mask_slot(&mut json_parent_mask, array, total_slots)?;
+                    let resume_ip = ip;
                     ip += 1;
-                }
-                QuickLongOp::FetchArrayLong {
-                    array,
-                    index,
-                    result: instruction.result,
-                    destination,
-                    next_target: QuickLongTarget::unresolved(ip)?,
-                    resume_ip,
+                    QuickLongOp::JsonProjectionStep {
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    let index = match instruction.op2_type {
+                        OpType::Cv | OpType::Tmp => {
+                            if instruction.op2_type == OpType::Cv
+                                && string_key_assignment_mask & (1u64 << instruction.op2) != 0
+                            {
+                                add_mask_slot(
+                                    &mut string_input_mask,
+                                    instruction.op2,
+                                    total_slots,
+                                )?;
+                                QuickArrayIndex::ValueSlot(instruction.op2)
+                            } else {
+                                add_mask_slot(
+                                    &mut long_input_mask,
+                                    instruction.op2,
+                                    total_slots,
+                                )?;
+                                QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
+                            }
+                        }
+                        OpType::Const => array_literal_index(op_array, instruction.op2)?,
+                        _ => return None,
+                    };
+                    add_mask_slot(&mut array_input_mask, array, total_slots)?;
+                    add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                    let destination = op_array
+                        .instructions
+                        .get(ip + 1)
+                        .copied()
+                        .and_then(long_assign)
+                        .and_then(|(destination, source)| {
+                            (source == instruction.result).then_some(destination)
+                        });
+                    let resume_ip = ip;
+                    if let Some(destination) = destination {
+                        add_mask_slot(&mut long_output_mask, destination, total_slots)?;
+                        has_assign = true;
+                        ip += 2;
+                    } else {
+                        ip += 1;
+                    }
+                    QuickLongOp::FetchArrayLong {
+                        array,
+                        index,
+                        result: instruction.result,
+                        destination,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
                 }
             }
             OpCode::AssignDim => {
+                if json_paths
+                    .get(instruction.op1 as usize)
+                    .and_then(|path| path.as_ref())
+                    .is_some()
+                {
+                    // Reusing one decoded array is observable once the loop
+                    // mutates it; canonical execution creates a fresh array on
+                    // every iteration. Keep all such roots on the baseline.
+                    return None;
+                }
                 if instruction.op1_type != OpType::Cv
                     || !matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var)
                 {
@@ -3827,6 +3998,13 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::ArrayPushOp => {
+                if json_paths
+                    .get(instruction.op1 as usize)
+                    .and_then(|path| path.as_ref())
+                    .is_some()
+                {
+                    return None;
+                }
                 if instruction.op1_type != OpType::Cv
                     || instruction.result_type != OpType::Unused
                 {
@@ -4719,6 +4897,7 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::BranchUnlessLe { resume_ip, .. }
             | QuickLongOp::TraceGuard { resume_ip, .. }
             | QuickLongOp::ModConst { resume_ip, .. }
+            | QuickLongOp::JsonProjectionStep { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
             | QuickLongOp::StoreArrayLong { resume_ip, .. }
             | QuickLongOp::ArrayPushLong { resume_ip, .. }
@@ -4850,6 +5029,34 @@ fn detect_long_ops_region_inner(
     };
     long_input_mask &= !(long_output_mask & !cv_mask);
 
+    if let Some(projection) = json_decode_projection.as_mut() {
+        if json_fetch_mask == 0
+            || json_fetch_mask & !(json_parent_mask | long_input_mask) != 0
+        {
+            return None;
+        }
+        let mut outputs = json_fetch_mask & long_input_mask;
+        while outputs != 0 {
+            let result = outputs.trailing_zeros() as u16;
+            outputs &= outputs - 1;
+            let path = json_paths
+                .get(result as usize)?
+                .as_ref()?
+                .clone();
+            if path.is_empty() {
+                return None;
+            }
+            projection.output_mask |= 1u64 << result;
+            projection.projections.push(QuickJsonLongProjection {
+                path: path.into_boxed_slice(),
+                result,
+            });
+        }
+        if projection.projections.is_empty() {
+            return None;
+        }
+    }
+
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
         || array_input_mask & (long_mask | bool_output_mask) != 0
@@ -4907,6 +5114,7 @@ fn detect_long_ops_region_inner(
         string_output_mask,
         string_append_mask,
         object_input_mask,
+        json_decode_projection,
         string_cache_capacity: string_cache_capacity as u8,
         involved_mask,
         straight_array_kernel: None,
@@ -5437,6 +5645,45 @@ for ($i = 0; $i < 100; $i++) {
                     main.op_array.instructions
                 )
             })
+    }
+
+    #[test]
+    fn detects_invariant_json_decode_long_projections() {
+        let plan = long_ops_plan(
+            "<?php
+$json = '{\"age\":30,\"scores\":[95,87]}';
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $sum = $sum + $row['age'] + $row['scores'][0] + $row['scores'][1];
+}
+",
+        );
+        let projection = plan
+            .json_decode_projection
+            .as_ref()
+            .expect("stable associative json_decode should become a prelude");
+        assert_eq!(projection.projections.len(), 3);
+        assert_eq!(projection.output_mask.count_ones(), 3);
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::JsonProjectionStep { .. }
+        )));
+        assert!(projection.projections.iter().any(|output| {
+            matches!(
+                output.path.as_ref(),
+                [QuickJsonPathElement::StringLiteral(_)]
+            )
+        }));
+        assert!(projection.projections.iter().any(|output| {
+            matches!(
+                output.path.as_ref(),
+                [
+                    QuickJsonPathElement::StringLiteral(_),
+                    QuickJsonPathElement::Integer(0)
+                ]
+            )
+        }));
     }
 
     #[test]

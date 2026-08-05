@@ -3100,7 +3100,10 @@ impl Compiler {
                         .unambiguous_global_function_name(name)
                         .and_then(crate::builtin_metadata::direct_internal_spec)
                         .filter(|spec| {
-                            spec.required_args <= 1 && spec.max_args >= 1
+                            spec.required_args <= 1
+                                && spec.max_args >= 1
+                                && spec.kind.lowering()
+                                    != crate::builtin_metadata::DirectInternalLowering::Generic2
                         })
                         .map(|spec| spec.kind);
 

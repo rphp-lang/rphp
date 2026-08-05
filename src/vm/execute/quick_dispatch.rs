@@ -34,7 +34,11 @@ unsafe fn run_quick_long_ops_loop(
 
     let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     let mut slots = [0i64; 64];
-    let mut input_mask = plan.long_input_mask;
+    let json_output_mask = plan
+        .json_decode_projection
+        .as_ref()
+        .map_or(0, |projection| projection.output_mask);
+    let mut input_mask = plan.long_input_mask & !json_output_mask;
     while input_mask != 0 {
         let slot = input_mask.trailing_zeros() as usize;
         input_mask &= input_mask - 1;
@@ -54,6 +58,17 @@ unsafe fn run_quick_long_ops_loop(
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         }
+    }
+
+    if !prepare_quick_json_decode_projection(
+        frame,
+        op_array,
+        plan,
+        slot_base,
+        &mut slots,
+    ) {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
     }
 
     let mut object_mask = plan.object_input_mask;
@@ -348,6 +363,7 @@ unsafe fn run_quick_long_ops_loop(
                     return Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
+            QuickLongOp::JsonProjectionStep { next_target, .. } => next_target,
             QuickLongOp::FetchArrayLong {
                 array,
                 index,

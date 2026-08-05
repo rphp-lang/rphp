@@ -43,6 +43,7 @@ use super::quick::{
     compose_quick_scalar_leaf_program, compose_scalar_double_program,
     QuickArrayIndex, QuickIncrementKind,
     QuickDoubleArgumentProgram, QuickDoubleCallAccumulateLoop, QuickDoubleSource,
+    QuickJsonInput, QuickJsonPathElement,
     QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
     QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
     QuickObjectLongArgument, QuickObjectLongMethodCall, QuickTypedMethodCall,
@@ -5156,6 +5157,7 @@ pub(super) unsafe fn quick_loop_slot_has_heap(frame: *mut ExecuteData, slot: u16
 include!("execute/quick_induction_runtime.rs");
 include!("execute/quick_scalar_runtime.rs");
 include!("execute/quick_double_runtime.rs");
+include!("execute/quick_json_runtime.rs");
 
 include!("execute/quick_object_resolution.rs");
 
@@ -5480,6 +5482,7 @@ fn native_quick_long_straight_kernel(
                 plan_index += 1;
                 continue;
             }
+            QuickLongOp::JsonProjectionStep { next_target, .. } => next_target,
             QuickLongOp::ModConst {
                 value,
                 divisor,

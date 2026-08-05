@@ -4,6 +4,7 @@
 //! `OpArray::prepare_quick_loops` without carrying reporting policy or tables.
 
 use super::OpArray;
+use crate::builtin_metadata::DirectInternalKind;
 use crate::value::Value;
 use crate::vm::instruction::Instruction;
 use crate::vm::opcode::OpCode;
@@ -69,6 +70,12 @@ pub(super) fn loop_miss_reason(
 
     for instruction in &op_array.instructions[header_ip..=backedge_ip] {
         if named_call_matches(op_array, instruction, &["json_encode", "json_decode"]) {
+            return JitMissReason::JsonPipeline;
+        }
+        if instruction.opcode == OpCode::DirectInternalCall2
+            && DirectInternalKind::from_id(instruction.extended_value)
+                == Some(DirectInternalKind::JsonDecode)
+        {
             return JitMissReason::JsonPipeline;
         }
         if named_call_matches(op_array, instruction, CALLBACK_FUNCTIONS) {
@@ -187,6 +194,16 @@ mod tests {
         assert_eq!(
             classify_loop(
                 "<?php for ($i = 0; $i < 10; $i++) { $row = json_encode($i); }"
+            ),
+            JitMissReason::JsonPipeline
+        );
+    }
+
+    #[test]
+    fn recognizes_direct_associative_json_decode() {
+        assert_eq!(
+            classify_loop(
+                r#"<?php $json = '{"value":1}'; for ($i = 0; $i < 10; $i++) { $row = json_decode($json, true); echo $row['value']; }"#
             ),
             JitMissReason::JsonPipeline
         );
