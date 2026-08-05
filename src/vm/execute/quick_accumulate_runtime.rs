@@ -230,6 +230,11 @@ unsafe fn run_quick_long_accumulate_loop(
             bound,
         )?
     {
+        #[cfg(feature = "vm-stats")]
+        record_native_quick_outcome(
+            stats::JitRegionKind::LongAccumulate,
+            &outcome,
+        );
         return Ok(outcome);
     }
     #[cfg(all(
@@ -254,6 +259,11 @@ unsafe fn run_quick_long_accumulate_loop(
         accumulator,
         bound,
     )? {
+        #[cfg(feature = "vm-stats")]
+        record_native_quick_outcome(
+            stats::JitRegionKind::LongAccumulate,
+            &outcome,
+        );
         return Ok(outcome);
     }
     let invariant_addend = addend_ptr.map(|ptr| (*ptr).raw_long());

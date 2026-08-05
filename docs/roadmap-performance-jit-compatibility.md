@@ -984,6 +984,29 @@ tracing-JIT invocation. Every JIT batch must first verify
 Also track compilation latency, code-cache memory, runtime memory, and
 deoptimization frequency.
 
+Coverage telemetry checkpoint (2026-08-05): the opt-in `vm-stats` build now
+measures the shared quick/JIT admission pipeline instead of treating a fast or
+slow benchmark as evidence of coverage. It records static backward-loop
+candidates and admitted plan shapes, stable dominant rejection families,
+runtime-weighted executions of rejected backedges, straight-region admission
+at the exact `no_typed_span`/`no_dense_kernel` stage, optimized-region entries,
+and successful native executions plus side exits by shape. Scalar Long/Double
+native dispatch is included alongside loop regions. Rejected ordinary `Jmp`
+instructions use their otherwise-unused `extended_value` only in a
+`vm-stats` build; ordinary builds contain neither the marker nor its runtime
+branch or counters.
+
+The four order/ledger corpus variants each expose one hot loop, admit it as a
+general typed-ops region, execute it once natively for the remaining 499,967
+iterations, and record zero side exits and zero rejected hot backedges. Each
+also exposes four cold post-loop `FetchDimR` starts that fail with
+`no_typed_span`; these are result formatting, not the timed hot-loop gap. In
+contrast, the JSON benchmark records one `json_pipeline` planner rejection and
+10,000 executions of that rejected backedge. This confirms both sides of the
+report and makes JSON/callback/collection coverage a measurable architectural
+extension rather than a benchmark-driven guess. Timings from `vm-stats` are
+diagnostic only because the enabled build performs atomic counting.
+
 ### Planned JIT extension: fused collection, JSON, and callback pipelines
 
 After the minimal scalar/object JIT is stable, extend the same guarded region

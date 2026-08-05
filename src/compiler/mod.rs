@@ -1,4 +1,6 @@
 pub mod compile;
+#[cfg(feature = "vm-stats")]
+mod jit_coverage;
 
 use crate::value::Value;
 use crate::vm::instruction::{Instruction, InlineCache, KnownScalarType, OpType};
@@ -360,6 +362,8 @@ impl OpArray {
             if header_ip >= backedge_ip {
                 continue;
             }
+            #[cfg(feature = "vm-stats")]
+            crate::vm::stats::inc_jit_loop_candidate();
             let plan = crate::vm::quick::detect_long_induction_loop(
                 self,
                 header_ip,
@@ -397,8 +401,46 @@ impl OpArray {
             if let Some(plan) = plan {
                 let block_idx = *self.ip_to_block.get(header_ip).unwrap_or(&u16::MAX);
                 if block_idx != u16::MAX {
+                    #[cfg(feature = "vm-stats")]
+                    {
+                        let kind = match &plan {
+                            BlockPlan::QuickLongInduction(_) => {
+                                crate::vm::stats::JitRegionKind::LongInduction
+                            }
+                            BlockPlan::QuickDoubleCallAccumulate(_) => {
+                                crate::vm::stats::JitRegionKind::DoubleCallAccumulate
+                            }
+                            BlockPlan::QuickLongAccumulate(_) => {
+                                crate::vm::stats::JitRegionKind::LongAccumulate
+                            }
+                            BlockPlan::QuickForeachLongAccumulate(_) => {
+                                crate::vm::stats::JitRegionKind::ForeachLongAccumulate
+                            }
+                            BlockPlan::QuickLongOps(_) => {
+                                crate::vm::stats::JitRegionKind::TypedOpsLoop
+                            }
+                            _ => unreachable!(
+                                "quick-loop detector returned a non-loop plan"
+                            ),
+                        };
+                        crate::vm::stats::inc_jit_loop_admitted(kind);
+                    }
                     closed_region_ip[header_ip..=backedge_ip].fill(true);
                     candidates.push((backedge_ip, block_idx, plan));
+                    continue;
+                }
+            }
+
+            #[cfg(feature = "vm-stats")]
+            {
+                let reason = jit_coverage::loop_miss_reason(
+                    self,
+                    header_ip,
+                    backedge_ip,
+                );
+                crate::vm::stats::inc_jit_loop_rejected(reason);
+                if crate::vm::stats::enabled() {
+                    self.instructions[backedge_ip].extended_value = reason.marker();
                 }
             }
         }
@@ -440,7 +482,13 @@ impl OpArray {
             if last_ip <= entry_ip {
                 continue;
             }
+            #[cfg(feature = "vm-stats")]
+            crate::vm::stats::inc_jit_straight_candidate();
 
+            #[cfg(feature = "vm-stats")]
+            let mut saw_typed_span = false;
+            #[cfg(feature = "vm-stats")]
+            let mut admitted = false;
             for end_ip in (entry_ip + 1..=last_ip).rev() {
                 if closed_region_ip[entry_ip..=end_ip].iter().any(|covered| *covered) {
                     continue;
@@ -452,6 +500,10 @@ impl OpArray {
                 ) else {
                     continue;
                 };
+                #[cfg(feature = "vm-stats")]
+                {
+                    saw_typed_span = true;
+                }
                 // Short straight-line regions must have a preselected dense
                 // execution shape. Falling back to generic typed-op dispatch
                 // here costs more than the baseline instructions it replaces.
@@ -460,7 +512,23 @@ impl OpArray {
                 }
                 self.block_plans[block_idx as usize] = BlockPlan::QuickLongOps(plan);
                 self.instructions[entry_ip].extended_value = u32::from(block_idx) + 1;
+                #[cfg(feature = "vm-stats")]
+                {
+                    crate::vm::stats::inc_jit_straight_admitted();
+                    admitted = true;
+                }
                 break;
+            }
+            #[cfg(feature = "vm-stats")]
+            {
+                if !admitted {
+                    let reason = if saw_typed_span {
+                        crate::vm::stats::JitStraightMissReason::NoDenseKernel
+                    } else {
+                        crate::vm::stats::JitStraightMissReason::NoTypedSpan
+                    };
+                    crate::vm::stats::inc_jit_straight_rejected(reason);
+                }
             }
         }
 

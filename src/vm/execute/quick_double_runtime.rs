@@ -629,6 +629,11 @@ unsafe fn run_quick_double_call_accumulate_loop(
         last_term,
         last_increment,
     )? {
+        #[cfg(feature = "vm-stats")]
+        record_native_quick_outcome(
+            stats::JitRegionKind::DoubleCallAccumulate,
+            &outcome,
+        );
         return Ok(outcome);
     }
 

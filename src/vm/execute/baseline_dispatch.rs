@@ -921,6 +921,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::Jmp => {
+                #[cfg(feature = "vm-stats")]
+                if opline.extended_value != 0 {
+                    stats::inc_jit_rejected_backedge_hit(opline.extended_value);
+                }
                 // op1 = absolute instruction index to jump to
                 let target = opline.op1 as usize;
                 unsafe {

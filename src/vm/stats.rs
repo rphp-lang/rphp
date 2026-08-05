@@ -2,8 +2,110 @@
 // Without the feature, all functions compile to nothing (zero overhead).
 // Usage: cargo build --features vm-stats && RPHP_VM_STATS=1 ./target/release/rphp script.php
 
+/// Region shapes admitted by the shared quick-loop/JIT planner.
+///
+/// The planner is shared by the no-JIT typed executor and the native JIT, so
+/// these counters describe optimization coverage rather than native code alone.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JitRegionKind {
+    LongInduction = 0,
+    DoubleCallAccumulate = 1,
+    LongAccumulate = 2,
+    ForeachLongAccumulate = 3,
+    TypedOpsLoop = 4,
+    StraightArrayRegion = 5,
+    ScalarLongFunction = 6,
+    ScalarDoubleFunction = 7,
+}
+
+impl JitRegionKind {
+    #[cfg(feature = "vm-stats")]
+    const COUNT: usize = 8;
+
+    #[cfg(feature = "vm-stats")]
+    #[inline(always)]
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
+/// Dominant operation family in a loop the quick-loop/JIT planner rejected.
+///
+/// This deliberately describes the first architectural gap, not an exact
+/// parser error. One loop can contain several unsupported families; the
+/// classifier uses a stable priority so corpus reports remain comparable.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JitMissReason {
+    JsonPipeline = 0,
+    CallbackOrIndirectCall = 1,
+    ArrayShape = 2,
+    StringShape = 3,
+    ObjectShape = 4,
+    DirectCallShape = 5,
+    SemanticBoundary = 6,
+    ComplexControlFlow = 7,
+    UnsupportedScalarShape = 8,
+}
+
+impl JitMissReason {
+    #[cfg(feature = "vm-stats")]
+    const COUNT: usize = 9;
+
+    #[cfg(feature = "vm-stats")]
+    #[inline(always)]
+    const fn index(self) -> usize {
+        self as usize
+    }
+
+    /// Non-zero marker stored in otherwise-unused `Jmp::extended_value` by a
+    /// vm-stats build. Zero remains "not a measured rejected backedge".
+    #[inline(always)]
+    pub const fn marker(self) -> u32 {
+        self as u32 + 1
+    }
+
+    #[cfg(feature = "vm-stats")]
+    #[inline(always)]
+    const fn from_marker(marker: u32) -> Option<Self> {
+        match marker {
+            1 => Some(Self::JsonPipeline),
+            2 => Some(Self::CallbackOrIndirectCall),
+            3 => Some(Self::ArrayShape),
+            4 => Some(Self::StringShape),
+            5 => Some(Self::ObjectShape),
+            6 => Some(Self::DirectCallShape),
+            7 => Some(Self::SemanticBoundary),
+            8 => Some(Self::ComplexControlFlow),
+            9 => Some(Self::UnsupportedScalarShape),
+            _ => None,
+        }
+    }
+}
+
+/// Exact admission stage that rejected a straight-line application region.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JitStraightMissReason {
+    NoTypedSpan = 0,
+    NoDenseKernel = 1,
+}
+
+impl JitStraightMissReason {
+    #[cfg(feature = "vm-stats")]
+    const COUNT: usize = 2;
+
+    #[cfg(feature = "vm-stats")]
+    #[inline(always)]
+    const fn index(self) -> usize {
+        self as usize
+    }
+}
+
 #[cfg(feature = "vm-stats")]
 mod inner {
+    use super::{JitMissReason, JitRegionKind, JitStraightMissReason};
     use std::io::Write;
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
@@ -34,6 +136,24 @@ mod inner {
     static QUICK_LOOP_DEOPTIMIZATIONS: AtomicU64 = AtomicU64::new(0);
     static QUICK_LOOP_GUARD_FAILURES: AtomicU64 = AtomicU64::new(0);
     static QUICK_LOOP_ITERATIONS: AtomicU64 = AtomicU64::new(0);
+
+    static JIT_LOOP_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+    static JIT_LOOP_ADMISSIONS: [AtomicU64; JitRegionKind::COUNT] =
+        [const { AtomicU64::new(0) }; JitRegionKind::COUNT];
+    static JIT_LOOP_REJECTIONS: [AtomicU64; JitMissReason::COUNT] =
+        [const { AtomicU64::new(0) }; JitMissReason::COUNT];
+    static JIT_REJECTED_BACKEDGE_HITS: [AtomicU64; JitMissReason::COUNT] =
+        [const { AtomicU64::new(0) }; JitMissReason::COUNT];
+    static JIT_REGION_EXECUTIONS: [AtomicU64; JitRegionKind::COUNT] =
+        [const { AtomicU64::new(0) }; JitRegionKind::COUNT];
+    static JIT_NATIVE_EXECUTIONS: [AtomicU64; JitRegionKind::COUNT] =
+        [const { AtomicU64::new(0) }; JitRegionKind::COUNT];
+    static JIT_NATIVE_SIDE_EXITS: [AtomicU64; JitRegionKind::COUNT] =
+        [const { AtomicU64::new(0) }; JitRegionKind::COUNT];
+    static JIT_STRAIGHT_CANDIDATES: AtomicU64 = AtomicU64::new(0);
+    static JIT_STRAIGHT_ADMISSIONS: AtomicU64 = AtomicU64::new(0);
+    static JIT_STRAIGHT_REJECTIONS: [AtomicU64; JitStraightMissReason::COUNT] =
+        [const { AtomicU64::new(0) }; JitStraightMissReason::COUNT];
 
     static FIND_FUNCTION_CALLS: AtomicU64 = AtomicU64::new(0);
     static FIND_FUNCTION_EXACT_HITS: AtomicU64 = AtomicU64::new(0);
@@ -77,6 +197,30 @@ mod inner {
         QUICK_LOOP_DEOPTIMIZATIONS.store(0, Ordering::Relaxed);
         QUICK_LOOP_GUARD_FAILURES.store(0, Ordering::Relaxed);
         QUICK_LOOP_ITERATIONS.store(0, Ordering::Relaxed);
+        JIT_LOOP_CANDIDATES.store(0, Ordering::Relaxed);
+        JIT_STRAIGHT_CANDIDATES.store(0, Ordering::Relaxed);
+        JIT_STRAIGHT_ADMISSIONS.store(0, Ordering::Relaxed);
+        for counter in &JIT_STRAIGHT_REJECTIONS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &JIT_LOOP_ADMISSIONS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &JIT_LOOP_REJECTIONS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &JIT_REJECTED_BACKEDGE_HITS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &JIT_REGION_EXECUTIONS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &JIT_NATIVE_EXECUTIONS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &JIT_NATIVE_SIDE_EXITS {
+            counter.store(0, Ordering::Relaxed);
+        }
         FIND_FUNCTION_CALLS.store(0, Ordering::Relaxed);
         FIND_FUNCTION_EXACT_HITS.store(0, Ordering::Relaxed);
         FIND_FUNCTION_LOWER_HITS.store(0, Ordering::Relaxed);
@@ -173,6 +317,77 @@ mod inner {
     pub fn inc_quick_loop_guard_failed() {
         if !enabled() { return; }
         QUICK_LOOP_GUARD_FAILURES.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[inline]
+    pub fn inc_jit_loop_candidate() {
+        if enabled() {
+            JIT_LOOP_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_loop_admitted(kind: JitRegionKind) {
+        if enabled() {
+            JIT_LOOP_ADMISSIONS[kind.index()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_loop_rejected(reason: JitMissReason) {
+        if enabled() {
+            JIT_LOOP_REJECTIONS[reason.index()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_rejected_backedge_hit(marker: u32) {
+        if !enabled() { return; }
+        if let Some(reason) = JitMissReason::from_marker(marker) {
+            JIT_REJECTED_BACKEDGE_HITS[reason.index()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_region_execution(kind: JitRegionKind) {
+        if enabled() {
+            JIT_REGION_EXECUTIONS[kind.index()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_native_execution(kind: JitRegionKind) {
+        if enabled() {
+            JIT_NATIVE_EXECUTIONS[kind.index()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_native_side_exit(kind: JitRegionKind) {
+        if enabled() {
+            JIT_NATIVE_SIDE_EXITS[kind.index()].fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_straight_candidate() {
+        if enabled() {
+            JIT_STRAIGHT_CANDIDATES.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_straight_admitted() {
+        if enabled() {
+            JIT_STRAIGHT_ADMISSIONS.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub fn inc_jit_straight_rejected(reason: JitStraightMissReason) {
+        if enabled() {
+            JIT_STRAIGHT_REJECTIONS[reason.index()].fetch_add(1, Ordering::Relaxed);
+        }
     }
 
     #[inline]
@@ -288,6 +503,43 @@ mod inner {
         }
     }
 
+    fn jit_region_name(kind: usize) -> &'static str {
+        match kind {
+            0 => "long_induction",
+            1 => "double_call_accumulate",
+            2 => "long_accumulate",
+            3 => "foreach_long_accumulate",
+            4 => "typed_ops_loop",
+            5 => "straight_array_region",
+            6 => "scalar_long_function",
+            7 => "scalar_double_function",
+            _ => "unknown",
+        }
+    }
+
+    fn jit_miss_name(reason: usize) -> &'static str {
+        match reason {
+            0 => "json_pipeline",
+            1 => "callback_or_indirect_call",
+            2 => "array_shape",
+            3 => "string_shape",
+            4 => "object_shape",
+            5 => "direct_call_shape",
+            6 => "semantic_boundary",
+            7 => "complex_control_flow",
+            8 => "unsupported_scalar_shape",
+            _ => "unknown",
+        }
+    }
+
+    fn jit_straight_miss_name(reason: usize) -> &'static str {
+        match reason {
+            0 => "no_typed_span",
+            1 => "no_dense_kernel",
+            _ => "unknown",
+        }
+    }
+
     pub fn dump_to_stderr() {
         if !enabled() { return; }
 
@@ -311,6 +563,71 @@ mod inner {
         let _ = writeln!(err, "quick_loop_deoptimizations={}", QUICK_LOOP_DEOPTIMIZATIONS.load(Ordering::Relaxed));
         let _ = writeln!(err, "quick_loop_guard_failures={}", QUICK_LOOP_GUARD_FAILURES.load(Ordering::Relaxed));
         let _ = writeln!(err, "quick_loop_iterations={}", QUICK_LOOP_ITERATIONS.load(Ordering::Relaxed));
+        let _ = writeln!(err, "-- quick/JIT planner coverage --");
+        let _ = writeln!(err, "jit_loop_candidates={}", JIT_LOOP_CANDIDATES.load(Ordering::Relaxed));
+        let loop_admissions = JIT_LOOP_ADMISSIONS
+            .iter()
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .sum::<u64>();
+        let loop_rejections = JIT_LOOP_REJECTIONS
+            .iter()
+            .map(|counter| counter.load(Ordering::Relaxed))
+            .sum::<u64>();
+        let _ = writeln!(err, "jit_loop_admissions={loop_admissions}");
+        let _ = writeln!(err, "jit_loop_rejections={loop_rejections}");
+        let _ = writeln!(err, "jit_straight_candidates={}", JIT_STRAIGHT_CANDIDATES.load(Ordering::Relaxed));
+        let _ = writeln!(err, "jit_straight_admissions={}", JIT_STRAIGHT_ADMISSIONS.load(Ordering::Relaxed));
+        let _ = writeln!(err, "-- rejected straight regions by admission stage --");
+        for (index, counter) in JIT_STRAIGHT_REJECTIONS.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                let _ = writeln!(err, "{}={count}", jit_straight_miss_name(index));
+            }
+        }
+        let _ = writeln!(err, "-- admitted regions by shape --");
+        for (index, counter) in JIT_LOOP_ADMISSIONS.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                let _ = writeln!(err, "{}={count}", jit_region_name(index));
+            }
+        }
+        let straight_admissions = JIT_STRAIGHT_ADMISSIONS.load(Ordering::Relaxed);
+        if straight_admissions > 0 {
+            let _ = writeln!(err, "straight_array_region={straight_admissions}");
+        }
+        let _ = writeln!(err, "-- executed optimized regions by shape --");
+        for (index, counter) in JIT_REGION_EXECUTIONS.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                let _ = writeln!(err, "{}={count}", jit_region_name(index));
+            }
+        }
+        let _ = writeln!(err, "-- native JIT executions by shape --");
+        for (index, counter) in JIT_NATIVE_EXECUTIONS.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                let side_exits = JIT_NATIVE_SIDE_EXITS[index].load(Ordering::Relaxed);
+                let _ = writeln!(
+                    err,
+                    "{}={count},side_exits={side_exits}",
+                    jit_region_name(index)
+                );
+            }
+        }
+        let _ = writeln!(err, "-- rejected loops by dominant gap --");
+        for (index, counter) in JIT_LOOP_REJECTIONS.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                let _ = writeln!(err, "{}={count}", jit_miss_name(index));
+            }
+        }
+        let _ = writeln!(err, "-- rejected backedge executions by dominant gap --");
+        for (index, counter) in JIT_REJECTED_BACKEDGE_HITS.iter().enumerate() {
+            let count = counter.load(Ordering::Relaxed);
+            if count > 0 {
+                let _ = writeln!(err, "{}={count}", jit_miss_name(index));
+            }
+        }
         let _ = writeln!(err, "find_function_calls={}", FIND_FUNCTION_CALLS.load(Ordering::Relaxed));
         let _ = writeln!(err, "find_function_exact_hits={}", FIND_FUNCTION_EXACT_HITS.load(Ordering::Relaxed));
         let _ = writeln!(err, "find_function_lower_hits={}", FIND_FUNCTION_LOWER_HITS.load(Ordering::Relaxed));
@@ -459,6 +776,76 @@ pub fn inc_quick_loop_guard_failed() { inner::inc_quick_loop_guard_failed(); }
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_quick_loop_guard_failed() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_loop_candidate() { inner::inc_jit_loop_candidate(); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_loop_candidate() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_loop_admitted(kind: JitRegionKind) { inner::inc_jit_loop_admitted(kind); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_loop_admitted(_kind: JitRegionKind) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_loop_rejected(reason: JitMissReason) { inner::inc_jit_loop_rejected(reason); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_loop_rejected(_reason: JitMissReason) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_rejected_backedge_hit(marker: u32) { inner::inc_jit_rejected_backedge_hit(marker); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_rejected_backedge_hit(_marker: u32) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_region_execution(kind: JitRegionKind) { inner::inc_jit_region_execution(kind); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_region_execution(_kind: JitRegionKind) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_native_execution(kind: JitRegionKind) { inner::inc_jit_native_execution(kind); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_native_execution(_kind: JitRegionKind) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_native_side_exit(kind: JitRegionKind) { inner::inc_jit_native_side_exit(kind); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_native_side_exit(_kind: JitRegionKind) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_straight_candidate() { inner::inc_jit_straight_candidate(); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_straight_candidate() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_straight_admitted() { inner::inc_jit_straight_admitted(); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_straight_admitted() {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn inc_jit_straight_rejected(reason: JitStraightMissReason) { inner::inc_jit_straight_rejected(reason); }
+#[cfg(not(feature = "vm-stats"))]
+#[inline(always)]
+pub fn inc_jit_straight_rejected(_reason: JitStraightMissReason) {}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

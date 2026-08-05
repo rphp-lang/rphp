@@ -1340,8 +1340,25 @@ fn evaluate_scalar_long_plan(
     ))]
     match plan.native_jit().dispatch(plan, arguments) {
         ScalarLongJitDispatch::Interpret => {}
-        ScalarLongJitDispatch::Value(value) => return Some(value),
-        ScalarLongJitDispatch::SideExit => return None,
+        ScalarLongJitDispatch::Value(value) => {
+            #[cfg(feature = "vm-stats")]
+            stats::inc_jit_native_execution(
+                stats::JitRegionKind::ScalarLongFunction,
+            );
+            return Some(value);
+        }
+        ScalarLongJitDispatch::SideExit => {
+            #[cfg(feature = "vm-stats")]
+            {
+                stats::inc_jit_native_execution(
+                    stats::JitRegionKind::ScalarLongFunction,
+                );
+                stats::inc_jit_native_side_exit(
+                    stats::JitRegionKind::ScalarLongFunction,
+                );
+            }
+            return None;
+        }
     }
     let mut temporaries = [0i64; 8];
     let evaluate_operations = |start: usize, end: usize, temporaries: &mut [i64; 8]| {
@@ -1442,8 +1459,25 @@ fn evaluate_scalar_double_plan(
     ))]
     match plan.native_jit().dispatch(plan, arguments) {
         ScalarDoubleJitDispatch::Interpret => {}
-        ScalarDoubleJitDispatch::Value(value) => return Some(value),
-        ScalarDoubleJitDispatch::SideExit => return None,
+        ScalarDoubleJitDispatch::Value(value) => {
+            #[cfg(feature = "vm-stats")]
+            stats::inc_jit_native_execution(
+                stats::JitRegionKind::ScalarDoubleFunction,
+            );
+            return Some(value);
+        }
+        ScalarDoubleJitDispatch::SideExit => {
+            #[cfg(feature = "vm-stats")]
+            {
+                stats::inc_jit_native_execution(
+                    stats::JitRegionKind::ScalarDoubleFunction,
+                );
+                stats::inc_jit_native_side_exit(
+                    stats::JitRegionKind::ScalarDoubleFunction,
+                );
+            }
+            return None;
+        }
     }
     evaluate_scalar_double_plan_rust(plan, arguments)
 }
@@ -5094,6 +5128,26 @@ pub(super) enum QuickLoopOutcome {
 }
 
 #[inline(always)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "vm-stats",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+fn record_native_quick_outcome(
+    kind: stats::JitRegionKind,
+    outcome: &QuickLoopOutcome,
+) {
+    stats::inc_jit_native_execution(kind);
+    if matches!(outcome, QuickLoopOutcome::Deoptimized) {
+        stats::inc_jit_native_side_exit(kind);
+    }
+}
+
+#[inline(always)]
 #[cfg(feature = "quick-loops")]
 pub(super) unsafe fn quick_loop_slot_has_heap(frame: *mut ExecuteData, slot: u16) -> bool {
     (*frame).heap_bitmap & (1u64 << slot) != 0
@@ -5988,6 +6042,8 @@ unsafe fn execute_quick_region_entry(
         return Ok(false);
     }
 
+    #[cfg(feature = "vm-stats")]
+    stats::inc_jit_region_execution(stats::JitRegionKind::StraightArrayRegion);
     match run_quick_long_ops_loop(eg, frame, op_array, plan)? {
         QuickLoopOutcome::Completed => {
             hot_counter.set(QUICK_LOOP_HOT_THRESHOLD);
@@ -6036,20 +6092,40 @@ unsafe fn execute_quick_loop_backedge(
         if hot_progress >= QUICK_LOOP_HOT_THRESHOLD {
             let outcome = match plan {
                 super::planner::BlockPlan::QuickLongInduction(plan) => {
+                    #[cfg(feature = "vm-stats")]
+                    stats::inc_jit_region_execution(
+                        stats::JitRegionKind::LongInduction,
+                    );
                     run_quick_long_induction_loop(eg, frame, op_array, *plan)?
                 }
                 super::planner::BlockPlan::QuickLongAccumulate(plan) => {
+                    #[cfg(feature = "vm-stats")]
+                    stats::inc_jit_region_execution(
+                        stats::JitRegionKind::LongAccumulate,
+                    );
                     run_quick_long_accumulate_loop(eg, frame, op_array, plan)?
                 }
                 super::planner::BlockPlan::QuickDoubleCallAccumulate(plan) => {
+                    #[cfg(feature = "vm-stats")]
+                    stats::inc_jit_region_execution(
+                        stats::JitRegionKind::DoubleCallAccumulate,
+                    );
                     run_quick_double_call_accumulate_loop(eg, frame, op_array, plan)?
                 }
                 super::planner::BlockPlan::QuickForeachLongAccumulate(plan) => {
+                    #[cfg(feature = "vm-stats")]
+                    stats::inc_jit_region_execution(
+                        stats::JitRegionKind::ForeachLongAccumulate,
+                    );
                     super::quick_foreach::run_quick_foreach_long_accumulate_loop(
                         eg, frame, op_array, *plan,
                     )?
                 }
                 super::planner::BlockPlan::QuickLongOps(plan) => {
+                    #[cfg(feature = "vm-stats")]
+                    stats::inc_jit_region_execution(
+                        stats::JitRegionKind::TypedOpsLoop,
+                    );
                     run_quick_long_ops_loop(eg, frame, op_array, plan)?
                 }
                 _ => {

@@ -93,6 +93,11 @@ unsafe fn run_quick_long_ops_loop(
             &mut slots,
             &kernel,
         )? {
+            #[cfg(feature = "vm-stats")]
+            record_native_quick_outcome(
+                stats::JitRegionKind::TypedOpsLoop,
+                &outcome,
+            );
             return Ok(outcome);
         }
     }
@@ -210,6 +215,11 @@ unsafe fn run_quick_long_ops_loop(
             &resolved_object_ops,
             &kernel,
         )? {
+            #[cfg(feature = "vm-stats")]
+            record_native_quick_outcome(
+                stats::JitRegionKind::TypedOpsLoop,
+                &outcome,
+            );
             return Ok(outcome);
         }
     }

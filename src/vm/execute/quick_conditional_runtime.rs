@@ -630,6 +630,11 @@ unsafe fn dispatch_quick_long_conditional_kernel(
             kernel,
             body,
         )? {
+            #[cfg(feature = "vm-stats")]
+            record_native_quick_outcome(
+                stats::JitRegionKind::TypedOpsLoop,
+                &outcome,
+            );
             return Ok(outcome);
         }
     }
