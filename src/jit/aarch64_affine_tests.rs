@@ -43,6 +43,18 @@ fn variable_reverse_multiply_subtract_config(bound: i64) -> NativeStraightLongLo
     config
 }
 
+fn carried_multiply_add_config(bound: i64) -> NativeStraightLongLoopConfig {
+    let mut config = variable_multiply_add_config(bound);
+    config.operations[1] = NativeStraightLongOperation::BinaryAssign {
+        kind: ScalarLongOpKind::Add,
+        lhs: QuickLongOperand::Slot(4),
+        rhs: QuickLongOperand::Slot(3),
+        result: 5,
+        destination: 3,
+    };
+    config
+}
+
 fn scheduled_increment_between_pair_config(bound: i64) -> NativeStraightLongLoopConfig {
     let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::BranchUnless {
@@ -145,6 +157,36 @@ fn range_proven_polling_fuses_variable_multiply_add() {
         .filter(|word| is_real_multiply_add(*word))
         .collect::<Vec<_>>();
     assert_eq!(madd_words, [0x9b0a_2468]);
+}
+
+#[test]
+fn carried_multiply_add_keeps_a_rename_move_after_the_fused_result() {
+    let program =
+        CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication_and_carried(
+            carried_multiply_add_config(5_000),
+            1_024,
+            1u64 << 3,
+            1u64 << 3,
+        )
+        .unwrap();
+    let interrupt = AtomicBool::new(false);
+    let mut slots = [0_i64; 64];
+    slots[1] = 73;
+    slots[3] = 10;
+
+    let completed = program
+        .call_range_proven_polling(&mut slots, 5_000, interrupt.as_ptr() as *const bool, 5_000)
+        .unwrap();
+    assert_eq!(completed.outcome, NativeStraightLongLoopOutcome::Completed);
+    assert_eq!((slots[0], slots[3]), (5_000, 912_317_510));
+
+    let words = program
+        .code()
+        .chunks_exact(4)
+        .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
+        .collect::<Vec<_>>();
+    assert!(words.contains(&0x9b0a_1068)); // MADD X8, X3, X10, X4
+    assert!(words.contains(&0xaa08_03e4)); // MOV X4, X8
 }
 
 #[test]

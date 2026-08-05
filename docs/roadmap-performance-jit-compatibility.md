@@ -3451,6 +3451,42 @@ tests, 86 JIT integration tests, the four-test corpus and
 `cargo check --all-features`; x86-64 passes 180 library tests, 18 JIT
 integration tests, the four-test corpus and the same check.
 
+The next ARM64 publication checkpoint removes the remaining linear
+`result in x8 -> MOV into fixed register` sequence when an operation already
+owns a non-carried publication register or one of several independent carried
+registers. ARM64's three-address scalar instructions can safely generate the
+value in that fixed destination; the resident-value bookkeeping now records
+the actual result register instead of assuming that every operation refreshed
+x8. Exact generated-code tests cover a non-carried direct `ADD`, four visible
+fixed results and reverse-dependent carried state, while execution tests cover
+interrupt, resume and final publication.
+
+The first unrestricted candidate exposed a target-specific counterexample. A
+single loop-carried read-modify-write chain slowed by about 1.7 percent even
+though one instruction disappeared: the Apple ARM core profits from computing
+through x8 and treating the following `MOV` as a register rename. A physical
+profitability guard therefore retains that sequence when exactly one carried
+group is both read and rewritten. It is based on carried dependencies and
+register ownership, not source or benchmark identity. On 301 order-alternated
+100-million-iteration pairs, the composed-recurrence control returns to
+28.759003 versus 28.721094 ms (-0.13 percent; paired -0.10 percent).
+
+The admitted shapes keep the intended benefit. In 201 order-alternated long
+pairs against a clean `595a8ef` build, three independent recurrences improve
+from 25.866032 to 25.677919 ms (-0.73 percent), overlapping scalar lifetimes
+from 34.830093 to 34.161806 ms (-1.92 percent), and two independent variable
+multiply-add results from 30.996084 to 30.798912 ms (-0.64 percent). The latter
+two paired p10/p90 ranges are respectively -2.88/-0.89 percent and
+-6.23/+0.70 percent; the shorter instruction stream is strongest under
+overlapping live values and remains modest for the affine pair. x86-64 is
+unchanged: its two-address lowering cannot inherit this ARM destination choice
+without a separate target-specific allocation proof. The five ARM application
+corpus medians remain between a 0.81 percent improvement and a 0.57 percent
+regression in 101 short order-alternated pairs. ARM64 passes 163 library tests,
+86 JIT integration tests, the four-test corpus and `cargo check --all-features`;
+the synchronized x86-64 tree passes 180 library tests, 18 JIT integration
+tests, the four-test corpus and the same check.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,

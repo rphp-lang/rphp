@@ -670,7 +670,8 @@ mod tests {
             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
 
-        assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
+        assert!(words.contains(&0x8b03_0464)); // ADD x4, x3, x3, LSL #1
+        assert!(!words.contains(&0xaa08_03e4)); // no MOV x4, x8
         assert!(!words.contains(&0xf900_0808)); // no loop STR x8, [x0, #16]
         assert!(words.contains(&0xf900_0804)); // exit STR x4, [x0, #16]
     }
@@ -828,9 +829,12 @@ mod tests {
             .chunks_exact(4)
             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
-        assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
-        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8
-        assert!(words.contains(&0xaa08_03eb)); // MOV x11, x8
+        assert!(words.contains(&0x8b03_0464)); // ADD x4, x3, x3, LSL #1
+        assert!(words.contains(&0x9100_1c65)); // ADD x5, x3, #7
+        assert!(words.contains(&0x8b03_086b)); // ADD x11, x3, x3, LSL #2
+        assert!(!words.contains(&0xaa08_03e4)); // no MOV x4, x8
+        assert!(!words.contains(&0xaa08_03e5)); // no MOV x5, x8
+        assert!(!words.contains(&0xaa08_03eb)); // no MOV x11, x8
 
         let interrupt = AtomicBool::new(true);
         let mut slots = [0i64; 64];
@@ -892,8 +896,10 @@ mod tests {
             .chunks_exact(4)
             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
-        assert!(words.contains(&0xaa08_03e4)); // MOV x4, x8
-        assert!(words.contains(&0xaa08_03e5)); // MOV x5, x8
+        assert!(words.contains(&0x8b05_0084)); // ADD x4, x4, x5
+        assert!(words.contains(&0x8b03_00a5)); // ADD x5, x5, x3
+        assert!(!words.contains(&0xaa08_03e4)); // no MOV x4, x8
+        assert!(!words.contains(&0xaa08_03e5)); // no MOV x5, x8
 
         let interrupt = AtomicBool::new(true);
         let mut slots = [0i64; 64];

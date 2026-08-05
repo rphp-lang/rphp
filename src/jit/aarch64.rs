@@ -27,6 +27,9 @@ mod affine;
 #[cfg(test)]
 #[path = "aarch64_affine_tests.rs"]
 mod affine_tests;
+#[cfg(test)]
+#[path = "aarch64_residency_tests.rs"]
+mod residency_tests;
 
 use affine::{
     Arm64StraightMultiplyAccumulateFusion, arm64_straight_multiply_accumulate_fusion,
@@ -2860,10 +2863,30 @@ impl CompiledQuickLongStraightLoop {
                         .then_some(resident_values[resident_index].1)
                 })
                 .flatten();
+            let linear_direct_result_register = keeps_linear_scalar_values_resident
+                .then(|| {
+                    let resident_index = deferred_register_by_operation[index];
+                    let single_carried_read_modify_write =
+                        (resident_index != usize::MAX && carried_mask.count_ones() == 1)
+                            && resident_values[resident_index].0 & carried_mask != 0
+                            && straight_long_operation_input_mask(operation)
+                                & resident_values[resident_index].0
+                                != 0;
+                    // A lone ARM64 recurrence profits from computing through
+                    // x8 and letting MOV rename the result into its fixed
+                    // register. Multiple independent chains and non-carried
+                    // publications instead profit from lower instruction
+                    // pressure and may write their final registers directly.
+                    (resident_index != usize::MAX && !single_carried_read_modify_write)
+                        .then(|| resident_values[resident_index].1)
+                })
+                .flatten();
             // When every immediately consumed alias is represented by the
             // fixed group, generate the scalar result in its final register.
             // Otherwise x8 remains the path-local forwarding register.
-            let result = structured_direct_result_register.unwrap_or(result);
+            let result = structured_direct_result_register
+                .or(linear_direct_result_register)
+                .unwrap_or(result);
             let emitted_multiply_accumulate = if let Some(fusion) = pending_multiply_accumulate
                 && fusion.consumer == index
             {
@@ -3318,14 +3341,20 @@ impl CompiledQuickLongStraightLoop {
                 for (slot_mask, _) in &mut resident_values {
                     *slot_mask &= !output_mask;
                 }
-                resident_values[0].0 = output_mask;
+                resident_values[0].0 = if result == resident_values[0].1 {
+                    output_mask
+                } else {
+                    0
+                };
                 let deferred_register = deferred_register_by_operation[index];
                 if deferred_register != usize::MAX {
                     if deferred_register != 0 {
-                        assembler.move_register(
-                            resident_values[deferred_register].1,
-                            result,
-                        );
+                        if resident_values[deferred_register].1 != result {
+                            assembler.move_register(
+                                resident_values[deferred_register].1,
+                                result,
+                            );
+                        }
                         resident_values[deferred_register].0 = output_mask;
                     }
                     active_exit_masks[deferred_register] =
