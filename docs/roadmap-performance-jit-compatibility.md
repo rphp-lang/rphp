@@ -3363,6 +3363,18 @@ tests, 86 JIT integration tests, the four-test corpus and
 `cargo check --all-features`; the unchanged x86 scheduling test and build also
 remain green.
 
+A follow-up attempt to move the ARM64 polling `CMP induction, chunk_end` next
+to the early induction increment is deliberately rejected. The selected pure
+scalar suffix preserves condition flags, so the transformation was
+semantically valid and added no instruction. It nevertheless separated the
+compare from its consuming `B.NE`; on the wide skewed holdout the median moved
+from 3.574848 to 3.844023 ms (+7.53 percent), with non-overlapping p10/p90
+ranges and a 7.49 percent paired regression. This is consistent with losing a
+profitable compare/branch front-end pairing on the Apple ARM64 host. All code
+for the candidate was removed. x86 was not exposed to the experiment because
+its common `ADD`/`IMUL` suffixes overwrite flags, so the same schedule is not
+semantically available there without extra instructions.
+
 The frozen workstream is:
 
 1. move native loop IR, range proof, liveness, carried-dependency analysis,
