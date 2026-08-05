@@ -4460,6 +4460,17 @@ roughly 3.9x no-JIT deficit is now the cost of VM dispatch, receiver/operand
 guards, `RefCell` object access, dynamic-map hashing and heap-value cloning,
 rather than repeated visibility resolution.
 
+A follow-up experiment deliberately tried to reuse `PhpArray` as the dynamic
+property container. Retained reads improved another 18.3% and the two-property
+changing decode improved 1.8%, but construction regressed about 13%/12%/54%
+for four/eight/twelve-property objects. The experiment was reverted. Array
+storage shares keys through `Rc` so ordered entries and `HashMap` indexes can
+own one allocation; a plain object map already owns each `String` directly, so
+that reuse adds the wrong ownership cost. A future compact dynamic-property
+container should therefore be object-specific: own each String once in ordered
+entries and use a position-only index, with no duplicated or reference-counted
+key. It must pass the same width-12 promotion control before admission.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
