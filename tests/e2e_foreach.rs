@@ -279,6 +279,74 @@ echo $sum . '|' . $row->value . '|' . $row->name;
 }
 
 #[test]
+fn test_e2e_quick_foreach_dynamic_property_pair_handles_mixed_insertion_order() {
+    assert_eq!(
+        run_php(
+            "<?php
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    if (($i % 2) == 0) {
+        $rows[] = json_decode('{\"value\":11,\"name\":\"alpha\"}');
+    } else {
+        $rows[] = json_decode('{\"name\":\"alpha\",\"value\":11}');
+    }
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value . '|' . $row->name;
+"
+        ),
+        "1024|11|alpha"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_dynamic_property_pair_handles_hash_storage() {
+    assert_eq!(
+        run_php(
+            "<?php
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    $rows[] = json_decode('{\"value\":11,\"name\":\"alpha\",\"x\":1,\"y\":2}');
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value . '|' . $row->name;
+"
+        ),
+        "1024|11|alpha"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_dynamic_second_projection_side_exit_is_exact() {
+    assert_eq!(
+        run_php(
+            "<?php
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    if ($i == 40) {
+        $rows[] = json_decode('{\"value\":11,\"name\":5}');
+    } else {
+        $rows[] = json_decode('{\"value\":11,\"name\":\"alpha\"}');
+    }
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value . '|' . $row->name;
+"
+        ),
+        "1020|11|alpha"
+    );
+}
+
+#[test]
 fn test_e2e_quick_foreach_object_class_guard_side_exit() {
     assert_eq!(
         run_php("<?php

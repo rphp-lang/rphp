@@ -4719,6 +4719,61 @@ batch multiple guarded small-map property positions for one receiver, paying
 the `RefCell`/storage-shape branch once per row. Native lowering of the same
 plan and call-region read/write-set analysis remain later independent steps.
 
+### Batched dynamic-property projection checkpoint
+
+Two projections from the same changing dynamic receiver now share one guarded
+object access (2026-08-06). `DynamicPropertyMap::get_pair_at_positions` branches
+on inline versus hash storage once. Inline maps validate both cached positions
+independently and fall back by name when receivers have a different insertion
+order; hash maps perform both lookups after the shared storage dispatch. The
+runtime helper combines the receiver-layout guard, dynamic-map access and both
+reads while retaining an independent null result for each property, so a
+missing or wrongly typed second property still resumes the exact second
+`FetchObjR` after publishing the first temporary.
+
+The first implementation also batched declared slots, but native A/B controls
+showed that LLVM already merged their simple object loads and the wider runtime
+shape caused a regression. The retained design therefore uses the batch only
+for two dynamic projections. A constant-generic inner loop produces distinct
+ordinary and batched machine-code kernels, and keeping those kernels
+non-inlined prevents either architecture from paying the other variant's code-
+layout cost. This measured rollback and separation is part of the design, not
+a benchmark special case.
+
+Thirty-one order-alternated native-CPU `max-perf` A/B pairs on ARM64 produced:
+
+| ARM64 workload | Previous RPHP no JIT | RPHP no JIT | Previous RPHP JIT build | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows, 5.12M receivers | 15.714 ms | 13.477 ms | 15.597 ms | 13.712 ms | 54.533 ms | 16.308 ms |
+| Inline `stdClass`, 5.12M receivers | 56.721 ms | 35.020 ms | 57.577 ms | 36.121 ms | 95.259 ms | 68.138 ms |
+| Hash `stdClass`, 5.12M receivers | 173.633 ms | 121.875 ms | 170.770 ms | 118.987 ms | 94.984 ms | 68.818 ms |
+
+The inline dynamic path improves 38.3% without JIT and 37.3% in the JIT build;
+it is now 2.72x faster than PHP without JIT and 1.89x faster than PHP tracing
+JIT. The declared control also improves by 14.2% and 12.1%, confirming that the
+separate ordinary kernel did not trade away its previous result. The four-
+property hash workload improves about 30%, but remains 1.28x slower than PHP
+without JIT and 1.73x slower than tracing JIT.
+
+The same source passed the focused shape/order and exact-overflow tests on
+x86-64, followed by all 32 x86 native-JIT tests. Thirty-one order-alternated
+A/B pairs there produced:
+
+| x86-64 workload | Previous RPHP no JIT | RPHP no JIT | Previous RPHP JIT build | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows, 5.12M receivers | 18.229 ms | 17.089 ms | 18.107 ms | 16.483 ms | 55.069 ms | 20.693 ms |
+| Inline `stdClass`, 5.12M receivers | 86.209 ms | 34.274 ms | 85.627 ms | 35.936 ms | 82.681 ms | 59.163 ms |
+| Hash `stdClass`, 5.12M receivers | 173.509 ms | 123.595 ms | 173.812 ms | 123.107 ms | 82.868 ms | 58.567 ms |
+
+The inline dynamic improvement is 60.2% without JIT and 58.0% in the JIT
+build. RPHP now beats the corresponding PHP modes by 2.41x and 1.65x; declared
+rows retain a 3.22x and 1.26x lead. The remaining object gap is isolated to the
+general dynamic hash representation, not foreach dispatch. The next best
+price/performance step is a bounded linear dynamic-property tier between the
+three-entry inline map and general `HashMap`, mirroring the array storage
+strategy. Four-to-eight-property objects should avoid per-read string hashing;
+larger or mutation-heavy objects continue to promote to the general map.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

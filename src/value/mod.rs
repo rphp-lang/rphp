@@ -192,6 +192,46 @@ impl DynamicPropertyMap {
         (stored_key == key).then_some(value)
     }
 
+    /// Resolve two independent property reads while branching on the backing
+    /// storage only once. Cached small-map positions are guards, not
+    /// assumptions: a receiver with a different insertion order falls back to
+    /// the property name independently for each result.
+    #[inline(always)]
+    pub(crate) fn get_pair_at_positions(
+        &self,
+        keys: [&str; 2],
+        positions: [Option<usize>; 2],
+    ) -> [*const Value; 2] {
+        let mut result = [std::ptr::null(); 2];
+        match &self.storage {
+            DynamicPropertyStorage::Small(small) => {
+                for index in 0..2 {
+                    let key = keys[index];
+                    let cached = positions[index].and_then(|position| {
+                        let (stored_key, value) = small.entries.get(position)?.as_ref()?;
+                        (stored_key == key).then_some(value)
+                    });
+                    let value = cached.or_else(|| {
+                        small.find(key).and_then(|position| {
+                            small.entries[position].as_ref().map(|entry| &entry.1)
+                        })
+                    });
+                    result[index] =
+                        value.map_or(std::ptr::null(), |value| value as *const Value);
+                }
+            }
+            DynamicPropertyStorage::Hash(properties) => {
+                result[0] = properties
+                    .get(keys[0])
+                    .map_or(std::ptr::null(), |value| value as *const Value);
+                result[1] = properties
+                    .get(keys[1])
+                    .map_or(std::ptr::null(), |value| value as *const Value);
+            }
+        }
+        result
+    }
+
     #[inline]
     pub(crate) fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         match &mut self.storage {
@@ -546,6 +586,39 @@ mod object_tests {
         assert!(matches!(properties.storage, DynamicPropertyStorage::Hash(_)));
         assert_eq!(properties.get("b").and_then(Value::as_long), Some(20));
         assert_eq!(properties.get("d").and_then(Value::as_long), Some(4));
+    }
+
+    #[test]
+    fn dynamic_property_pair_validates_positions_and_supports_hash_storage() {
+        let mut properties = DynamicPropertyMap::with_capacity(0);
+        properties.insert_owned("name".to_string(), Value::long(5));
+        properties.insert_owned("value".to_string(), Value::long(11));
+        properties.insert_owned("extra".to_string(), Value::long(17));
+
+        // Both cached positions intentionally describe the opposite insertion
+        // order. Name fallback must resolve each property independently.
+        let pair = properties.get_pair_at_positions(
+            ["value", "name"],
+            [Some(0), Some(1)],
+        );
+        assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
+        assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
+
+        let missing = properties.get_pair_at_positions(
+            ["value", "missing"],
+            [Some(1), Some(2)],
+        );
+        assert!(!missing[0].is_null());
+        assert!(missing[1].is_null());
+
+        properties.insert_owned("fourth".to_string(), Value::long(23));
+        assert!(matches!(properties.storage, DynamicPropertyStorage::Hash(_)));
+        let pair = properties.get_pair_at_positions(
+            ["value", "name"],
+            [Some(99), Some(99)],
+        );
+        assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
+        assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
     }
 }
 
@@ -2871,6 +2944,33 @@ impl Value {
             .as_ref()
             .and_then(|properties| properties.get_at_position(position, name))
             .map_or(std::ptr::null(), |value| value as *const Value)
+    }
+
+    /// Guard a dynamic receiver layout and resolve two property reads through
+    /// one object dereference and one dynamic-storage dispatch. Individual
+    /// null pointers preserve the exact side-exit point for a missing value.
+    /// SAFETY: Only valid when `value_type() == ValueType::Object`; returned
+    /// pointers are invalidated by a mutable property operation.
+    #[inline(always)]
+    pub unsafe fn object_dynamic_property_pair_guarded_unchecked(
+        &self,
+        expected_layout: *const ObjectLayout,
+        names: [&str; 2],
+        positions: [Option<usize>; 2],
+    ) -> Option<[*const Value; 2]> {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &*refcell.as_ptr();
+        if obj.property_layout_ptr() != expected_layout {
+            return None;
+        }
+        Some(
+            obj.dynamic_properties
+                .as_ref()
+                .map_or([std::ptr::null(); 2], |properties| {
+                    properties.get_pair_at_positions(names, positions)
+                }),
+        )
     }
 
     /// Read a property value pointer from an Object without RefCell borrow.

@@ -154,6 +154,35 @@ impl<'a> QuickForeachObjectPropertyBinding<'a> {
             }
         }
     }
+
+    /// Validate one dynamic receiver and resolve both planned projections
+    /// without repeating the object or dynamic-storage lookup. Declared slots
+    /// deliberately retain their smaller single-read path: native A/B
+    /// measurement shows LLVM already merges its repeated object loads.
+    #[inline(always)]
+    unsafe fn guarded_dynamic_property_pair(
+        self,
+        receiver: &Value,
+    ) -> Option<[*const Value; 2]> {
+        if receiver.value_type() != ValueType::Object || receiver.is_reference() {
+            return None;
+        }
+        match self {
+            Self::Dynamic {
+                layout,
+                names,
+                positions,
+            } => receiver.object_dynamic_property_pair_guarded_unchecked(
+                layout, names, positions,
+            ),
+            Self::Declared { .. } => None,
+        }
+    }
+
+    #[inline(always)]
+    fn is_dynamic(self) -> bool {
+        matches!(self, Self::Dynamic { .. })
+    }
 }
 
 #[inline(always)]
@@ -304,58 +333,23 @@ pub(super) unsafe fn run_quick_foreach_long_accumulate_loop(
 }
 
 #[inline(never)]
-pub(super) unsafe fn run_quick_foreach_object_property_accumulate_loop(
+unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
+    const BATCH_DYNAMIC_PROPERTIES: bool,
+>(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &OpArray,
     plan: QuickForeachObjectPropertyAccumulateLoop,
+    mut position: usize,
+    len: usize,
+    quick_array: QuickForeachLongArray,
+    binding: QuickForeachObjectPropertyBinding<'_>,
 ) -> Result<QuickLoopOutcome, VmError> {
-    if (*frame).num_cvs != op_array.num_cvs
-        || (*frame).num_cvs + (*frame).num_temps > 64
-        || plan.projection_count == 0
-        || plan.projection_count > 2
-    {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    }
-
     let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-    let array_ptr = slot_base.add(plan.array_tmp as usize);
     let position_ptr = slot_base.add(plan.position_tmp as usize);
     let done_ptr = slot_base.add(plan.done_tmp as usize);
     let accumulator_ptr = slot_base.add(plan.accumulator_cv as usize);
     let sum_ptr = slot_base.add(plan.sum_tmp as usize);
-
-    if quick_loop_slot_has_heap(frame, plan.position_tmp)
-        || quick_loop_slot_has_heap(frame, plan.done_tmp)
-        || quick_loop_slot_has_heap(frame, plan.accumulator_cv)
-        || (*array_ptr).as_array().is_none()
-        || (*position_ptr).value_type() != ValueType::Long
-        || (*done_ptr).value_type() != ValueType::True
-        || (*accumulator_ptr).value_type() != ValueType::Long
-    {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    }
-
-    let Some(mut position) = usize::try_from((*position_ptr).raw_long()).ok() else {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    };
-    let array = (*array_ptr).as_array().unwrap_unchecked();
-    let len = array.len();
-    if position > len {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    }
-    let Some(quick_array) = QuickForeachLongArray::from_array(array) else {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    };
-    let Some(binding) = QuickForeachObjectPropertyBinding::from_plan(op_array, plan) else {
-        stats::inc_quick_loop_guard_failed();
-        return Ok(QuickLoopOutcome::GuardFailed);
-    };
 
     let mut accumulator = (*accumulator_ptr).raw_long();
     let mut projected = [0i64; 2];
@@ -365,30 +359,61 @@ pub(super) unsafe fn run_quick_foreach_object_property_accumulate_loop(
     while position < len {
         let receiver = quick_array.value_at_position(position);
         let next_position = position + 1;
-        if !binding.receiver_matches(&*receiver) {
-            publish_foreach_object_state(
-                frame,
-                slot_base,
-                plan,
-                next_position,
-                receiver,
-                accumulator,
-                &projected,
-                0,
-                None,
-                true,
-            );
-            (*frame).opline = op_array
-                .instructions
-                .as_ptr()
-                .add(plan.projections[0].unwrap_unchecked().cache_ip);
-            stats::inc_quick_loop_deoptimized(iterations);
-            return Ok(QuickLoopOutcome::Deoptimized);
-        }
+        let property_pair = if BATCH_DYNAMIC_PROPERTIES {
+            let Some(property_pair) =
+                binding.guarded_dynamic_property_pair(&*receiver)
+            else {
+                publish_foreach_object_state(
+                    frame,
+                    slot_base,
+                    plan,
+                    next_position,
+                    receiver,
+                    accumulator,
+                    &projected,
+                    0,
+                    None,
+                    true,
+                );
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(plan.projections[0].unwrap_unchecked().cache_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(QuickLoopOutcome::Deoptimized);
+            };
+            property_pair
+        } else {
+            if !binding.receiver_matches(&*receiver) {
+                publish_foreach_object_state(
+                    frame,
+                    slot_base,
+                    plan,
+                    next_position,
+                    receiver,
+                    accumulator,
+                    &projected,
+                    0,
+                    None,
+                    true,
+                );
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(plan.projections[0].unwrap_unchecked().cache_ip);
+                stats::inc_quick_loop_deoptimized(iterations);
+                return Ok(QuickLoopOutcome::Deoptimized);
+            }
+            [std::ptr::null(); 2]
+        };
 
         for index in 0..plan.projection_count as usize {
             let projection = plan.projections[index].unwrap_unchecked();
-            let property = binding.property_at(&*receiver, index);
+            let property = if BATCH_DYNAMIC_PROPERTIES {
+                *property_pair.get_unchecked(index)
+            } else {
+                binding.property_at(&*receiver, index)
+            };
             let projected_value = if property.is_null() || (*property).is_reference() {
                 None
             } else {
@@ -505,4 +530,82 @@ pub(super) unsafe fn run_quick_foreach_object_property_accumulate_loop(
     (*frame).opline = op_array.instructions.as_ptr().add(plan.exit_ip);
     stats::inc_quick_loop_completed(iterations);
     Ok(QuickLoopOutcome::Completed)
+}
+
+#[inline(never)]
+pub(super) unsafe fn run_quick_foreach_object_property_accumulate_loop(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &OpArray,
+    plan: QuickForeachObjectPropertyAccumulateLoop,
+) -> Result<QuickLoopOutcome, VmError> {
+    if (*frame).num_cvs != op_array.num_cvs
+        || (*frame).num_cvs + (*frame).num_temps > 64
+        || plan.projection_count == 0
+        || plan.projection_count > 2
+    {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+
+    let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    let array_ptr = slot_base.add(plan.array_tmp as usize);
+    let position_ptr = slot_base.add(plan.position_tmp as usize);
+    let done_ptr = slot_base.add(plan.done_tmp as usize);
+    let accumulator_ptr = slot_base.add(plan.accumulator_cv as usize);
+
+    if quick_loop_slot_has_heap(frame, plan.position_tmp)
+        || quick_loop_slot_has_heap(frame, plan.done_tmp)
+        || quick_loop_slot_has_heap(frame, plan.accumulator_cv)
+        || (*array_ptr).as_array().is_none()
+        || (*position_ptr).value_type() != ValueType::Long
+        || (*done_ptr).value_type() != ValueType::True
+        || (*accumulator_ptr).value_type() != ValueType::Long
+    {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+
+    let Some(position) = usize::try_from((*position_ptr).raw_long()).ok() else {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    };
+    let array = (*array_ptr).as_array().unwrap_unchecked();
+    let len = array.len();
+    if position > len {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    }
+    let Some(quick_array) = QuickForeachLongArray::from_array(array) else {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    };
+    let Some(binding) = QuickForeachObjectPropertyBinding::from_plan(op_array, plan) else {
+        stats::inc_quick_loop_guard_failed();
+        return Ok(QuickLoopOutcome::GuardFailed);
+    };
+
+    if plan.projection_count == 2 && binding.is_dynamic() {
+        run_quick_foreach_object_property_accumulate_loop_inner::<true>(
+            eg,
+            frame,
+            op_array,
+            plan,
+            position,
+            len,
+            quick_array,
+            binding,
+        )
+    } else {
+        run_quick_foreach_object_property_accumulate_loop_inner::<false>(
+            eg,
+            frame,
+            op_array,
+            plan,
+            position,
+            len,
+            quick_array,
+            binding,
+        )
+    }
 }
