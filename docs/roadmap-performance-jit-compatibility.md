@@ -4984,6 +4984,91 @@ capacity growth and `Value` movement. The next array checkpoint should profile
 that construction path and design a general reserve/growth or bulk-construction
 strategy without weakening ordered PHP-array semantics.
 
+### Adaptive regular integer-index checkpoint
+
+The sparse-construction follow-up is implemented (2026-08-06). ARM64 sampling
+confirmed that the previous path performed a `HashMap::get` followed by a
+separate `insert` for every new integer key. `set_int`, hash insertion and
+`reserve_rehash` dominated the array side of the profile, while the VM loop and
+key/value preparation formed the other large component.
+
+The existing verified integer-prefix word now also describes an exact ordered
+arithmetic progression, not only stride one. While all integer entries form
+that progression, with at most a String-only suffix, their positions are
+derived from the first two stored keys and the verified length. The secondary
+integer `HashMap` remains unallocated. A matching append extends the proof and
+the ordered entry vector in O(1); replacement validates and updates its exact
+position. Adding a String metadata field does not destroy the integer proof.
+
+The first incompatible integer write materializes the complete index exactly
+once and continues through `HashMap::entry`, which combines lookup and insert
+into one hash/probe. Fully irregular arrays therefore retain the general
+indexed representation. Arbitrary removal and `shift` rebuild the appropriate
+proof or index; tail `pop`, cloning, COW and `next_int_key` retain their previous
+semantics. Packed-to-hash conversion also leaves the redundant integer index
+lazy. The exact read kernel from the preceding checkpoint still requires
+stride one, so its pointer contract is unchanged. No field or byte was added to
+`PhpArray`, and the implementation is target-neutral.
+
+Thirty-one order-alternated ARM64 pairs produced:
+
+| ARM64 workload | Previous no JIT | Adaptive no JIT | Paired delta | Previous JIT build | Adaptive JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Regular stride-seven build | 56.265 ms | 25.203 ms | -54.76% | 59.393 ms | 25.249 ms | -56.60% |
+| Irregular integer build | 61.284 ms | 57.575 ms | -5.91% | 62.716 ms | 57.662 ms | -7.22% |
+| Packed-to-hash transition | 15.726 ms | 6.158 ms | -60.45% | 16.749 ms | 6.570 ms | -60.72% |
+| Irregular integer reads | 126.853 ms | 126.581 ms | -1.52% | 135.639 ms | 135.432 ms | -0.63% |
+| Materialized contiguous reads | 4.231 ms | 2.729 ms | -32.85% | 4.384 ms | 2.815 ms | -34.37% |
+| String-key read control | 19.390 ms | 19.414 ms | -0.01% | 20.617 ms | 20.630 ms | -0.39% |
+
+The materialized-read gain is a secondary but real memory effect: the array no
+longer carries a million-entry integer index that the exact read kernel never
+uses.
+
+The same source in thirty-one CPU-pinned x86-64 pairs produced:
+
+| x86-64 workload | Previous no JIT | Adaptive no JIT | Paired delta | Previous JIT build | Adaptive JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Regular stride-seven build | 102.370 ms | 41.436 ms | -59.90% | 101.718 ms | 39.604 ms | -61.03% |
+| Irregular integer build | 112.005 ms | 106.612 ms | -5.25% | 110.823 ms | 104.860 ms | -5.17% |
+| Packed-to-hash transition | 54.834 ms | 24.091 ms | -56.21% | 54.715 ms | 24.230 ms | -55.97% |
+| Irregular integer reads | 100.954 ms | 104.281 ms | +3.18% | 103.694 ms | 102.612 ms | +0.27% |
+| Materialized contiguous reads | 3.066 ms | 2.953 ms | -3.27% | 2.980 ms | 3.004 ms | +0.79% |
+| String-key read control | 13.888 ms | 13.710 ms | -0.05% | 14.885 ms | 13.247 ms | -8.60% |
+
+The short x86 no-JIT irregular-read timer is a layout-sensitive outlier, not an
+added hash operation. A ten-pass read-dominant `perf stat` control records
+11.278B versus 11.194B instructions, 5.471B versus 5.493B cycles and 1.041
+versus 1.044 seconds; cycle and elapsed changes are inside their run variance.
+The large x86 JIT String-control movement is likewise recorded as code-layout
+sensitivity rather than attributed to an integer path it cannot execute.
+
+A separate fifteen-run four-mode rotation against PHP produced these new
+absolute medians:
+
+| Workload and host | RPHP no JIT | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|
+| Regular build, ARM64 / PHP 8.5.9 | 24.803 ms | 24.621 ms | 14.668 ms | 12.326 ms |
+| Packed-to-hash, ARM64 | 6.061 ms | 6.460 ms | 5.125 ms | 5.502 ms |
+| Materialized reads, ARM64 | 2.330 ms | 2.477 ms | 5.015 ms | 2.668 ms |
+| Irregular reads, ARM64 | 133.809 ms | 138.134 ms | 11.105 ms | 5.382 ms |
+| Regular build, x86-64 / PHP 8.4.24 | 41.506 ms | 39.518 ms | 36.600 ms | 31.800 ms |
+| Packed-to-hash, x86-64 | 24.210 ms | 24.145 ms | 15.359 ms | 15.212 ms |
+| Materialized reads, x86-64 | 2.977 ms | 2.990 ms | 7.473 ms | 2.641 ms |
+| Irregular reads, x86-64 | 103.729 ms | 103.160 ms | 14.577 ms | 8.043 ms |
+
+The regular construction gap is now modest on x86-64 and substantially smaller
+on ARM64. Fully irregular construction remains slower—58.6/106.3 ms versus PHP
+without JIT at 20.5/42.7 ms—but the new holdout shows an even larger execution
+gap in dynamic irregular reads. ARM64 sampling attributes 775 of 840 samples to
+the general `execute_ex` loop and only 21 to `PhpArray::get_int`: the dominant
+cost is repeated bytecode dispatch, key-expression materialization and generic
+fetch/add handling, not the hash probe itself. The next checkpoint should
+therefore extend the target-neutral typed quick/JIT region to composed integer
+key expressions plus guarded indexed fetch and accumulation. Materialized-index
+layout and irregular structural writes remain the following construction task;
+another special key pattern is not the answer.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

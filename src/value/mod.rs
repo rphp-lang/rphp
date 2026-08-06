@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
@@ -1054,6 +1054,7 @@ enum ArrayStorage {
         entries: Vec<(ArrayEntryKey, Value)>,
         str_index: HashMap<SharedStringKey, usize>,
         int_index: IntIndex,
+        /// Exact arithmetic integer prefix represented without `int_index`.
         verified_int_prefix: usize,
     },
 }
@@ -1128,15 +1129,106 @@ fn verified_int_prefix_len(entries: &[(ArrayEntryKey, Value)]) -> usize {
     let Some((ArrayEntryKey::Int(first), _)) = entries.first() else {
         return 0;
     };
+    let Some((ArrayEntryKey::Int(second), _)) = entries.get(1) else {
+        return 1;
+    };
+    let Some(stride) = second
+        .checked_sub(*first)
+        .filter(|stride| *stride != 0)
+    else {
+        return 1;
+    };
     let mut len = 1;
     while let Some((ArrayEntryKey::Int(key), _)) = entries.get(len) {
-        let expected = first.checked_add(len as i64);
+        let expected = i64::try_from(len)
+            .ok()
+            .and_then(|offset| stride.checked_mul(offset))
+            .and_then(|offset| first.checked_add(offset));
         if expected != Some(*key) {
             break;
         }
         len += 1;
     }
     len
+}
+
+#[inline]
+fn verified_int_position(
+    entries: &[(ArrayEntryKey, Value)],
+    verified_int_prefix: usize,
+    key: i64,
+) -> Option<usize> {
+    if verified_int_prefix == 0 {
+        return None;
+    }
+    let (ArrayEntryKey::Int(first), _) = entries.first()? else {
+        return None;
+    };
+    let position = if verified_int_prefix == 1 {
+        (*first == key).then_some(0)?
+    } else {
+        let (ArrayEntryKey::Int(second), _) = entries.get(1)? else {
+            return None;
+        };
+        let stride = second.checked_sub(*first).filter(|stride| *stride != 0)?;
+        let offset = key.checked_sub(*first)?;
+        if offset.checked_rem(stride) != Some(0) {
+            return None;
+        }
+        usize::try_from(offset.checked_div(stride)?).ok()?
+    };
+    if position >= verified_int_prefix {
+        return None;
+    }
+    matches!(entries.get(position), Some((ArrayEntryKey::Int(found), _)) if *found == key)
+        .then_some(position)
+}
+
+fn rebuild_int_index(
+    entries: &[(ArrayEntryKey, Value)],
+    int_index: &mut IntIndex,
+    additional_capacity: usize,
+) -> usize {
+    int_index.clear();
+    let verified_int_prefix = verified_int_prefix_len(entries);
+    if entries[verified_int_prefix..]
+        .iter()
+        .all(|entry| matches!(entry.0, ArrayEntryKey::String(_)))
+    {
+        return verified_int_prefix;
+    }
+
+    materialize_int_index(entries, int_index, additional_capacity);
+    0
+}
+
+fn materialize_int_index(
+    entries: &[(ArrayEntryKey, Value)],
+    int_index: &mut IntIndex,
+    additional_capacity: usize,
+) {
+    int_index.clear();
+    let integer_keys = entries
+        .iter()
+        .filter(|entry| matches!(entry.0, ArrayEntryKey::Int(_)))
+        .count();
+    int_index.reserve(integer_keys.saturating_add(additional_capacity));
+    for (position, (key, _)) in entries.iter().enumerate() {
+        if let ArrayEntryKey::Int(key) = key {
+            int_index.insert(*key, position);
+        }
+    }
+}
+
+#[inline]
+fn indexed_int_position(
+    entries: &[(ArrayEntryKey, Value)],
+    int_index: &IntIndex,
+    verified_int_prefix: usize,
+    key: i64,
+) -> Option<usize> {
+    verified_int_position(entries, verified_int_prefix, key)
+        .or_else(|| int_index.get(&key).copied())
 }
 
 #[cfg(feature = "quick-loops")]
@@ -1327,6 +1419,69 @@ fn linear_find_str(entries: &[(ArrayEntryKey, Value)], key: &str) -> Option<usiz
     )
 }
 
+#[inline(always)]
+fn set_indexed_int(
+    entries: &mut Vec<(ArrayEntryKey, Value)>,
+    int_index: &mut IntIndex,
+    verified_int_prefix: &mut usize,
+    next_int_key: &mut i64,
+    key: i64,
+    val: Value,
+) {
+    if let Some(position) = verified_int_position(entries, *verified_int_prefix, key) {
+        entries[position].1 = val;
+        return;
+    }
+
+    let extends_verified_prefix = *verified_int_prefix == entries.len()
+        && int_index.is_empty()
+        && match *verified_int_prefix {
+            0 => entries.is_empty(),
+            1 => matches!(entries.first(), Some((ArrayEntryKey::Int(first), _)) if *first != key),
+            len => match (entries.first(), entries.get(1)) {
+                (
+                    Some((ArrayEntryKey::Int(first), _)),
+                    Some((ArrayEntryKey::Int(second), _)),
+                ) => second
+                    .checked_sub(*first)
+                    .and_then(|stride| {
+                        i64::try_from(len)
+                            .ok()
+                            .and_then(|len| stride.checked_mul(len))
+                    })
+                    .and_then(|offset| first.checked_add(offset))
+                    == Some(key),
+                _ => false,
+            },
+        };
+    if extends_verified_prefix {
+        entries.push((ArrayEntryKey::Int(key), val));
+        *verified_int_prefix += 1;
+        if key >= *next_int_key {
+            *next_int_key = key + 1;
+        }
+        return;
+    }
+
+    if *verified_int_prefix != 0 {
+        materialize_int_index(entries, int_index, 1);
+        *verified_int_prefix = 0;
+    }
+    match int_index.entry(key) {
+        Entry::Occupied(entry) => {
+            entries[*entry.get()].1 = val;
+        }
+        Entry::Vacant(entry) => {
+            let position = entries.len();
+            entries.push((ArrayEntryKey::Int(key), val));
+            entry.insert(position);
+            if key >= *next_int_key {
+                *next_int_key = key + 1;
+            }
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum ArrayKey {
     Int(i64),
@@ -1402,9 +1557,8 @@ impl PhpArray {
                 return;
             }
             let mut entries = Vec::with_capacity(len);
-            let mut int_index = int_index_with_capacity(len);
+            let int_index = int_index_with_capacity(0);
             for (i, val) in std::mem::take(values).into_iter().enumerate() {
-                int_index.insert(i as i64, i);
                 entries.push((ArrayEntryKey::Int(i as i64), val));
             }
             *&mut self.storage = ArrayStorage::Hash {
@@ -1445,23 +1599,22 @@ impl PhpArray {
             .count();
         let mut str_index =
             HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity));
-        let mut int_index =
-            int_index_with_capacity((len - string_keys).saturating_add(additional_int_capacity));
+        let mut int_index = int_index_with_capacity(0);
         for (position, (key, _)) in entries.iter().enumerate() {
             match key {
-                ArrayEntryKey::Int(key) => {
-                    int_index.insert(*key, position);
-                }
+                ArrayEntryKey::Int(_) => {}
                 ArrayEntryKey::String(key) => {
                     str_index.insert(key.clone(), position);
                 }
             }
         }
+        let verified_int_prefix =
+            rebuild_int_index(&entries, &mut int_index, additional_int_capacity);
         self.storage = ArrayStorage::Hash {
             entries,
             str_index,
             int_index,
-            verified_int_prefix: 0,
+            verified_int_prefix,
         };
     }
 
@@ -1516,13 +1669,10 @@ impl PhpArray {
             HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity))
         });
         str_index.reserve(additional_string_capacity);
-        let mut int_index =
-            int_index_with_capacity((len - string_keys).saturating_add(additional_int_capacity));
+        let mut int_index = int_index_with_capacity(0);
         for (position, (key, _)) in entries.iter().enumerate() {
             match key {
-                ArrayEntryKey::Int(key) => {
-                    int_index.insert(*key, position);
-                }
+                ArrayEntryKey::Int(_) => {}
                 ArrayEntryKey::String(key) => {
                     if !str_index.contains_key(key.as_ref()) {
                         str_index.insert(key.clone(), position);
@@ -1530,11 +1680,13 @@ impl PhpArray {
                 }
             }
         }
+        let verified_int_prefix =
+            rebuild_int_index(&entries, &mut int_index, additional_int_capacity);
         self.storage = ArrayStorage::Hash {
             entries,
             str_index,
             int_index,
-            verified_int_prefix: 0,
+            verified_int_prefix,
         };
     }
 
@@ -1569,18 +1721,44 @@ impl PhpArray {
             ArrayStorage::Hash {
                 entries,
                 int_index,
+                verified_int_prefix,
                 ..
             } => {
-                let idx = entries.len();
-                entries.push((ArrayEntryKey::Int(key), val));
-                int_index.insert(key, idx);
+                set_indexed_int(
+                    entries,
+                    int_index,
+                    verified_int_prefix,
+                    &mut self.next_int_key,
+                    key,
+                    val,
+                );
             }
         }
     }
 
     /// Set by integer key
     pub fn set_int(&mut self, key: i64, val: Value) {
-        // Use raw pointer to avoid borrow conflict with next_int_key
+        // Wide associative arrays are a stable hot state. Resolve a new or
+        // existing integer key with one hash/probe instead of walking every
+        // earlier storage tier and then performing separate get + insert.
+        if let ArrayStorage::Hash {
+            entries,
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &mut self.storage
+        {
+            set_indexed_int(
+                entries,
+                int_index,
+                verified_int_prefix,
+                &mut self.next_int_key,
+                key,
+                val,
+            );
+            return;
+        }
+
         let storage = &mut self.storage;
         if let ArrayStorage::Packed(values) = storage {
             // Can stay packed if key == next sequential
@@ -1634,19 +1812,18 @@ impl PhpArray {
         if let ArrayStorage::Hash {
             entries,
             int_index,
+            verified_int_prefix,
             ..
         } = storage
         {
-            if let Some(&idx) = int_index.get(&key) {
-                entries[idx].1 = val;
-            } else {
-                let idx = entries.len();
-                entries.push((ArrayEntryKey::Int(key), val));
-                int_index.insert(key, idx);
-                if key >= self.next_int_key {
-                    self.next_int_key = key + 1;
-                }
-            }
+            set_indexed_int(
+                entries,
+                int_index,
+                verified_int_prefix,
+                &mut self.next_int_key,
+                key,
+                val,
+            );
         }
     }
 
@@ -1899,11 +2076,16 @@ impl PhpArray {
                 .find_int(key)
                 .and_then(|position| linear.entries.get(position))
                 .map(|entry| &entry.1),
-            ArrayStorage::Hash { entries, int_index, .. } => {
+            ArrayStorage::Hash {
+                entries,
+                int_index,
+                verified_int_prefix,
+                ..
+            } => {
                 // Ordered PHP arrays commonly retain a contiguous integer run
-                // after transitioning to hash storage. Derive the likely entry
-                // position from its first key and validate it; irregular
-                // layouts fall through to the general integer hash index.
+                // after transitioning to hash storage. Keep its stride-one
+                // candidate especially cheap, then use the exact arithmetic
+                // prefix or the materialized index for other layouts.
                 if let Some((ArrayEntryKey::Int(first_key), _)) = entries.first() {
                     if let Some(position) = key
                         .checked_sub(*first_key)
@@ -1922,7 +2104,8 @@ impl PhpArray {
                         }
                     }
                 }
-                int_index.get(&key).map(|&idx| &entries[idx].1)
+                indexed_int_position(entries, int_index, *verified_int_prefix, key)
+                    .map(|position| &entries[position].1)
             }
         }
     }
@@ -1943,8 +2126,14 @@ impl PhpArray {
                 let position = linear.find_int(key)?;
                 linear.entries.get_mut(position).map(|entry| &mut entry.1)
             }
-            ArrayStorage::Hash { entries, int_index, .. } => {
-                let position = *int_index.get(&key)?;
+            ArrayStorage::Hash {
+                entries,
+                int_index,
+                verified_int_prefix,
+                ..
+            } => {
+                let position =
+                    indexed_int_position(entries, int_index, *verified_int_prefix, key)?;
                 entries.get_mut(position).map(|entry| &mut entry.1)
             }
         }
@@ -2070,7 +2259,7 @@ impl PhpArray {
                 .and_then(|position| linear.entries.get(position))
                 .map(|entry| &entry.1),
             ArrayStorage::Hash { entries, int_index, .. } => {
-                int_index.get(&key).map(|&index| &entries[index].1)
+                int_index.get(&key).map(|&position| &entries[position].1)
             }
             ArrayStorage::Packed(_) => None,
         }
@@ -2091,7 +2280,7 @@ impl PhpArray {
                 .and_then(|position| linear.entries.get(position))
                 .map(|entry| &entry.1),
             ArrayStorage::Hash { entries, int_index, .. } => {
-                int_index.get(&key).map(|&idx| &entries[idx].1)
+                int_index.get(&key).map(|&position| &entries[position].1)
             }
             ArrayStorage::Packed(_) => None,
         }
@@ -2354,18 +2543,18 @@ impl PhpArray {
         } = &mut self.storage
         {
             let found_idx = match key {
-                ArrayKey::Int(n) => int_index.get(n).copied(),
+                ArrayKey::Int(n) => {
+                    indexed_int_position(entries, int_index, *verified_int_prefix, *n)
+                }
                 ArrayKey::String(s) => str_index.get(s.as_str()).copied(),
             };
             if let Some(idx) = found_idx {
                 let (removed_key, _) = entries.remove(idx);
-                match removed_key {
-                    ArrayEntryKey::Int(n) => { int_index.remove(&n); }
-                    ArrayEntryKey::String(s) => { str_index.remove(s.as_ref()); }
+                if let ArrayEntryKey::String(s) = removed_key {
+                    str_index.remove(s.as_ref());
                 }
-                // Re-index entries after removed position
-                Self::reindex_entries(entries, int_index, str_index, idx);
-                *verified_int_prefix = 0;
+                *verified_int_prefix = rebuild_int_index(entries, int_index, 0);
+                Self::reindex_string_entries(entries, str_index, idx);
                 return true;
             }
         }
@@ -2409,8 +2598,11 @@ impl PhpArray {
                 if let Some((key, val)) = entries.pop() {
                     match &key {
                         ArrayEntryKey::Int(n) => {
-                            int_index.remove(n);
-                            *verified_int_prefix = 0;
+                            if *verified_int_prefix == entries.len() + 1 {
+                                *verified_int_prefix = entries.len();
+                            } else {
+                                int_index.remove(n);
+                            }
                             // PHP: only decrement if popped key was the auto-index boundary
                             if *n == self.next_int_key - 1 {
                                 self.next_int_key -= 1;
@@ -2477,13 +2669,11 @@ impl PhpArray {
 
             // Renumber: rebuild with int keys starting from 0, string keys preserved
             let mut new_int_counter: i64 = 0;
-            int_index.clear();
             str_index.clear();
             for (i, (key, _)) in entries.iter_mut().enumerate() {
                 match key {
                     ArrayEntryKey::Int(n) => {
                         *n = new_int_counter;
-                        int_index.insert(new_int_counter, i);
                         new_int_counter += 1;
                     }
                     ArrayEntryKey::String(s) => {
@@ -2492,7 +2682,7 @@ impl PhpArray {
                 }
             }
             self.next_int_key = new_int_counter;
-            *verified_int_prefix = verified_int_prefix_len(entries);
+            *verified_int_prefix = rebuild_int_index(entries, int_index, 0);
             Some(val)
         } else {
             None
@@ -2500,18 +2690,16 @@ impl PhpArray {
     }
 
 
-    /// Rebuild index entries from position `from` onward (after remove/shift).
-    fn reindex_entries(
+    /// Rebuild String positions affected by an ordered-entry removal.
+    fn reindex_string_entries(
         entries: &[(ArrayEntryKey, Value)],
-        int_index: &mut IntIndex,
         str_index: &mut HashMap<SharedStringKey, usize>,
         from: usize,
     ) {
         for (i, (k, _)) in entries.iter().enumerate() {
             if i >= from {
-                match k {
-                    ArrayEntryKey::Int(n) => { int_index.insert(*n, i); }
-                    ArrayEntryKey::String(s) => { str_index.insert(s.clone(), i); }
+                if let ArrayEntryKey::String(s) = k {
+                    str_index.insert(s.clone(), i);
                 }
             }
         }
@@ -3110,6 +3298,97 @@ mod php_array_tests {
         }
         assert!(irregular.exact_ordered_int_layout().is_none());
         assert_eq!(irregular.integer_position_hint(), Some((44, 7)));
+    }
+
+    #[test]
+    fn regular_integer_hash_index_materializes_only_when_needed() {
+        let mut regular = PhpArray::new();
+        for offset in 0..12 {
+            regular.set_int(100 + offset * 7, Value::long(offset));
+        }
+        let ArrayStorage::Hash {
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &regular.storage
+        else {
+            panic!("wide regular integer keys should use hash storage");
+        };
+        assert_eq!(*verified_int_prefix, 12);
+        assert!(int_index.is_empty());
+        assert_eq!(regular.get_int(149).and_then(Value::as_long), Some(7));
+        assert!(regular.get_int(150).is_none());
+
+        regular.set_int(149, Value::long(70));
+        regular.set_str("sentinel", Value::long(-1));
+        assert_eq!(regular.get_int(149).and_then(Value::as_long), Some(70));
+        let ArrayStorage::Hash {
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &regular.storage
+        else {
+            unreachable!();
+        };
+        assert_eq!(*verified_int_prefix, 12);
+        assert!(int_index.is_empty());
+
+        regular.set_int(184, Value::long(12));
+        let ArrayStorage::Hash {
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &regular.storage
+        else {
+            unreachable!();
+        };
+        assert_eq!(*verified_int_prefix, 0);
+        assert_eq!(int_index.len(), 13);
+        assert_eq!(regular.get_int(100).and_then(Value::as_long), Some(0));
+        assert_eq!(regular.get_int(184).and_then(Value::as_long), Some(12));
+
+        let mut popped = PhpArray::new();
+        for offset in 0..12 {
+            popped.set_int(-50 + offset * 3, Value::long(offset));
+        }
+        assert_eq!(popped.pop().and_then(|value| value.as_long()), Some(11));
+        let ArrayStorage::Hash {
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &popped.storage
+        else {
+            unreachable!();
+        };
+        assert_eq!(*verified_int_prefix, 11);
+        assert!(int_index.is_empty());
+
+        assert_eq!(popped.shift().and_then(|value| value.as_long()), Some(0));
+        let ArrayStorage::Hash {
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &popped.storage
+        else {
+            unreachable!();
+        };
+        assert_eq!(*verified_int_prefix, 10);
+        assert!(int_index.is_empty());
+        assert_eq!(popped.get_int(0).and_then(Value::as_long), Some(1));
+
+        assert!(popped.remove(&ArrayKey::Int(4)));
+        let ArrayStorage::Hash {
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &popped.storage
+        else {
+            unreachable!();
+        };
+        assert_eq!(*verified_int_prefix, 0);
+        assert_eq!(int_index.len(), 9);
+        assert!(popped.get_int(4).is_none());
+        assert_eq!(popped.get_int(5).and_then(Value::as_long), Some(6));
     }
 
     #[test]
