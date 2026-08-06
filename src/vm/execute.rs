@@ -525,7 +525,7 @@ unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
 
 /// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
 #[inline(always)]
-unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
+pub(super) unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
     if (*frame).has_heap_slots {
         bitmap_drop_scalar(frame, ptr);
     }
@@ -543,7 +543,7 @@ unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) 
 
 /// Overwrite a frame slot (CV or TMP). Per-slot drop via bitmap when heap present.
 #[inline(always)]
-unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+pub(super) unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     stats::inc_write_frame_slot(heap);
     if (*frame).has_heap_slots {
@@ -6123,6 +6123,15 @@ unsafe fn execute_quick_loop_backedge(
                         stats::JitRegionKind::ForeachLongAccumulate,
                     );
                     super::quick_foreach::run_quick_foreach_long_accumulate_loop(
+                        eg, frame, op_array, *plan,
+                    )?
+                }
+                super::planner::BlockPlan::QuickForeachObjectPropertyAccumulate(plan) => {
+                    #[cfg(feature = "vm-stats")]
+                    stats::inc_jit_region_execution(
+                        stats::JitRegionKind::ForeachObjectPropertyAccumulate,
+                    );
+                    super::quick_foreach::run_quick_foreach_object_property_accumulate_loop(
                         eg, frame, op_array, *plan,
                     )?
                 }

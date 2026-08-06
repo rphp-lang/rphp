@@ -9,5 +9,6 @@ pub mod stats;
 pub mod planner;
 pub mod hot;
 pub mod quick;
+mod quick_foreach_plan;
 #[cfg(feature = "quick-loops")]
 mod quick_foreach;

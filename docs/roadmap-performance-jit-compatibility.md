@@ -4660,6 +4660,65 @@ receivers inside one region and read/write-set analysis for regions containing
 calls; broader scalar-expression support should extend this compact kernel
 rather than reintroduce benchmark-specific executors.
 
+### Guarded changing-receiver foreach checkpoint
+
+The first varying-receiver slice is now a separate target-neutral foreach plan
+(2026-08-06). It recognizes a value-only `foreach` whose complete body adds one
+or two scalar projections from the current receiver, including a borrowed
+String-property length. Property names, receiver/accumulator CVs, array storage
+and declared classes remain arbitrary; both packed and ordered hash arrays use
+the existing raw positional value layout. This is therefore the same path used
+by ordinary application rows, not a JSON- or benchmark-specific opcode.
+
+After the canonical `FetchObjR` sites warm, one entry binding validates either
+the declared class ID plus property slots or the canonical dynamic `stdClass`
+layout plus property-position hints. Every array element then guards the current
+receiver before reading its properties. A changed class/layout, missing or
+referenced property, wrong scalar type, or checked-add overflow publishes the
+current foreach position, receiver CV, accumulator and already produced
+temporaries, then resumes the exact owning `FetchObjR` or `Add`. The value CV
+is also materialized on completion, preserving PHP's observable last-foreach-
+value behavior. Interrupt polling publishes header-consistent state every 32
+iterations.
+
+The executor is written once in Rust and is selected in both no-JIT and native-
+JIT feature builds; neither architecture has a private implementation yet. The
+planner records a distinct `foreach_object_property_accumulate` coverage kind.
+On the declared ARM64 holdout, VM statistics reported one admission, 20,000
+completed entries, 5,099,968 optimized receivers and zero guard failures or
+deoptimizations. Permanent tests cover declared and dynamic receivers, packed
+and hash arrays, one/two projections, last-value publication, changed classes,
+a mid-stream Double type side exit, and exact term/accumulator overflow replay.
+
+Fifteen native-CPU `max-perf` medians on ARM64 with PHP 8.5.9 were:
+
+| ARM64 workload | Previous RPHP no JIT | RPHP no JIT | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|
+| Declared rows, 5.12M receivers | 148.815 ms | 15.557 ms | 15.772 ms | 54.543 ms | 15.216 ms |
+| `stdClass` rows, 5.12M receivers | 197.529 ms | 55.751 ms | 56.249 ms | 97.009 ms | 68.111 ms |
+
+The declared path is 9.57x faster than the preceding RPHP no-JIT executor,
+3.51x faster than PHP without JIT and within 3.7% of PHP tracing JIT. The
+dynamic path improves 3.54x and beats PHP without and with JIT by 1.74x and
+1.21x respectively.
+
+The same source and five focused correctness tests passed on x86-64 Linux,
+followed by all 32 x86 native-JIT prototype tests. Eleven-run `max-perf`
+medians with PHP 8.4.24 were:
+
+| x86-64 workload | Previous RPHP no JIT | Previous RPHP JIT | RPHP no JIT | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows, 5.12M receivers | 204.175 ms | 194.034 ms | 17.781 ms | 17.932 ms | 55.507 ms | 20.594 ms |
+| `stdClass` rows, 5.12M receivers | 249.894 ms | 230.688 ms | 86.493 ms | 85.763 ms | 82.721 ms | 58.766 ms |
+
+Declared rows improve 11.48x over the preceding no-JIT binary and now beat PHP
+without JIT by 3.12x and PHP tracing JIT by 1.15x. Dynamic `stdClass` rows expose
+the next narrow object bottleneck: RPHP remains 4.6% behind PHP without JIT and
+46% behind tracing JIT on x86-64. The next price/performance experiment should
+batch multiple guarded small-map property positions for one receiver, paying
+the `RefCell`/storage-shape branch once per row. Native lowering of the same
+plan and call-region read/write-set analysis remain later independent steps.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

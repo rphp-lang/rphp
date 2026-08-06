@@ -233,3 +233,119 @@ fn test_e2e_foreach_bool_warns() {
         "\nWarning: foreach() argument must be of type array|object, bool given\nafter"
     );
 }
+
+#[test]
+fn test_e2e_quick_foreach_declared_object_property_accumulation() {
+    assert_eq!(
+        run_php("<?php
+class QuickForeachRow {
+    public $value;
+    public $name;
+    public function __construct($value, $name) {
+        $this->value = $value;
+        $this->name = $name;
+    }
+}
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    $rows[] = new QuickForeachRow(($i % 4) + 1, 'alpha');
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value . '|' . $row->name;
+"),
+        "480|4|alpha"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_dynamic_object_property_accumulation_on_hash_array() {
+    assert_eq!(
+        run_php("<?php
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    $rows[$i * 3] = json_decode('{\"value\":11,\"name\":\"alpha\"}');
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value . '|' . $row->name;
+"),
+        "1024|11|alpha"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_object_class_guard_side_exit() {
+    assert_eq!(
+        run_php("<?php
+class QuickForeachLeft { public $value = 2; public $name = 'x'; }
+class QuickForeachRight { public $value = 4; public $name = 'x'; }
+$rows = [];
+for ($i = 0; $i < 70; $i++) {
+    if (($i % 2) == 0) {
+        $rows[] = new QuickForeachLeft();
+    } else {
+        $rows[] = new QuickForeachRight();
+    }
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value;
+"),
+        "280|4"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_single_long_property_projection() {
+    assert_eq!(
+        run_php("<?php
+class QuickForeachLongRow {
+    public $value;
+    public function __construct($value) { $this->value = $value; }
+}
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    $rows[] = new QuickForeachLongRow(($i % 4) + 1);
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value;
+}
+echo $sum . '|' . $row->value;
+"),
+        "160|4"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_property_type_side_exit() {
+    assert_eq!(
+        run_php("<?php
+class QuickForeachMixedValueRow {
+    public $value;
+    public function __construct($value) { $this->value = $value; }
+}
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    if ($i == 40) {
+        $rows[] = new QuickForeachMixedValueRow(1.5);
+    } else {
+        $rows[] = new QuickForeachMixedValueRow(1);
+    }
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value;
+}
+echo $sum;
+"),
+        "64.5"
+    );
+}

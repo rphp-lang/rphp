@@ -2597,6 +2597,59 @@ echo $value;
 }
 
 #[test]
+fn quick_foreach_object_property_term_overflow_resumes_exact_add() {
+    assert_eq!(
+        run_php(
+            "<?php
+class ForeachProjectionOverflowRow {
+    public $value;
+    public $increment;
+    public function __construct($value, $increment) {
+        $this->value = $value;
+        $this->increment = $increment;
+    }
+}
+$rows = [];
+for ($i = 0; $i < 100; $i++) {
+    if ($i == 80) {
+        $rows[] = new ForeachProjectionOverflowRow(PHP_INT_MAX, 1);
+    } else {
+        $rows[] = new ForeachProjectionOverflowRow(1, 1);
+    }
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + $row->increment;
+}
+echo gettype($sum) . '|' . $row->value;
+"
+        ),
+        "double|1"
+    );
+}
+
+#[test]
+fn quick_foreach_object_property_accumulator_overflow_resumes_exact_add() {
+    assert_eq!(
+        run_php(
+            "<?php
+class ForeachAccumulatorOverflowRow { public $value = 1; }
+$rows = [];
+for ($i = 0; $i < 100; $i++) {
+    $rows[] = new ForeachAccumulatorOverflowRow();
+}
+$sum = PHP_INT_MAX - 50;
+foreach ($rows as $row) {
+    $sum += $row->value;
+}
+echo gettype($sum) . '|' . $row->value;
+"
+        ),
+        "double|1"
+    );
+}
+
+#[test]
 fn nested_double_method_loop_revalidates_overridden_inner_target() {
     assert_eq!(
         run_php(

@@ -387,6 +387,14 @@ impl OpArray {
                 .map(BlockPlan::QuickLongAccumulate)
             })
             .or_else(|| {
+                crate::vm::quick::detect_foreach_object_property_accumulate_loop(
+                    self,
+                    header_ip,
+                    backedge_ip,
+                )
+                .map(BlockPlan::QuickForeachObjectPropertyAccumulate)
+            })
+            .or_else(|| {
                 crate::vm::quick::detect_foreach_long_accumulate_loop(
                     self,
                     header_ip,
@@ -415,6 +423,9 @@ impl OpArray {
                             }
                             BlockPlan::QuickForeachLongAccumulate(_) => {
                                 crate::vm::stats::JitRegionKind::ForeachLongAccumulate
+                            }
+                            BlockPlan::QuickForeachObjectPropertyAccumulate(_) => {
+                                crate::vm::stats::JitRegionKind::ForeachObjectPropertyAccumulate
                             }
                             BlockPlan::QuickLongOps(_) => {
                                 crate::vm::stats::JitRegionKind::TypedOpsLoop

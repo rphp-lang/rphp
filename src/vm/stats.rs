@@ -17,11 +17,12 @@ pub enum JitRegionKind {
     StraightArrayRegion = 5,
     ScalarLongFunction = 6,
     ScalarDoubleFunction = 7,
+    ForeachObjectPropertyAccumulate = 8,
 }
 
 impl JitRegionKind {
     #[cfg(feature = "vm-stats")]
-    const COUNT: usize = 8;
+    const COUNT: usize = 9;
 
     #[cfg(feature = "vm-stats")]
     #[inline(always)]
@@ -513,6 +514,7 @@ mod inner {
             5 => "straight_array_region",
             6 => "scalar_long_function",
             7 => "scalar_double_function",
+            8 => "foreach_object_property_accumulate",
             _ => "unknown",
         }
     }

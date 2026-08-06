@@ -14,6 +14,12 @@ use crate::vm::function::{
 use crate::vm::instruction::OpType;
 use crate::vm::opcode::OpCode;
 
+pub use super::quick_foreach_plan::{
+    QuickForeachObjectProjection, QuickForeachObjectProjectionKind,
+    QuickForeachObjectPropertyAccumulateLoop,
+    detect_foreach_object_property_accumulate_loop,
+};
+
 /// Number of executions of the same backward edge before quickening it.
 pub const QUICK_LOOP_HOT_THRESHOLD: u32 = 32;
 /// Consecutive failed activations before a region stays in baseline.
