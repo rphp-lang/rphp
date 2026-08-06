@@ -4774,6 +4774,80 @@ three-entry inline map and general `HashMap`, mirroring the array storage
 strategy. Four-to-eight-property objects should avoid per-read string hashing;
 larger or mutation-heavy objects continue to promote to the general map.
 
+### Bounded linear dynamic-property storage checkpoint
+
+Dynamic objects now use three storage tiers (2026-08-06): one to three
+properties remain in the allocation-inline array, four to eight live in a
+compact ordered `Vec`, and the ninth promotes to the general secure `HashMap`.
+The transition moves owned keys and values without cloning them. Direct
+construction with a known JSON member count selects the final tier immediately;
+streaming or later mutation follows `Small -> Linear -> Hash`. Cloning,
+replacement, lookup, mutable lookup, length and property iteration share the
+same representation contract, and both compact tiers preserve insertion order.
+
+The linear tier returns a guarded numeric position through the existing dynamic
+property inline cache. A warm normal read therefore validates one position and
+does not scan or hash. The two-projection foreach batch validates both cached
+positions; only a receiver with a different insertion order enters a separate
+non-inlined bounded name scan. Promotion to hash makes position validation fail
+and safely replays lookup by name. Permanent tests cover direct four-entry
+construction, both promotions, replacement, cloning, ordered iteration,
+position fallback, mixed insertion orders, mixed linear/hash receivers and a
+live cache crossing `Linear -> Hash` before updating an existing property.
+
+Native measurement exposed a second code-shape issue: the ordinary foreach
+kernel still combined declared and one-projection dynamic bindings. Adding a
+storage variant therefore enlarged even declared-object machine code. Binding
+is now a static generic strategy with separate declared, dynamic-single and
+dynamic-pair monomorphizations. On x86-64 the declared no-JIT kernel fell from
+4,298 to 3,206 bytes; no architecture-specific implementation was added.
+
+Thirty-one order-alternated native-CPU A/B pairs on ARM64, with fifteen PHP
+8.5.9 comparison runs, produced:
+
+| ARM64 workload, 5.12M receivers | Previous RPHP no JIT | RPHP no JIT | Previous RPHP JIT build | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows | 13.184 ms | 12.394 ms | 13.522 ms | 12.599 ms | 54.106 ms | 15.092 ms |
+| Two-property inline `stdClass` | 34.291 ms | 35.013 ms | 35.715 ms | 35.526 ms | 93.261 ms | 67.844 ms |
+| Four-property linear `stdClass` | 100.283 ms | 35.712 ms | 101.327 ms | 36.121 ms | 94.210 ms | 68.247 ms |
+| Eight-property linear `stdClass` | 109.332 ms | 35.938 ms | 109.002 ms | 36.579 ms | 92.489 ms | 67.925 ms |
+| Nine-property hash `stdClass` | 110.568 ms | 111.571 ms | 109.861 ms | 108.966 ms | 93.367 ms | 67.799 ms |
+
+The new tier reduces the four-property workload by 64.4% and the eight-property
+workload by 67.1% without JIT; the JIT-build reductions are 64.4% and 66.4%.
+Those workloads now beat PHP without JIT by 2.64x and 2.57x, and PHP tracing JIT
+by 1.89x and 1.86x. Declared rows also improve 6.0% and 6.8%. The hash control
+stays within one percent. The two-property no-JIT control regresses 2.1%
+(about 0.14 ns per receiver), while its JIT build is stable. Avoiding that small
+dispatch cost would require guarding a whole foreach on one dynamic storage
+kind and deoptimizing valid mixed-shape inputs, which is not an acceptable
+generality trade for this checkpoint.
+
+Fifty-one order-alternated, CPU-pinned A/B pairs on x86-64, with PHP 8.4.24,
+produced:
+
+| x86-64 workload, 5.12M receivers | Previous RPHP no JIT | RPHP no JIT | Previous RPHP JIT build | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows | 16.891 ms | 14.522 ms | 16.322 ms | 15.517 ms | 55.131 ms | 20.274 ms |
+| Two-property inline `stdClass` | 34.334 ms | 35.132 ms | 35.880 ms | 35.802 ms | 83.135 ms | 58.333 ms |
+| Four-property linear `stdClass` | 124.192 ms | 47.249 ms | 123.789 ms | 37.649 ms | 82.675 ms | 58.872 ms |
+| Eight-property linear `stdClass` | 125.056 ms | 47.378 ms | 125.000 ms | 37.811 ms | 83.553 ms | 58.848 ms |
+| Nine-property hash `stdClass` | 125.928 ms | 126.353 ms | 125.760 ms | 124.787 ms | 85.012 ms | 59.105 ms |
+
+Four and eight properties improve about 62% without JIT and 70% in the JIT
+build. RPHP beats the corresponding PHP modes by 1.75x/1.76x and
+1.56x/1.56x. Declared rows improve 14.0% and 4.9%, the hash control remains
+within one percent, and the small-object trade is the same 2.3% no-JIT versus a
+stable JIT build.
+
+The remaining dynamic-object gap is now sharply isolated at the ninth-property
+promotion. Merely widening the linear threshold would move the benchmark
+boundary while making arbitrary cold lookups unbounded. The systemic next
+design should retain ordered values for wide dynamic objects and add a compact
+name-to-slot index that shares each key allocation. Warm property caches can
+then keep numeric slots at every width, while cold names and structural writes
+retain bounded indexed behavior.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

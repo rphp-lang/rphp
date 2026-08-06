@@ -303,7 +303,7 @@ echo $sum . '|' . $row->value . '|' . $row->name;
 }
 
 #[test]
-fn test_e2e_quick_foreach_dynamic_property_pair_handles_hash_storage() {
+fn test_e2e_quick_foreach_dynamic_property_pair_handles_linear_storage() {
     assert_eq!(
         run_php(
             "<?php
@@ -319,6 +319,51 @@ echo $sum . '|' . $row->value . '|' . $row->name;
 "
         ),
         "1024|11|alpha"
+    );
+}
+
+#[test]
+fn test_e2e_quick_foreach_dynamic_property_pair_handles_hash_storage() {
+    assert_eq!(
+        run_php(
+            "<?php
+$rows = [];
+for ($i = 0; $i < 64; $i++) {
+    $rows[] = json_decode('{\"value\":11,\"name\":\"alpha\",\"x\":1,\"y\":2,\"a\":3,\"b\":4,\"c\":5,\"d\":6,\"e\":7}');
+}
+$sum = 0;
+foreach ($rows as $row) {
+    $sum += $row->value + strlen($row->name);
+}
+echo $sum . '|' . $row->value . '|' . $row->name;
+"
+        ),
+        "1024|11|alpha"
+    );
+}
+
+#[test]
+fn test_e2e_dynamic_property_cache_survives_linear_to_hash_promotion() {
+    assert_eq!(
+        run_php(
+            "<?php
+$row = json_decode('{\"value\":11,\"name\":\"alpha\",\"x\":1,\"y\":2}');
+$sum = 0;
+for ($i = 0; $i < 80; $i++) {
+    $sum += $row->value + strlen($row->name);
+    if ($i == 40) {
+        $row->a = 5;
+        $row->b = 6;
+        $row->c = 7;
+        $row->d = 8;
+        $row->e = 9;
+        $row->value = 13;
+    }
+}
+echo $sum . '|' . $row->value . '|' . $row->name . '|' . $row->e;
+"
+        ),
+        "1358|13|alpha|9"
     );
 }
 

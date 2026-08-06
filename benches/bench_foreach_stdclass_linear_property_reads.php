@@ -1,8 +1,8 @@
 <?php
-// Holdout for two projected reads from stdClass objects in general hash storage.
+// Holdout for two projected reads from four-property bounded-linear stdClass rows.
 $rows = [];
 for ($i = 0; $i < 256; $i++) {
-    $rows[] = json_decode('{"value":11,"name":"alpha","x":1,"y":2,"a":3,"b":4,"c":5,"d":6,"e":7}');
+    $rows[] = json_decode('{"value":11,"name":"alpha","x":1,"y":2}');
 }
 
 $rounds = 20000;

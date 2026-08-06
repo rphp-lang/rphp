@@ -57,15 +57,21 @@ impl QuickForeachLongArray {
 
 #[derive(Clone, Copy)]
 enum QuickForeachObjectPropertyBinding<'a> {
-    Declared {
-        class_id: u32,
-        slots: [usize; 2],
-    },
-    Dynamic {
-        layout: *const ObjectLayout,
-        names: [&'a str; 2],
-        positions: [Option<usize>; 2],
-    },
+    Declared(QuickForeachDeclaredPropertyBinding),
+    Dynamic(QuickForeachDynamicPropertyBinding<'a>),
+}
+
+#[derive(Clone, Copy)]
+struct QuickForeachDeclaredPropertyBinding {
+    class_id: u32,
+    slots: [usize; 2],
+}
+
+#[derive(Clone, Copy)]
+struct QuickForeachDynamicPropertyBinding<'a> {
+    layout: *const ObjectLayout,
+    names: [&'a str; 2],
+    positions: [Option<usize>; 2],
 }
 
 impl<'a> QuickForeachObjectPropertyBinding<'a> {
@@ -93,11 +99,11 @@ impl<'a> QuickForeachObjectPropertyBinding<'a> {
                     .as_str()?;
                 positions[index] = cache.dynamic_property_position();
             }
-            return Some(Self::Dynamic {
+            return Some(Self::Dynamic(QuickForeachDynamicPropertyBinding {
                 layout,
                 names,
                 positions,
-            });
+            }));
         }
 
         let class_id = first_cache.class_id;
@@ -115,73 +121,84 @@ impl<'a> QuickForeachObjectPropertyBinding<'a> {
             }
             slots[index] = cache.property_slot();
         }
-        Some(Self::Declared { class_id, slots })
+        Some(Self::Declared(QuickForeachDeclaredPropertyBinding {
+            class_id,
+            slots,
+        }))
     }
+}
 
+trait QuickForeachObjectPropertyAccess: Copy {
+    unsafe fn receiver_matches(self, receiver: &Value) -> bool;
+
+    unsafe fn property_at(self, receiver: &Value, index: usize) -> *const Value;
+
+    unsafe fn guarded_property_pair(
+        self,
+        receiver: &Value,
+    ) -> Option<[*const Value; 2]>;
+}
+
+impl QuickForeachObjectPropertyAccess for QuickForeachDeclaredPropertyBinding {
     #[inline(always)]
     unsafe fn receiver_matches(self, receiver: &Value) -> bool {
         if receiver.value_type() != ValueType::Object || receiver.is_reference() {
             return false;
         }
-        match self {
-            Self::Declared { class_id, .. } => {
-                receiver.object_class_id_unchecked() == class_id
-            }
-            Self::Dynamic { layout, .. } => {
-                receiver.object_property_layout_ptr_unchecked() == layout
-            }
-        }
+        receiver.object_class_id_unchecked() == self.class_id
     }
 
     #[inline(always)]
     unsafe fn property_at(self, receiver: &Value, index: usize) -> *const Value {
-        match self {
-            Self::Declared { slots, .. } => {
-                receiver.object_property_slot_unchecked(*slots.get_unchecked(index))
-            }
-            Self::Dynamic {
-                names, positions, ..
-            } => {
-                let name = *names.get_unchecked(index);
-                let mut property = (*positions.get_unchecked(index)).map_or(
-                    std::ptr::null(),
-                    |position| receiver.object_dynamic_property_at_unchecked(name, position),
-                );
-                if property.is_null() {
-                    property = receiver.object_dynamic_property_unchecked(name);
-                }
-                property
-            }
+        receiver.object_property_slot_unchecked(*self.slots.get_unchecked(index))
+    }
+
+    #[inline(always)]
+    unsafe fn guarded_property_pair(
+        self,
+        _receiver: &Value,
+    ) -> Option<[*const Value; 2]> {
+        None
+    }
+}
+
+impl<'a> QuickForeachObjectPropertyAccess for QuickForeachDynamicPropertyBinding<'a> {
+    #[inline(always)]
+    unsafe fn receiver_matches(self, receiver: &Value) -> bool {
+        if receiver.value_type() != ValueType::Object || receiver.is_reference() {
+            return false;
         }
+        receiver.object_property_layout_ptr_unchecked() == self.layout
+    }
+
+    #[inline(always)]
+    unsafe fn property_at(self, receiver: &Value, index: usize) -> *const Value {
+        let name = *self.names.get_unchecked(index);
+        let mut property = (*self.positions.get_unchecked(index)).map_or(
+            std::ptr::null(),
+            |position| receiver.object_dynamic_property_at_unchecked(name, position),
+        );
+        if property.is_null() {
+            property = receiver.object_dynamic_property_unchecked(name);
+        }
+        property
     }
 
     /// Validate one dynamic receiver and resolve both planned projections
-    /// without repeating the object or dynamic-storage lookup. Declared slots
-    /// deliberately retain their smaller single-read path: native A/B
-    /// measurement shows LLVM already merges its repeated object loads.
+    /// without repeating the object or dynamic-storage lookup.
     #[inline(always)]
-    unsafe fn guarded_dynamic_property_pair(
+    unsafe fn guarded_property_pair(
         self,
         receiver: &Value,
     ) -> Option<[*const Value; 2]> {
         if receiver.value_type() != ValueType::Object || receiver.is_reference() {
             return None;
         }
-        match self {
-            Self::Dynamic {
-                layout,
-                names,
-                positions,
-            } => receiver.object_dynamic_property_pair_guarded_unchecked(
-                layout, names, positions,
-            ),
-            Self::Declared { .. } => None,
-        }
-    }
-
-    #[inline(always)]
-    fn is_dynamic(self) -> bool {
-        matches!(self, Self::Dynamic { .. })
+        receiver.object_dynamic_property_pair_guarded_unchecked(
+            self.layout,
+            self.names,
+            self.positions,
+        )
     }
 }
 
@@ -335,6 +352,7 @@ pub(super) unsafe fn run_quick_foreach_long_accumulate_loop(
 #[inline(never)]
 unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
     const BATCH_DYNAMIC_PROPERTIES: bool,
+    Binding: QuickForeachObjectPropertyAccess,
 >(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -343,7 +361,7 @@ unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
     mut position: usize,
     len: usize,
     quick_array: QuickForeachLongArray,
-    binding: QuickForeachObjectPropertyBinding<'_>,
+    binding: Binding,
 ) -> Result<QuickLoopOutcome, VmError> {
     let slot_base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
     let position_ptr = slot_base.add(plan.position_tmp as usize);
@@ -361,7 +379,7 @@ unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
         let next_position = position + 1;
         let property_pair = if BATCH_DYNAMIC_PROPERTIES {
             let Some(property_pair) =
-                binding.guarded_dynamic_property_pair(&*receiver)
+                binding.guarded_property_pair(&*receiver)
             else {
                 publish_foreach_object_state(
                     frame,
@@ -585,27 +603,44 @@ pub(super) unsafe fn run_quick_foreach_object_property_accumulate_loop(
         return Ok(QuickLoopOutcome::GuardFailed);
     };
 
-    if plan.projection_count == 2 && binding.is_dynamic() {
-        run_quick_foreach_object_property_accumulate_loop_inner::<true>(
-            eg,
-            frame,
-            op_array,
-            plan,
-            position,
-            len,
-            quick_array,
-            binding,
-        )
-    } else {
-        run_quick_foreach_object_property_accumulate_loop_inner::<false>(
-            eg,
-            frame,
-            op_array,
-            plan,
-            position,
-            len,
-            quick_array,
-            binding,
-        )
+    match binding {
+        QuickForeachObjectPropertyBinding::Declared(binding) => {
+            run_quick_foreach_object_property_accumulate_loop_inner::<false, _>(
+                eg,
+                frame,
+                op_array,
+                plan,
+                position,
+                len,
+                quick_array,
+                binding,
+            )
+        }
+        QuickForeachObjectPropertyBinding::Dynamic(binding)
+            if plan.projection_count == 2 =>
+        {
+            run_quick_foreach_object_property_accumulate_loop_inner::<true, _>(
+                eg,
+                frame,
+                op_array,
+                plan,
+                position,
+                len,
+                quick_array,
+                binding,
+            )
+        }
+        QuickForeachObjectPropertyBinding::Dynamic(binding) => {
+            run_quick_foreach_object_property_accumulate_loop_inner::<false, _>(
+                eg,
+                frame,
+                op_array,
+                plan,
+                position,
+                len,
+                quick_array,
+                binding,
+            )
+        }
     }
 }
