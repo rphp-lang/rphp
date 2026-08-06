@@ -4467,9 +4467,68 @@ for four/eight/twelve-property objects. The experiment was reverted. Array
 storage shares keys through `Rc` so ordered entries and `HashMap` indexes can
 own one allocation; a plain object map already owns each `String` directly, so
 that reuse adds the wrong ownership cost. A future compact dynamic-property
-container should therefore be object-specific: own each String once in ordered
-entries and use a position-only index, with no duplicated or reference-counted
-key. It must pass the same width-12 promotion control before admission.
+container should therefore be object-specific and own each String once. It
+must pass the same width-promotion controls before admission.
+
+### Inline dynamic-property storage checkpoint
+
+The accepted object-specific container keeps up to three dynamic properties
+inline in insertion order and promotes a fourth unique name directly into the
+existing randomized `HashMap<String, Value>` (2026-08-06). Small objects avoid
+both a bucket allocation and hashing while retaining the parser-owned String
+without a copy or `Rc`. Wider objects immediately return to the established
+secure general map, so attacker-controlled names do not enter a deterministic
+hasher and the `PhpObject` field remains one pointer wide. Duplicate names
+overwrite their original position; cloning, mutation, direct cached reads and
+property iteration all use the shared container API.
+
+Two more ambitious designs were rejected before admission. A position-only
+open-addressed index at property nine made width 12 about 22% slower; moving
+the threshold to 17 made width 20 about 33% slower. Keeping those objects
+linear reduced but did not eliminate the construction regression. A hybrid
+ordered-vector-to-HashMap path still paid an extra vector allocation. The final
+inline-three design removes both the unused index and intermediate vector: the
+fourth insert moves three owned entries straight into the standard map. An
+inline-four candidate improved its exact-width workload by 25%, but retained a
+repeatable 1.6% width-20 regression; inline three was selected because the
+wide control stays neutral.
+
+Nine paired native-CPU `max-perf` no-JIT A/B runs against the preceding
+property-cache checkpoint produced these medians. The width-20 control used an
+additional eleven isolated order-rotated runs because mixed batches showed
+thermal outliers:
+
+| Workload | Previous map | Inline-three map | Change |
+|---|---:|---:|---:|
+| Retained `stdClass` reads, 5M pairs | 263.839 ms | 193.939 ms | -26.5% |
+| Changing object decode, 2 properties | 42.414 ms | 35.642 ms | -16.0% |
+| Changing object decode, 4 properties | 68.769 ms | 67.579 ms | -1.7% |
+| Changing object decode, 8 properties | 123.124 ms | 122.493 ms | -0.5% |
+| Changing object decode, 12 properties | 155.900 ms | 152.720 ms | -2.0% |
+| Changing object decode, 20 properties | 248.288 ms | 247.090 ms | -0.5% |
+
+The existing two-property parse plus two-property-read control improved from
+59.876 to 47.128 ms (-21.3%). Moving object materialization into a separate
+non-inlined helper keeps its evolving code layout out of the generic
+associative branch; the unrelated associative-array control remained within
+1.0%. Four-mode results below are nine order-rotated internal-time
+medians with PHP 8.5.9 and a verified active PHP tracing JIT:
+
+| Workload | RPHP JIT | RPHP no JIT | PHP tracing JIT | PHP no JIT |
+|---|---:|---:|---:|---:|
+| Changing object control | 46.835 ms | 47.528 ms | 36.269 ms | 39.213 ms |
+| Retained `stdClass` reads, 5M pairs | 194.809 ms | 195.318 ms | 63.122 ms | 67.475 ms |
+| Object decode, 2 properties | 34.278 ms | 34.249 ms | 29.581 ms | 31.753 ms |
+| Object decode, 4 properties | 65.797 ms | 66.166 ms | 48.033 ms | 50.884 ms |
+| Object decode, 8 properties | 119.739 ms | 117.679 ms | 83.156 ms | 85.315 ms |
+| Object decode, 12 properties | 154.123 ms | 152.495 ms | 123.585 ms | 126.073 ms |
+| Object decode, 20 properties | 248.670 ms | 251.599 ms | 204.904 ms | 205.663 ms |
+
+Canonical changing object decode is now only 1.21x slower than PHP without JIT,
+and the two-property decode is within 7.9%. The remaining retained-read gap is
+about 2.9x and does not shrink under the current native-JIT feature, identifying
+VM dispatch, receiver/operand guards, `RefCell` access and heap-Value cloning as
+the next independent object-access problem.
 
 ### Nice to have: persistent compiled artifacts
 

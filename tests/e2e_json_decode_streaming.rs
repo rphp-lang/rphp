@@ -152,3 +152,16 @@ echo value_of($first) . '|'
         "11|17|31|11|23|null"
     );
 }
+
+#[test]
+fn decoded_stdclass_preserves_duplicate_position_and_property_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$value = json_decode('{"a":1,"b":2,"a":3,"c":4}');
+echo $value->a . '|' . json_encode($value);
+"#,
+        ),
+        "3|{\"a\":3,\"b\":2,\"c\":4}"
+    );
+}

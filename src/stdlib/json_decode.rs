@@ -5,12 +5,13 @@
 //! object) and then immediately walk and destroy that tree while constructing
 //! the PHP result.
 
-use std::collections::HashMap;
 use std::fmt;
 
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
-use crate::value::{canonical_decimal_array_key, PhpArray, PhpObject, Value};
+use crate::value::{
+    canonical_decimal_array_key, DynamicPropertyMap, PhpArray, PhpObject, Value,
+};
 
 #[derive(Clone, Copy)]
 struct PhpValueSeed {
@@ -125,14 +126,25 @@ impl<'de> Visitor<'de> for PhpValueVisitor {
             }
             Ok(Value::array(array))
         } else {
-            let mut properties = HashMap::with_capacity(map.size_hint().unwrap_or(0));
-            while let Some(key) = map.next_key::<String>()? {
-                let value = map.next_value_seed(PhpValueSeed::new(false))?;
-                properties.insert(key, value);
-            }
-            Ok(Value::object(PhpObject::std_class(properties)))
+            decode_object_map(map)
         }
     }
+}
+
+/// Keep object materialization out of the shared generic map-dispatch body.
+/// Its storage policy may evolve independently without perturbing the hotter
+/// associative-array branch's code layout and inlining decisions.
+#[inline(never)]
+fn decode_object_map<'de, A>(mut map: A) -> Result<Value, A::Error>
+where
+    A: MapAccess<'de>,
+{
+    let mut properties = DynamicPropertyMap::with_capacity(map.size_hint().unwrap_or(0));
+    while let Some(key) = map.next_key::<String>()? {
+        let value = map.next_value_seed(PhpValueSeed::new(false))?;
+        properties.insert_owned(key, value);
+    }
+    Ok(Value::object(PhpObject::std_class_from_properties(properties)))
 }
 
 pub(super) fn decode_php_value(input: &str, associative: bool) -> Result<Value, serde_json::Error> {

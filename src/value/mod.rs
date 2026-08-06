@@ -88,6 +88,178 @@ impl ObjectLayout {
     }
 }
 
+const SMALL_DYNAMIC_PROPERTY_CAPACITY: usize = 3;
+
+#[derive(Clone)]
+struct SmallDynamicProperties {
+    entries: [Option<(String, Value)>; SMALL_DYNAMIC_PROPERTY_CAPACITY],
+}
+
+impl SmallDynamicProperties {
+    fn new() -> Self {
+        Self {
+            entries: std::array::from_fn(|_| None),
+        }
+    }
+
+    #[inline]
+    fn len(&self) -> usize {
+        self.entries.iter().take_while(|entry| entry.is_some()).count()
+    }
+
+    #[inline]
+    fn find(&self, key: &str) -> Option<usize> {
+        self.entries[..self.len()]
+            .iter()
+            .position(|entry| entry.as_ref().is_some_and(|entry| entry.0 == key))
+    }
+
+    #[inline]
+    fn push(&mut self, key: String, value: Value) {
+        let len = self.len();
+        debug_assert!(len < SMALL_DYNAMIC_PROPERTY_CAPACITY);
+        self.entries[len] = Some((key, value));
+    }
+}
+
+#[derive(Clone)]
+enum DynamicPropertyStorage {
+    Small(SmallDynamicProperties),
+    Hash(HashMap<String, Value>),
+}
+
+/// Dynamic-object properties with one owning String per key. Up to three
+/// properties stay inline and preserve insertion order; a fourth promotes
+/// directly to the standard secure HashMap used by the general object path.
+#[derive(Clone)]
+pub struct DynamicPropertyMap {
+    storage: DynamicPropertyStorage,
+}
+
+impl DynamicPropertyMap {
+    pub(crate) fn with_capacity(capacity: usize) -> Self {
+        let storage = if capacity <= SMALL_DYNAMIC_PROPERTY_CAPACITY {
+            DynamicPropertyStorage::Small(SmallDynamicProperties::new())
+        } else {
+            DynamicPropertyStorage::Hash(HashMap::with_capacity(capacity))
+        };
+        Self { storage }
+    }
+
+    fn from_hash_map(properties: HashMap<String, Value>) -> Self {
+        if properties.len() > SMALL_DYNAMIC_PROPERTY_CAPACITY {
+            return Self {
+                storage: DynamicPropertyStorage::Hash(properties),
+            };
+        }
+        let mut result = Self::with_capacity(properties.len());
+        for (key, value) in properties {
+            result.insert_owned(key, value);
+        }
+        result
+    }
+
+    #[inline]
+    pub(crate) fn get(&self, key: &str) -> Option<&Value> {
+        match &self.storage {
+            DynamicPropertyStorage::Small(small) => small
+                .find(key)
+                .and_then(|position| small.entries[position].as_ref().map(|entry| &entry.1)),
+            DynamicPropertyStorage::Hash(properties) => properties.get(key),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
+        match &mut self.storage {
+            DynamicPropertyStorage::Small(small) => {
+                let position = small.find(key)?;
+                small.entries[position].as_mut().map(|entry| &mut entry.1)
+            }
+            DynamicPropertyStorage::Hash(properties) => properties.get_mut(key),
+        }
+    }
+
+    pub(crate) fn insert_owned(&mut self, key: String, value: Value) {
+        if let DynamicPropertyStorage::Hash(properties) = &mut self.storage {
+            properties.insert(key, value);
+            return;
+        }
+        if let DynamicPropertyStorage::Small(small) = &mut self.storage {
+            if let Some(position) = small.find(&key) {
+                small.entries[position].as_mut().unwrap().1 = value;
+                return;
+            }
+            if small.len() < SMALL_DYNAMIC_PROPERTY_CAPACITY {
+                small.push(key, value);
+                return;
+            }
+        }
+
+        let DynamicPropertyStorage::Small(small) = std::mem::replace(
+            &mut self.storage,
+            DynamicPropertyStorage::Small(SmallDynamicProperties::new()),
+        ) else {
+            unreachable!();
+        };
+        let mut properties = HashMap::with_capacity(small.len() + 1);
+        properties.extend(small.entries.into_iter().flatten());
+        properties.insert(key, value);
+        self.storage = DynamicPropertyStorage::Hash(properties);
+    }
+
+    #[inline]
+    pub(crate) fn insert(&mut self, key: &str, value: Value) {
+        if let Some(existing) = self.get_mut(key) {
+            *existing = value;
+        } else {
+            self.insert_owned(key.to_string(), value);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn contains_key(&self, key: &str) -> bool {
+        self.get(key).is_some()
+    }
+
+    #[inline]
+    pub(crate) fn len(&self) -> usize {
+        match &self.storage {
+            DynamicPropertyStorage::Small(small) => small.len(),
+            DynamicPropertyStorage::Hash(properties) => properties.len(),
+        }
+    }
+
+    #[inline]
+    pub(crate) fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub(crate) fn for_each(&self, mut visitor: impl FnMut(&str, &Value)) {
+        match &self.storage {
+            DynamicPropertyStorage::Small(small) => {
+                for (key, value) in small.entries[..small.len()].iter().flatten() {
+                    visitor(key, value);
+                }
+            }
+            DynamicPropertyStorage::Hash(properties) => {
+                for (key, value) in properties {
+                    visitor(key, value);
+                }
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for DynamicPropertyMap {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DynamicPropertyMap")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
 pub struct PhpObject {
@@ -101,7 +273,7 @@ pub struct PhpObject {
     /// Declared properties in compact numeric slots.
     pub property_values: Vec<Value>,
     /// Dynamic properties are uncommon and allocated lazily.
-    pub dynamic_properties: Option<Box<HashMap<String, Value>>>,
+    pub dynamic_properties: Option<Box<DynamicPropertyMap>>,
     /// If this object is a Generator, holds the generator state
     pub generator: Option<GeneratorRef>,
 }
@@ -147,7 +319,7 @@ impl PhpObject {
             dynamic_properties: if properties.is_empty() {
                 None
             } else {
-                Some(Box::new(properties))
+                Some(Box::new(DynamicPropertyMap::from_hash_map(properties)))
             },
             generator: None,
         }
@@ -157,6 +329,11 @@ impl PhpObject {
     /// Class metadata is immutable and shared; the property map remains owned
     /// exclusively by this object.
     pub fn std_class(properties: HashMap<String, Value>) -> Self {
+        Self::std_class_from_properties(DynamicPropertyMap::from_hash_map(properties))
+    }
+
+    /// Construct canonical `stdClass` from ordered streaming properties.
+    pub(crate) fn std_class_from_properties(properties: DynamicPropertyMap) -> Self {
         let (class_name, property_layout) = STD_CLASS_METADATA.with(|metadata| {
             (Rc::clone(&metadata.0), Rc::clone(&metadata.1))
         });
@@ -224,7 +401,7 @@ impl PhpObject {
             || self
                 .dynamic_properties
                 .as_ref()
-                .is_some_and(|props| props.contains_key(key))
+                .is_some_and(|properties| properties.contains_key(key))
     }
 
     /// Set a declared slot or create/update a dynamic property.
@@ -236,8 +413,8 @@ impl PhpObject {
             Some(slot)
         } else {
             self.dynamic_properties
-                .get_or_insert_with(|| Box::new(HashMap::new()))
-                .insert(key.to_string(), value);
+                .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(1)))
+                .insert(key, value);
             None
         }
     }
@@ -249,16 +426,16 @@ impl PhpObject {
             }
         }
         if let Some(dynamic) = &self.dynamic_properties {
-            for (key, value) in dynamic.iter() {
-                visitor(key, value);
-            }
+            dynamic.for_each(visitor);
         }
     }
 }
 
 #[cfg(test)]
 mod object_tests {
-    use super::{ObjectLayout, PhpObject, Value};
+    use super::{
+        DynamicPropertyMap, DynamicPropertyStorage, ObjectLayout, PhpObject, Value,
+    };
     use std::rc::Rc;
 
     #[test]
@@ -300,6 +477,39 @@ mod object_tests {
         ));
         assert!(first.dynamic_properties.is_none());
         assert!(second.dynamic_properties.is_none());
+    }
+
+    #[test]
+    fn dynamic_property_map_keeps_three_inline_then_promotes_to_hash() {
+        assert!(std::mem::size_of::<DynamicPropertyMap>() <= 176);
+        assert_eq!(
+            std::mem::size_of::<Option<Box<DynamicPropertyMap>>>(),
+            std::mem::size_of::<usize>()
+        );
+
+        let mut properties = DynamicPropertyMap::with_capacity(0);
+        for (position, key) in ["a", "b", "c"]
+            .into_iter()
+            .enumerate()
+        {
+            properties.insert_owned(key.to_string(), Value::long(position as i64 + 1));
+        }
+        properties.insert_owned("b".to_string(), Value::long(20));
+        assert_eq!(properties.len(), 3);
+        assert!(matches!(properties.storage, DynamicPropertyStorage::Small(_)));
+
+        let mut keys = Vec::new();
+        properties.for_each(|key, _| keys.push(key.to_string()));
+        assert_eq!(keys, ["a", "b", "c"]);
+        assert_eq!(properties.get("b").and_then(Value::as_long), Some(20));
+
+        let cloned = properties.clone();
+        assert!(matches!(cloned.storage, DynamicPropertyStorage::Small(_)));
+
+        properties.insert_owned("d".to_string(), Value::long(4));
+        assert!(matches!(properties.storage, DynamicPropertyStorage::Hash(_)));
+        assert_eq!(properties.get("b").and_then(Value::as_long), Some(20));
+        assert_eq!(properties.get("d").and_then(Value::as_long), Some(4));
     }
 }
 
