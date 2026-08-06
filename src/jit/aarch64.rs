@@ -387,6 +387,17 @@ impl Arm64Assembler {
         self.words.push(instruction);
     }
 
+    /// Encode `ORR Xd, Xn, Xm`.
+    fn bitwise_or_register(
+        &mut self,
+        destination: Arm64Register,
+        lhs: Arm64Register,
+        rhs: Arm64Register,
+    ) {
+        let instruction = 0xaa00_0000 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        self.words.push(instruction);
+    }
+
     /// Encode `TST Xn, Xm`, the `ANDS XZR, Xn, Xm` alias.
     fn test_registers(&mut self, lhs: Arm64Register, rhs: Arm64Register) {
         const XZR: u32 = 31;
@@ -4042,6 +4053,8 @@ fn validate_straight_long_binary(
         | ScalarLongOpKind::Multiply
         | ScalarLongOpKind::IntDivide
         | ScalarLongOpKind::Modulo
+        | ScalarLongOpKind::BitwiseAnd
+        | ScalarLongOpKind::BitwiseOr
         | ScalarLongOpKind::BitwiseXor => {}
     }
     validate_straight_long_operand(lhs)?;
@@ -4213,6 +4226,12 @@ fn emit_straight_binary(
                 assembler.signed_divide(auxiliary, lhs, rhs);
                 assembler.multiply_subtract(result, auxiliary, rhs, lhs);
             }
+        }
+        ScalarLongOpKind::BitwiseAnd => {
+            assembler.bitwise_and_register(result, lhs, rhs);
+        }
+        ScalarLongOpKind::BitwiseOr => {
+            assembler.bitwise_or_register(result, lhs, rhs);
         }
         ScalarLongOpKind::BitwiseXor => {
             assembler.exclusive_or_register(result, lhs, rhs);
@@ -5213,6 +5232,8 @@ fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Scalar
             ScalarLongOpKind::Add
             | ScalarLongOpKind::Subtract
             | ScalarLongOpKind::Multiply
+            | ScalarLongOpKind::BitwiseAnd
+            | ScalarLongOpKind::BitwiseOr
             | ScalarLongOpKind::BitwiseXor
             | ScalarLongOpKind::IntDivide
             | ScalarLongOpKind::Modulo => {}
@@ -5380,6 +5401,12 @@ fn emit_scalar_operation(
             );
             side_exit_branches
                 .push(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual));
+        }
+        ScalarLongOpKind::BitwiseAnd => {
+            assembler.bitwise_and_register(destination, lhs, rhs);
+        }
+        ScalarLongOpKind::BitwiseOr => {
+            assembler.bitwise_or_register(destination, lhs, rhs);
         }
         ScalarLongOpKind::BitwiseXor => {
             assembler.exclusive_or_register(destination, lhs, rhs);

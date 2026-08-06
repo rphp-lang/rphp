@@ -1,48 +1,208 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+#[cfg(feature = "quick-loops")]
+fn quick_long_array_prefix_op(
+    operation: QuickLongOp,
+) -> Option<(QuickLongArrayPrefixOp, QuickLongTarget)> {
+    match operation {
+        QuickLongOp::ModConst {
+            value,
+            divisor,
+            result,
+            next_target,
+            resume_ip,
+        } => Some((
+            QuickLongArrayPrefixOp {
+                kind: ScalarLongOpKind::Modulo,
+                lhs: QuickLongOperand::Slot(value),
+                rhs: QuickLongOperand::Const(divisor),
+                result,
+                destination: None,
+                resume_ip,
+            },
+            next_target,
+        )),
+        QuickLongOp::Add {
+            lhs,
+            rhs,
+            result,
+            next_target,
+            resume_ip,
+        } => Some((
+            QuickLongArrayPrefixOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: QuickLongOperand::Slot(lhs),
+                rhs: QuickLongOperand::Slot(rhs),
+                result,
+                destination: None,
+                resume_ip,
+            },
+            next_target,
+        )),
+        QuickLongOp::Binary {
+            kind,
+            lhs,
+            rhs,
+            result,
+            next_target,
+            resume_ip,
+        } => Some((
+            QuickLongArrayPrefixOp {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination: None,
+                resume_ip,
+            },
+            next_target,
+        )),
+        QuickLongOp::BinaryAssign {
+            kind,
+            lhs,
+            rhs,
+            result,
+            destination,
+            next_target,
+            resume_ip,
+        } => Some((
+            QuickLongArrayPrefixOp {
+                kind,
+                lhs,
+                rhs,
+                result,
+                destination: Some(destination),
+                resume_ip,
+            },
+            next_target,
+        )),
+        QuickLongOp::AddAssign {
+            lhs,
+            rhs,
+            result,
+            destination,
+            next_target,
+            add_resume_ip,
+        } => Some((
+            QuickLongArrayPrefixOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: QuickLongOperand::Slot(lhs),
+                rhs: QuickLongOperand::Slot(rhs),
+                result,
+                destination: Some(destination),
+                resume_ip: add_resume_ip,
+            },
+            next_target,
+        )),
+        _ => None,
+    }
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 fn quick_long_array_loop_kernel(
     plan: &QuickLongOpsLoop,
-) -> Option<(QuickLongArrayLoopKernel, QuickLongArrayBodyKernel)> {
-    if plan.entry_op != 0 || plan.string_input_mask != 0 || plan.string_output_mask != 0 {
+) -> Option<(
+    QuickLongArrayLoopKernel,
+    QuickLongArrayBodyKernel,
+    Vec<QuickLongArrayPrefixOp>,
+)> {
+    if plan.entry_op != 0
+        || plan.string_input_mask != 0
+        || plan.string_output_mask != 0
+        || plan.ops.len() < 4
+    {
         return None;
     }
 
-    let [
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match *plan.ops.first()? {
         QuickLongOp::BranchUnlessLt {
-            lhs: header_lhs,
-            rhs: header_rhs,
-            condition_tmp: header_condition_tmp,
-            false_target: header_false_target,
-            next_target: header_next_target,
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
             ..
-        },
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    let post_index = plan.ops.len() - 1;
+    let (
+        post_value,
+        post_result,
+        post_condition_lhs,
+        post_condition_rhs,
+        post_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match *plan.ops.last()? {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+
+    let mut prefix = Vec::new();
+    let mut fetch_index = 1usize;
+    while fetch_index < post_index {
+        let Some((operation, next_target)) =
+            quick_long_array_prefix_op(plan.ops[fetch_index])
+        else {
+            break;
+        };
+        if prefix.len() == QUICK_LONG_ARRAY_PREFIX_LIMIT
+            || next_target.op_index() != Some(fetch_index + 1)
+        {
+            return None;
+        }
+        prefix.push(operation);
+        fetch_index += 1;
+    }
+
+    let (
+        array,
+        index,
+        fetch_result,
+        fetch_destination,
+        fetch_next_target,
+        fetch_resume_ip,
+    ) = match *plan.ops.get(fetch_index)? {
         QuickLongOp::FetchArrayLong {
             array,
             index,
-            result: fetch_result,
-            destination: fetch_destination,
-            next_target: fetch_next_target,
-            resume_ip: fetch_resume_ip,
-        },
-        body_ops @ ..,
-        QuickLongOp::PostIncLoopLt {
-            value: post_value,
-            result: post_result,
-            condition_lhs: post_condition_lhs,
-            condition_rhs: post_condition_rhs,
-            condition_tmp: post_condition_tmp,
-            body_target,
-            exit_target,
-            resume_ip: post_resume_ip,
-        },
-    ] = plan.ops.as_slice()
-    else {
-        return None;
+            result,
+            destination,
+            next_target,
+            resume_ip,
+        } => (array, index, result, destination, next_target, resume_ip),
+        _ => return None,
     };
 
-    let post_index = plan.ops.len() - 1;
+    let first_body_index = fetch_index + 1;
+    let body_ops = plan.ops.get(first_body_index..post_index)?;
     let body = match body_ops {
         [QuickLongOp::AddAssign {
             lhs,
@@ -79,7 +239,7 @@ fn quick_long_array_loop_kernel(
                 next_target: second_next_target,
                 add_resume_ip: second_resume_ip,
             },
-        ] if first_next_target.op_index() == Some(3)
+        ] if first_next_target.op_index() == Some(first_body_index + 1)
             && second_next_target.op_index() == Some(post_index) =>
         {
             QuickLongArrayBodyKernel::TwoAdds {
@@ -128,8 +288,8 @@ fn quick_long_array_loop_kernel(
                 next_target: last_next_target,
                 add_resume_ip: last_resume_ip,
             },
-        ] if first_next_target.op_index() == Some(3)
-            && middle_next_target.op_index() == Some(4)
+        ] if first_next_target.op_index() == Some(first_body_index + 1)
+            && middle_next_target.op_index() == Some(first_body_index + 2)
             && last_next_target.op_index() == Some(post_index) =>
         {
             QuickLongArrayBodyKernel::AddFusedAddAdd {
@@ -180,7 +340,7 @@ fn quick_long_array_loop_kernel(
                 next_target: second_next_target,
                 add_resume_ip: second_resume_ip,
             },
-        ] if first_next_target.op_index() == Some(3)
+        ] if first_next_target.op_index() == Some(first_body_index + 1)
             && second_next_target.op_index() == Some(post_index) =>
         {
             QuickLongArrayBodyKernel::ConditionalAdd {
@@ -207,7 +367,7 @@ fn quick_long_array_loop_kernel(
 
     header_false_target.exit_ip()?;
     if header_next_target.op_index() != Some(1)
-        || fetch_next_target.op_index() != Some(2)
+        || fetch_next_target.op_index() != Some(first_body_index)
         || body_target.op_index() != Some(1)
         || exit_target != header_false_target
         || post_condition_lhs != header_lhs
@@ -219,21 +379,22 @@ fn quick_long_array_loop_kernel(
 
     Some((
         QuickLongArrayLoopKernel {
-            header_lhs: *header_lhs,
-            header_rhs: *header_rhs,
-            header_condition_tmp: *header_condition_tmp,
-            array: *array,
-            index: *index,
-            fetch_result: *fetch_result,
-            fetch_destination: *fetch_destination,
-            fetch_resume_ip: *fetch_resume_ip,
-            post_value: *post_value,
-            post_result: *post_result,
-            post_resume_ip: *post_resume_ip,
-            body_target: *body_target,
-            exit_target: *exit_target,
+            header_lhs,
+            header_rhs,
+            header_condition_tmp,
+            array,
+            index,
+            fetch_result,
+            fetch_destination,
+            fetch_resume_ip,
+            post_value,
+            post_result,
+            post_resume_ip,
+            body_target,
+            exit_target,
         },
         body,
+        prefix,
     ))
 }
 

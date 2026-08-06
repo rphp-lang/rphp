@@ -931,7 +931,7 @@ fn conditional_scalar_ir_skips_inactive_overflow_and_exits_on_selected_overflow(
 }
 
 #[test]
-fn constants_subtraction_and_xor_share_the_native_lowering() {
+fn constants_subtraction_and_bitwise_ops_share_the_native_lowering() {
     let plan = scalar_plan(
         2,
         vec![
@@ -941,18 +941,28 @@ fn constants_subtraction_and_xor_share_the_native_lowering() {
                 rhs: ScalarLongSource::Constant(5),
             },
             ScalarLongOp {
-                kind: ScalarLongOpKind::BitwiseXor,
+                kind: ScalarLongOpKind::BitwiseAnd,
                 lhs: ScalarLongSource::Temporary(0),
+                rhs: ScalarLongSource::Constant(15),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::BitwiseOr,
+                lhs: ScalarLongSource::Temporary(1),
+                rhs: ScalarLongSource::Constant(16),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::BitwiseXor,
+                lhs: ScalarLongSource::Temporary(2),
                 rhs: ScalarLongSource::Input(1),
             },
         ],
-        ScalarLongSource::Temporary(1),
+        ScalarLongSource::Temporary(3),
     );
     let function = CompiledScalarLongProgram::compile(&plan).expect("plan should lower");
 
     assert_eq!(
         function.call(&[20, 3]).unwrap(),
-        ScalarLongJitOutcome::Value(12)
+        ScalarLongJitOutcome::Value(28)
     );
     assert!(function.code().len() >= 4);
 }
@@ -1159,6 +1169,8 @@ fn native_checked_arithmetic_matches_rust_over_many_inputs() {
         ScalarLongOpKind::Add,
         ScalarLongOpKind::Subtract,
         ScalarLongOpKind::Multiply,
+        ScalarLongOpKind::BitwiseAnd,
+        ScalarLongOpKind::BitwiseOr,
         ScalarLongOpKind::BitwiseXor,
         ScalarLongOpKind::IntDivide,
         ScalarLongOpKind::Modulo,
@@ -1191,6 +1203,8 @@ fn native_checked_arithmetic_matches_rust_over_many_inputs() {
                 ScalarLongOpKind::Add => lhs.checked_add(rhs),
                 ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
                 ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
+                ScalarLongOpKind::BitwiseAnd => Some(lhs & rhs),
+                ScalarLongOpKind::BitwiseOr => Some(lhs | rhs),
                 ScalarLongOpKind::BitwiseXor => Some(lhs ^ rhs),
                 ScalarLongOpKind::IntDivide => lhs.checked_div(rhs),
                 ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),

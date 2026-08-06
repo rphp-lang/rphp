@@ -1663,6 +1663,8 @@ fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
         }
         OpCode::Mul => Some(ScalarLongOpKind::Multiply),
         OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
+        OpCode::BitwiseAnd => Some(ScalarLongOpKind::BitwiseAnd),
+        OpCode::BitwiseOr => Some(ScalarLongOpKind::BitwiseOr),
         OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
             Some(ScalarLongOpKind::BitwiseXor)
         }

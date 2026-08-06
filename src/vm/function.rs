@@ -468,6 +468,8 @@ pub enum ScalarLongOpKind {
     Multiply,
     IntDivide,
     Modulo,
+    BitwiseAnd,
+    BitwiseOr,
     BitwiseXor,
 }
 

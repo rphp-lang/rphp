@@ -780,11 +780,18 @@ fn binary_interval(
                 Some(modulo_interval(lhs, rhs))
             }
         }
-        ScalarLongOpKind::BitwiseXor => {
+        ScalarLongOpKind::BitwiseAnd
+        | ScalarLongOpKind::BitwiseOr
+        | ScalarLongOpKind::BitwiseXor => {
             if lhs.minimum == lhs.maximum && rhs.minimum == rhs.maximum {
-                Some(LongInterval::exact(
-                    (lhs.minimum as i64) ^ (rhs.minimum as i64),
-                ))
+                let lhs = lhs.minimum as i64;
+                let rhs = rhs.minimum as i64;
+                Some(LongInterval::exact(match kind {
+                    ScalarLongOpKind::BitwiseAnd => lhs & rhs,
+                    ScalarLongOpKind::BitwiseOr => lhs | rhs,
+                    ScalarLongOpKind::BitwiseXor => lhs ^ rhs,
+                    _ => unreachable!(),
+                }))
             } else {
                 Some(LongInterval::FULL)
             }
@@ -1620,6 +1627,8 @@ mod tests {
             ScalarLongOpKind::Multiply,
             ScalarLongOpKind::IntDivide,
             ScalarLongOpKind::Modulo,
+            ScalarLongOpKind::BitwiseAnd,
+            ScalarLongOpKind::BitwiseOr,
             ScalarLongOpKind::BitwiseXor,
         ];
 
@@ -1643,6 +1652,12 @@ mod tests {
                                     (left as i64).checked_div(right as i64)
                                 }
                                 ScalarLongOpKind::Modulo => (left as i64).checked_rem(right as i64),
+                                ScalarLongOpKind::BitwiseAnd => {
+                                    Some((left as i64) & (right as i64))
+                                }
+                                ScalarLongOpKind::BitwiseOr => {
+                                    Some((left as i64) | (right as i64))
+                                }
                                 ScalarLongOpKind::BitwiseXor => {
                                     Some((left as i64) ^ (right as i64))
                                 }

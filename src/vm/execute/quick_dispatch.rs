@@ -154,7 +154,7 @@ unsafe fn run_quick_long_ops_loop(
     }
 
     let array_kernel = quick_long_array_loop_kernel(plan);
-    let exact_array_slot = array_kernel.and_then(|(kernel, body)| {
+    let exact_array_slot = array_kernel.as_ref().and_then(|(kernel, body, _)| {
         matches!(body, QuickLongArrayBodyKernel::OneAdd { .. })
             .then_some(kernel.array as usize)
     });
@@ -187,7 +187,24 @@ unsafe fn run_quick_long_ops_loop(
         arrays[slot] = quick_array;
     }
 
-    if let Some((kernel, body)) = array_kernel {
+    if let Some((kernel, body, prefix)) = array_kernel {
+        if !prefix.is_empty() {
+            return dispatch_quick_long_composed_array_loop_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                &arrays,
+                &int_position_hints,
+                indexed_int_array_mask,
+                exact_int_layout,
+                kernel,
+                body,
+                &prefix,
+            );
+        }
         if let (
             Some(exact_layout),
             QuickLongArray::Hash { array },

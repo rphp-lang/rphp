@@ -5069,6 +5069,103 @@ key expressions plus guarded indexed fetch and accumulation. Materialized-index
 layout and irregular structural writes remain the following construction task;
 another special key pattern is not the answer.
 
+### Composed integer-key read checkpoint
+
+The composed-key follow-up is implemented (2026-08-06). Bytecode inspection
+confirmed that multiplication, checked addition and dynamic integer fetch were
+already representable in the general typed loop, but binary `BitwiseAnd` ended
+the region. The loop consequently executed every key-expression, fetch and
+accumulation opcode through `execute_ex`.
+
+`ScalarLongOpKind` now represents the complete binary integer bitwise family:
+AND, OR and XOR. The compiler, no-JIT evaluator, interval/range analysis,
+straight-loop IR and both handwritten ARM64 and x86-64 lowerings consume the
+same variants. Exact-Long input guards retain canonical PHP coercion for other
+types, checked arithmetic retains the precise failing instruction as its side
+exit, and bitwise operations themselves cannot overflow.
+
+The target-neutral array kernel now accepts a bounded straight scalar prefix
+of up to eight operations before a guarded integer fetch. It normalizes the
+existing `ModConst`, Add, general binary and materialized binary operations;
+the canonical quick graph remains authoritative outside that bound. Prefix
+results are published transactionally before a missing/non-Long fetch resumes
+the original `FetchDimR`. Loops without a composed prefix retain their old,
+smaller kernel and therefore pay neither a per-iteration empty-prefix branch
+nor a larger copied kernel descriptor.
+
+After this removed opcode dispatch, ARM64 sampling assigned 45 of 50 remaining
+read-loop samples to `PhpArray::get_indexed_int` and only five to the composed
+kernel itself. Replacing Rust's indexed map with a simple flat linear-probe
+prototype was explicitly rejected: irregular read time regressed 12.3%, build
+time regressed 84.8%, and the larger 16-byte buckets increased cache traffic.
+The standard group-probed table remains canonical.
+
+The retained index change is deliberately smaller. Integer hashing now uses
+one odd 64-bit multiplicative mix followed by a folded high half; both stages
+are bijective/invertible over the full hash word, while the fold moves high-key
+entropy into bucket-index bits. Against the preceding two-multiply finalizer it
+improved the primary irregular build 2.5% and a new high-bit-key control 2.2%
+on ARM64; insertion-order and permuted reads, materialized integer reads and
+String reads stayed within 1.3%.
+
+The larger read gain comes from an adaptive ordered cursor over immutable hash
+entries. The first canonical index probe also returns the validated insertion
+position. The next dynamic key speculates on the following ordered entry and
+revalidates the full integer key before using its value. Two prediction misses
+disable the cursor for the rest of that region, bounding unordered-workload
+overhead. Mutation continues to rebuild canonical positions; COW and the
+read-only array guard keep entry storage stable while the region runs. This is
+a general insertion-order traversal optimization, not an LCG or literal-key
+special case.
+
+Fifty-one order-alternated ARM64 pairs against the adaptive-index checkpoint
+produced:
+
+| ARM64 workload | Previous no JIT | Composed no JIT | Paired delta | Previous JIT build | Composed JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular insertion-order read | 135.737 ms | 9.172 ms | -93.21% | 131.216 ms | 9.190 ms | -93.03% |
+| Irregular permuted-order read | 274.188 ms | 92.951 ms | -66.27% | 283.807 ms | 96.491 ms | -66.35% |
+| Irregular integer build | 58.279 ms | 59.159 ms | +1.24% | 54.956 ms | 54.353 ms | -0.56% |
+| High-bit irregular build | 28.293 ms | 28.634 ms | +1.30% | 27.535 ms | 28.444 ms | +2.69% |
+| Regular sparse build | 24.720 ms | 24.353 ms | -1.71% | 24.190 ms | 24.169 ms | -0.62% |
+| Materialized contiguous read | 2.843 ms | 2.798 ms | -1.32% | 2.721 ms | 2.662 ms | -1.31% |
+| String-key materialized control | 19.399 ms | 19.316 ms | -0.49% | 20.246 ms | 20.327 ms | +0.40% |
+
+Thirty-one x86-64 pairs produced the target/read controls below; the longer
+101-pair build control was -0.13% no JIT and +2.05% in the JIT-feature build:
+
+| x86-64 workload | Previous no JIT | Composed no JIT | Paired delta | Previous JIT build | Composed JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular insertion-order read | 103.607 ms | 8.877 ms | -91.34% | 103.616 ms | 9.077 ms | -91.25% |
+| Irregular permuted-order read | 195.880 ms | 61.385 ms | -68.44% | 189.083 ms | 61.415 ms | -67.48% |
+| Irregular integer build | 106.901 ms | 107.181 ms | +0.17% | 107.596 ms | 111.139 ms | +2.50% |
+| High-bit irregular build | 51.888 ms | 50.834 ms | -2.35% | 51.849 ms | 53.910 ms | +0.73% |
+| Regular sparse build | 41.170 ms | 38.383 ms | -6.49% | 39.779 ms | 41.600 ms | +4.51% |
+| Materialized contiguous read | 2.952 ms | 3.074 ms | +4.18% | 2.997 ms | 2.960 ms | -1.01% |
+| String-key materialized control | 13.771 ms | 13.901 ms | +1.46% | 13.152 ms | 14.009 ms | +6.35% |
+
+The short x86 control deltas are fat-LTO placement sensitivity, not additional
+work in those paths. Ten-run `perf stat` reports 374,704,030 versus 374,602,598
+instructions for the JIT String control and 286,007,907 versus 284,848,982 for
+the no-JIT materialized integer control. Cycles were 75.646M versus 75.716M and
+203.645M versus 204.074M respectively, inside the measured variance.
+
+A separate fifteen-run four-mode rotation gives the current absolute position:
+
+| Workload and host | RPHP no JIT | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|
+| Insertion-order read, ARM64 / PHP 8.5.9 | 9.162 ms | 9.151 ms | 10.354 ms | 4.963 ms |
+| Permuted-order read, ARM64 | 86.450 ms | 88.510 ms | 63.321 ms | 35.460 ms |
+| Insertion-order read, x86-64 / PHP 8.4.24 | 8.945 ms | 9.045 ms | 14.500 ms | 7.792 ms |
+| Permuted-order read, x86-64 | 61.793 ms | 63.336 ms | 23.193 ms | 14.768 ms |
+
+RPHP without JIT now wins the original unseen irregular-read workload on both
+architectures and comes within roughly 15% of PHP tracing JIT on x86-64. The
+permuted control deliberately defeats the ordered cursor and is the honest next
+array-read boundary: improving it requires a more cache-efficient canonical
+integer index/value layout or native guarded lookup integration, not another
+source-expression recognizer.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

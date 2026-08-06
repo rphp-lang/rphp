@@ -120,6 +120,141 @@ where
     Ok(QuickLoopOutcome::Completed)
 }
 
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn run_quick_long_composed_array_loop_kernel<Fetch, Body>(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    mut slots: [i64; 64],
+    kernel: QuickLongArrayLoopKernel,
+    prefix: &[QuickLongArrayPrefixOp],
+    mut fetch: Fetch,
+    mut execute_body: Body,
+) -> Result<QuickLoopOutcome, VmError>
+where
+    Fetch: FnMut(&[i64; 64]) -> Option<i64>,
+    Body: FnMut(&mut [i64; 64], &mut u64, &mut u64) -> Result<(), usize>,
+{
+    let mut dirty_long_mask = 0u64;
+    let mut dirty_bool_mask = 0u64;
+    let mut iterations = 0u64;
+
+    let mut continue_loop =
+        slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+    if let Some(slot) = kernel.header_condition_tmp {
+        slots[slot as usize] = i64::from(continue_loop);
+        dirty_bool_mask |= 1u64 << slot;
+    }
+
+    while continue_loop {
+        if let Err(resume_ip) =
+            execute_quick_long_array_prefix(&mut slots, &mut dirty_long_mask, prefix)
+        {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                resume_ip,
+                iterations,
+            ));
+        }
+        let Some(fetched) = fetch(&slots) else {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                kernel.fetch_resume_ip,
+                iterations,
+            ));
+        };
+        slots[kernel.fetch_result as usize] = fetched;
+        dirty_long_mask |= 1u64 << kernel.fetch_result;
+        if let Some(destination) = kernel.fetch_destination {
+            slots[destination as usize] = fetched;
+            dirty_long_mask |= 1u64 << destination;
+        }
+
+        if let Err(resume_ip) =
+            execute_body(&mut slots, &mut dirty_long_mask, &mut dirty_bool_mask)
+        {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                resume_ip,
+                iterations,
+            ));
+        }
+
+        let Some(incremented) = slots[kernel.post_value as usize].checked_add(1) else {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                kernel.post_resume_ip,
+                iterations,
+            ));
+        };
+        if let Some(result) = kernel.post_result {
+            slots[result as usize] = slots[kernel.post_value as usize];
+            dirty_long_mask |= 1u64 << result;
+        }
+        slots[kernel.post_value as usize] = incremented;
+        dirty_long_mask |= 1u64 << kernel.post_value;
+
+        continue_loop =
+            slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+        if let Some(slot) = kernel.header_condition_tmp {
+            slots[slot as usize] = i64::from(continue_loop);
+            dirty_bool_mask |= 1u64 << slot;
+        }
+        iterations += 1;
+
+        if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+            commit_quick_long_ops_slots(
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+            );
+            let next_target = if continue_loop {
+                kernel.body_target
+            } else {
+                kernel.exit_target
+            };
+            let next_ip = plan.target_ip(next_target).unwrap_unchecked();
+            (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+            handle_interrupt(eg)?;
+        }
+    }
+
+    commit_quick_long_ops_slots(
+        slot_base,
+        &slots,
+        dirty_long_mask,
+        dirty_bool_mask,
+    );
+    let next_ip = kernel.exit_target.exit_ip().unwrap_unchecked();
+    (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+    stats::inc_quick_loop_completed(iterations);
+    Ok(QuickLoopOutcome::Completed)
+}
+
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
 fn execute_quick_long_add_assign(
@@ -133,6 +268,30 @@ fn execute_quick_long_add_assign(
     slots[kernel.result as usize] = value;
     slots[kernel.destination as usize] = value;
     *dirty_long_mask |= (1u64 << kernel.result) | (1u64 << kernel.destination);
+    Ok(())
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+fn execute_quick_long_array_prefix(
+    slots: &mut [i64; 64],
+    dirty_long_mask: &mut u64,
+    prefix: &[QuickLongArrayPrefixOp],
+) -> Result<(), usize> {
+    for operation in prefix {
+        let value = apply_scalar_long_op(
+            operation.kind,
+            quick_long_operand(slots, operation.lhs),
+            quick_long_operand(slots, operation.rhs),
+        )
+        .ok_or(operation.resume_ip)?;
+        slots[operation.result as usize] = value;
+        *dirty_long_mask |= 1u64 << operation.result;
+        if let Some(destination) = operation.destination {
+            slots[destination as usize] = value;
+            *dirty_long_mask |= 1u64 << destination;
+        }
+    }
     Ok(())
 }
 
@@ -574,6 +733,126 @@ where
 
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
+unsafe fn dispatch_quick_long_composed_array_body_kernel<Fetch>(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    slots: [i64; 64],
+    kernel: QuickLongArrayLoopKernel,
+    body: QuickLongArrayBodyKernel,
+    prefix: &[QuickLongArrayPrefixOp],
+    fetch: Fetch,
+) -> Result<QuickLoopOutcome, VmError>
+where
+    Fetch: FnMut(&[i64; 64]) -> Option<i64>,
+{
+    match body {
+        QuickLongArrayBodyKernel::OneAdd { add } => {
+            run_quick_long_composed_array_loop_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                prefix,
+                fetch,
+                move |slots, dirty_long_mask, _| {
+                    execute_quick_long_add_assign(slots, dirty_long_mask, add)
+                },
+            )
+        }
+        QuickLongArrayBodyKernel::TwoAdds { first, second } => {
+            run_quick_long_composed_array_loop_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                prefix,
+                fetch,
+                move |slots, dirty_long_mask, _| {
+                    execute_quick_long_add_assign(slots, dirty_long_mask, first)?;
+                    execute_quick_long_add_assign(slots, dirty_long_mask, second)
+                },
+            )
+        }
+        QuickLongArrayBodyKernel::AddFusedAddAdd {
+            first,
+            middle,
+            last,
+        } => run_quick_long_composed_array_loop_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            kernel,
+            prefix,
+            fetch,
+            move |slots, dirty_long_mask, _| {
+                execute_quick_long_add_assign(slots, dirty_long_mask, first)?;
+                execute_quick_long_add_add_assign(slots, dirty_long_mask, middle)?;
+                execute_quick_long_add_assign(slots, dirty_long_mask, last)
+            },
+        ),
+        QuickLongArrayBodyKernel::ConditionalAdd { first, second } => match first.condition {
+            QuickLongCondition::Lt { lhs, rhs } => run_quick_long_composed_array_loop_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                prefix,
+                fetch,
+                move |slots, dirty_long_mask, dirty_bool_mask| {
+                    let condition = slots[lhs as usize] < quick_long_operand(slots, rhs);
+                    execute_quick_long_conditional_add_assign(
+                        slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        first,
+                        condition,
+                    )?;
+                    execute_quick_long_add_assign(slots, dirty_long_mask, second)
+                },
+            ),
+            QuickLongCondition::Eq { lhs, rhs } => run_quick_long_composed_array_loop_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                prefix,
+                fetch,
+                move |slots, dirty_long_mask, dirty_bool_mask| {
+                    let condition = slots[lhs as usize] == quick_long_operand(slots, rhs);
+                    execute_quick_long_conditional_add_assign(
+                        slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        first,
+                        condition,
+                    )?;
+                    execute_quick_long_add_assign(slots, dirty_long_mask, second)
+                },
+            ),
+        },
+    }
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_exact_int_array_one_add_kernel(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -689,6 +968,136 @@ unsafe fn run_quick_long_exact_int_array_one_add_kernel(
     (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
     stats::inc_quick_loop_completed(iterations);
     Ok(QuickLoopOutcome::Completed)
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn dispatch_quick_long_composed_array_loop_kernel(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    slots: [i64; 64],
+    arrays: &[QuickLongArray; 64],
+    int_position_hints: &[Option<QuickLongIntPositionHint>; 64],
+    indexed_int_array_mask: u64,
+    exact_int_layout: Option<QuickLongExactIntLayout>,
+    kernel: QuickLongArrayLoopKernel,
+    body: QuickLongArrayBodyKernel,
+    prefix: &[QuickLongArrayPrefixOp],
+) -> Result<QuickLoopOutcome, VmError> {
+    let array = arrays[kernel.array as usize];
+    if let (
+        Some(exact_layout),
+        QuickLongArray::Hash { array },
+        QuickArrayIndex::Long(index),
+    ) = (exact_int_layout, array, kernel.index)
+    {
+        return dispatch_quick_long_composed_array_body_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            kernel,
+            body,
+            prefix,
+            move |slots| exact_layout.long_at(array, quick_long_operand(slots, index)),
+        );
+    }
+
+    if let (
+        Some(position_hint),
+        QuickLongArray::Hash { array },
+        QuickArrayIndex::Long(index),
+    ) = (
+        int_position_hints[kernel.array as usize],
+        array,
+        kernel.index,
+    ) {
+        return dispatch_quick_long_composed_array_body_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            kernel,
+            body,
+            prefix,
+            move |slots| {
+                (*array)
+                    .get_positioned_int(
+                        quick_long_operand(slots, index),
+                        position_hint.first_key,
+                        position_hint.stride,
+                    )
+                    .and_then(|value| {
+                        (value.value_type() == ValueType::Long).then(|| value.raw_long())
+                    })
+            },
+        );
+    }
+
+    if indexed_int_array_mask & (1u64 << kernel.array) != 0 {
+        if let (QuickLongArray::Hash { array }, QuickArrayIndex::Long(index)) =
+            (array, kernel.index)
+        {
+            let mut next_ordered_position = None;
+            let mut ordered_misses = 0u8;
+            let mut order_prediction_enabled = true;
+            return dispatch_quick_long_composed_array_body_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                kernel,
+                body,
+                prefix,
+                move |slots| {
+                    let key = quick_long_operand(slots, index);
+                    if order_prediction_enabled
+                        && let Some(position) = next_ordered_position
+                    {
+                        if let Some(value) = (*array).get_ordered_int_at(position, key) {
+                            next_ordered_position = position.checked_add(1);
+                            ordered_misses = 0;
+                            return (value.value_type() == ValueType::Long)
+                                .then(|| value.raw_long());
+                        }
+                        ordered_misses += 1;
+                        if ordered_misses == 2 {
+                            order_prediction_enabled = false;
+                            next_ordered_position = None;
+                        }
+                    }
+
+                    let (position, value) = (*array).get_indexed_int_with_position(key)?;
+                    if order_prediction_enabled {
+                        next_ordered_position = position.checked_add(1);
+                    }
+                    (value.value_type() == ValueType::Long).then(|| value.raw_long())
+                },
+            );
+        }
+    }
+
+    dispatch_quick_long_composed_array_body_kernel(
+        eg,
+        frame,
+        op_array,
+        plan,
+        slot_base,
+        slots,
+        kernel,
+        body,
+        prefix,
+        move |slots| array.long_at(kernel.index, slots, op_array),
+    )
 }
 
 #[inline(never)]

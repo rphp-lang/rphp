@@ -205,6 +205,23 @@ struct QuickLongConditionalAddAssignKernel {
     add_resume_ip: usize,
 }
 
+#[cfg(feature = "quick-loops")]
+const QUICK_LONG_ARRAY_PREFIX_LIMIT: usize = 8;
+
+/// One straight scalar operation evaluated before an indexed array fetch.
+/// Keeping this target-neutral lets the dense no-JIT kernel and both JIT
+/// feature builds share the same guarded key-expression semantics.
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickLongArrayPrefixOp {
+    kind: ScalarLongOpKind,
+    lhs: QuickLongOperand,
+    rhs: QuickLongOperand,
+    result: u16,
+    destination: Option<u16>,
+    resume_ip: usize,
+}
+
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
 enum QuickLongArrayBodyKernel {

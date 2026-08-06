@@ -2408,6 +2408,59 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_composed_bitwise_integer_key_keeps_exact_result() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1000;
+$values = [];
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $values[$key] = $i;
+}
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $sum += $values[$key];
+}
+echo $sum;
+echo '|';
+echo $key;
+echo '|';
+echo $i;
+"
+        ),
+        "499500|753618331|1000"
+    );
+}
+
+#[test]
+fn quick_hash_composed_key_permutation_falls_back_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 1024;
+$values = [];
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $values[$key] = $i;
+}
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $position = ($i * 271) & 1023;
+    $key = (($position * 1103515245) & 2147483647) + 1000000;
+    $sum += $values[$key];
+}
+echo $sum;
+echo '|';
+echo $i;
+"
+        ),
+        "523776|1024"
+    );
+}
+
+#[test]
 fn quick_hash_general_program_deoptimizes_non_long_fetch_exactly() {
     assert_eq!(
         run_php(

@@ -1299,6 +1299,8 @@ fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i6
         ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
         ScalarLongOpKind::IntDivide => lhs.checked_div(rhs),
         ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),
+        ScalarLongOpKind::BitwiseAnd => Some(lhs & rhs),
+        ScalarLongOpKind::BitwiseOr => Some(lhs | rhs),
         ScalarLongOpKind::BitwiseXor => Some(lhs ^ rhs),
     }
 }

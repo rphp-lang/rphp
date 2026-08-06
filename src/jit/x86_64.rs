@@ -187,6 +187,13 @@ impl X86_64Assembler {
         self.emit_register_modrm(destination, source);
     }
 
+    /// Encode `OR destination, source` using the register-direct r64/rm64 form.
+    pub fn or_register(&mut self, destination: X86_64Register, source: X86_64Register) {
+        self.emit_rex_w(destination, source);
+        self.bytes.push(0x0b);
+        self.emit_register_modrm(destination, source);
+    }
+
     /// Encode `XOR destination, source` using the register-direct r64/rm64 form.
     pub fn xor_register(&mut self, destination: X86_64Register, source: X86_64Register) {
         self.emit_rex_w(destination, source);
@@ -1450,6 +1457,8 @@ fn x86_direct_resident_result_register(
                 ScalarLongOpKind::Add
                 | ScalarLongOpKind::Subtract
                 | ScalarLongOpKind::Multiply
+                | ScalarLongOpKind::BitwiseAnd
+                | ScalarLongOpKind::BitwiseOr
                 | ScalarLongOpKind::BitwiseXor,
             ..
         }
@@ -1458,6 +1467,8 @@ fn x86_direct_resident_result_register(
                 ScalarLongOpKind::Add
                 | ScalarLongOpKind::Subtract
                 | ScalarLongOpKind::Multiply
+                | ScalarLongOpKind::BitwiseAnd
+                | ScalarLongOpKind::BitwiseOr
                 | ScalarLongOpKind::BitwiseXor,
             ..
         } => true,
@@ -2241,6 +2252,12 @@ fn emit_scalar_straight_loop(
                 } else {
                     assembler.multiply_register(result_register, right_register.unwrap());
                 }
+            }
+            ScalarLongOpKind::BitwiseAnd => {
+                assembler.and_register(result_register, right_register.unwrap());
+            }
+            ScalarLongOpKind::BitwiseOr => {
+                assembler.or_register(result_register, right_register.unwrap());
             }
             ScalarLongOpKind::BitwiseXor => match embedded_immediate {
                 Some(immediate) => {
@@ -3619,6 +3636,12 @@ fn emit_x86_scalar_operation(
                 assembler.multiply_register(lhs, rhs);
             }
             side_exit_jumps.push(assembler.jump_overflow_rel32());
+        }
+        ScalarLongOpKind::BitwiseAnd => {
+            assembler.and_register(lhs, rhs);
+        }
+        ScalarLongOpKind::BitwiseOr => {
+            assembler.or_register(lhs, rhs);
         }
         ScalarLongOpKind::BitwiseXor => {
             if let Some(immediate) = embedded_immediate {
@@ -5625,7 +5648,7 @@ mod tests {
     }
 
     #[test]
-    fn scalar_lowering_executes_divide_modulo_and_xor() {
+    fn scalar_lowering_executes_divide_modulo_and_bitwise_ops() {
         let mut config = composed_add_recurrence(5);
         config.operations[0] = NativeStraightLongOperation::Binary {
             kind: ScalarLongOpKind::Modulo,
@@ -5640,19 +5663,31 @@ mod tests {
             result: 5,
         };
         config.operations[2] = NativeStraightLongOperation::Binary {
-            kind: ScalarLongOpKind::BitwiseXor,
+            kind: ScalarLongOpKind::BitwiseAnd,
             lhs: QuickLongOperand::Slot(4),
             rhs: QuickLongOperand::Slot(5),
             result: 6,
         };
-        config.operation_count = 3;
+        config.operations[3] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::BitwiseOr,
+            lhs: QuickLongOperand::Slot(4),
+            rhs: QuickLongOperand::Slot(5),
+            result: 7,
+        };
+        config.operations[4] = NativeStraightLongOperation::Binary {
+            kind: ScalarLongOpKind::BitwiseXor,
+            lhs: QuickLongOperand::Slot(4),
+            rhs: QuickLongOperand::Slot(5),
+            result: 8,
+        };
+        config.operation_count = 5;
         config.post_result = None;
         let program = CompiledX86StraightLongLoop::compile(config).unwrap();
         let mut slots = [0_i64; 64];
         let result = program.call(&mut slots).unwrap();
         assert_eq!(result.outcome, NativeStraightLongLoopOutcome::Completed);
         assert_eq!(slots[0], 5);
-        assert_eq!(&slots[4..7], &[1, 2, 3]);
+        assert_eq!(&slots[4..9], &[1, 2, 0, 3, 3]);
     }
 
     #[test]

@@ -4530,7 +4530,14 @@ fn detect_long_ops_region_inner(
                     }
                 }
             }
-            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp | OpCode::Mul => {
+            OpCode::Sub
+            | OpCode::Sub_CvConst
+            | OpCode::Sub_TmpTmp
+            | OpCode::Mul
+            | OpCode::BitwiseAnd
+            | OpCode::BitwiseOr
+            | OpCode::BitwiseXor
+            | OpCode::BitwiseXor_LongLong => {
                 if instruction.result_type != OpType::Tmp {
                     return None;
                 }
@@ -4550,10 +4557,14 @@ fn detect_long_ops_region_inner(
                     }
                 }
                 add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
-                let kind = if instruction.opcode == OpCode::Mul {
-                    ScalarLongOpKind::Multiply
-                } else {
-                    ScalarLongOpKind::Subtract
+                let kind = match instruction.opcode {
+                    OpCode::Mul => ScalarLongOpKind::Multiply,
+                    OpCode::BitwiseAnd => ScalarLongOpKind::BitwiseAnd,
+                    OpCode::BitwiseOr => ScalarLongOpKind::BitwiseOr,
+                    OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
+                        ScalarLongOpKind::BitwiseXor
+                    }
+                    _ => ScalarLongOpKind::Subtract,
                 };
                 let resume_ip = ip;
                 let destination = op_array
@@ -6976,6 +6987,38 @@ for ($i = 0; $i < 3; $i++) {
                 QuickLongOp::PostIncLoopLt { .. },
             ]
         ));
+    }
+
+    #[test]
+    fn detects_composed_bitwise_integer_hash_key_as_typed_ops() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [1000000 => 3, 1104515245 => 5];
+$sum = 0;
+for ($i = 0; $i < 2; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $sum += $values[$key];
+}
+",
+        );
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::Binary {
+                kind: ScalarLongOpKind::BitwiseAnd,
+                ..
+            }
+        )), "{:#?}", plan.ops);
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::FetchArrayLong {
+                index: QuickArrayIndex::Long(QuickLongOperand::Slot(_)),
+                ..
+            }
+        )), "{:#?}", plan.ops);
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::AddAssign { .. }
+        )), "{:#?}", plan.ops);
     }
 
     #[test]

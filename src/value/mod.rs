@@ -988,9 +988,10 @@ pub struct PhpArray {
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
 /// `std::HashMap` otherwise uses the DOS-resistant general-purpose string
-/// hasher for every integer lookup. SplitMix64's finalizer is a bijection over
-/// `u64`, so distinct integer keys retain full-width entropy without paying
-/// that general hashing cost. String keys keep the randomized default hasher.
+/// hasher for every integer lookup. Odd multiplicative mixing is bijective over
+/// `u64`; the folded high half diffuses high-bit differences into bucket-index
+/// bits without paying for a byte-oriented hash. String keys keep the
+/// randomized default hasher.
 #[derive(Default)]
 struct IntKeyHasher {
     hash: u64,
@@ -998,10 +999,9 @@ struct IntKeyHasher {
 
 impl IntKeyHasher {
     #[inline(always)]
-    fn mix(mut value: u64) -> u64 {
-        value = (value ^ (value >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        value = (value ^ (value >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        value ^ (value >> 31)
+    fn mix(value: u64) -> u64 {
+        let mixed = value.wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        mixed ^ (mixed >> 32)
     }
 }
 
@@ -2286,6 +2286,40 @@ impl PhpArray {
         }
     }
 
+    /// Indexed lookup that also exposes the canonical insertion-order
+    /// position. Guarded read-only regions use the position as a speculative
+    /// cursor for a following dynamic key; the key is always revalidated.
+    #[cfg(feature = "quick-loops")]
+    #[inline]
+    pub(crate) fn get_indexed_int_with_position(&self, key: i64) -> Option<(usize, &Value)> {
+        match &self.storage {
+            ArrayStorage::SmallHash(small) => {
+                let position = small.find_int(key)?;
+                Some((position, &small.get(position)?.1))
+            }
+            ArrayStorage::LinearHash(linear) => {
+                let position = linear.find_int(key)?;
+                Some((position, &linear.entries.get(position)?.1))
+            }
+            ArrayStorage::Hash { entries, int_index, .. } => {
+                let position = *int_index.get(&key)?;
+                Some((position, &entries[position].1))
+            }
+            ArrayStorage::Packed(_) => None,
+        }
+    }
+
+    /// Validate one predicted insertion-order position without probing the
+    /// secondary integer index.
+    #[cfg(feature = "quick-loops")]
+    #[inline(always)]
+    pub(crate) fn get_ordered_int_at(&self, position: usize, key: i64) -> Option<&Value> {
+        match self.hash_entry_at(position) {
+            Some((ArrayEntryKey::Int(found), value)) if *found == key => Some(value),
+            _ => None,
+        }
+    }
+
     /// Get by string key — O(1), zero allocation.
     /// Uses `HashMap<String, usize>::get(&str)` via `Borrow<str>` trait.
     #[inline]
@@ -3176,6 +3210,42 @@ mod php_array_tests {
             Some(6)
         );
         assert!(irregular.get_positioned_int(101, 100, 7).is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "quick-loops")]
+    fn indexed_lookup_position_revalidates_ordered_cursor_after_mutation() {
+        let keys = [11, 30, 31, 70, -4, 900, 2, 88, 1234, -90];
+        let mut array = PhpArray::new();
+        for (position, key) in keys.into_iter().enumerate() {
+            array.set_int(key, Value::long(position as i64));
+        }
+
+        for (position, key) in keys.into_iter().enumerate() {
+            let (indexed_position, value) = array
+                .get_indexed_int_with_position(key)
+                .expect("indexed key should exist");
+            assert_eq!(indexed_position, position);
+            assert_eq!(value.as_long(), Some(position as i64));
+            assert_eq!(
+                array
+                    .get_ordered_int_at(position, key)
+                    .and_then(Value::as_long),
+                Some(position as i64)
+            );
+            assert!(array.get_ordered_int_at(position, key + 1).is_none());
+        }
+
+        assert!(array.remove(&ArrayKey::Int(70)));
+        let (position, value) = array
+            .get_indexed_int_with_position(-4)
+            .expect("shifted key should retain its rebuilt position");
+        assert_eq!(position, 3);
+        assert_eq!(value.as_long(), Some(4));
+        assert_eq!(
+            array.get_ordered_int_at(position, -4).and_then(Value::as_long),
+            Some(4)
+        );
     }
 
     #[test]
