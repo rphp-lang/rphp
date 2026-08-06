@@ -120,6 +120,152 @@ where
     Ok(QuickLoopOutcome::Completed)
 }
 
+#[cfg(feature = "quick-loops")]
+// Keep deoptimization, interrupt and slot-publication semantics in one source
+// body while allowing both the general and fixed-prefix kernels to inline their
+// own hot operations under different function-placement attributes.
+macro_rules! run_quick_long_composed_array_loop {
+    (
+        $eg:ident,
+        $frame:ident,
+        $op_array:ident,
+        $plan:ident,
+        $slot_base:ident,
+        $slots:ident,
+        $kernel:ident,
+        prefix = |$prefix_slots:ident, $prefix_dirty_long_mask:ident| $prefix:expr,
+        fetch = |$fetch_slots:ident| $fetch:expr,
+        body = |$body_slots:ident, $body_dirty_long_mask:ident, $body_dirty_bool_mask:ident| $body:expr $(,)?
+    ) => {{
+        let mut dirty_long_mask = 0u64;
+        let mut dirty_bool_mask = 0u64;
+        let mut iterations = 0u64;
+
+        let mut continue_loop = $slots[$kernel.header_lhs as usize]
+            < quick_long_operand(&$slots, $kernel.header_rhs);
+        if let Some(slot) = $kernel.header_condition_tmp {
+            $slots[slot as usize] = i64::from(continue_loop);
+            dirty_bool_mask |= 1u64 << slot;
+        }
+
+        while continue_loop {
+            let prefix_result = {
+                let $prefix_slots = &mut $slots;
+                let $prefix_dirty_long_mask = &mut dirty_long_mask;
+                $prefix
+            };
+            if let Err(resume_ip) = prefix_result {
+                return Ok(deopt_quick_long_kernel(
+                    $frame,
+                    $op_array,
+                    $slot_base,
+                    &$slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                    resume_ip,
+                    iterations,
+                ));
+            }
+            let fetched = {
+                let $fetch_slots = &$slots;
+                $fetch
+            };
+            let Some(fetched) = fetched else {
+                return Ok(deopt_quick_long_kernel(
+                    $frame,
+                    $op_array,
+                    $slot_base,
+                    &$slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                    $kernel.fetch_resume_ip,
+                    iterations,
+                ));
+            };
+            $slots[$kernel.fetch_result as usize] = fetched;
+            dirty_long_mask |= 1u64 << $kernel.fetch_result;
+            if let Some(destination) = $kernel.fetch_destination {
+                $slots[destination as usize] = fetched;
+                dirty_long_mask |= 1u64 << destination;
+            }
+
+            let body_result = {
+                let $body_slots = &mut $slots;
+                let $body_dirty_long_mask = &mut dirty_long_mask;
+                let $body_dirty_bool_mask = &mut dirty_bool_mask;
+                $body
+            };
+            if let Err(resume_ip) = body_result {
+                return Ok(deopt_quick_long_kernel(
+                    $frame,
+                    $op_array,
+                    $slot_base,
+                    &$slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                    resume_ip,
+                    iterations,
+                ));
+            }
+
+            let Some(incremented) = $slots[$kernel.post_value as usize].checked_add(1) else {
+                return Ok(deopt_quick_long_kernel(
+                    $frame,
+                    $op_array,
+                    $slot_base,
+                    &$slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                    $kernel.post_resume_ip,
+                    iterations,
+                ));
+            };
+            if let Some(result) = $kernel.post_result {
+                $slots[result as usize] = $slots[$kernel.post_value as usize];
+                dirty_long_mask |= 1u64 << result;
+            }
+            $slots[$kernel.post_value as usize] = incremented;
+            dirty_long_mask |= 1u64 << $kernel.post_value;
+
+            continue_loop = $slots[$kernel.header_lhs as usize]
+                < quick_long_operand(&$slots, $kernel.header_rhs);
+            if let Some(slot) = $kernel.header_condition_tmp {
+                $slots[slot as usize] = i64::from(continue_loop);
+                dirty_bool_mask |= 1u64 << slot;
+            }
+            iterations += 1;
+
+            if iterations & 31 == 0 && $eg.vm_interrupt.load(Ordering::Relaxed) {
+                commit_quick_long_ops_slots(
+                    $slot_base,
+                    &$slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                let next_target = if continue_loop {
+                    $kernel.body_target
+                } else {
+                    $kernel.exit_target
+                };
+                let next_ip = $plan.target_ip(next_target).unwrap_unchecked();
+                (*$frame).opline = $op_array.instructions.as_ptr().add(next_ip);
+                handle_interrupt($eg)?;
+            }
+        }
+
+        commit_quick_long_ops_slots(
+            $slot_base,
+            &$slots,
+            dirty_long_mask,
+            dirty_bool_mask,
+        );
+        let next_ip = $kernel.exit_target.exit_ip().unwrap_unchecked();
+        (*$frame).opline = $op_array.instructions.as_ptr().add(next_ip);
+        stats::inc_quick_loop_completed(iterations);
+        Ok(QuickLoopOutcome::Completed)
+    }};
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_composed_array_loop_kernel<Fetch, Body>(
@@ -138,121 +284,26 @@ where
     Fetch: FnMut(&[i64; 64]) -> Option<i64>,
     Body: FnMut(&mut [i64; 64], &mut u64, &mut u64) -> Result<(), usize>,
 {
-    let mut dirty_long_mask = 0u64;
-    let mut dirty_bool_mask = 0u64;
-    let mut iterations = 0u64;
-
-    let mut continue_loop =
-        slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
-    if let Some(slot) = kernel.header_condition_tmp {
-        slots[slot as usize] = i64::from(continue_loop);
-        dirty_bool_mask |= 1u64 << slot;
-    }
-
-    while continue_loop {
-        if let Err(resume_ip) =
-            execute_quick_long_array_prefix(&mut slots, &mut dirty_long_mask, prefix)
-        {
-            return Ok(deopt_quick_long_kernel(
-                frame,
-                op_array,
-                slot_base,
-                &slots,
-                dirty_long_mask,
-                dirty_bool_mask,
-                resume_ip,
-                iterations,
-            ));
-        }
-        let Some(fetched) = fetch(&slots) else {
-            return Ok(deopt_quick_long_kernel(
-                frame,
-                op_array,
-                slot_base,
-                &slots,
-                dirty_long_mask,
-                dirty_bool_mask,
-                kernel.fetch_resume_ip,
-                iterations,
-            ));
-        };
-        slots[kernel.fetch_result as usize] = fetched;
-        dirty_long_mask |= 1u64 << kernel.fetch_result;
-        if let Some(destination) = kernel.fetch_destination {
-            slots[destination as usize] = fetched;
-            dirty_long_mask |= 1u64 << destination;
-        }
-
-        if let Err(resume_ip) =
-            execute_body(&mut slots, &mut dirty_long_mask, &mut dirty_bool_mask)
-        {
-            return Ok(deopt_quick_long_kernel(
-                frame,
-                op_array,
-                slot_base,
-                &slots,
-                dirty_long_mask,
-                dirty_bool_mask,
-                resume_ip,
-                iterations,
-            ));
-        }
-
-        let Some(incremented) = slots[kernel.post_value as usize].checked_add(1) else {
-            return Ok(deopt_quick_long_kernel(
-                frame,
-                op_array,
-                slot_base,
-                &slots,
-                dirty_long_mask,
-                dirty_bool_mask,
-                kernel.post_resume_ip,
-                iterations,
-            ));
-        };
-        if let Some(result) = kernel.post_result {
-            slots[result as usize] = slots[kernel.post_value as usize];
-            dirty_long_mask |= 1u64 << result;
-        }
-        slots[kernel.post_value as usize] = incremented;
-        dirty_long_mask |= 1u64 << kernel.post_value;
-
-        continue_loop =
-            slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
-        if let Some(slot) = kernel.header_condition_tmp {
-            slots[slot as usize] = i64::from(continue_loop);
-            dirty_bool_mask |= 1u64 << slot;
-        }
-        iterations += 1;
-
-        if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
-            commit_quick_long_ops_slots(
-                slot_base,
-                &slots,
-                dirty_long_mask,
-                dirty_bool_mask,
-            );
-            let next_target = if continue_loop {
-                kernel.body_target
-            } else {
-                kernel.exit_target
-            };
-            let next_ip = plan.target_ip(next_target).unwrap_unchecked();
-            (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
-            handle_interrupt(eg)?;
-        }
-    }
-
-    commit_quick_long_ops_slots(
+    run_quick_long_composed_array_loop!(
+        eg,
+        frame,
+        op_array,
+        plan,
         slot_base,
-        &slots,
-        dirty_long_mask,
-        dirty_bool_mask,
-    );
-    let next_ip = kernel.exit_target.exit_ip().unwrap_unchecked();
-    (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
-    stats::inc_quick_loop_completed(iterations);
-    Ok(QuickLoopOutcome::Completed)
+        slots,
+        kernel,
+        prefix = |prefix_slots, prefix_dirty_long_mask| execute_quick_long_array_prefix(
+            prefix_slots,
+            prefix_dirty_long_mask,
+            prefix,
+        ),
+        fetch = |fetch_slots| fetch(fetch_slots),
+        body = |body_slots, body_dirty_long_mask, body_dirty_bool_mask| execute_body(
+            body_slots,
+            body_dirty_long_mask,
+            body_dirty_bool_mask,
+        ),
+    )
 }
 
 #[inline(always)]
@@ -273,24 +324,54 @@ fn execute_quick_long_add_assign(
 
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
+fn execute_quick_long_array_prefix_operation(
+    slots: &mut [i64; 64],
+    dirty_long_mask: &mut u64,
+    operation: QuickLongArrayPrefixOp,
+) -> Result<(), usize> {
+    let value = apply_scalar_long_op(
+        operation.kind,
+        quick_long_operand(slots, operation.lhs),
+        quick_long_operand(slots, operation.rhs),
+    )
+    .ok_or(operation.resume_ip)?;
+    slots[operation.result as usize] = value;
+    *dirty_long_mask |= 1u64 << operation.result;
+    if let Some(destination) = operation.destination {
+        slots[destination as usize] = value;
+        *dirty_long_mask |= 1u64 << destination;
+    }
+    Ok(())
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
 fn execute_quick_long_array_prefix(
     slots: &mut [i64; 64],
     dirty_long_mask: &mut u64,
     prefix: &[QuickLongArrayPrefixOp],
 ) -> Result<(), usize> {
     for operation in prefix {
-        let value = apply_scalar_long_op(
-            operation.kind,
-            quick_long_operand(slots, operation.lhs),
-            quick_long_operand(slots, operation.rhs),
-        )
-        .ok_or(operation.resume_ip)?;
-        slots[operation.result as usize] = value;
-        *dirty_long_mask |= 1u64 << operation.result;
-        if let Some(destination) = operation.destination {
-            slots[destination as usize] = value;
-            *dirty_long_mask |= 1u64 << destination;
-        }
+        execute_quick_long_array_prefix_operation(slots, dirty_long_mask, *operation)?;
+    }
+    Ok(())
+}
+
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+fn execute_fixed_quick_long_array_prefix<const PREFIX_LEN: usize>(
+    slots: &mut [i64; 64],
+    dirty_long_mask: &mut u64,
+    prefix: &[QuickLongArrayPrefixOp; PREFIX_LEN],
+) -> Result<(), usize> {
+    let mut index = 0usize;
+    while index < PREFIX_LEN {
+        execute_quick_long_array_prefix_operation(
+            slots,
+            dirty_long_mask,
+            *prefix.get(index).unwrap(),
+        )?;
+        index += 1;
     }
     Ok(())
 }
@@ -339,6 +420,75 @@ fn execute_quick_long_conditional_add_assign(
         *dirty_long_mask |= (1u64 << kernel.result) | (1u64 << kernel.destination);
     }
     Ok(())
+}
+
+#[cold]
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn run_quick_long_composed_indexed_array_one_add_kernel<const PREFIX_LEN: usize>(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    mut slots: [i64; 64],
+    array: *const PhpArray,
+    index: QuickLongOperand,
+    kernel: QuickLongArrayLoopKernel,
+    add: QuickLongAddAssignKernel,
+    prefix: &[QuickLongArrayPrefixOp; PREFIX_LEN],
+) -> Result<QuickLoopOutcome, VmError> {
+    let mut next_ordered_position = None;
+    let mut ordered_misses = 0u8;
+    let mut order_prediction_enabled = true;
+    run_quick_long_composed_array_loop!(
+        eg,
+        frame,
+        op_array,
+        plan,
+        slot_base,
+        slots,
+        kernel,
+        prefix = |prefix_slots, prefix_dirty_long_mask| execute_fixed_quick_long_array_prefix(
+            prefix_slots,
+            prefix_dirty_long_mask,
+            prefix,
+        ),
+        fetch = |fetch_slots| {
+            let key = quick_long_operand(fetch_slots, index);
+            let mut predicted_match = false;
+            let mut fetched = None;
+            if order_prediction_enabled
+                && let Some(position) = next_ordered_position
+            {
+                if let Some(value) = (*array).get_ordered_int_at(position, key) {
+                    predicted_match = true;
+                    next_ordered_position = position.checked_add(1);
+                    ordered_misses = 0;
+                    fetched =
+                        (value.value_type() == ValueType::Long).then(|| value.raw_long());
+                } else {
+                    ordered_misses += 1;
+                    if ordered_misses == 2 {
+                        order_prediction_enabled = false;
+                        next_ordered_position = None;
+                    }
+                }
+            }
+            if !predicted_match {
+                if let Some((position, value)) = (*array).get_indexed_long_with_position(key) {
+                    if order_prediction_enabled {
+                        next_ordered_position = position.checked_add(1);
+                    }
+                    fetched = Some(value);
+                }
+            }
+            fetched
+        },
+        body = |body_slots, body_dirty_long_mask, _body_dirty_bool_mask| {
+            execute_quick_long_add_assign(body_slots, body_dirty_long_mask, add)
+        },
+    )
 }
 
 #[inline(never)]
@@ -1041,6 +1191,23 @@ unsafe fn dispatch_quick_long_composed_array_loop_kernel(
         if let (QuickLongArray::Hash { array }, QuickArrayIndex::Long(index)) =
             (array, kernel.index)
         {
+            if let QuickLongArrayBodyKernel::OneAdd { add } = body {
+                if let Ok(fixed_prefix) = <&[QuickLongArrayPrefixOp; 3]>::try_from(prefix) {
+                    return run_quick_long_composed_indexed_array_one_add_kernel::<3>(
+                        eg,
+                        frame,
+                        op_array,
+                        plan,
+                        slot_base,
+                        slots,
+                        array,
+                        index,
+                        kernel,
+                        add,
+                        fixed_prefix,
+                    );
+                }
+            }
             let mut next_ordered_position = None;
             let mut ordered_misses = 0u8;
             let mut order_prediction_enabled = true;

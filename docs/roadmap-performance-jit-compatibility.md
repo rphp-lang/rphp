@@ -5261,6 +5261,84 @@ x86-64 library tests, 113 quick-loop tests, 100 ARM64 plus 32 x86-64 JIT
 prototype tests, and every end-to-end suite. Ten explicit performance tests
 remain ignored by design.
 
+### Fixed three-operation composed-prefix dispatch checkpoint
+
+The next composed-read follow-up is implemented (2026-08-06). A read-dominant
+profile of the compact-index source assigned 62.81% of self samples to the
+general composed array loop, 13.61% to `execute_ex`, and 8.41% to the indexed
+fetch closure. Disassembly exposed a remaining front-end cost: one indirect
+jump-table site evaluated every scalar-prefix operation, so the branch target
+alternated among multiply, bitwise AND and checked addition on every loop
+iteration even though the prefix shape was already immutable.
+
+The indexed Hash/Long one-add kernel now has one deliberately narrow fast
+case. An exactly three-operation scalar prefix is converted to a fixed array,
+and the target-neutral evaluator gives every prefix position its own stable
+inlined operation site. Other prefix lengths and body shapes continue through
+the bounded general evaluator. The adaptive ordered cursor, canonical indexed
+fallback, exact-Long guards, checked-overflow exits, resume IPs, interrupt
+handling and transactional slot publication are unchanged.
+
+The common loop mechanics are not duplicated. A single macro body owns
+deoptimization, loop control, interrupt polling and publication, while the
+general and fixed-prefix functions supply only their prefix, fetch and body
+operations. This preserves direct inlining under their different placement
+attributes without adding a runtime callback layer. Specializing prefix
+lengths one through eight was rejected after it added about 33 KiB of ARM64
+text; only the measured three-operation shape remains.
+
+Thirty-one order-rotated ARM64 pairs against the compact-index checkpoint,
+with 101 pairs for the two longer controls, produced:
+
+| ARM64 workload | Previous no JIT | Fixed-prefix no JIT | Paired delta | Previous JIT build | Fixed-prefix JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular insertion-order read | 8.872 ms | 7.330 ms | -18.21% | 8.689 ms | 7.225 ms | -17.48% |
+| Irregular permuted-order read | 36.058 ms | 35.626 ms | -0.64% | 35.658 ms | 35.864 ms | +0.08% |
+| Wide-Long fallback read | 77.372 ms | 77.571 ms | +0.13% | 77.791 ms | 77.422 ms | -0.51% |
+| Irregular integer build | 51.556 ms | 49.651 ms | -3.54% | 51.711 ms | 49.945 ms | -3.20% |
+| High-bit irregular build | 26.605 ms | 25.743 ms | -3.46% | 26.617 ms | 25.642 ms | -3.68% |
+| Regular sparse build | 24.034 ms | 24.003 ms | -0.00% | 23.817 ms | 24.013 ms | +0.27% |
+| Materialized contiguous read | 2.562 ms | 2.513 ms | -1.92% | 2.531 ms | 2.511 ms | -1.82% |
+| String-key materialized control | 18.771 ms | 18.821 ms | +0.27% | 19.648 ms | 19.795 ms | +0.74% |
+
+The same source in thirty-one CPU-pinned x86-64 pairs, with 101 pairs for the
+high-bit and materialized controls, produced:
+
+| x86-64 workload | Previous no JIT | Fixed-prefix no JIT | Paired delta | Previous JIT build | Fixed-prefix JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular insertion-order read | 8.943 ms | 7.332 ms | -18.17% | 9.395 ms | 7.018 ms | -25.15% |
+| Irregular permuted-order read | 39.533 ms | 39.398 ms | -1.04% | 40.499 ms | 40.250 ms | -1.44% |
+| Wide-Long fallback read | 61.212 ms | 60.389 ms | -1.20% | 61.772 ms | 60.988 ms | -0.42% |
+| Irregular integer build | 106.652 ms | 106.342 ms | -0.27% | 107.170 ms | 106.913 ms | -0.27% |
+| High-bit irregular build | 53.738 ms | 54.654 ms | +1.79% | 53.926 ms | 53.593 ms | -0.41% |
+| Regular sparse build | 40.403 ms | 40.302 ms | -0.66% | 39.739 ms | 39.921 ms | +0.20% |
+| Materialized contiguous read | 2.903 ms | 2.915 ms | +0.16% | 2.894 ms | 2.904 ms | +0.34% |
+| String-key materialized control | 13.693 ms | 11.889 ms | -13.09% | 14.120 ms | 13.237 ms | -5.80% |
+
+The x86 no-JIT high-bit movement is transparently retained as global fat-LTO
+layout sensitivity. The change moves `execute_ex` from a 64-byte boundary to
+offset 48. Twenty-run `perf stat` measurements record fewer instructions
+(594.716M to 594.462M), branches (108.818M to 108.768M) and branch misses
+(1.802M to 1.797M), while cycles move from 265.13M to 273.14M. The benchmark
+cannot execute the composed-read kernel. Conversely, the eight-pass permuted
+read-dominant holdout records 2.07B versus 2.10B no-JIT cycles and 785.4M versus
+802.2M branches despite timer noise. Its exact `4398042316800` result matches
+in all four modes on both architectures.
+
+The ARM64 `__text` section moves from 1,780,708 to 1,765,296 bytes without JIT
+and from 1,954,340 to 1,939,748 bytes in the JIT-feature build because the
+shared source body lets LLVM coalesce more generic loop code. x86-64 moves from
+2,127,818 to 2,132,970 bytes and from 2,340,314 to 2,345,706 bytes respectively.
+The next read-side boundary remains native guarded lookup integration for
+unordered keys; fixed-prefix specialization must not expand without a new
+profiled common shape and an explicit code-size budget.
+
+The final source passes formatting enforcement, no-default all-target checks,
+207 ARM64 and 232 x86-64 library tests, 115 quick-loop tests, 100 ARM64 plus 32
+x86-64 JIT prototype tests, and every end-to-end suite. The two new exact-deopt
+tests also pass with quick loops disabled; ten explicit performance tests
+remain ignored by design.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

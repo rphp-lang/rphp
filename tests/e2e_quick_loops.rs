@@ -2435,6 +2435,58 @@ echo $i;
 }
 
 #[test]
+fn quick_hash_composed_bitwise_key_deoptimizes_non_long_fetch_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 100;
+$values = [];
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $values[$key] = $i;
+}
+$lastKey = ((99 * 1103515245) & 2147483647) + 1000000;
+$values[$lastKey] = 1.5;
+$sum = 0;
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $sum += $values[$key];
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|100"
+    );
+}
+
+#[test]
+fn quick_hash_composed_bitwise_key_deoptimizes_accumulator_overflow_exactly() {
+    assert_eq!(
+        run_php(
+            "<?php
+$n = 100;
+$values = [];
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $values[$key] = 1;
+}
+$sum = PHP_INT_MAX - 40;
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $sum += $values[$key];
+}
+echo is_float($sum) ? 'float' : 'int';
+echo '|';
+echo $i;
+"
+        ),
+        "float|100"
+    );
+}
+
+#[test]
 fn quick_hash_composed_key_permutation_falls_back_exactly() {
     assert_eq!(
         run_php(
