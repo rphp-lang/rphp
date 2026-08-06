@@ -1026,7 +1026,66 @@ impl Hasher for IntKeyHasher {
     }
 }
 
-type IntIndex = HashMap<i64, usize, BuildHasherDefault<IntKeyHasher>>;
+/// Canonical integer-index payload. Ordinary entries store only their ordered
+/// position. When both the position and a Long payload fit in 24/39 bits, the
+/// same machine word also carries the Long value used by typed read regions.
+/// This preserves the compact HashMap bucket while removing the dependent
+/// ordered-entry load for the common small-integer case.
+#[derive(Clone, Copy)]
+struct IntIndexValue(usize);
+
+impl IntIndexValue {
+    const CACHED_LONG_BIT: usize = 1usize << (usize::BITS - 1);
+    const POSITION_BITS: u32 = 24;
+    const LONG_BITS: u32 = usize::BITS - 1 - Self::POSITION_BITS;
+    const POSITION_SHIFT: u32 = Self::LONG_BITS;
+    const POSITION_MASK: usize = (1usize << Self::POSITION_BITS) - 1;
+    const LONG_MASK: usize = (1usize << Self::LONG_BITS) - 1;
+    const LONG_MIN: i64 = -(1i64 << (Self::LONG_BITS - 1));
+    const LONG_MAX: i64 = (1i64 << (Self::LONG_BITS - 1)) - 1;
+
+    #[inline(always)]
+    fn new(position: usize, value: &Value) -> Self {
+        let Some(long) = value.as_long() else {
+            return Self(position);
+        };
+        if !(Self::LONG_MIN..=Self::LONG_MAX).contains(&long) || position > Self::POSITION_MASK {
+            return Self(position);
+        }
+        Self(
+            Self::CACHED_LONG_BIT
+                | (position << Self::POSITION_SHIFT)
+                | (long as usize & Self::LONG_MASK),
+        )
+    }
+
+    #[inline(always)]
+    fn position(self) -> usize {
+        if self.0 & Self::CACHED_LONG_BIT != 0 {
+            (self.0 >> Self::POSITION_SHIFT) & Self::POSITION_MASK
+        } else {
+            self.0
+        }
+    }
+
+    #[inline(always)]
+    #[cfg(any(feature = "quick-loops", test))]
+    fn cached_long(self) -> Option<i64> {
+        (self.0 & Self::CACHED_LONG_BIT != 0).then(|| {
+            let value = (self.0 & Self::LONG_MASK) as i64;
+            let shift = i64::BITS - Self::LONG_BITS;
+            (value << shift) >> shift
+        })
+    }
+
+    #[inline(always)]
+    #[cfg(any(feature = "quick-loops", test))]
+    fn clear_cached_long(&mut self) {
+        self.0 = self.position();
+    }
+}
+
+type IntIndex = HashMap<i64, IntIndexValue, BuildHasherDefault<IntKeyHasher>>;
 
 #[inline]
 fn int_index_with_capacity(capacity: usize) -> IntIndex {
@@ -1205,9 +1264,9 @@ fn materialize_int_index(
         .filter(|entry| matches!(entry.0, ArrayEntryKey::Int(_)))
         .count();
     int_index.reserve(integer_keys.saturating_add(additional_capacity));
-    for (position, (key, _)) in entries.iter().enumerate() {
+    for (position, (key, value)) in entries.iter().enumerate() {
         if let ArrayEntryKey::Int(key) = key {
-            int_index.insert(*key, position);
+            int_index.insert(*key, IntIndexValue::new(position, value));
         }
     }
 }
@@ -1220,7 +1279,7 @@ fn indexed_int_position(
     key: i64,
 ) -> Option<usize> {
     verified_int_position(entries, verified_int_prefix, key)
-        .or_else(|| int_index.get(&key).copied())
+        .or_else(|| int_index.get(&key).copied().map(IntIndexValue::position))
 }
 
 #[cfg(feature = "quick-loops")]
@@ -1459,13 +1518,15 @@ fn set_indexed_int(
         *verified_int_prefix = 0;
     }
     match int_index.entry(key) {
-        Entry::Occupied(entry) => {
-            entries[*entry.get()].1 = val;
+        Entry::Occupied(mut entry) => {
+            let position = entry.get().position();
+            entries[position].1 = val;
+            entry.insert(IntIndexValue::new(position, &entries[position].1));
         }
         Entry::Vacant(entry) => {
             let position = entries.len();
             entries.push((ArrayEntryKey::Int(key), val));
-            entry.insert(position);
+            entry.insert(IntIndexValue::new(position, &entries[position].1));
             if key >= *next_int_key {
                 *next_int_key = key + 1;
             }
@@ -2093,7 +2154,7 @@ impl PhpArray {
 
     /// Mutable lookup used only after the caller has established unique COW
     /// ownership. Replacing the returned entry cannot change array structure.
-    #[cfg(feature = "quick-loops")]
+    #[cfg(any(feature = "quick-loops", test))]
     #[inline(always)]
     pub(crate) fn get_int_mut(&mut self, key: i64) -> Option<&mut Value> {
         match &mut self.storage {
@@ -2118,6 +2179,9 @@ impl PhpArray {
                 ..
             } => {
                 let position = indexed_int_position(entries, int_index, *verified_int_prefix, key)?;
+                if let Some(indexed) = int_index.get_mut(&key) {
+                    indexed.clear_cached_long();
+                }
                 entries.get_mut(position).map(|entry| &mut entry.1)
             }
         }
@@ -2245,7 +2309,9 @@ impl PhpArray {
                 .map(|entry| &entry.1),
             ArrayStorage::Hash {
                 entries, int_index, ..
-            } => int_index.get(&key).map(|&position| &entries[position].1),
+            } => int_index
+                .get(&key)
+                .map(|value| &entries[value.position()].1),
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -2266,7 +2332,9 @@ impl PhpArray {
                 .map(|entry| &entry.1),
             ArrayStorage::Hash {
                 entries, int_index, ..
-            } => int_index.get(&key).map(|&position| &entries[position].1),
+            } => int_index
+                .get(&key)
+                .map(|value| &entries[value.position()].1),
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -2274,7 +2342,7 @@ impl PhpArray {
     /// Indexed lookup that also exposes the canonical insertion-order
     /// position. Guarded read-only regions use the position as a speculative
     /// cursor for a following dynamic key; the key is always revalidated.
-    #[cfg(feature = "quick-loops")]
+    #[cfg(test)]
     #[inline]
     pub(crate) fn get_indexed_int_with_position(&self, key: i64) -> Option<(usize, &Value)> {
         match &self.storage {
@@ -2289,7 +2357,7 @@ impl PhpArray {
             ArrayStorage::Hash {
                 entries, int_index, ..
             } => {
-                let position = *int_index.get(&key)?;
+                let position = int_index.get(&key)?.position();
                 Some((position, &entries[position].1))
             }
             ArrayStorage::Packed(_) => None,
@@ -2304,6 +2372,60 @@ impl PhpArray {
         match self.hash_entry_at(position) {
             Some((ArrayEntryKey::Int(found), value)) if *found == key => Some(value),
             _ => None,
+        }
+    }
+
+    /// Typed integer lookup that consumes a compact cached Long payload when
+    /// available and otherwise validates the canonical ordered entry.
+    #[cfg(any(feature = "quick-loops", test))]
+    #[inline(always)]
+    pub(crate) fn get_indexed_long(&self, key: i64) -> Option<i64> {
+        match &self.storage {
+            ArrayStorage::SmallHash(small) => {
+                let position = small.find_int(key)?;
+                small.get(position)?.1.as_long()
+            }
+            ArrayStorage::LinearHash(linear) => {
+                let position = linear.find_int(key)?;
+                linear.entries.get(position)?.1.as_long()
+            }
+            ArrayStorage::Hash {
+                entries, int_index, ..
+            } => {
+                let indexed = *int_index.get(&key)?;
+                indexed
+                    .cached_long()
+                    .or_else(|| entries.get(indexed.position())?.1.as_long())
+            }
+            ArrayStorage::Packed(_) => None,
+        }
+    }
+
+    /// Typed indexed lookup retaining the ordered position needed by the
+    /// adaptive insertion-order cursor.
+    #[cfg(any(feature = "quick-loops", test))]
+    #[inline(always)]
+    pub(crate) fn get_indexed_long_with_position(&self, key: i64) -> Option<(usize, i64)> {
+        match &self.storage {
+            ArrayStorage::SmallHash(small) => {
+                let position = small.find_int(key)?;
+                Some((position, small.get(position)?.1.as_long()?))
+            }
+            ArrayStorage::LinearHash(linear) => {
+                let position = linear.find_int(key)?;
+                Some((position, linear.entries.get(position)?.1.as_long()?))
+            }
+            ArrayStorage::Hash {
+                entries, int_index, ..
+            } => {
+                let indexed = *int_index.get(&key)?;
+                let position = indexed.position();
+                let value = indexed
+                    .cached_long()
+                    .or_else(|| entries.get(position)?.1.as_long())?;
+                Some((position, value))
+            }
+            ArrayStorage::Packed(_) => None,
         }
     }
 
@@ -2944,15 +3066,76 @@ impl std::fmt::Debug for PhpArray {
 mod php_array_tests {
     use std::rc::Rc;
 
-    use super::{ArrayEntryKey, ArrayKey, ArrayStorage, PhpArray, Value};
+    use super::{ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, PhpArray, Value};
 
     #[test]
     fn hash_entry_layout_stays_compact() {
         assert_eq!(std::mem::size_of::<ArrayEntryKey>(), 16);
+        assert_eq!(
+            std::mem::size_of::<IntIndexValue>(),
+            std::mem::size_of::<usize>()
+        );
         assert_eq!(std::mem::size_of::<(ArrayEntryKey, Value)>(), 32);
         assert_eq!(std::mem::size_of::<Option<(ArrayEntryKey, Value)>>(), 32);
         assert_eq!(std::mem::size_of::<ArrayStorage>(), 112);
         assert_eq!(std::mem::size_of::<PhpArray>(), 120);
+    }
+
+    #[test]
+    fn integer_index_compact_long_payload_stays_exact_across_mutation() {
+        let keys = [107, -4, 91, 33, 205, 17, 409, 73, 301];
+        let mut array = PhpArray::new();
+        for (position, key) in keys.into_iter().enumerate() {
+            array.set_int(key, Value::long(position as i64 - 4));
+        }
+
+        let ArrayStorage::Hash {
+            entries, int_index, ..
+        } = &array.storage
+        else {
+            panic!("irregular integer keys should materialize the canonical index");
+        };
+        for (position, key) in keys.into_iter().enumerate() {
+            let indexed = *int_index.get(&key).unwrap();
+            assert_eq!(indexed.position(), position);
+            assert_eq!(indexed.cached_long(), Some(position as i64 - 4));
+            assert_eq!(entries[position].1.as_long(), indexed.cached_long());
+        }
+
+        array.set_int(33, Value::long(i64::MAX));
+        let ArrayStorage::Hash { int_index, .. } = &array.storage else {
+            unreachable!();
+        };
+        let wide = *int_index.get(&33).unwrap();
+        assert_eq!(wide.position(), 3);
+        assert_eq!(wide.cached_long(), None);
+        assert_eq!(array.get_indexed_long(33), Some(i64::MAX));
+
+        array.set_int(33, Value::long(IntIndexValue::LONG_MIN));
+        let ArrayStorage::Hash { int_index, .. } = &array.storage else {
+            unreachable!();
+        };
+        assert_eq!(
+            int_index.get(&33).unwrap().cached_long(),
+            Some(IntIndexValue::LONG_MIN)
+        );
+
+        *array.get_int_mut(33).unwrap() = Value::long(987_654_321);
+        let ArrayStorage::Hash { int_index, .. } = &array.storage else {
+            unreachable!();
+        };
+        assert_eq!(int_index.get(&33).unwrap().cached_long(), None);
+        assert_eq!(array.get_indexed_long(33), Some(987_654_321));
+
+        let cloned = array.clone();
+        assert_eq!(cloned.get_indexed_long(33), Some(987_654_321));
+        assert!(array.remove(&ArrayKey::Int(-4)));
+        for key in keys.into_iter().filter(|key| *key != -4) {
+            assert_eq!(
+                array.get_int(key).and_then(Value::as_long),
+                cloned.get_int(key).and_then(Value::as_long)
+            );
+        }
     }
 
     #[test]

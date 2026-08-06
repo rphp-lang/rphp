@@ -10,8 +10,13 @@
 #[cfg(feature = "quick-loops")]
 enum QuickLongArray {
     Empty,
-    Packed { values: *const Value, len: usize },
-    Hash { array: *const PhpArray },
+    Packed {
+        values: *const Value,
+        len: usize,
+    },
+    Hash {
+        array: *const PhpArray,
+    },
 }
 
 #[derive(Clone, Copy)]
@@ -27,15 +32,24 @@ struct QuickLongExactIntLayout {
     layout: ExactOrderedIntLayout,
 }
 
+#[cold]
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+unsafe fn fallback_indexed_long(array: *const PhpArray, key: i64) -> Option<i64> {
+    (*array).get_indexed_long(key)
+}
+
 #[cfg(feature = "quick-loops")]
 impl QuickLongExactIntLayout {
     #[inline(always)]
     unsafe fn long_at(self, array: *const PhpArray, key: i64) -> Option<i64> {
-        let value = match self.layout.positioned_value(key) {
-            Some(value) => &*value,
-            None => (*array).get_indexed_int(key)?,
-        };
-        (value.value_type() == ValueType::Long).then(|| value.raw_long())
+        match self.layout.positioned_value(key) {
+            Some(value) => {
+                let value = &*value;
+                (value.value_type() == ValueType::Long).then(|| value.raw_long())
+            }
+            None => fallback_indexed_long(array, key),
+        }
     }
 }
 
@@ -85,7 +99,9 @@ impl QuickLongArray {
         op_array: &crate::compiler::OpArray,
     ) -> Option<i64> {
         match index {
-            QuickArrayIndex::Long(index) => self.long_at_int(quick_long_operand(slots, index)),
+            QuickArrayIndex::Long(index) => {
+                self.long_at_int(quick_long_operand(slots, index))
+            }
             QuickArrayIndex::StringLiteral(literal) => self.long_at_str(
                 op_array
                     .literals
@@ -107,7 +123,9 @@ unsafe fn mutable_long_entry_at(
     op_array: &crate::compiler::OpArray,
 ) -> Option<(i64, *mut Value)> {
     let value = match index {
-        QuickArrayIndex::Long(index) => (*array).get_int_mut(quick_long_operand(slots, index)),
+        QuickArrayIndex::Long(index) => {
+            (*array).get_int_mut(quick_long_operand(slots, index))
+        }
         QuickArrayIndex::StringLiteral(literal) => {
             let key = op_array
                 .literals
@@ -121,5 +139,6 @@ unsafe fn mutable_long_entry_at(
         }
         QuickArrayIndex::ValueSlot(_) => return None,
     }?;
-    (value.value_type() == ValueType::Long).then(|| (value.raw_long(), value as *mut Value))
+    (value.value_type() == ValueType::Long)
+        .then(|| (value.raw_long(), value as *mut Value))
 }

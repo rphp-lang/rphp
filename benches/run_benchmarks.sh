@@ -92,6 +92,8 @@ BENCHMARKS=(
     "bench_hash_sparse_int_array_build.php:Sparse hash integer build 1M"
     "bench_hash_irregular_int_array_build.php:Irregular hash integer build 1M"
     "bench_hash_irregular_int_array_read.php:Irregular hash integer reads 1M"
+    "bench_hash_irregular_int_array_permuted_read.php:Irregular permuted hash reads 1M"
+    "bench_hash_irregular_wide_long_array_permuted_read.php:Irregular wide-Long fallback reads 1M"
     "bench_packed_to_hash_transition.php:Packed to hash transition 1M"
     "bench_hash_sparse_int_array_transform.php:Sparse hash transform 1M"
     "bench_hash_sparse_int_array_filter.php:Sparse hash filter 1M"

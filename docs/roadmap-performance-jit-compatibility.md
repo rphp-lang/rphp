@@ -5166,6 +5166,101 @@ array-read boundary: improving it requires a more cache-efficient canonical
 integer index/value layout or native guarded lookup integration, not another
 source-expression recognizer.
 
+### Compact integer-index payload checkpoint
+
+The cache-layout follow-up is implemented (2026-08-06). A focused Rust
+microbenchmark separated twenty million random operations over the canonical
+integer index: probing the index alone took 133.97 ms, reading randomized
+ordered entries alone took 58.96 ms, but the dependent index-then-entry chain
+took 288.32 ms. The second load therefore cost substantially more when its
+address depended on the hash result. This matched the ARM64 sample that placed
+45 of the 50 remaining read-loop samples in the indexed lookup after composed
+key execution had already been removed.
+
+The canonical integer `HashMap` still has one bucket payload and remains the
+only arbitrary-key index. Its former `usize` position is now an equally sized
+tagged word. On 64-bit targets, a cacheable entry stores a 24-bit canonical
+insertion position plus a signed 39-bit Long in that same word. Typed guarded
+reads can consume the Long immediately after the hash probe and avoid the
+dependent ordered-entry load. Non-Long values, wider Longs, and positions above
+the compact bound store the ordinary canonical position and validate the
+ordered entry exactly as before. No extra map, bucket, key-pattern recognizer,
+or benchmark-specific path was added.
+
+Insertion, replacement and index rebuild construct the payload from the
+authoritative ordered entry. A mutable integer lookup clears its cached Long
+before exposing `&mut Value`; removal and shift use the existing rebuild path,
+and clone/COW copy or reconstruct exact state. Ordinary PHP-array APIs always
+decode the canonical position, so insertion order and mixed-key behavior are
+unchanged. Boundary and mutation tests cover negative cached values, the signed
+compact limit, `i64::MAX` fallback, replacement, mutable invalidation, clone and
+removal. `IntIndexValue`, `ArrayStorage`, and `PhpArray` retain their previous
+machine sizes.
+
+The exact contiguous-prefix kernel initially inherited the larger typed
+fallback through `#[inline(always)]`, even though its successful prefix path
+never executes that fallback. On ARM64 this changed LTO register/code placement
+and moved the materialized-prefix control from roughly 2.55 to 3.04 ms. The
+fallback is now isolated behind a cold, non-inlined helper. Thirty-one rotated
+runs then returned the control to 2.53/2.56 ms without affecting the irregular
+target. The permanent wide-Long benchmark uses values above the signed 39-bit
+range and verifies the canonical position-based fallback with the same
+permuted keys and exact sum on both architectures.
+
+Thirty-one order-rotated ARM64 runs against a clean `f6129d2` build produced:
+
+| ARM64 workload | Previous no JIT | Compact no JIT | Paired delta | Previous JIT build | Compact JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular permuted-order read | 77.100 ms | 35.718 ms | -53.55% | 76.913 ms | 34.992 ms | -54.55% |
+| Wide-Long fallback read | 76.767 ms | 76.608 ms | +0.09% | 77.858 ms | 76.688 ms | -0.69% |
+| Irregular insertion-order read | 8.638 ms | 8.680 ms | +0.43% | 8.663 ms | 8.837 ms | +2.21% |
+| Irregular integer build | 49.974 ms | 49.492 ms | -0.44% | 54.611 ms | 54.748 ms | +0.81% |
+| High-bit irregular build | 25.661 ms | 25.583 ms | -0.16% | 29.170 ms | 29.162 ms | -0.28% |
+| Regular sparse build | 24.141 ms | 24.151 ms | -0.02% | 29.736 ms | 29.586 ms | -1.28% |
+| Materialized contiguous read | 2.548 ms | 2.532 ms | -1.48% | 2.584 ms | 2.563 ms | -2.69% |
+| String-key materialized control | 18.763 ms | 18.765 ms | -0.01% | 19.644 ms | 19.640 ms | -0.05% |
+
+The same source passed the complete x86-64 suite and was measured in thirty-one
+order-rotated pairs pinned to Ryzen CPU 2:
+
+| x86-64 workload | Previous no JIT | Compact no JIT | Paired delta | Previous JIT build | Compact JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular permuted-order read | 61.757 ms | 41.309 ms | -33.44% | 62.349 ms | 41.623 ms | -32.88% |
+| Wide-Long fallback read | 62.430 ms | 62.577 ms | +0.47% | 62.043 ms | 62.145 ms | +0.01% |
+| Irregular insertion-order read | 9.128 ms | 8.929 ms | -1.79% | 9.251 ms | 8.832 ms | -4.48% |
+| Irregular integer build | 106.425 ms | 107.119 ms | +0.78% | 105.494 ms | 107.163 ms | +1.49% |
+| High-bit irregular build | 53.546 ms | 53.010 ms | -2.04% | 53.868 ms | 52.422 ms | +0.11% |
+| Regular sparse build | 40.807 ms | 40.022 ms | -2.03% | 42.393 ms | 42.256 ms | -0.38% |
+| Materialized contiguous read | 3.102 ms | 2.898 ms | -5.89% | 3.132 ms | 2.907 ms | -7.20% |
+| String-key materialized control | 11.850 ms | 13.732 ms | +15.58% | 15.783 ms | 13.268 ms | -15.80% |
+
+The opposing x86 String movements are fat-LTO placement sensitivity rather
+than work introduced in a String path. Twenty-run `perf stat` measurements show
+326,305,812 versus 326,250,219 instructions in the no-JIT binaries and
+376,407,021 versus 376,342,150 in the JIT-feature binaries, both changes below
+0.02%. Cycles move from 66.05M to 76.79M in the first pair and from 86.72M to
+72.95M in the second. The source cannot execute the integer-index payload for a
+String key; the unchanged instruction counts and opposite cycle shifts expose
+global code placement transparently.
+
+Twenty-one-run four-mode rotations give the current absolute target position:
+
+| Host and PHP | RPHP no JIT | RPHP JIT build | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|
+| ARM64 / PHP 8.5.9 | 35.896 ms | 35.420 ms | 49.628 ms | 28.990 ms |
+| x86-64 / PHP 8.4.24 | 41.179 ms | 41.519 ms | 23.428 ms | 14.877 ms |
+
+All four modes return the identical `549755289600` sum. RPHP no JIT now beats
+PHP no JIT by about 28% on ARM64 and cuts the preceding RPHP permuted-read time
+by more than half. x86-64 improves by one third but remains behind PHP, which
+leaves native guarded lookup integration as the next read-side boundary.
+Irregular structural writes and construction remain a separate storage task.
+
+The final source passes no-default and all-feature checks, 207 ARM64 and 232
+x86-64 library tests, 113 quick-loop tests, 100 ARM64 plus 32 x86-64 JIT
+prototype tests, and every end-to-end suite. Ten explicit performance tests
+remain ignored by design.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
