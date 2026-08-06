@@ -5195,6 +5195,7 @@ include!("execute/quick_kernel_plan.rs");
 include!("execute/quick_kernel_common.rs");
 include!("execute/quick_array_runtime.rs");
 include!("execute/quick_conditional_runtime.rs");
+include!("execute/quick_invariant_property_runtime.rs");
 
 #[cfg(all(
     feature = "quick-loops",

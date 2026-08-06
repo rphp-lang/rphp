@@ -144,6 +144,31 @@ struct QuickLongBranchOnlyKernel {
     exit_target: QuickLongTarget,
 }
 
+/// Dense no-JIT kernel for accumulating a scalar expression whose leaves are
+/// invariant object-property projections. `term_rhs == None` represents one
+/// direct property value; otherwise the two property values are added once at
+/// region entry and retained in `term_result`.
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickLongInvariantPropertyAccumulateKernel {
+    header_lhs: u16,
+    header_rhs: QuickLongOperand,
+    header_condition_tmp: Option<u16>,
+    property_output_mask: u64,
+    term_lhs: u16,
+    term_rhs: Option<u16>,
+    term_result: Option<u16>,
+    term_resume_ip: usize,
+    accumulator: u16,
+    sum_result: u16,
+    sum_resume_ip: usize,
+    post_value: u16,
+    post_result: Option<u16>,
+    post_resume_ip: usize,
+    body_target: QuickLongTarget,
+    exit_target: QuickLongTarget,
+}
+
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
 struct QuickLongAddAssignKernel {

@@ -47,6 +47,63 @@ enum QuickResolvedObjectOp {
     },
 }
 
+#[inline]
+#[cfg(feature = "quick-loops")]
+fn quick_object_property_reads_are_invariant(plan: &QuickLongOpsLoop) -> bool {
+    !plan.ops.iter().any(|operation| {
+        matches!(
+            operation,
+            QuickLongOp::PropertyMethodCall { .. }
+                | QuickLongOp::PropertyGetterCall { .. }
+                | QuickLongOp::ScalarMethodCall { .. }
+                | QuickLongOp::ObjectLongMethodCall { .. }
+                | QuickLongOp::ComposedPropertyCall { .. }
+                | QuickLongOp::VirtualObjectArrayPipeline { .. }
+        )
+    })
+}
+
+/// Materialize property projections that are stable for the whole typed
+/// region. Resolution already binds the invariant receiver's property slot;
+/// regions containing any object call remain on the per-operation reread path
+/// because a method may mutate an aliased receiver property.
+#[inline]
+#[cfg(feature = "quick-loops")]
+unsafe fn prepare_quick_invariant_object_properties(
+    plan: &QuickLongOpsLoop,
+    resolved: &[QuickResolvedObjectOp],
+    slots: &mut [i64; 64],
+) -> Option<u64> {
+    if !quick_object_property_reads_are_invariant(plan) {
+        return Some(0);
+    }
+
+    let mut output_mask = 0u64;
+    for (index, operation) in plan.ops.iter().copied().enumerate() {
+        let (result, string_length) = match operation {
+            QuickLongOp::ObjectPropertyLong { result, .. } => (result, false),
+            QuickLongOp::ObjectPropertyStringLength { result, .. } => (result, true),
+            _ => continue,
+        };
+        let QuickResolvedObjectOp::PropertyRead { property } = *resolved.get(index)? else {
+            return None;
+        };
+        if property.is_null() || (*property).is_reference() {
+            return None;
+        }
+        slots[result as usize] = if string_length {
+            (*property).as_str()?.len() as i64
+        } else {
+            if (*property).value_type() != ValueType::Long {
+                return None;
+            }
+            (*property).raw_long()
+        };
+        output_mask |= 1u64 << result;
+    }
+    Some(output_mask)
+}
+
 #[cfg(feature = "quick-loops")]
 struct QuickObjectCallRecorder<'a> {
     resolved: &'a [QuickResolvedObjectOp],

@@ -377,6 +377,195 @@ fn quick_long_branch_only_kernel(
 
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
+fn quick_long_invariant_property_accumulate_kernel(
+    plan: &QuickLongOpsLoop,
+    property_output_mask: u64,
+) -> Option<QuickLongInvariantPropertyAccumulateKernel> {
+    if plan.entry_op != 0 || property_output_mask == 0 || plan.ops.len() < 4 {
+        return None;
+    }
+
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match *plan.ops.first()? {
+        QuickLongOp::BranchUnlessLt {
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
+            ..
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    header_false_target.exit_ip()?;
+
+    let post_index = plan.ops.len() - 1;
+    let (
+        post_value,
+        post_result,
+        post_condition_lhs,
+        post_condition_rhs,
+        post_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match *plan.ops.last()? {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+    if post_condition_lhs != header_lhs
+        || post_condition_rhs != header_rhs
+        || post_condition_tmp != header_condition_tmp
+        || header_next_target.op_index() != Some(1)
+        || body_target.op_index() != Some(1)
+        || exit_target != header_false_target
+    {
+        return None;
+    }
+
+    let mut index = 1usize;
+    while index < post_index {
+        let (result, next_target) = match plan.ops[index] {
+            QuickLongOp::ObjectPropertyLong {
+                result,
+                next_target,
+                ..
+            }
+            | QuickLongOp::ObjectPropertyStringLength {
+                result,
+                next_target,
+                ..
+            } => (result, next_target),
+            _ => break,
+        };
+        if property_output_mask & (1u64 << result) == 0
+            || next_target.op_index() != Some(index + 1)
+        {
+            return None;
+        }
+        index += 1;
+    }
+    if index == 1 || index + 1 != post_index {
+        return None;
+    }
+
+    let (
+        term_lhs,
+        term_rhs,
+        term_result,
+        term_resume_ip,
+        accumulator,
+        sum_result,
+        sum_resume_ip,
+        arithmetic_next,
+    ) = match plan.ops[index] {
+        QuickLongOp::AddAssign {
+            lhs,
+            rhs,
+            result,
+            destination,
+            next_target,
+            add_resume_ip,
+        } => {
+            let term = if lhs == destination && property_output_mask & (1u64 << rhs) != 0 {
+                rhs
+            } else if rhs == destination && property_output_mask & (1u64 << lhs) != 0 {
+                lhs
+            } else {
+                return None;
+            };
+            (
+                term,
+                None,
+                None,
+                add_resume_ip,
+                destination,
+                result,
+                add_resume_ip,
+                next_target,
+            )
+        }
+        QuickLongOp::AddAddAssign {
+            first_lhs,
+            first_rhs,
+            first_result,
+            second_lhs,
+            second_rhs,
+            second_result,
+            destination,
+            next_target,
+            first_resume_ip,
+            second_resume_ip,
+        } => {
+            if property_output_mask & (1u64 << first_lhs) == 0
+                || property_output_mask & (1u64 << first_rhs) == 0
+                || !((second_lhs == destination && second_rhs == first_result)
+                    || (second_rhs == destination && second_lhs == first_result))
+            {
+                return None;
+            }
+            (
+                first_lhs,
+                Some(first_rhs),
+                Some(first_result),
+                first_resume_ip,
+                destination,
+                second_result,
+                second_resume_ip,
+                next_target,
+            )
+        }
+        _ => return None,
+    };
+    if arithmetic_next.op_index() != Some(post_index) {
+        return None;
+    }
+
+    Some(QuickLongInvariantPropertyAccumulateKernel {
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        property_output_mask,
+        term_lhs,
+        term_rhs,
+        term_result,
+        term_resume_ip,
+        accumulator,
+        sum_result,
+        sum_resume_ip,
+        post_value,
+        post_result,
+        post_resume_ip,
+        body_target,
+        exit_target,
+    })
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
 fn quick_long_conditional_kernel(
     plan: &QuickLongOpsLoop,
 ) -> Option<(QuickLongConditionalKernel, QuickLongConditionalBody)> {
@@ -550,4 +739,3 @@ fn quick_long_conditional_kernel(
         body,
     ))
 }
-

@@ -210,6 +210,19 @@ unsafe fn run_quick_long_ops_loop(
         };
         resolved
     };
+    let invariant_object_property_mask = if plan.object_input_mask == 0 {
+        0
+    } else {
+        let Some(mask) = prepare_quick_invariant_object_properties(
+            plan,
+            &resolved_object_ops,
+            &mut slots,
+        ) else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        mask
+    };
     #[cfg(all(
         feature = "jit-prototype",
         any(
@@ -241,6 +254,20 @@ unsafe fn run_quick_long_ops_loop(
             );
             return Ok(outcome);
         }
+    }
+    if let Some(kernel) = quick_long_invariant_property_accumulate_kernel(
+        plan,
+        invariant_object_property_mask,
+    ) {
+        return run_quick_long_invariant_property_accumulate_kernel(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            kernel,
+        );
     }
     let mut object_call_recorder = QuickObjectCallRecorder {
         counts: vec![0; resolved_object_ops.len()],
@@ -774,25 +801,27 @@ unsafe fn run_quick_long_ops_loop(
                 resume_ip,
                 ..
             } => {
-                let QuickResolvedObjectOp::PropertyRead { property } =
-                    *resolved_object_ops.get_unchecked(op_index)
-                else {
-                    unreachable!("resolved object property read")
-                };
-                if (*property).value_type() != ValueType::Long || (*property).is_reference() {
-                    string_state.commit();
-                    return Ok(deopt_quick_long_kernel(
-                        frame,
-                        op_array,
-                        slot_base,
-                        &slots,
-                        dirty_long_mask,
-                        dirty_bool_mask,
-                        resume_ip,
-                        iterations,
-                    ));
+                if invariant_object_property_mask & (1u64 << result) == 0 {
+                    let QuickResolvedObjectOp::PropertyRead { property } =
+                        *resolved_object_ops.get_unchecked(op_index)
+                    else {
+                        unreachable!("resolved object property read")
+                    };
+                    if (*property).value_type() != ValueType::Long || (*property).is_reference() {
+                        string_state.commit();
+                        return Ok(deopt_quick_long_kernel(
+                            frame,
+                            op_array,
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                            resume_ip,
+                            iterations,
+                        ));
+                    }
+                    slots[result as usize] = (*property).raw_long();
                 }
-                slots[result as usize] = (*property).raw_long();
                 dirty_long_mask |= 1u64 << result;
                 next_target
             }
@@ -802,25 +831,27 @@ unsafe fn run_quick_long_ops_loop(
                 resume_ip,
                 ..
             } => {
-                let QuickResolvedObjectOp::PropertyRead { property } =
-                    *resolved_object_ops.get_unchecked(op_index)
-                else {
-                    unreachable!("resolved object property strlen")
-                };
-                let Some(value) = (*property).as_str() else {
-                    string_state.commit();
-                    return Ok(deopt_quick_long_kernel(
-                        frame,
-                        op_array,
-                        slot_base,
-                        &slots,
-                        dirty_long_mask,
-                        dirty_bool_mask,
-                        resume_ip,
-                        iterations,
-                    ));
-                };
-                slots[result as usize] = value.len() as i64;
+                if invariant_object_property_mask & (1u64 << result) == 0 {
+                    let QuickResolvedObjectOp::PropertyRead { property } =
+                        *resolved_object_ops.get_unchecked(op_index)
+                    else {
+                        unreachable!("resolved object property strlen")
+                    };
+                    let Some(value) = (*property).as_str() else {
+                        string_state.commit();
+                        return Ok(deopt_quick_long_kernel(
+                            frame,
+                            op_array,
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                            resume_ip,
+                            iterations,
+                        ));
+                    };
+                    slots[result as usize] = value.len() as i64;
+                }
                 dirty_long_mask |= 1u64 << result;
                 next_target
             }

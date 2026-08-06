@@ -4603,10 +4603,62 @@ PHP 8.4.24 tracing JIT were:
 | `stdClass` mixed retained reads | 58.849 ms | 5.466 ms | 65.759 ms | 50.036 ms |
 | Declared-object mixed reads | 58.943 ms | 5.512 ms | 43.485 ms | 12.329 ms |
 
-The remaining object-access work is therefore no longer invariant reads. The
-next independent targets are no-JIT declared-property dispatch on x86-64,
-varying receivers that cannot bind once per region, and precise property
-read/write analysis that can safely combine native reads with mutating methods.
+The remaining object-access work was therefore narrowed to no-JIT
+declared-property dispatch on x86-64, varying receivers that cannot bind once
+per region, and precise property read/write analysis that can safely combine
+native reads with mutating methods.
+
+### Dense no-JIT invariant-property accumulation checkpoint
+
+The x86-64 no-JIT gap was profiled before adding another property-storage
+special case (2026-08-06). One five-million-iteration declared-property region
+executed 1.222 billion instructions, 311.8 million cycles and 205.6 million
+branches, while branch and cache misses were negligible. `perf` attributed
+96.7% of samples to `run_quick_long_ops_loop`. VM statistics independently
+confirmed one `typed_ops_loop`, 4,999,967 optimized iterations and zero guard
+failures or side exits. The bottleneck was the general quick-operation dispatch
+graph, not property lookup or memory locality.
+
+The first architecture-independent change materializes guarded property
+projections once at region entry. It applies only when the closed region has no
+object method, getter, composed call or virtual object pipeline; those shapes
+continue to reread the bound property pointer because a call may mutate an
+aliased receiver. The same helper now seeds both the no-JIT shadow state and
+the existing ARM64/x86-64 native IR. On ARM64 this reduced the declared-object
+no-JIT control from 35.917 ms to about 28.9 ms. On x86-64 it removed 9.6% of
+executed instructions but only about 1% of elapsed time, proving that the
+remaining cost was dispatch throughput.
+
+A compact no-JIT kernel now recognizes the general linear shape
+`invariant property projection(s) -> checked accumulation -> induction`.
+It accepts either one invariant Long projection or the checked sum of two
+Long projections, including borrowed String-property lengths. Property names,
+classes, receiver slots and accumulator slots remain arbitrary. The invariant
+term is derived once after the loop-entry guard; the dense Rust loop retains
+checked accumulator and induction arithmetic, exact overflow resume positions,
+condition temporaries, interrupt safepoints and canonical state publication.
+Native JIT remains the preferred lane when that feature is enabled.
+
+After lowering the general dispatch graph, the x86-64 control executes 243.8
+million instructions, 44.3 million cycles and 50.8 million branches: reductions
+of 80.0%, 85.8% and 75.3% respectively. Nine-run native-CPU `max-perf` medians
+with PHP 8.4.24 and verified tracing JIT were:
+
+| x86-64 workload | RPHP no JIT | RPHP JIT | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|
+| `stdClass` mixed reads, 5M pairs | 8.017 ms | 5.506 ms | 64.923 ms | 49.103 ms |
+| Declared-object mixed reads, 5M pairs | 8.044 ms | 5.564 ms | 42.855 ms | 12.220 ms |
+| `stdClass` Long property, 10M reads | 15.999 ms | 6.956 ms | 70.637 ms | 50.265 ms |
+
+No-JIT RPHP is now 8.10x, 5.33x and 4.42x faster than PHP without JIT on
+these three shapes. It also beats PHP tracing JIT by 6.13x, 1.52x and 3.14x.
+Permanent tests cover dynamic and declared receivers, receiver rebinding,
+different dynamic-property orders, one- and two-projection bodies, accumulator
+and term overflow, and a mutating-method control that must remain on the
+per-operation reread path. The next independent object targets are varying
+receivers inside one region and read/write-set analysis for regions containing
+calls; broader scalar-expression support should extend this compact kernel
+rather than reintroduce benchmark-specific executors.
 
 ### Nice to have: persistent compiled artifacts
 

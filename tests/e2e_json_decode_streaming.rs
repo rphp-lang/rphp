@@ -218,3 +218,53 @@ echo summarize($first) . '|'
         "3200|2200|1600|3200"
     );
 }
+
+#[test]
+fn typed_property_read_region_accumulates_one_invariant_long_property() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DeclaredValue {
+    public $value = 3;
+}
+function sum_value($row) {
+    $sum = 0;
+    for ($i = 0; $i < 200; $i++) {
+        $sum += $row->value;
+    }
+    return $sum;
+}
+$dynamic = json_decode('{"value":11}');
+echo sum_value($dynamic) . '|'
+    . sum_value(new DeclaredValue()) . '|'
+    . sum_value($dynamic);
+"#,
+        ),
+        "2200|600|2200"
+    );
+}
+
+#[test]
+fn typed_property_read_region_side_exits_transactionally_on_overflow() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class OverflowValue {
+    public $value = 9223372036854775807;
+    public $increment = 1;
+}
+$row = new OverflowValue();
+$direct = 0;
+for ($i = 0; $i < 2; $i++) {
+    $direct += $row->value;
+}
+$composed = 0;
+for ($i = 0; $i < 2; $i++) {
+    $composed += $row->value + $row->increment;
+}
+echo gettype($direct) . '|' . gettype($composed);
+"#,
+        ),
+        "double|double"
+    );
+}
