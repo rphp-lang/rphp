@@ -13,7 +13,7 @@ use super::straight::{
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
-use crate::value::native_indexed_long_lookup;
+use crate::value::{native_indexed_long_lookup, native_long_array_set};
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
     ScalarLongOpKind, ScalarLongSource,
@@ -958,7 +958,8 @@ fn required_straight_context_mask(config: &NativeStraightLongLoopConfig) -> u16 
                     token_count,
                     ..
                 } => (entry_base, token_count),
-                NativeStraightLongOperation::IndexedLongLoad { context, .. } => {
+                NativeStraightLongOperation::IndexedLongLoad { context, .. }
+                | NativeStraightLongOperation::ArrayLongSet { context, .. } => {
                     return mask | (1u16 << context);
                 }
                 _ => return mask,
@@ -1639,6 +1640,73 @@ fn emit_indexed_long_load(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_array_long_set(
+    assembler: &mut X86_64Assembler,
+    key: QuickLongOperand,
+    value: QuickLongOperand,
+    context_index: u8,
+    context: X86_64Register,
+    induction_slot: u16,
+    induction: X86_64Register,
+    resident_values: &[(u64, X86_64Register)],
+    operation_index: u8,
+    operation_side_exit_jumps: &mut Vec<(usize, u8)>,
+) {
+    for register in [
+        X86_64Register::RDI,
+        X86_64Register::RSI,
+        X86_64Register::RCX,
+        X86_64Register::R10,
+        X86_64Register::R11,
+        X86_64Register::RDX,
+    ] {
+        assembler.push_register(register);
+    }
+
+    emit_linear_operand(
+        assembler,
+        key,
+        X86_64Register::RSI,
+        induction_slot,
+        induction,
+        resident_values,
+    );
+    emit_linear_operand(
+        assembler,
+        value,
+        X86_64Register::RDX,
+        induction_slot,
+        induction,
+        resident_values,
+    );
+    assembler.move_register(X86_64Register::RDI, context);
+    assembler.move_from_base_disp32(
+        X86_64Register::RDI,
+        X86_64Register::RDI,
+        i32::from(context_index) * std::mem::size_of::<*mut i64>() as i32,
+    );
+    assembler.move_immediate64(
+        X86_64Register::RAX,
+        native_long_array_set as *const () as usize as i64,
+    );
+    assembler.call_register(X86_64Register::RAX);
+    assembler.move_register(X86_64Register::R9, X86_64Register::RAX);
+
+    for register in [
+        X86_64Register::RDX,
+        X86_64Register::R11,
+        X86_64Register::R10,
+        X86_64Register::RCX,
+        X86_64Register::RSI,
+        X86_64Register::RDI,
+    ] {
+        assembler.pop_register(register);
+    }
+    assembler.compare_immediate8(X86_64Register::R9, 0);
+    operation_side_exit_jumps.push((assembler.jump_equal_rel32(), operation_index));
+}
+
 fn emit_scalar_straight_loop(
     config: &NativeStraightLongLoopConfig,
     checked: bool,
@@ -2135,6 +2203,25 @@ fn emit_scalar_straight_loop(
                     result,
                     destination,
                     slots,
+                    context,
+                    config.induction_slot,
+                    induction,
+                    &active_resident_values,
+                    operation_index as u8,
+                    &mut operation_side_exit_jumps,
+                );
+                continue;
+            }
+            NativeStraightLongOperation::ArrayLongSet {
+                key,
+                value,
+                context: context_index,
+            } => {
+                emit_array_long_set(
+                    &mut assembler,
+                    key,
+                    value,
+                    context_index,
                     context,
                     config.induction_slot,
                     induction,
@@ -2666,6 +2753,19 @@ fn validate_scalar_straight_config(
                     written_mask |= 1u64 << destination;
                 }
             }
+            NativeStraightLongOperation::ArrayLongSet {
+                key,
+                value,
+                context,
+            } => {
+                validate_operand(key)?;
+                validate_operand(value)?;
+                if context as usize >= super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES {
+                    return Err(X86StraightLongLoopError::UnsupportedConfig(
+                        "x86 mutable array context is outside the shared entry table",
+                    ));
+                }
+            }
             NativeStraightLongOperation::Binary {
                 kind: _,
                 lhs,
@@ -3007,7 +3107,7 @@ impl CompiledX86StraightLongLoop {
         &self,
         slots: &mut [i64; 64],
         iteration_budget: u64,
-        entry_pointers: &[*mut i64; super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_pointers: &[*mut i64; super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
         if iteration_budget == 0 {
             return Err(X86StraightLongLoopError::ZeroIterationBudget);
@@ -3016,7 +3116,7 @@ impl CompiledX86StraightLongLoop {
         while required != 0 {
             let index = required.trailing_zeros() as usize;
             required &= required - 1;
-            if entry_pointers[index].is_null() {
+            if context_pointers[index].is_null() {
                 return Err(X86StraightLongLoopError::UnsupportedConfig(
                     "x86 straight-loop runtime context contains a null pointer",
                 ));
@@ -3040,7 +3140,7 @@ impl CompiledX86StraightLongLoop {
             function(
                 slots.as_mut_ptr(),
                 iteration_budget,
-                entry_pointers.as_ptr(),
+                context_pointers.as_ptr(),
             )
         };
         self.decode_status(status)
@@ -3280,13 +3380,13 @@ impl X86QuickLongOpsJitCache {
         program: &CompiledX86StraightLongLoop,
         slots: &mut [i64; 64],
         iteration_budget: u64,
-        entry_pointers: &[*mut i64; super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_pointers: &[*mut i64; super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
         self.native_calls
             .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
-        let outcome = program.call_chunk_with_context(slots, iteration_budget, entry_pointers);
+        let outcome = program.call_chunk_with_context(slots, iteration_budget, context_pointers);
         self.record_side_exit(&outcome);
         outcome
     }

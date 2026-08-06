@@ -29,7 +29,7 @@ fn execute_source(source: &str) -> (UserFunction, String) {
     (main, output)
 }
 
-fn native_indexed_plans(
+fn native_array_plans(
     main: &UserFunction,
 ) -> impl Iterator<Item = &rphp::vm::quick::QuickLongOpsLoop> {
     main.op_array
@@ -60,10 +60,14 @@ echo $sum . '|' . $i;
     let (main, output) = execute_source(source);
 
     assert_eq!(output, "8386560|4096");
-    let plans = native_indexed_plans(&main).collect::<Vec<_>>();
-    assert_eq!(plans.len(), 1);
-    assert_eq!(plans[0].native_jit().native_entries(), 1);
-    assert_eq!(plans[0].native_jit().side_exits(), 0);
+    let plans = native_array_plans(&main).collect::<Vec<_>>();
+    assert_eq!(plans.len(), 2);
+    assert!(
+        plans
+            .iter()
+            .all(|plan| plan.native_jit().native_entries() == 1)
+    );
+    assert!(plans.iter().all(|plan| plan.native_jit().side_exits() == 0));
 }
 
 #[test]
@@ -87,8 +91,41 @@ echo $sum . '|' . $i;
     let (main, output) = execute_source(source);
 
     assert_eq!(output, "8382466.5|4096");
-    let plans = native_indexed_plans(&main).collect::<Vec<_>>();
+    let plans = native_array_plans(&main).collect::<Vec<_>>();
+    assert_eq!(plans.len(), 2);
+    assert!(
+        plans
+            .iter()
+            .all(|plan| plan.native_jit().native_entries() == 1)
+    );
+    assert_eq!(
+        plans
+            .iter()
+            .map(|plan| plan.native_jit().side_exits())
+            .sum::<u64>(),
+        1
+    );
+}
+
+#[test]
+fn native_structural_writes_preserve_cow_and_grow_exactly() {
+    let source = "<?php
+$n = 4096;
+$values = [];
+$values[1000000] = -1;
+$alias = $values;
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $values[$key] = $i;
+}
+$lastKey = ((4095 * 1103515245) & 2147483647) + 1000000;
+echo $alias[1000000] . '|' . $values[1000000] . '|' . $values[$lastKey] . '|' . $i;
+";
+    let (main, output) = execute_source(source);
+
+    assert_eq!(output, "-1|0|4095|4096");
+    let plans = native_array_plans(&main).collect::<Vec<_>>();
     assert_eq!(plans.len(), 1);
     assert_eq!(plans[0].native_jit().native_entries(), 1);
-    assert_eq!(plans[0].native_jit().side_exits(), 1);
+    assert_eq!(plans[0].native_jit().side_exits(), 0);
 }

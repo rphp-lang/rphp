@@ -5461,6 +5461,67 @@ library tests, 118 quick-loop tests, 100 ARM64 and 32 x86-64 backend-specific
 JIT tests, the two shared native indexed-array tests and every end-to-end suite.
 Both architectures also pass the complete no-default-feature matrix.
 
+### Native structural integer-write checkpoint
+
+The native follow-up is implemented (2026-08-06). Target-neutral straight IR
+now includes `ArrayLongSet`, which consumes guarded Long key/value operands and
+one stable mutable-array context. The mixed-region runtime obtains that
+`PhpArray` pointer from the existing unique-COW guard once per activation. Both
+handwritten backends then call one C-ABI helper per iteration; the helper still
+delegates storage promotion, replacement, growth, insertion order,
+`next_int_key` and compact-index maintenance to the authoritative `set_int`.
+It returns zero for an invalid context, which maps to the operation's exact
+resume IP before any write.
+
+The context table was refactored from an ambiguous indexed/non-indexed Boolean
+to three explicit kinds: a prevalidated entry pointer, a read-only indexed
+lookup context and a mutable `PhpArray`. This keeps dispatch-error snapshots
+limited to scalar entry pointers and prevents a read context or whole-array
+pointer from being dereferenced as a Long payload. Structural mutations remain
+committed across later exact side exits, matching bytecode execution, while the
+existing chunk boundary retains interrupt polling and bounded safepoint
+latency. ARM64 preserves the link register and live loop/control state around
+`BLR`; x86-64 keeps the SysV stack aligned and preserves its live caller-saved
+state around the indirect helper call.
+
+Permanent coverage now calls the helper directly for promotion, irregular
+insertion, replacement, wide Long and null-context behavior. The shared native
+array suite proves that a standalone structural-write loop enters native code,
+grows the canonical index, preserves a preexisting COW alias and completes
+without a side exit on both architectures. The existing read and exact
+type-miss tests now also observe the newly native construction loop, ensuring
+that read and write contexts coexist across independent regions.
+
+Warm release measurements discard two warmups and use 31 measured runs for the
+two native targets and 51 for the non-target high-bit control. They compare the
+preceding guarded structural-write checkpoint with the final source:
+
+| Workload | ARM64 before | ARM64 native | Delta | x86-64 before | x86-64 native | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular integer build 1M | 39.122 ms | 26.158 ms | -33.13% | 78.076 ms | 65.127 ms | -16.59% |
+| Regular sparse build 1M | 10.037 ms | 6.153 ms | -38.70% | 24.931 ms | 18.638 ms | -25.24% |
+| High-bit irregular build 500K | 19.872 ms | 18.727 ms | -5.76% | 38.796 ms | 37.615 ms | -3.04% |
+
+Every workload retains its exact output. VM statistics for the primary build
+record one native typed-region entry, 999,967 native iterations, one completion
+and zero deoptimizations on both hosts. The high-bit control cannot execute the
+new operation because native lowering still stops at its preceding `Shift`;
+its stable-to-better result therefore rules out a general quick-dispatch
+regression rather than being credited to native array writes.
+
+The final matrix passes formatting and all-target checks, 213 ARM64 and 238
+x86-64 all-feature library tests, 118 quick-loop tests, 100 ARM64 and 32 x86-64
+backend-specific JIT tests, all three shared native indexed-array tests and
+every end-to-end suite. Both architectures also pass the complete
+no-default-feature matrix; the recursive Ackermann test uses the established
+16 MiB test-thread stack on both hosts.
+
+The next structural experiment remains a one-time capacity hint derived from a
+proven remaining trip count. It must be measured independently, cap speculative
+memory growth for early exits and continue using the canonical hash table. A
+fresh native-write profile should first confirm that rehashing still owns
+enough of the reduced runtime to justify that memory tradeoff.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

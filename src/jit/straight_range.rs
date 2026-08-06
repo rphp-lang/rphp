@@ -267,6 +267,26 @@ pub(crate) fn straight_long_remaining_range_proof(
                     return None;
                 }
             }
+            NativeStraightLongOperation::ArrayLongSet { key, value, .. } => {
+                operand_range(
+                    key,
+                    &state.ranges,
+                    config.induction_slot,
+                    induction_range,
+                    output_mask,
+                    state.definitely_written,
+                    recurrence.carried_mask,
+                )?;
+                operand_range(
+                    value,
+                    &state.ranges,
+                    config.induction_slot,
+                    induction_range,
+                    output_mask,
+                    state.definitely_written,
+                    recurrence.carried_mask,
+                )?;
+            }
             NativeStraightLongOperation::Unused
             | NativeStraightLongOperation::StringToken { .. }
             | NativeStraightLongOperation::StringLength { .. }
@@ -516,6 +536,7 @@ fn recurrence_expression_operand_range(
         | NativeStraightLongOperation::HashLoad { .. }
         | NativeStraightLongOperation::HashStore { .. }
         | NativeStraightLongOperation::IndexedLongLoad { .. }
+        | NativeStraightLongOperation::ArrayLongSet { .. }
         | NativeStraightLongOperation::Guard { .. }
         | NativeStraightLongOperation::BranchUnless { .. }
         | NativeStraightLongOperation::Jump { .. } => None,

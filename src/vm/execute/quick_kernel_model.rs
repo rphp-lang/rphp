@@ -81,6 +81,24 @@ const NATIVE_FINITE_STRING_LIMIT: usize = 4;
 ))]
 const NATIVE_QUICK_LONG_SLOT_CAPACITY: usize = 64;
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+enum NativeMixedContextKind {
+    /// Pointer to one prevalidated Long payload selected by a String token.
+    Entry,
+    /// Pointer to an immutable `NativeIndexedLongLookupContext`.
+    IndexedRead,
+    /// Stable pointer to the unique-COW `PhpArray` object itself.
+    MutableArray,
+}
+
 #[derive(Clone, Copy)]
 #[cfg(all(
     feature = "quick-loops",
@@ -101,7 +119,7 @@ struct NativeQuickLongMixedKernel {
     string_token_count: u8,
     context_array_slots: [u16; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_tokens: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
-    context_indexed: [bool; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_kinds: [NativeMixedContextKind; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_count: u8,
     property_binding_op_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     property_binding_property_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],

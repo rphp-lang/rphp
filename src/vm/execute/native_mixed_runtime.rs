@@ -163,46 +163,56 @@ unsafe fn run_native_quick_long_mixed_kernel(
         return Ok(None);
     };
 
-    let mut entry_pointers =
+    let mut context_pointers =
         [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
     let mut indexed_contexts = [
         std::mem::MaybeUninit::<NativeIndexedLongLookupContext>::uninit();
         NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
     ];
     for index in 0..kernel.context_count as usize {
-        if kernel.context_indexed[index] {
-            let Some(array) =
-                (*slot_base.add(kernel.context_array_slots[index] as usize)).as_array()
-            else {
-                return Ok(None);
-            };
-            let Some(context) = array.native_indexed_long_lookup_context() else {
-                return Ok(None);
-            };
-            entry_pointers[index] = indexed_contexts[index].write(context)
-                as *mut NativeIndexedLongLookupContext
-                as *mut i64;
-            continue;
+        match kernel.context_kinds[index] {
+            NativeMixedContextKind::IndexedRead => {
+                let Some(array) =
+                    (*slot_base.add(kernel.context_array_slots[index] as usize)).as_array()
+                else {
+                    return Ok(None);
+                };
+                let Some(context) = array.native_indexed_long_lookup_context() else {
+                    return Ok(None);
+                };
+                context_pointers[index] = indexed_contexts[index].write(context)
+                    as *mut NativeIndexedLongLookupContext
+                    as *mut i64;
+            }
+            NativeMixedContextKind::MutableArray => {
+                let array = mutable_arrays[kernel.context_array_slots[index] as usize];
+                if array.is_null() {
+                    return Ok(None);
+                }
+                context_pointers[index] = array as *mut i64;
+            }
+            NativeMixedContextKind::Entry => {
+                let array = mutable_arrays[kernel.context_array_slots[index] as usize];
+                if array.is_null() {
+                    return Ok(None);
+                }
+                let token = kernel.context_tokens[index] as usize;
+                let key = op_array.literals[kernel.string_literals[token] as usize]
+                    .as_str()
+                    .unwrap_unchecked();
+                let value = match canonical_decimal_array_key(key) {
+                    Some(key) => (*array).get_int_mut(key),
+                    None => (*array).get_str_mut(key),
+                };
+                let Some(value) = value else {
+                    return Ok(None);
+                };
+                if value.value_type() != ValueType::Long || value.is_reference() {
+                    return Ok(None);
+                }
+                context_pointers[index] = value as *mut Value as *mut i64;
+            }
         }
-        let array = mutable_arrays[kernel.context_array_slots[index] as usize];
-        if array.is_null() {
-            return Ok(None);
-        }
-        let token = kernel.context_tokens[index] as usize;
-        let key = op_array.literals[kernel.string_literals[token] as usize]
-            .as_str()
-            .unwrap_unchecked();
-        let value = match canonical_decimal_array_key(key) {
-            Some(key) => (*array).get_int_mut(key),
-            None => (*array).get_str_mut(key),
-        };
-        let Some(value) = value else {
-            return Ok(None);
-        };
-        if value.value_type() != ValueType::Long || value.is_reference() {
-            return Ok(None);
-        }
-        entry_pointers[index] = value as *mut Value as *mut i64;
     }
 
     let cache = plan.native_jit();
@@ -225,8 +235,8 @@ unsafe fn run_native_quick_long_mixed_kernel(
         }
         let mut before_entries = [0i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
         for index in 0..kernel.context_count as usize {
-            if !kernel.context_indexed[index] {
-                before_entries[index] = *entry_pointers[index];
+            if kernel.context_kinds[index] == NativeMixedContextKind::Entry {
+                before_entries[index] = *context_pointers[index];
             }
         }
 
@@ -234,7 +244,7 @@ unsafe fn run_native_quick_long_mixed_kernel(
             program,
             slots,
             NATIVE_LONG_SAFEPOINT_INTERVAL,
-            &entry_pointers,
+            &context_pointers,
         );
         let mut result = match native_result {
             Ok(result) => {
@@ -249,8 +259,8 @@ unsafe fn run_native_quick_long_mixed_kernel(
                     slots[kernel.mutable_slots[index] as usize] = before_values[index];
                 }
                 for index in 0..kernel.context_count as usize {
-                    if !kernel.context_indexed[index] {
-                        *entry_pointers[index] = before_entries[index];
+                    if kernel.context_kinds[index] == NativeMixedContextKind::Entry {
+                        *context_pointers[index] = before_entries[index];
                     }
                 }
                 commit_native_mixed_properties(kernel, &property_values, slots);

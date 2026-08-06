@@ -121,6 +121,14 @@ pub enum NativeStraightLongOperation {
         result: u16,
         destination: Option<u16>,
     },
+    /// Insert or replace a Long through one prevalidated mutable PhpArray
+    /// context. The helper preserves canonical structural/COW semantics and a
+    /// zero return takes this operation's precise side exit.
+    ArrayLongSet {
+        key: QuickLongOperand,
+        value: QuickLongOperand,
+        context: u8,
+    },
     Binary {
         kind: ScalarLongOpKind,
         lhs: QuickLongOperand,
@@ -172,6 +180,7 @@ impl NativeStraightLongOperation {
                 destination,
                 ..
             } => (1u64 << result) | destination.map_or(0, |slot| 1u64 << slot),
+            Self::ArrayLongSet { .. } => 0,
             Self::Binary { result, .. } => 1u64 << result,
             Self::BinaryAssign {
                 result,
@@ -231,6 +240,9 @@ pub(crate) fn straight_long_operation_input_mask(operation: NativeStraightLongOp
             (1u64 << key) | operand_mask(source)
         }
         NativeStraightLongOperation::IndexedLongLoad { key, .. } => operand_mask(key),
+        NativeStraightLongOperation::ArrayLongSet { key, value, .. } => {
+            operand_mask(key) | operand_mask(value)
+        }
         NativeStraightLongOperation::Binary { lhs, rhs, .. }
         | NativeStraightLongOperation::BinaryAssign { lhs, rhs, .. } => {
             operand_mask(lhs) | operand_mask(rhs)

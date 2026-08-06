@@ -11,7 +11,7 @@ use super::straight::{
     straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
-use crate::value::native_indexed_long_lookup;
+use crate::value::{native_indexed_long_lookup, native_long_array_set};
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
     ScalarLongOpKind, ScalarLongSource,
@@ -2375,14 +2375,14 @@ mod conditional_range_proof_tests;
 #[repr(C)]
 struct NativeStraightLongLoopControl {
     failed_operation: u64,
-    entry_pointers: [*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_pointers: [*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
 }
 
 impl Default for NativeStraightLongLoopControl {
     fn default() -> Self {
         Self {
             failed_operation: u64::MAX,
-            entry_pointers: [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+            context_pointers: [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         }
     }
 }
@@ -2485,7 +2485,8 @@ impl CompiledQuickLongStraightLoop {
                         token_count,
                         ..
                     } => (entry_base, token_count),
-                    NativeStraightLongOperation::IndexedLongLoad { context, .. } => {
+                    NativeStraightLongOperation::IndexedLongLoad { context, .. }
+                    | NativeStraightLongOperation::ArrayLongSet { context, .. } => {
                         return mask | (1u16 << context);
                     }
                     _ => return mask,
@@ -3205,6 +3206,26 @@ impl CompiledQuickLongStraightLoop {
                             &mut operation_side_exit_branches,
                         )?;
                     }
+                    NativeStraightLongOperation::ArrayLongSet {
+                        key,
+                        value,
+                        context: context_index,
+                    } => {
+                        emit_straight_array_long_set(
+                            &mut assembler,
+                            key,
+                            value,
+                            context_index,
+                            control,
+                            induction,
+                            bound,
+                            one,
+                            auxiliary,
+                            config.induction_slot,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                    }
                     NativeStraightLongOperation::Binary {
                         kind,
                         lhs: original_lhs_operand,
@@ -3650,7 +3671,7 @@ impl CompiledQuickLongStraightLoop {
         &self,
         slots: &mut [i64; 64],
         iteration_budget: u64,
-        entry_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
@@ -3659,14 +3680,14 @@ impl CompiledQuickLongStraightLoop {
         while required != 0 {
             let index = required.trailing_zeros() as usize;
             required &= required - 1;
-            if entry_pointers[index].is_null() {
+            if context_pointers[index].is_null() {
                 return Err(QuickLongAccumulateJitError::InvalidProgram(
                     "straight-loop runtime context contains a null pointer",
                 ));
             }
         }
         let mut control = NativeStraightLongLoopControl::default();
-        control.entry_pointers = *entry_pointers;
+        control.context_pointers = *context_pointers;
         unsafe { self.call_with_control(slots, iteration_budget, &mut control) }
     }
 
@@ -3876,6 +3897,19 @@ fn validate_straight_long_loop_config(
                 if let Some(destination) = destination {
                     validate_straight_long_output(destination, config.induction_slot)?;
                     output_mask |= 1u64 << destination;
+                }
+            }
+            NativeStraightLongOperation::ArrayLongSet {
+                key,
+                value,
+                context,
+            } => {
+                validate_straight_long_operand(key)?;
+                validate_straight_long_operand(value)?;
+                if context as usize >= NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES {
+                    return Err(QuickLongAccumulateJitError::InvalidProgram(
+                        "straight-loop mutable array context exceeds the native ABI",
+                    ));
                 }
             }
             NativeStraightLongOperation::Binary {
@@ -4348,7 +4382,7 @@ fn emit_straight_context_entry_select(
         let next = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
         let entry_index = usize::from(entry_base) + index;
         let offset = u16::try_from(
-            std::mem::offset_of!(NativeStraightLongLoopControl, entry_pointers)
+            std::mem::offset_of!(NativeStraightLongLoopControl, context_pointers)
                 + entry_index * std::mem::size_of::<*mut i64>(),
         )
         .map_err(|_| {
@@ -4404,7 +4438,7 @@ fn emit_straight_indexed_long_load(
     assembler.add_immediate(Arm64Register::X2, Arm64Register::X0, result_slot * 8);
     emit_straight_long_operand(assembler, key, Arm64Register::X1, induction_slot, induction);
     let context_offset = u16::try_from(
-        std::mem::offset_of!(NativeStraightLongLoopControl, entry_pointers)
+        std::mem::offset_of!(NativeStraightLongLoopControl, context_pointers)
             + usize::from(context_index) * std::mem::size_of::<*mut i64>(),
     )
     .map_err(|_| {
@@ -4436,6 +4470,61 @@ fn emit_straight_indexed_long_load(
         assembler.load_u64(helper, Arm64Register::X0, long_slot_offset(result_slot));
         assembler.store_u64(helper, Arm64Register::X0, long_slot_offset(destination));
     }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_straight_array_long_set(
+    assembler: &mut Arm64Assembler,
+    key: QuickLongOperand,
+    value: QuickLongOperand,
+    context_index: u8,
+    control: Arm64Register,
+    induction: Arm64Register,
+    bound: Arm64Register,
+    one: Arm64Register,
+    helper: Arm64Register,
+    induction_slot: u16,
+    operation_index: u8,
+    operation_side_exit_branches: &mut Vec<(usize, u8)>,
+) -> Result<(), QuickLongAccumulateJitError> {
+    let saved_link = Arm64Register::from_code(30);
+    assembler.push_pair(Arm64Register::X0, Arm64Register::X1);
+    assembler.push_pair(induction, bound);
+    assembler.push_pair(one, control);
+    assembler.push_pair(saved_link, Arm64Register::X2);
+
+    emit_straight_long_operand(assembler, key, Arm64Register::X1, induction_slot, induction);
+    emit_straight_long_operand(
+        assembler,
+        value,
+        Arm64Register::X2,
+        induction_slot,
+        induction,
+    );
+    let context_offset = u16::try_from(
+        std::mem::offset_of!(NativeStraightLongLoopControl, context_pointers)
+            + usize::from(context_index) * std::mem::size_of::<*mut i64>(),
+    )
+    .map_err(|_| {
+        QuickLongAccumulateJitError::InvalidProgram(
+            "straight-loop mutable array context offset exceeds the native ABI",
+        )
+    })?;
+    assembler.load_u64(Arm64Register::X0, control, context_offset);
+    assembler.move_immediate(helper, native_long_array_set as *const () as usize as i64);
+    assembler.branch_link_register(helper);
+    assembler.move_register(helper, Arm64Register::X0);
+
+    assembler.pop_pair(saved_link, Arm64Register::X2);
+    assembler.pop_pair(one, control);
+    assembler.pop_pair(induction, bound);
+    assembler.pop_pair(Arm64Register::X0, Arm64Register::X1);
+    assembler.compare_with_zero(helper);
+    operation_side_exit_branches.push((
+        assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+        operation_index,
+    ));
     Ok(())
 }
 
@@ -4768,13 +4857,13 @@ impl QuickLongOpsJitCache {
         program: &CompiledQuickLongStraightLoop,
         slots: &mut [i64; 64],
         iteration_budget: u64,
-        entry_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_pointers: &[*mut i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
         self.native_calls
             .set(self.native_calls.get().saturating_add(1));
         self.native_chunks
             .set(self.native_chunks.get().saturating_add(1));
-        let outcome = program.call_with_context(slots, iteration_budget, entry_pointers);
+        let outcome = program.call_with_context(slots, iteration_budget, context_pointers);
         if matches!(
             outcome,
             Ok(NativeStraightLongLoopResult {

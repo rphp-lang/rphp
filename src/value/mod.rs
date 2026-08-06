@@ -1138,6 +1138,24 @@ pub(crate) unsafe extern "C" fn native_indexed_long_lookup(
     1
 }
 
+/// Exact native-call boundary for a structural integer-key Long write. The
+/// mutable array is resolved through the normal unique-COW guard before the
+/// native region starts; the helper deliberately keeps `set_int` as the one
+/// canonical implementation of storage promotion, growth and replacement.
+#[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+#[inline(never)]
+pub(crate) unsafe extern "C" fn native_long_array_set(
+    array: *mut PhpArray,
+    key: i64,
+    value: i64,
+) -> u32 {
+    let Some(array) = array.as_mut() else {
+        return 0;
+    };
+    array.set_int(key, Value::long(value));
+    1
+}
+
 #[inline]
 fn int_index_with_capacity(capacity: usize) -> IntIndex {
     IntIndex::with_capacity_and_hasher(capacity, BuildHasherDefault::default())
@@ -3143,7 +3161,7 @@ mod php_array_tests {
 
     use super::{
         ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, PhpArray, Value,
-        native_indexed_long_lookup,
+        native_indexed_long_lookup, native_long_array_set,
     };
 
     #[test]
@@ -3261,6 +3279,34 @@ mod php_array_tests {
         }
 
         assert!(array.native_indexed_long_lookup_context().is_none());
+    }
+
+    #[test]
+    fn native_integer_store_uses_canonical_structural_mutation() {
+        let mut array = PhpArray::new();
+        let keys = [107, -4, 91, 33, 205, 17, 409, 73, 301];
+        for (position, key) in keys.into_iter().enumerate() {
+            assert_eq!(
+                unsafe { native_long_array_set(&mut array, key, position as i64 - 4) },
+                1
+            );
+        }
+        assert_eq!(
+            unsafe { native_long_array_set(&mut array, 33, i64::MAX) },
+            1
+        );
+        for (position, key) in keys.into_iter().enumerate() {
+            let expected = if key == 33 {
+                i64::MAX
+            } else {
+                position as i64 - 4
+            };
+            assert_eq!(array.get_int(key).and_then(Value::as_long), Some(expected));
+        }
+        assert_eq!(
+            unsafe { native_long_array_set(std::ptr::null_mut(), 1, 2) },
+            0
+        );
     }
 
     #[test]
