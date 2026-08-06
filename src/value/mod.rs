@@ -170,6 +170,29 @@ impl DynamicPropertyMap {
     }
 
     #[inline]
+    pub(crate) fn get_with_position(&self, key: &str) -> Option<(&Value, Option<usize>)> {
+        match &self.storage {
+            DynamicPropertyStorage::Small(small) => {
+                let position = small.find(key)?;
+                let value = &small.entries[position].as_ref().unwrap().1;
+                Some((value, Some(position)))
+            }
+            DynamicPropertyStorage::Hash(properties) => {
+                properties.get(key).map(|value| (value, None))
+            }
+        }
+    }
+
+    #[inline(always)]
+    pub(crate) fn get_at_position(&self, position: usize, key: &str) -> Option<&Value> {
+        let DynamicPropertyStorage::Small(small) = &self.storage else {
+            return None;
+        };
+        let (stored_key, value) = small.entries.get(position)?.as_ref()?;
+        (stored_key == key).then_some(value)
+    }
+
+    #[inline]
     pub(crate) fn get_mut(&mut self, key: &str) -> Option<&mut Value> {
         match &mut self.storage {
             DynamicPropertyStorage::Small(small) => {
@@ -362,6 +385,11 @@ impl PhpObject {
             && self.property_values.is_empty()
     }
 
+    #[inline(always)]
+    pub(crate) fn property_layout_ptr(&self) -> *const ObjectLayout {
+        Rc::as_ptr(&self.property_layout)
+    }
+
     #[inline]
     pub fn property_slot(&self, key: &str) -> Option<usize> {
         self.property_layout.slot(key)
@@ -393,6 +421,14 @@ impl PhpObject {
         } else {
             self.dynamic_properties.as_mut()?.get_mut(key)
         }
+    }
+
+    #[inline]
+    pub(crate) fn get_dynamic_property_with_position(
+        &self,
+        key: &str,
+    ) -> Option<(&Value, Option<usize>)> {
+        self.dynamic_properties.as_ref()?.get_with_position(key)
     }
 
     #[inline]
@@ -2783,6 +2819,15 @@ impl Value {
         (*refcell.as_ptr()).class_id
     }
 
+    /// Read the shared property-layout identity without a `RefCell` borrow.
+    /// SAFETY: Only valid when `value_type() == ValueType::Object`.
+    #[inline(always)]
+    pub unsafe fn object_property_layout_ptr_unchecked(&self) -> *const ObjectLayout {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        (*refcell.as_ptr()).property_layout_ptr()
+    }
+
     /// Check the canonical dynamic `stdClass` receiver shape without a
     /// `RefCell` borrow. The single-threaded dispatch loop guarantees that the
     /// object metadata cannot change concurrently.
@@ -2806,6 +2851,25 @@ impl Value {
         obj.dynamic_properties
             .as_ref()
             .and_then(|properties| properties.get(name))
+            .map_or(std::ptr::null(), |value| value as *const Value)
+    }
+
+    /// Validate and read a cached inline dynamic-property position. A null
+    /// result means the current receiver has a different insertion order or
+    /// has already promoted to general hash storage.
+    /// SAFETY: The receiver must pass the canonical stdClass shape guard.
+    #[inline(always)]
+    pub unsafe fn object_dynamic_property_at_unchecked(
+        &self,
+        name: &str,
+        position: usize,
+    ) -> *const Value {
+        debug_assert!(self.object_is_dynamic_std_class_unchecked());
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        let obj = &*refcell.as_ptr();
+        obj.dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.get_at_position(position, name))
             .map_or(std::ptr::null(), |value| value as *const Value)
     }
 

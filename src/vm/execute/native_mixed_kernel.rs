@@ -127,6 +127,7 @@ unsafe fn native_quick_long_mixed_kernel(
     let mut has_hash_update = false;
     let mut has_virtual_pipeline = false;
     let mut has_property_method = false;
+    let mut has_property_read = false;
     let mut has_typed_method = false;
     let mut plan_index = 1usize;
 
@@ -295,6 +296,38 @@ unsafe fn native_quick_long_mixed_kernel(
                     },
                     plan.target_ip(next_target)?.saturating_sub(1),
                 )?;
+            }
+            QuickLongOp::ObjectPropertyLong {
+                result,
+                next_target,
+                resume_ip,
+                ..
+            }
+            | QuickLongOp::ObjectPropertyStringLength {
+                result,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1)
+                    || !matches!(
+                        resolved_object_ops.get(plan_index),
+                        Some(QuickResolvedObjectOp::PropertyRead { .. })
+                    )
+                {
+                    return None;
+                }
+                // Runtime resolves the invariant property and seeds this
+                // shadow slot before native entry. A self move keeps control
+                // target mapping explicit while register allocation can erase it.
+                builder.append(
+                    NativeStraightLongOperation::Move {
+                        source: QuickLongOperand::Slot(result),
+                        result,
+                    },
+                    resume_ip,
+                )?;
+                has_property_read = true;
             }
             QuickLongOp::VirtualObjectArrayPipeline {
                 constructor_arguments,
@@ -542,6 +575,63 @@ unsafe fn native_quick_long_mixed_kernel(
                     resume_ip,
                 )?;
             }
+            QuickLongOp::AddAssign {
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                add_resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(lhs),
+                        rhs: QuickLongOperand::Slot(rhs),
+                        result,
+                        destination,
+                    },
+                    add_resume_ip,
+                )?;
+            }
+            QuickLongOp::AddAddAssign {
+                first_lhs,
+                first_rhs,
+                first_result,
+                second_lhs,
+                second_rhs,
+                second_result,
+                destination,
+                next_target,
+                first_resume_ip,
+                second_resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                builder.append(
+                    NativeStraightLongOperation::Binary {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(first_lhs),
+                        rhs: QuickLongOperand::Slot(first_rhs),
+                        result: first_result,
+                    },
+                    first_resume_ip,
+                )?;
+                builder.append(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(second_lhs),
+                        rhs: QuickLongOperand::Slot(second_rhs),
+                        result: second_result,
+                        destination,
+                    },
+                    second_resume_ip,
+                )?;
+            }
             QuickLongOp::TraceGuard {
                 kind,
                 lhs,
@@ -599,8 +689,19 @@ unsafe fn native_quick_long_mixed_kernel(
         }
         builder.operations[native_index as usize] = NativeStraightLongOperation::Jump { target };
     }
-    if (!has_hash_update && !has_virtual_pipeline && !has_property_method)
-        || !has_typed_method
+    // A frame-free object method in the same region may mutate a property
+    // through the receiver. Quick execution rereads the bound pointer on each
+    // operation, whereas native property inputs are hoisted once at entry.
+    // Keep that combination out until property read/write sets are proven
+    // disjoint by the planner.
+    if has_property_read && (has_property_method || has_typed_method || has_virtual_pipeline) {
+        return None;
+    }
+    if (!has_hash_update
+        && !has_virtual_pipeline
+        && !has_property_method
+        && !has_property_read)
+        || (!has_typed_method && !has_property_read)
         || builder.operation_count == 0
     {
         return None;

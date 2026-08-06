@@ -2273,8 +2273,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchObjR => {
-                if !try_cached_fetch_obj_r(frame, op_array, opline) {
-                    op_fetch_obj_r_slow(eg, frame, op_array, opline)?;
+                match try_cached_fetch_obj_r(frame, op_array, opline) {
+                    CachedFetchObjResult::Miss => {
+                        op_fetch_obj_r_slow(eg, frame, op_array, opline)?;
+                    }
+                    CachedFetchObjResult::Complete => {}
+                    CachedFetchObjResult::CompleteAndSkipNext => {
+                        unsafe { (*frame).opline = opline_ptr.add(2) };
+                        continue;
+                    }
                 }
             }
 

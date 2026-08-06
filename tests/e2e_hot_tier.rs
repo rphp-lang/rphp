@@ -738,6 +738,23 @@ echo $mm->min . '|' . $mm->max;
 }
 
 #[test]
+fn native_property_read_region_does_not_hoist_across_mutating_method() {
+    assert_eq!(run_php("<?php
+class RunningCounter {
+    public $value = 0;
+    public function advance() { $this->value = $this->value + 1; }
+}
+$counter = new RunningCounter();
+$sum = 0;
+for ($i = 0; $i < 200; $i++) {
+    $counter->advance();
+    $sum += $counter->value;
+}
+echo $counter->value . '|' . $sum;
+"), "200|20100");
+}
+
+#[test]
 fn test_long_property_method_plan_is_compiled_from_general_patterns() {
     let source = "<?php
 class Stats {

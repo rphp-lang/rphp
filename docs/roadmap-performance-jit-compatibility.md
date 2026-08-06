@@ -4530,6 +4530,84 @@ about 2.9x and does not shrink under the current native-JIT feature, identifying
 VM dispatch, receiver/operand guards, `RefCell` access and heap-Value cloning as
 the next independent object-access problem.
 
+### Guarded invariant object-property region checkpoint
+
+The retained-read gap is now handled as a general object optimization rather
+than a JSON kernel (2026-08-06). A dynamic-property cache records the shared
+canonical `stdClass` `ObjectLayout` pointer in the cache entry's otherwise idle
+function-pointer field. A hit compares that existing pointer rather than
+rechecking the class-name String and empty declared layout. Small dynamic maps
+also contribute a position hint, but every hit validates the current key and
+falls back to canonical name lookup when another object uses a different
+insertion order. No object-local pointer is retained by the bytecode cache and
+`PhpObject` remains its preceding size with no new construction-time store.
+
+The baseline dispatcher also consumes adjacent `FetchObjR -> strlen` directly
+from the borrowed String property. It writes only the Long length and skips the
+intermediate heap-Value clone, bitmap transition and second opcode dispatch.
+Non-String values, missing properties, changed receiver layouts and
+magic-property cases retain their canonical paths. A declared receiver arriving
+at a dynamic-cached site first performs full resolution, then its ordinary
+declared-slot cache can use the same borrowed consumer fusion.
+
+Closed typed loops gained two architecture-independent operations:
+`ObjectPropertyLong` and `ObjectPropertyStringLength`. Planning requires an
+invariant receiver CV and an exact literal property name. At each region entry,
+runtime revalidates the warmed declared/dynamic inline cache, receiver layout,
+property name, current value type and reference state, then binds the current
+property pointer. Quick execution rereads that pointer per operation. Native
+execution hoists the immutable value into an existing Long shadow slot and the
+shared straight-loop IR feeds both ARM64 and x86-64 assemblers. `AddAssign` and
+`AddAddAssign` were added to the same mixed native lowering, so this extension
+also applies to non-object typed regions.
+
+Native hoisting is deliberately rejected when the same region contains an
+object method or virtual object pipeline: such a call may mutate the property.
+The quick executor remains correct because it rereads the bound pointer. Native
+admission can later recover those combinations only after the compiler proves
+disjoint property read/write sets. Replacement receivers, different property
+orders, declared receivers and a mutating-method control are permanent tests;
+all failures resume at the exact original `FetchObjR` without replaying a
+committed operation.
+
+Eleven order-rotated native-CPU `max-perf` runs on ARM64 produced these internal
+time medians. "Previous" is commit `cb39f90`; PHP 8.5.9 tracing JIT was verified
+active:
+
+| Workload | Previous RPHP | RPHP no JIT | RPHP JIT | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|---:|
+| `stdClass` Long property, 10M reads | 201.490 ms | 56.609 ms | 6.287 ms | 74.226 ms | 68.422 ms |
+| `stdClass` String property + `strlen`, 10M reads | 263.653 ms | 55.232 ms | 5.751 ms | 76.967 ms | 73.454 ms |
+| `stdClass` mixed retained reads, 5M pairs | 201.536 ms | 36.552 ms | 5.518 ms | 68.659 ms | 64.596 ms |
+| Declared-object mixed reads, 5M pairs | 145.103 ms | 35.917 ms | 5.445 ms | 34.164 ms | 11.221 ms |
+
+The canonical retained `stdClass` mix is now 1.88x faster than PHP without JIT
+and 11.71x faster than PHP tracing JIT. The declared-object no-JIT lane is still
+5.1% slower than PHP on this ARM64 host, while the native lane is 2.06x faster
+than PHP tracing JIT. VM statistics record one admitted/executed native
+`typed_ops_loop`, 4,999,967 optimized iterations and zero side exits.
+
+Twenty-one paired controls protect construction and unrelated storage. Changing
+object decode moved from 48.620 to 48.306 ms (-0.6%), width two from 35.613 to
+34.524 ms (-3.1%), width twenty from 251.691 to 253.736 ms (+0.8%), and the
+associative width-four control from 70.694 to 69.599 ms (-1.5%). The rejected
+per-object shape-ID variant exceeded the width-20 budget; using the already
+shared layout pointer brought the final result below the 1% admission limit.
+
+The same source was synchronized into an isolated x86-64 Linux build and both
+feature configurations compiled successfully. Nine-run medians with an active
+PHP 8.4.24 tracing JIT were:
+
+| x86-64 workload | RPHP no JIT | RPHP JIT | PHP no JIT | PHP tracing JIT |
+|---|---:|---:|---:|---:|
+| `stdClass` mixed retained reads | 58.849 ms | 5.466 ms | 65.759 ms | 50.036 ms |
+| Declared-object mixed reads | 58.943 ms | 5.512 ms | 43.485 ms | 12.329 ms |
+
+The remaining object-access work is therefore no longer invariant reads. The
+next independent targets are no-JIT declared-property dispatch on x86-64,
+varying receivers that cannot bind once per region, and precise property
+read/write analysis that can safely combine native reads with mutating methods.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

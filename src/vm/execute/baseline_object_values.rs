@@ -101,4 +101,3 @@ fn op_clone_obj<'a>(
     unsafe { slot_set(result_ptr, cloned_val) };
     Ok(ColdResult::Done)
 }
-

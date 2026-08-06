@@ -165,3 +165,56 @@ echo $value->a . '|' . json_encode($value);
         "3|{\"a\":3,\"b\":2,\"c\":4}"
     );
 }
+
+#[test]
+fn property_strlen_fusion_guards_dynamic_declared_and_missing_receivers() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NamedValue {
+    public $name = 'declared';
+}
+function name_length($value) {
+    return strlen($value->name);
+}
+$dynamic = json_decode('{"name":"alpha"}');
+$declared = new NamedValue();
+$missing = json_decode('{"other":"value"}');
+echo name_length($dynamic) . '|'
+    . name_length($dynamic) . '|'
+    . name_length($declared) . '|'
+    . name_length($dynamic) . '|'
+    . name_length($missing);
+"#,
+        ),
+        "5|5|8|5|0"
+    );
+}
+
+#[test]
+fn typed_property_read_region_rebinds_each_receiver_and_property_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class DeclaredRow {
+    public $name = 'gamma';
+    public $value = 3;
+}
+function summarize($row) {
+    $sum = 0;
+    for ($i = 0; $i < 200; $i++) {
+        $sum += $row->value + strlen($row->name);
+    }
+    return $sum;
+}
+$first = json_decode('{"value":11,"name":"alpha"}');
+$second = json_decode('{"name":"beta","value":7}');
+echo summarize($first) . '|'
+    . summarize($second) . '|'
+    . summarize(new DeclaredRow()) . '|'
+    . summarize($first);
+"#,
+        ),
+        "3200|2200|1600|3200"
+    );
+}

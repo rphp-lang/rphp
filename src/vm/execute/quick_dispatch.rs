@@ -67,7 +67,6 @@ unsafe fn run_quick_long_ops_loop(
         let value = &*slot_base.add(slot);
         if value.value_type() != ValueType::Object
             || value.is_reference()
-            || value.object_class_id_unchecked() == 0
         {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
@@ -767,6 +766,62 @@ unsafe fn run_quick_long_ops_loop(
                 slots[destination as usize] = second;
                 dirty_long_mask |=
                     (1u64 << second_result) | (1u64 << destination);
+                next_target
+            }
+            QuickLongOp::ObjectPropertyLong {
+                result,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                let QuickResolvedObjectOp::PropertyRead { property } =
+                    *resolved_object_ops.get_unchecked(op_index)
+                else {
+                    unreachable!("resolved object property read")
+                };
+                if (*property).value_type() != ValueType::Long || (*property).is_reference() {
+                    string_state.commit();
+                    return Ok(deopt_quick_long_kernel(
+                        frame,
+                        op_array,
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        resume_ip,
+                        iterations,
+                    ));
+                }
+                slots[result as usize] = (*property).raw_long();
+                dirty_long_mask |= 1u64 << result;
+                next_target
+            }
+            QuickLongOp::ObjectPropertyStringLength {
+                result,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                let QuickResolvedObjectOp::PropertyRead { property } =
+                    *resolved_object_ops.get_unchecked(op_index)
+                else {
+                    unreachable!("resolved object property strlen")
+                };
+                let Some(value) = (*property).as_str() else {
+                    string_state.commit();
+                    return Ok(deopt_quick_long_kernel(
+                        frame,
+                        op_array,
+                        slot_base,
+                        &slots,
+                        dirty_long_mask,
+                        dirty_bool_mask,
+                        resume_ip,
+                        iterations,
+                    ));
+                };
+                slots[result as usize] = value.len() as i64;
+                dirty_long_mask |= 1u64 << result;
                 next_target
             }
             QuickLongOp::PropertyMethodCall { call } => {

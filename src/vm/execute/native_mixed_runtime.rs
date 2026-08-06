@@ -139,6 +139,33 @@ unsafe fn run_native_quick_long_mixed_kernel(
     resolved_object_ops: &[QuickResolvedObjectOp],
     kernel: &NativeQuickLongMixedKernel,
 ) -> Result<Option<QuickLoopOutcome>, VmError> {
+    for (index, operation) in plan.ops.iter().copied().enumerate() {
+        let (result, string_length) = match operation {
+            QuickLongOp::ObjectPropertyLong { result, .. } => (result, false),
+            QuickLongOp::ObjectPropertyStringLength { result, .. } => (result, true),
+            _ => continue,
+        };
+        let Some(QuickResolvedObjectOp::PropertyRead { property }) =
+            resolved_object_ops.get(index).copied()
+        else {
+            return Ok(None);
+        };
+        if property.is_null() || (*property).is_reference() {
+            return Ok(None);
+        }
+        slots[result as usize] = if string_length {
+            let Some(value) = (*property).as_str() else {
+                return Ok(None);
+            };
+            value.len() as i64
+        } else {
+            if (*property).value_type() != ValueType::Long {
+                return Ok(None);
+            }
+            (*property).raw_long()
+        };
+    }
+
     for slot in 0..64usize {
         if plan.string_input_mask & (1u64 << slot) == 0 {
             continue;

@@ -243,17 +243,58 @@ fn op_new_obj<'a>(
 /// dispatch loop. The inline cache proves both the receiver class and stable
 /// property slot; misses retain the complete visibility, magic-method and
 /// dynamic-property behavior in `op_fetch_obj_r_slow`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CachedFetchObjResult {
+    Miss,
+    Complete,
+    CompleteAndSkipNext,
+}
+
+#[inline(always)]
+fn finish_cached_fetch_obj_r(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    property_ptr: *const Value,
+) -> CachedFetchObjResult {
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    if let Some(strlen) = op_array.instructions.get(ip + 1) {
+        let consumes_fetch = matches!(strlen.opcode, OpCode::Strlen | OpCode::Strlen_String)
+            && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+            && strlen.op1_type == opline.result_type
+            && strlen.op1 == opline.result
+            && matches!(strlen.result_type, OpType::Tmp | OpType::Var);
+        let property = unsafe { &*property_ptr };
+        if consumes_fetch && property.value_type() == ValueType::String {
+            let length = unsafe { property.as_str().unwrap_unchecked().len() as i64 };
+            let result_ptr = unsafe {
+                (*frame).get_op_mut(strlen.result as u32, strlen.result_type)
+            };
+            unsafe { frame_tmp_set_long(frame, result_ptr, length) };
+            return CachedFetchObjResult::CompleteAndSkipNext;
+        }
+    }
+
+    let result_ptr = unsafe {
+        (*frame).get_op_mut(opline.result as u32, opline.result_type)
+    };
+    unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
+    CachedFetchObjResult::Complete
+}
+
 #[inline(always)]
 fn try_cached_fetch_obj_r(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> bool {
+) -> CachedFetchObjResult {
     let obj_val = unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
     };
     if obj_val.value_type() != ValueType::Object {
-        return false;
+        return CachedFetchObjResult::Miss;
     }
 
     let ip = unsafe {
@@ -261,24 +302,30 @@ fn try_cached_fetch_obj_r(
     };
     let cache = &op_array.cache[ip];
     if cache.is_dynamic_property_read() {
-        if !unsafe { obj_val.object_is_dynamic_std_class_unchecked() } {
-            return false;
+        if unsafe { obj_val.object_property_layout_ptr_unchecked() }
+            != cache.dynamic_property_layout()
+        {
+            return CachedFetchObjResult::Miss;
         }
         let prop_name = unsafe {
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
         };
         let Some(name) = prop_name.as_str() else {
-            return false;
+            return CachedFetchObjResult::Miss;
         };
-        let property_ptr = unsafe { obj_val.object_dynamic_property_unchecked(name) };
+        let mut property_ptr = cache.dynamic_property_position().map_or(
+            std::ptr::null(),
+            |position| unsafe {
+                obj_val.object_dynamic_property_at_unchecked(name, position)
+            },
+        );
         if property_ptr.is_null() {
-            return false;
+            property_ptr = unsafe { obj_val.object_dynamic_property_unchecked(name) };
         }
-        let result_ptr = unsafe {
-            (*frame).get_op_mut(opline.result as u32, opline.result_type)
-        };
-        unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
-        return true;
+        if property_ptr.is_null() {
+            return CachedFetchObjResult::Miss;
+        }
+        return finish_cached_fetch_obj_r(frame, op_array, opline, property_ptr);
     }
 
     let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
@@ -286,17 +333,13 @@ fn try_cached_fetch_obj_r(
         || cache.class_id != object_class_id
         || object_class_id == 0
     {
-        return false;
+        return CachedFetchObjResult::Miss;
     }
 
     let property_ptr = unsafe {
         obj_val.object_property_slot_unchecked(cache.property_slot())
     };
-    let result_ptr = unsafe {
-        (*frame).get_op_mut(opline.result as u32, opline.result_type)
-    };
-    unsafe { frame_slot_set(frame, result_ptr, (*property_ptr).clone()) };
-    true
+    finish_cached_fetch_obj_r(frame, op_array, opline, property_ptr)
 }
 
 #[inline(never)]
@@ -384,13 +427,20 @@ fn op_fetch_obj_r_slow(
             }
         }
 
-        let found_val = obj.get_property(&key).cloned();
+        let (found_val, dynamic_position) = if cache_dynamic_std_class {
+            match obj.get_dynamic_property_with_position(&key) {
+                Some((value, position)) => (Some(value.clone()), position),
+                None => (None, None),
+            }
+        } else {
+            (obj.get_property(&key).cloned(), None)
+        };
         if cache_dynamic_std_class && found_val.is_some() {
             let ic_mut = unsafe {
                 &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache)
             };
-            ic_mut.set_dynamic_property_read();
+            ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
         if let Some(val) = found_val {

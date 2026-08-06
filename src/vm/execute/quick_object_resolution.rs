@@ -4,6 +4,9 @@
 #[cfg(feature = "quick-loops")]
 enum QuickResolvedObjectOp {
     None,
+    PropertyRead {
+        property: *const Value,
+    },
     PropertyMethod {
         receiver: *const Value,
         target: *const FunctionCommon,
@@ -64,7 +67,7 @@ impl QuickObjectCallRecorder<'_> {
             }
             unsafe {
                 match *resolved {
-                    QuickResolvedObjectOp::None => {}
+                    QuickResolvedObjectOp::None | QuickResolvedObjectOp::PropertyRead { .. } => {}
                     QuickResolvedObjectOp::PropertyMethod { target, .. }
                     | QuickResolvedObjectOp::PropertyGetter { target, .. }
                     | QuickResolvedObjectOp::ScalarMethod { target, .. }
@@ -140,6 +143,55 @@ unsafe fn quick_property_getter_slot(
         return None;
     }
     Some(slot)
+}
+
+#[cfg(feature = "quick-loops")]
+unsafe fn quick_object_property_read(
+    op_array: &crate::compiler::OpArray,
+    receiver: *const Value,
+    cache_ip: u32,
+    expected_type: ValueType,
+) -> Option<*const Value> {
+    let cache_ip = usize::try_from(cache_ip).ok()?;
+    let instruction = op_array.instructions.get(cache_ip)?;
+    let cache = op_array.cache.get(cache_ip)?;
+    let receiver_value = &*receiver;
+    if receiver_value.value_type() != ValueType::Object || receiver_value.is_reference() {
+        return None;
+    }
+
+    let property = if cache.is_dynamic_property_read() {
+        if receiver_value.object_property_layout_ptr_unchecked()
+            != cache.dynamic_property_layout()
+        {
+            return None;
+        }
+        let name = op_array
+            .literals
+            .get(instruction.op2 as usize)?
+            .as_str()?;
+        let mut property = cache.dynamic_property_position().map_or(
+            std::ptr::null(),
+            |position| receiver_value.object_dynamic_property_at_unchecked(name, position),
+        );
+        if property.is_null() {
+            property = receiver_value.object_dynamic_property_unchecked(name);
+        }
+        property
+    } else {
+        let class_id = receiver_value.object_class_id_unchecked();
+        if class_id == 0 || cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+            return None;
+        }
+        receiver_value.object_property_slot_unchecked(cache.property_slot())
+    };
+    if property.is_null()
+        || (*property).value_type() != expected_type
+        || (*property).is_reference()
+    {
+        return None;
+    }
+    Some(property)
 }
 
 #[cfg(feature = "quick-loops")]
@@ -245,6 +297,30 @@ unsafe fn resolve_quick_object_ops(
     let mut resolved = vec![QuickResolvedObjectOp::None; plan.ops.len()];
     for (index, operation) in plan.ops.iter().copied().enumerate() {
         resolved[index] = match operation {
+            QuickLongOp::ObjectPropertyLong {
+                object,
+                cache_ip,
+                ..
+            } => QuickResolvedObjectOp::PropertyRead {
+                property: quick_object_property_read(
+                    op_array,
+                    slot_base.add(object as usize),
+                    cache_ip,
+                    ValueType::Long,
+                )?,
+            },
+            QuickLongOp::ObjectPropertyStringLength {
+                object,
+                cache_ip,
+                ..
+            } => QuickResolvedObjectOp::PropertyRead {
+                property: quick_object_property_read(
+                    op_array,
+                    slot_base.add(object as usize),
+                    cache_ip,
+                    ValueType::String,
+                )?,
+            },
             QuickLongOp::PropertyMethodCall { call } => {
                 let (receiver, target, user) = quick_object_method_target(
                     op_array,

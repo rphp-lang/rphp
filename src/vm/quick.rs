@@ -823,6 +823,24 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Guarded read of an invariant receiver's Long property. Resolution
+    /// binds the current property location once at typed-region entry.
+    ObjectPropertyLong {
+        object: u16,
+        cache_ip: u32,
+        result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// Guarded borrowed strlen of an invariant receiver's String property.
+    /// The intermediate heap Value is never materialized in the frame.
+    ObjectPropertyStringLength {
+        object: u16,
+        cache_ip: u32,
+        result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     /// Replace an existing Long array entry selected by the same normalized
     /// integer/string key rules as canonical AssignDim. Planning admits this
     /// only when a preceding guarded fetch proved that the key exists.
@@ -1030,6 +1048,8 @@ impl QuickLongOp {
             | Self::JsonProjectionStep { next_target, .. }
             | Self::TraceGuard { next_target, .. }
             | Self::FetchArrayLong { next_target, .. }
+            | Self::ObjectPropertyLong { next_target, .. }
+            | Self::ObjectPropertyStringLength { next_target, .. }
             | Self::StoreArrayLong { next_target, .. }
             | Self::ArrayPushLong { next_target, .. }
             | Self::StringAppend { next_target, .. }
@@ -4763,6 +4783,51 @@ fn detect_long_ops_region_inner(
                     resume_ip,
                 }
             }
+            OpCode::FetchObjR => {
+                if instruction.op1_type != OpType::Cv
+                    || instruction.op2_type != OpType::Const
+                    || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                    || op_array
+                        .literals
+                        .get(instruction.op2 as usize)
+                        .and_then(Value::as_str)
+                        .is_none()
+                    || !cv_unmodified_in_region(region, instruction.op1)
+                {
+                    return None;
+                }
+                add_mask_slot(&mut object_input_mask, instruction.op1, total_slots)?;
+                has_object_call = true;
+                let cache_ip = u32::try_from(ip).ok()?;
+                let resume_ip = ip;
+                let strlen = op_array.instructions.get(ip + 1).copied();
+                if let Some(strlen) = strlen
+                    && matches!(strlen.opcode, OpCode::Strlen | OpCode::Strlen_String)
+                    && strlen.op1_type == instruction.result_type
+                    && strlen.op1 == instruction.result
+                    && matches!(strlen.result_type, OpType::Tmp | OpType::Var)
+                {
+                    add_mask_slot(&mut long_output_mask, strlen.result, total_slots)?;
+                    ip += 2;
+                    QuickLongOp::ObjectPropertyStringLength {
+                        object: instruction.op1,
+                        cache_ip,
+                        result: strlen.result,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                    ip += 1;
+                    QuickLongOp::ObjectPropertyLong {
+                        object: instruction.op1,
+                        cache_ip,
+                        result: instruction.result,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                }
+            }
             OpCode::InitMethodCall => {
                 if instruction.op1_type != OpType::Cv {
                     return None;
@@ -5105,6 +5170,8 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::ModConst { resume_ip, .. }
             | QuickLongOp::JsonProjectionStep { resume_ip, .. }
             | QuickLongOp::FetchArrayLong { resume_ip, .. }
+            | QuickLongOp::ObjectPropertyLong { resume_ip, .. }
+            | QuickLongOp::ObjectPropertyStringLength { resume_ip, .. }
             | QuickLongOp::StoreArrayLong { resume_ip, .. }
             | QuickLongOp::ArrayPushLong { resume_ip, .. }
             | QuickLongOp::StringAppend { resume_ip, .. }
@@ -6070,6 +6137,28 @@ for ($i = 0; $i < 100; $i++) {
         assert!(plan.ops.iter().any(|operation| matches!(
             operation,
             QuickLongOp::ComposedPropertyCall { .. }
+        )));
+    }
+
+    #[test]
+    fn detects_guarded_invariant_object_property_reads_in_long_ops_loop() {
+        let plan = long_ops_plan(
+            "<?php
+$row = json_decode('{\"value\":11,\"name\":\"alpha\"}');
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum += $row->value + strlen($row->name);
+}
+",
+        );
+        assert_ne!(plan.object_input_mask, 0);
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::ObjectPropertyLong { .. }
+        )));
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::ObjectPropertyStringLength { .. }
         )));
     }
 
