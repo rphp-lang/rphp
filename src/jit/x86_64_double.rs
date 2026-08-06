@@ -69,11 +69,7 @@ impl X86ScalarDoubleRegisterMap {
                 mark_source(&mut last_use, program.output, program.operations.len());
             }
         } else {
-            mark_source(
-                &mut last_use,
-                program.output,
-                program.operations.len(),
-            );
+            mark_source(&mut last_use, program.output, program.operations.len());
         }
 
         let mut temporaries = std::array::from_fn(|index| {
@@ -444,11 +440,8 @@ impl CompiledScalarDoubleProgram {
 fn validate_scalar_double_plan(
     plan: &ScalarDoubleFunctionPlan,
 ) -> Result<(), ScalarDoubleJitError> {
-    plan.validate_register_program(
-        MAX_SCALAR_DOUBLE_INPUTS,
-        MAX_SCALAR_DOUBLE_OPERATIONS,
-    )
-    .map_err(ScalarDoubleJitError::InvalidProgram)
+    plan.validate_register_program(MAX_SCALAR_DOUBLE_INPUTS, MAX_SCALAR_DOUBLE_OPERATIONS)
+        .map_err(ScalarDoubleJitError::InvalidProgram)
 }
 
 fn emit_scalar_double_operations(

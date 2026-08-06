@@ -187,7 +187,16 @@ fn two_input_argument_plan() -> QuickDoubleArgumentProgram {
             QuickDoubleSource::Constant(0.0),
         ],
         output_count: 2,
-        input_slots: [0, 1, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX],
+        input_slots: [
+            0,
+            1,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+        ],
         input_count: 2,
     }
 }
@@ -261,7 +270,16 @@ fn dependent_argument_plan() -> QuickDoubleArgumentProgram {
             QuickDoubleSource::Constant(0.0),
         ],
         output_count: 3,
-        input_slots: [0, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX, u16::MAX],
+        input_slots: [
+            0,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+        ],
         input_count: 1,
     }
 }
@@ -308,10 +326,7 @@ fn rhs_overwrite_leaf_plan() -> ScalarDoubleFunctionPlan {
 fn register_to_register_double_move_count(code: &[u8]) -> usize {
     code.windows(4)
         .filter(|bytes| {
-            bytes[0] == 0x66
-                && bytes[1] == 0x0f
-                && bytes[2] == 0x28
-                && bytes[3] & 0xc0 == 0xc0
+            bytes[0] == 0x66 && bytes[1] == 0x0f && bytes[2] == 0x28 && bytes[3] & 0xc0 == 0xc0
         })
         .count()
 }
@@ -746,7 +761,9 @@ fn composed_double_loop_completes_and_preserves_empty_state() {
     };
     let interrupt = false;
     assert_eq!(
-        program.call(&mut state, &[2.5, 4.0, 2.0], &interrupt).unwrap(),
+        program
+            .call(&mut state, &[2.5, 4.0, 2.0], &interrupt)
+            .unwrap(),
         QuickDoubleCallAccumulateJitOutcome::Completed
     );
     assert_eq!(state.induction, 5);
@@ -756,7 +773,9 @@ fn composed_double_loop_completes_and_preserves_empty_state() {
     state.bound = 5;
     state.last_term = 6.0;
     assert_eq!(
-        program.call(&mut state, &[2.5, 4.0, 2.0], &interrupt).unwrap(),
+        program
+            .call(&mut state, &[2.5, 4.0, 2.0], &interrupt)
+            .unwrap(),
         QuickDoubleCallAccumulateJitOutcome::Completed
     );
     assert_eq!(state.last_term, 6.0);
@@ -806,7 +825,9 @@ fn composed_double_loop_polls_and_side_exits_transactionally() {
     };
     let interrupt = true;
     assert_eq!(
-        program.call(&mut state, &[2.5, 4.0, 2.0], &interrupt).unwrap(),
+        program
+            .call(&mut state, &[2.5, 4.0, 2.0], &interrupt)
+            .unwrap(),
         QuickDoubleCallAccumulateJitOutcome::Interrupted
     );
     assert_eq!(state.induction, 1_024);

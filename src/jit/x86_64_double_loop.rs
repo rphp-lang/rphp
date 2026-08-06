@@ -7,9 +7,7 @@ use crate::vm::function::{
     ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleSource,
     ScalarLongConditionKind,
 };
-use crate::vm::quick::{
-    QuickDoubleArgumentOp, QuickDoubleArgumentProgram, QuickDoubleSource,
-};
+use crate::vm::quick::{QuickDoubleArgumentOp, QuickDoubleArgumentProgram, QuickDoubleSource};
 use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::io;
@@ -608,11 +606,11 @@ fn validate_argument_source(
         QuickDoubleSource::Input(index) if index >= input_count => Err(
             QuickDoubleCallAccumulateJitError::InvalidProgram("argument input is outside the ABI"),
         ),
-        QuickDoubleSource::Temporary(index) if index as usize >= available_temporaries => Err(
-            QuickDoubleCallAccumulateJitError::InvalidProgram(
+        QuickDoubleSource::Temporary(index) if index as usize >= available_temporaries => {
+            Err(QuickDoubleCallAccumulateJitError::InvalidProgram(
                 "argument temporary is used before definition",
-            ),
-        ),
+            ))
+        }
         _ => Ok(()),
     }
 }

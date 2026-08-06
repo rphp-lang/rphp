@@ -1,13 +1,12 @@
 /// Minimal PHP parser — produces AST from token stream.
-
 use crate::lexer::Token;
 
 /// Target in a list()/[] destructuring assignment.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListTarget {
     Variable(String),
-    Skip,  // empty slot: list(,$b)
-    Nested(Vec<ListTarget>), // nested destructuring
+    Skip,                                     // empty slot: list(,$b)
+    Nested(Vec<ListTarget>),                  // nested destructuring
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
 }
 
@@ -45,85 +44,101 @@ pub enum Expr {
         name: String,
         args: Vec<CallArg>,
     },
-    PostInc(String),   // $i++
-    PostDec(String),   // $i--
-    PreInc(String),    // ++$i
-    PreDec(String),    // --$i
-    Not(Box<Expr>),    // !expr
+    PostInc(String),       // $i++
+    PostDec(String),       // $i--
+    PreInc(String),        // ++$i
+    PreDec(String),        // --$i
+    Not(Box<Expr>),        // !expr
     UnaryMinus(Box<Expr>), // -$x
-    Ternary {          // cond ? then : else
+    Ternary {
+        // cond ? then : else
         condition: Box<Expr>,
         then_expr: Box<Expr>,
         else_expr: Box<Expr>,
     },
-    ArrayLiteral(Vec<ArrayElement>),  // [1, 2] or ['a' => 1]
-    ArrayAccess {      // $a[0], $a['key']
+    ArrayLiteral(Vec<ArrayElement>), // [1, 2] or ['a' => 1]
+    ArrayAccess {
+        // $a[0], $a['key']
         array: Box<Expr>,
         index: Box<Expr>,
     },
-    Cast {             // (int)$x, (string)$x, etc.
+    Cast {
+        // (int)$x, (string)$x, etc.
         cast_type: CastType,
         expr: Box<Expr>,
     },
-    Isset(Vec<Expr>),  // isset($a, $b)
-    Empty(Box<Expr>),  // empty($a)
-    NullCoalesce {     // $a ?? $b
+    Isset(Vec<Expr>), // isset($a, $b)
+    Empty(Box<Expr>), // empty($a)
+    NullCoalesce {
+        // $a ?? $b
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    Elvis {            // $a ?: $b (evaluates lhs once)
+    Elvis {
+        // $a ?: $b (evaluates lhs once)
         left: Box<Expr>,
         right: Box<Expr>,
     },
-    Match {            // match($x) { ... }
+    Match {
+        // match($x) { ... }
         expr: Box<Expr>,
         arms: Vec<MatchArm>,
     },
-    Closure {          // function($x) use($y) { ... }: ReturnType
+    Closure {
+        // function($x) use($y) { ... }: ReturnType
         params: Vec<Param>,
         use_vars: Vec<String>,
         body: Vec<Stmt>,
         return_type: Option<TypeHint>,
     },
-    New {              // new ClassName(args)
+    New {
+        // new ClassName(args)
         class_name: String,
         args: Vec<CallArg>,
     },
-    PropertyAccess {   // $obj->prop or $obj?->prop
+    PropertyAccess {
+        // $obj->prop or $obj?->prop
         object: Box<Expr>,
         property: String,
         nullsafe: bool,
     },
-    MethodCall {       // $obj->method(args) or $obj?->method(args)
+    MethodCall {
+        // $obj->method(args) or $obj?->method(args)
         object: Box<Expr>,
         method: String,
         args: Vec<CallArg>,
         nullsafe: bool,
     },
-    StaticCall {       // ClassName::method(args)
+    StaticCall {
+        // ClassName::method(args)
         class_name: String,
         method: String,
         args: Vec<CallArg>,
     },
-    StaticProperty {   // ClassName::$prop
+    StaticProperty {
+        // ClassName::$prop
         class_name: String,
         property: String,
     },
-    Throw(Box<Expr>),  // throw expr (PHP 8 expression)
-    Assign {           // $var = expr (used in expressions like $a = $b ?? $c)
+    Throw(Box<Expr>), // throw expr (PHP 8 expression)
+    Assign {
+        // $var = expr (used in expressions like $a = $b ?? $c)
         var: String,
         expr: Box<Expr>,
     },
-    DynamicCall {      // $var(args) — variable function call / closure call
+    DynamicCall {
+        // $var(args) — variable function call / closure call
         callable: Box<Expr>,
         args: Vec<CallArg>,
     },
-    Instanceof {       // $obj instanceof ClassName
+    Instanceof {
+        // $obj instanceof ClassName
         expr: Box<Expr>,
         class_name: String,
     },
-    Constant(String),  // FOO, PHP_INT_MAX — named constant reference
-    Yield {            // yield $value or yield $key => $value
+    Constant(String), // FOO, PHP_INT_MAX — named constant reference
+    Yield {
+        // yield $value or yield $key => $value
         value: Option<Box<Expr>>,
         key: Option<Box<Expr>>,
     },
@@ -164,15 +179,15 @@ pub enum BinOp {
     LessEqual,
     Greater,
     GreaterEqual,
-    And,    // &&
-    Or,     // ||
-    Spaceship,    // <=>
-    Pow,          // **
-    BitwiseAnd,   // &
-    BitwiseOr,    // |
-    BitwiseXor,   // ^
-    ShiftLeft,    // <<
-    ShiftRight,   // >>
+    And,        // &&
+    Or,         // ||
+    Spaceship,  // <=>
+    Pow,        // **
+    BitwiseAnd, // &
+    BitwiseOr,  // |
+    BitwiseXor, // ^
+    ShiftLeft,  // <<
+    ShiftRight, // >>
 }
 
 /// PHP type hint for function parameters.
@@ -188,9 +203,9 @@ pub enum TypeHint {
     Void,
     Mixed,
     Never,
-    ClassName(std::string::String),  // includes "self", "parent", "static"
-    Nullable(Box<TypeHint>),         // ?int, ?string, ?ClassName, etc.
-    Union(Vec<TypeHint>),            // int|string, Foo|Bar, etc.
+    ClassName(std::string::String), // includes "self", "parent", "static"
+    Nullable(Box<TypeHint>),        // ?int, ?string, ?ClassName, etc.
+    Union(Vec<TypeHint>),           // int|string, Foo|Bar, etc.
 }
 
 /// Function parameter with optional default value.
@@ -245,12 +260,14 @@ pub enum Stmt {
     },
     Return(Option<Expr>),
     ExprStmt(Expr),
-    ArrayAssign {      // $a[idx] = expr
+    ArrayAssign {
+        // $a[idx] = expr
         var: String,
         index: Expr,
         expr: Expr,
     },
-    ArrayPush {        // $a[] = expr
+    ArrayPush {
+        // $a[] = expr
         var: String,
         expr: Expr,
     },
@@ -275,56 +292,64 @@ pub enum Stmt {
         is_final: bool,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
-        uses: Vec<String>,          // trait names from `use Foo, Bar;`
+        uses: Vec<String>, // trait names from `use Foo, Bar;`
     },
     Interface {
         name: String,
         extends: Vec<String>,
-        methods: Vec<ClassMethod>,  // all public, abstract (no body)
+        methods: Vec<ClassMethod>, // all public, abstract (no body)
     },
     Trait {
         name: String,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
     },
-    AssignProp {       // $obj->prop = expr
+    AssignProp {
+        // $obj->prop = expr
         object: Expr,
         property: String,
         expr: Expr,
     },
-    AssignObjArrayDim {  // $obj->prop[$key] = expr
+    AssignObjArrayDim {
+        // $obj->prop[$key] = expr
         object: Expr,
         property: String,
         index: Expr,
         expr: Expr,
     },
-    Declare {           // declare(strict_types=1);
+    Declare {
+        // declare(strict_types=1);
         directive: String,
         value: i64,
     },
-    Namespace {         // namespace App\Models;
+    Namespace {
+        // namespace App\Models;
         name: String,
         body: Vec<Stmt>, // if braced: namespace App { ... }, else: rest of file
     },
-    UseDecl {           // use App\Models\User; or use App\Models\User as U;
+    UseDecl {
+        // use App\Models\User; or use App\Models\User as U;
         imports: Vec<(String, String)>, // (fully_qualified, alias)
     },
-    Const {            // const FOO = expr;
+    Const {
+        // const FOO = expr;
         name: String,
         value: Expr,
     },
-    ListAssign {       // list($a, $b) = expr; or [$a, $b] = expr;
+    ListAssign {
+        // list($a, $b) = expr; or [$a, $b] = expr;
         targets: Vec<ListTarget>,
         expr: Expr,
     },
-    Global(Vec<String>),  // global $a, $b;
-    StaticVar {           // static $a = 0, $b = "";
+    Global(Vec<String>), // global $a, $b;
+    StaticVar {
+        // static $a = 0, $b = "";
         vars: Vec<(String, Option<Expr>)>,
     },
     Enum {
         name: String,
         backing_type: Option<TypeHint>,
-        cases: Vec<(String, Option<Expr>)>,  // (case_name, optional_value)
+        cases: Vec<(String, Option<Expr>)>, // (case_name, optional_value)
         methods: Vec<ClassMethod>,
     },
     Include {
@@ -336,8 +361,8 @@ pub enum Stmt {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
-    pub types: Vec<String>,     // Exception class names (multi-catch: ExA | ExB)
-    pub var: String,            // $e
+    pub types: Vec<String>, // Exception class names (multi-catch: ExA | ExB)
+    pub var: String,        // $e
     pub body: Vec<Stmt>,
 }
 
@@ -390,7 +415,11 @@ pub struct Parser {
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0, in_class_body: false }
+        Self {
+            tokens,
+            pos: 0,
+            in_class_body: false,
+        }
     }
 
     pub fn parse(&mut self) -> Result<Vec<Stmt>, String> {
@@ -411,14 +440,24 @@ impl Parser {
                 self.expect(&Token::LParen)?;
                 let directive = match self.advance() {
                     Token::Identifier(n) => n,
-                    other => return Err(format!("Expected directive name in declare(), got {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "Expected directive name in declare(), got {:?}",
+                            other
+                        ));
+                    }
                 };
                 self.expect(&Token::Assign)?;
                 let value = match self.advance() {
                     Token::Integer(n) => n,
                     Token::True => 1,
                     Token::False => 0,
-                    other => return Err(format!("Expected integer value in declare(), got {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "Expected integer value in declare(), got {:?}",
+                            other
+                        ));
+                    }
                 };
                 self.expect(&Token::RParen)?;
                 self.expect(&Token::Semicolon)?;
@@ -456,7 +495,12 @@ impl Parser {
                         self.advance(); // consume 'as'
                         match self.advance() {
                             Token::Identifier(n) => n,
-                            other => return Err(format!("Expected alias name after 'as', got {:?}", other)),
+                            other => {
+                                return Err(format!(
+                                    "Expected alias name after 'as', got {:?}",
+                                    other
+                                ));
+                            }
                         }
                     } else {
                         // Default alias = last segment
@@ -476,7 +520,12 @@ impl Parser {
                 self.advance(); // consume 'const'
                 let name = match self.advance() {
                     Token::Identifier(n) => n,
-                    other => return Err(format!("Expected constant name after 'const', got {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "Expected constant name after 'const', got {:?}",
+                            other
+                        ));
+                    }
                 };
                 self.expect(&Token::Assign)?;
                 let value = self.parse_expr()?;
@@ -500,7 +549,11 @@ impl Parser {
                 };
                 let path = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
-                Ok(Stmt::Include { path, is_require, is_once })
+                Ok(Stmt::Include {
+                    path,
+                    is_require,
+                    is_once,
+                })
             }
             Token::Variable(_) => {
                 // Peek ahead to determine statement type
@@ -520,7 +573,10 @@ impl Parser {
                         self.advance(); // consume '='
                         let expr = self.parse_expr()?;
                         self.expect(&Token::Semicolon)?;
-                        return Ok(Stmt::ArrayPush { var: var_name, expr });
+                        return Ok(Stmt::ArrayPush {
+                            var: var_name,
+                            expr,
+                        });
                     }
                     // Check for $a[idx] = by scanning ahead for ] =
                     // Simple heuristic: find matching ] then check for =
@@ -535,7 +591,11 @@ impl Parser {
                         self.expect(&Token::Assign)?;
                         let expr = self.parse_expr()?;
                         self.expect(&Token::Semicolon)?;
-                        return Ok(Stmt::ArrayAssign { var: var_name, index, expr });
+                        return Ok(Stmt::ArrayAssign {
+                            var: var_name,
+                            index,
+                            expr,
+                        });
                     }
                     // Otherwise fall through to expression parsing
                     let expr = self.parse_expr()?;
@@ -579,15 +639,25 @@ impl Parser {
                         let is_obj_dim_assign = matches!(&expr, Expr::ArrayAccess { array, .. } if matches!(array.as_ref(), Expr::PropertyAccess { .. }));
 
                         if is_prop_assign {
-                            if let Expr::PropertyAccess { object, property, .. } = expr {
+                            if let Expr::PropertyAccess {
+                                object, property, ..
+                            } = expr
+                            {
                                 self.advance(); // consume '='
                                 let rhs = self.parse_expr()?;
                                 self.expect(&Token::Semicolon)?;
-                                return Ok(Stmt::AssignProp { object: *object, property, expr: rhs });
+                                return Ok(Stmt::AssignProp {
+                                    object: *object,
+                                    property,
+                                    expr: rhs,
+                                });
                             }
                         } else if is_obj_dim_assign {
                             if let Expr::ArrayAccess { array, index } = expr {
-                                if let Expr::PropertyAccess { object, property, .. } = *array {
+                                if let Expr::PropertyAccess {
+                                    object, property, ..
+                                } = *array
+                                {
                                     self.advance(); // consume '='
                                     let rhs = self.parse_expr()?;
                                     self.expect(&Token::Semicolon)?;
@@ -606,9 +676,7 @@ impl Parser {
                     Ok(Stmt::ExprStmt(expr))
                 }
             }
-            Token::If => {
-                self.parse_if()
-            }
+            Token::If => self.parse_if(),
             Token::ElseIf => {
                 // elseif at statement level (shouldn't happen normally, but handle gracefully)
                 self.parse_if()
@@ -658,25 +726,43 @@ impl Parser {
                             let value = self.parse_expr()?;
                             self.expect(&Token::Colon)?;
                             let mut body = Vec::new();
-                            while !matches!(self.peek(), Token::Case | Token::Default | Token::RBrace) && !self.at_eof() {
+                            while !matches!(
+                                self.peek(),
+                                Token::Case | Token::Default | Token::RBrace
+                            ) && !self.at_eof()
+                            {
                                 body.push(self.parse_stmt()?);
                             }
-                            cases.push(SwitchCase { value: Some(value), body });
+                            cases.push(SwitchCase {
+                                value: Some(value),
+                                body,
+                            });
                         }
                         Token::Default => {
                             if has_default {
-                                return Err("Switch statements may only contain one default clause".into());
+                                return Err(
+                                    "Switch statements may only contain one default clause".into(),
+                                );
                             }
                             has_default = true;
                             self.advance();
                             self.expect(&Token::Colon)?;
                             let mut body = Vec::new();
-                            while !matches!(self.peek(), Token::Case | Token::Default | Token::RBrace) && !self.at_eof() {
+                            while !matches!(
+                                self.peek(),
+                                Token::Case | Token::Default | Token::RBrace
+                            ) && !self.at_eof()
+                            {
                                 body.push(self.parse_stmt()?);
                             }
                             cases.push(SwitchCase { value: None, body });
                         }
-                        other => return Err(format!("Expected 'case' or 'default' in switch, got {:?}", other)),
+                        other => {
+                            return Err(format!(
+                                "Expected 'case' or 'default' in switch, got {:?}",
+                                other
+                            ));
+                        }
                     }
                 }
                 self.expect(&Token::RBrace)?;
@@ -712,7 +798,12 @@ impl Parser {
                 self.expect(&Token::RParen)?;
 
                 let body = self.parse_block_or_stmt()?;
-                Ok(Stmt::For { init, condition, update, body })
+                Ok(Stmt::For {
+                    init,
+                    condition,
+                    update,
+                    body,
+                })
             }
             Token::Foreach => {
                 self.advance(); // consume 'foreach'
@@ -728,7 +819,9 @@ impl Parser {
                     self.advance(); // consume '=>'
                     let val = match self.advance() {
                         Token::Variable(name) => name,
-                        other => return Err(format!("Expected variable after '=>', got {:?}", other)),
+                        other => {
+                            return Err(format!("Expected variable after '=>', got {:?}", other));
+                        }
                     };
                     (Some(first_var), val)
                 } else {
@@ -736,7 +829,12 @@ impl Parser {
                 };
                 self.expect(&Token::RParen)?;
                 let body = self.parse_block_or_stmt()?;
-                Ok(Stmt::Foreach { array, value_var, key_var, body })
+                Ok(Stmt::Foreach {
+                    array,
+                    value_var,
+                    key_var,
+                    body,
+                })
             }
             Token::Function => {
                 self.advance(); // consume 'function'
@@ -754,7 +852,12 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                Ok(Stmt::Function { name, params, body, return_type })
+                Ok(Stmt::Function {
+                    name,
+                    params,
+                    body,
+                    return_type,
+                })
             }
             Token::Return => {
                 self.advance(); // consume 'return'
@@ -788,28 +891,23 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Unset(targets))
             }
-            Token::Try => {
-                self.parse_try_catch()
-            }
+            Token::Try => self.parse_try_catch(),
             Token::Throw => {
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Throw(expr))
             }
-            Token::Class | Token::Abstract | Token::Final => {
-                self.parse_class()
-            }
-            Token::Enum => {
-                self.parse_enum()
-            }
-            Token::Interface => {
-                self.parse_interface()
-            }
-            Token::Trait => {
-                self.parse_trait()
-            }
-            Token::Isset | Token::Empty | Token::Match | Token::New | Token::Yield | Token::Clone => {
+            Token::Class | Token::Abstract | Token::Final => self.parse_class(),
+            Token::Enum => self.parse_enum(),
+            Token::Interface => self.parse_interface(),
+            Token::Trait => self.parse_trait(),
+            Token::Isset
+            | Token::Empty
+            | Token::Match
+            | Token::New
+            | Token::Yield
+            | Token::Clone => {
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::ExprStmt(expr))
@@ -841,7 +939,12 @@ impl Parser {
                 loop {
                     match self.advance() {
                         Token::Variable(name) => vars.push(name),
-                        other => return Err(format!("Expected variable after 'global', got {:?}", other)),
+                        other => {
+                            return Err(format!(
+                                "Expected variable after 'global', got {:?}",
+                                other
+                            ));
+                        }
                     }
                     if self.peek() == Token::Comma {
                         self.advance();
@@ -852,14 +955,21 @@ impl Parser {
                 self.expect(&Token::Semicolon)?;
                 Ok(Stmt::Global(vars))
             }
-            Token::Static if !self.in_class_body && matches!(self.peek_at(1), Token::Variable(_)) => {
+            Token::Static
+                if !self.in_class_body && matches!(self.peek_at(1), Token::Variable(_)) =>
+            {
                 // static $var = expr; (function-level static variable)
                 self.advance(); // consume 'static'
                 let mut vars = Vec::new();
                 loop {
                     let var_name = match self.advance() {
                         Token::Variable(name) => name,
-                        other => return Err(format!("Expected variable after 'static', got {:?}", other)),
+                        other => {
+                            return Err(format!(
+                                "Expected variable after 'static', got {:?}",
+                                other
+                            ));
+                        }
                     };
                     let default = if self.peek() == Token::Assign {
                         self.advance();
@@ -939,7 +1049,10 @@ impl Parser {
                 };
                 self.expect(&Token::Assign)?;
                 let expr = self.parse_expr()?;
-                return Ok(Stmt::Assign { var: var_name, expr });
+                return Ok(Stmt::Assign {
+                    var: var_name,
+                    expr,
+                });
             } else if let Some(bin_op) = Self::compound_assign_op(&next) {
                 let var_name = match self.advance() {
                     Token::Variable(name) => name,
@@ -992,7 +1105,10 @@ impl Parser {
             if let Expr::Variable(var) = expr {
                 self.advance(); // consume '='
                 let rhs = self.parse_expr()?;
-                return Ok(Expr::Assign { var, expr: Box::new(rhs) });
+                return Ok(Expr::Assign {
+                    var,
+                    expr: Box::new(rhs),
+                });
             }
         }
 
@@ -1010,8 +1126,19 @@ impl Parser {
         }
 
         // yield; or yield at end of expression context (no value)
-        if matches!(self.peek(), Token::Semicolon | Token::RParen | Token::RBracket | Token::RBrace | Token::Comma | Token::Eof) {
-            return Ok(Expr::Yield { value: None, key: None });
+        if matches!(
+            self.peek(),
+            Token::Semicolon
+                | Token::RParen
+                | Token::RBracket
+                | Token::RBrace
+                | Token::Comma
+                | Token::Eof
+        ) {
+            return Ok(Expr::Yield {
+                value: None,
+                key: None,
+            });
         }
 
         // yield <expr> or yield <key> => <value>
@@ -1019,9 +1146,15 @@ impl Parser {
         if self.peek() == Token::DoubleArrow {
             self.advance(); // consume '=>'
             let value = self.parse_ternary()?;
-            Ok(Expr::Yield { key: Some(Box::new(first)), value: Some(Box::new(value)) })
+            Ok(Expr::Yield {
+                key: Some(Box::new(first)),
+                value: Some(Box::new(value)),
+            })
         } else {
-            Ok(Expr::Yield { value: Some(Box::new(first)), key: None })
+            Ok(Expr::Yield {
+                value: Some(Box::new(first)),
+                key: None,
+            })
         }
     }
 
@@ -1168,10 +1301,15 @@ impl Parser {
             // instanceof has same precedence as comparison operators
             if self.peek() == Token::Instanceof {
                 self.advance();
-                let class_name = if self.peek() == Token::Backslash || matches!(self.peek(), Token::Identifier(_)) {
+                let class_name = if self.peek() == Token::Backslash
+                    || matches!(self.peek(), Token::Identifier(_))
+                {
                     self.parse_qualified_name()?
                 } else {
-                    return Err(format!("Expected class name after instanceof, got {:?}", self.peek()));
+                    return Err(format!(
+                        "Expected class name after instanceof, got {:?}",
+                        self.peek()
+                    ));
                 };
                 left = Expr::Instanceof {
                     expr: Box::new(left),
@@ -1320,7 +1458,10 @@ impl Parser {
                         self.advance(); // type keyword
                         self.advance(); // )
                         let expr = self.parse_unary()?;
-                        return Ok(Expr::Cast { cast_type: ct, expr: Box::new(expr) });
+                        return Ok(Expr::Cast {
+                            cast_type: ct,
+                            expr: Box::new(expr),
+                        });
                     }
                 }
                 self.parse_power()
@@ -1467,18 +1608,30 @@ impl Parser {
                             Token::Variable(n) => n,
                             _ => unreachable!(),
                         };
-                        return Ok(Expr::StaticProperty { class_name: name, property: prop });
+                        return Ok(Expr::StaticProperty {
+                            class_name: name,
+                            property: prop,
+                        });
                     }
                     let member = match self.advance() {
                         Token::Identifier(n) => n,
-                        other => return Err(format!("Expected member name after ::, got {:?}", other)),
+                        other => {
+                            return Err(format!("Expected member name after ::, got {:?}", other));
+                        }
                     };
                     if self.peek() == Token::LParen {
                         self.advance();
                         let args = self.parse_call_args()?;
-                        return Ok(Expr::StaticCall { class_name: name, method: member, args });
+                        return Ok(Expr::StaticCall {
+                            class_name: name,
+                            method: member,
+                            args,
+                        });
                     } else {
-                        return Ok(Expr::StaticProperty { class_name: name, property: member });
+                        return Ok(Expr::StaticProperty {
+                            class_name: name,
+                            property: member,
+                        });
                     }
                 }
                 if self.peek() == Token::LParen {
@@ -1507,22 +1660,34 @@ impl Parser {
                             Token::Variable(n) => n,
                             _ => unreachable!(),
                         };
-                        let expr = Expr::StaticProperty { class_name: name, property: prop };
+                        let expr = Expr::StaticProperty {
+                            class_name: name,
+                            property: prop,
+                        };
                         return Ok(self.parse_postfix_chain(expr)?);
                     }
                     let member = match self.advance() {
                         Token::Identifier(n) => n,
                         Token::Class => "class".to_string(),
-                        other => return Err(format!("Expected member name after ::, got {:?}", other)),
+                        other => {
+                            return Err(format!("Expected member name after ::, got {:?}", other));
+                        }
                     };
                     if self.peek() == Token::LParen {
                         self.advance();
                         let args = self.parse_call_args()?;
-                        let expr = Expr::StaticCall { class_name: name, method: member, args };
+                        let expr = Expr::StaticCall {
+                            class_name: name,
+                            method: member,
+                            args,
+                        };
                         return Ok(self.parse_postfix_chain(expr)?);
                     } else {
                         // Static constant/enum case access: ClassName::CONSTANT
-                        let expr = Expr::StaticProperty { class_name: name, property: member };
+                        let expr = Expr::StaticProperty {
+                            class_name: name,
+                            property: member,
+                        };
                         return Ok(self.parse_postfix_chain(expr)?);
                     }
                 }
@@ -1549,10 +1714,15 @@ impl Parser {
             }
             Token::New => {
                 self.advance(); // consume 'new'
-                let class_name = if self.peek() == Token::Backslash || matches!(self.peek(), Token::Identifier(_)) {
+                let class_name = if self.peek() == Token::Backslash
+                    || matches!(self.peek(), Token::Identifier(_))
+                {
                     self.parse_qualified_name()?
                 } else {
-                    return Err(format!("Expected class name after 'new', got {:?}", self.peek()));
+                    return Err(format!(
+                        "Expected class name after 'new', got {:?}",
+                        self.peek()
+                    ));
                 };
                 let args = if self.peek() == Token::LParen {
                     self.advance(); // consume (
@@ -1606,7 +1776,10 @@ impl Parser {
                 // key => value
                 self.advance();
                 let actual_value = self.parse_expr()?;
-                elements.push(ArrayElement { key: Some(value), value: actual_value });
+                elements.push(ArrayElement {
+                    key: Some(value),
+                    value: actual_value,
+                });
             } else {
                 elements.push(ArrayElement { key: None, value });
             }
@@ -1650,7 +1823,13 @@ impl Parser {
                     self.advance();
                     let member = match self.advance() {
                         Token::Identifier(n) => n,
-                        other => return Err(format!("Expected property/method name after {}, got {:?}", if nullsafe { "?->" } else { "->" }, other)),
+                        other => {
+                            return Err(format!(
+                                "Expected property/method name after {}, got {:?}",
+                                if nullsafe { "?->" } else { "->" },
+                                other
+                            ));
+                        }
                     };
                     if self.peek() == Token::LParen {
                         self.advance();
@@ -1729,7 +1908,11 @@ impl Parser {
             return Err("Cannot use try without catch or finally".into());
         }
 
-        Ok(Stmt::TryCatch { try_body, catches, finally_body })
+        Ok(Stmt::TryCatch {
+            try_body,
+            catches,
+            finally_body,
+        })
     }
 
     /// Parse class declaration
@@ -1739,8 +1922,14 @@ impl Parser {
         // Consume leading modifiers (abstract, final) in any order before 'class'
         loop {
             match self.peek() {
-                Token::Abstract => { self.advance(); is_abstract = true; }
-                Token::Final => { self.advance(); is_final = true; }
+                Token::Abstract => {
+                    self.advance();
+                    is_abstract = true;
+                }
+                Token::Final => {
+                    self.advance();
+                    is_final = true;
+                }
                 _ => break,
             }
         }
@@ -1817,7 +2006,15 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, is_final, return_type });
+                methods.push(ClassMethod {
+                    visibility: vis,
+                    name: method_name,
+                    params,
+                    body,
+                    is_static,
+                    is_final,
+                    return_type,
+                });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
                 // Skip type hint if present (we don't enforce property types at runtime yet)
@@ -1833,7 +2030,13 @@ impl Parser {
                     None
                 };
                 self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static, is_readonly });
+                properties.push(ClassProperty {
+                    visibility: vis,
+                    name: prop_name,
+                    default,
+                    is_static,
+                    is_readonly,
+                });
             } else if matches!(self.peek(), Token::Const) {
                 // Class constants — not yet implemented
                 return Err(format!("Unexpected token in class body: {:?}", self.peek()));
@@ -1844,7 +2047,16 @@ impl Parser {
         self.in_class_body = prev_in_class;
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Class { name, parent, implements, is_abstract, is_final, properties, methods, uses })
+        Ok(Stmt::Class {
+            name,
+            parent,
+            implements,
+            is_abstract,
+            is_final,
+            properties,
+            methods,
+            uses,
+        })
     }
 
     /// Parse trait declaration
@@ -1878,7 +2090,15 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, is_final, return_type });
+                methods.push(ClassMethod {
+                    visibility: vis,
+                    name: method_name,
+                    params,
+                    body,
+                    is_static,
+                    is_final,
+                    return_type,
+                });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
                 let _type_hint = self.try_parse_type_hint()?;
@@ -1893,14 +2113,24 @@ impl Parser {
                     None
                 };
                 self.expect(&Token::Semicolon)?;
-                properties.push(ClassProperty { visibility: vis, name: prop_name, default, is_static, is_readonly });
+                properties.push(ClassProperty {
+                    visibility: vis,
+                    name: prop_name,
+                    default,
+                    is_static,
+                    is_readonly,
+                });
             } else {
                 return Err(format!("Unexpected token in trait body: {:?}", self.peek()));
             }
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Trait { name, properties, methods })
+        Ok(Stmt::Trait {
+            name,
+            properties,
+            methods,
+        })
     }
 
     /// Parse interface declaration
@@ -1939,7 +2169,11 @@ impl Parser {
                 };
                 // Interface methods must be public (PHP rule)
                 if vis != Visibility::Public {
-                    let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
+                    let vis_str = match vis {
+                        Visibility::Protected => "protected",
+                        Visibility::Private => "private",
+                        _ => "public",
+                    };
                     return Err(format!(
                         "Access type for interface method {}::{}() must be public (got {})",
                         name, method_name, vis_str
@@ -1950,14 +2184,29 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
-                methods.push(ClassMethod { visibility: vis, name: method_name, params, body: vec![], is_static, is_final: false, return_type });
+                methods.push(ClassMethod {
+                    visibility: vis,
+                    name: method_name,
+                    params,
+                    body: vec![],
+                    is_static,
+                    is_final: false,
+                    return_type,
+                });
             } else {
-                return Err(format!("Unexpected token in interface body: {:?}", self.peek()));
+                return Err(format!(
+                    "Unexpected token in interface body: {:?}",
+                    self.peek()
+                ));
             }
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Interface { name, extends, methods })
+        Ok(Stmt::Interface {
+            name,
+            extends,
+            methods,
+        })
     }
 
     /// Parse enum declaration
@@ -2016,7 +2265,15 @@ impl Parser {
                         body.push(self.parse_stmt()?);
                     }
                     self.expect(&Token::RBrace)?;
-                    methods.push(ClassMethod { visibility: vis, name: method_name, params, body, is_static, is_final, return_type });
+                    methods.push(ClassMethod {
+                        visibility: vis,
+                        name: method_name,
+                        params,
+                        body,
+                        is_static,
+                        is_final,
+                        return_type,
+                    });
                 } else {
                     return Err(format!("Unexpected token in enum body: {:?}", self.peek()));
                 }
@@ -2025,7 +2282,12 @@ impl Parser {
         self.in_class_body = prev_in_class;
         self.expect(&Token::RBrace)?;
 
-        Ok(Stmt::Enum { name, backing_type, cases, methods })
+        Ok(Stmt::Enum {
+            name,
+            backing_type,
+            cases,
+            methods,
+        })
     }
 
     fn parse_visibility_and_static(&mut self) -> (Visibility, bool, bool, bool) {
@@ -2036,13 +2298,33 @@ impl Parser {
 
         loop {
             match self.peek() {
-                Token::Public => { self.advance(); vis = Visibility::Public; }
-                Token::Protected => { self.advance(); vis = Visibility::Protected; }
-                Token::Private => { self.advance(); vis = Visibility::Private; }
-                Token::Static => { self.advance(); is_static = true; }
-                Token::Final => { self.advance(); is_final = true; }
-                Token::Abstract => { self.advance(); /* absorbed for abstract methods */ }
-                Token::Identifier(ref s) if s == "readonly" => { self.advance(); is_readonly = true; }
+                Token::Public => {
+                    self.advance();
+                    vis = Visibility::Public;
+                }
+                Token::Protected => {
+                    self.advance();
+                    vis = Visibility::Protected;
+                }
+                Token::Private => {
+                    self.advance();
+                    vis = Visibility::Private;
+                }
+                Token::Static => {
+                    self.advance();
+                    is_static = true;
+                }
+                Token::Final => {
+                    self.advance();
+                    is_final = true;
+                }
+                Token::Abstract => {
+                    self.advance(); /* absorbed for abstract methods */
+                }
+                Token::Identifier(ref s) if s == "readonly" => {
+                    self.advance();
+                    is_readonly = true;
+                }
                 _ => break,
             }
         }
@@ -2063,7 +2345,10 @@ impl Parser {
                 self.advance();
                 self.expect(&Token::DoubleArrow)?;
                 let body = self.parse_expr()?;
-                arms.push(MatchArm { conditions: None, body });
+                arms.push(MatchArm {
+                    conditions: None,
+                    body,
+                });
             } else {
                 // One or more comma-separated conditions
                 let mut conditions = Vec::new();
@@ -2079,7 +2364,10 @@ impl Parser {
                 }
                 self.expect(&Token::DoubleArrow)?;
                 let body = self.parse_expr()?;
-                arms.push(MatchArm { conditions: Some(conditions), body });
+                arms.push(MatchArm {
+                    conditions: Some(conditions),
+                    body,
+                });
             }
             // Optional trailing comma between arms
             if self.peek() == Token::Comma {
@@ -2087,7 +2375,10 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
-        Ok(Expr::Match { expr: Box::new(expr), arms })
+        Ok(Expr::Match {
+            expr: Box::new(expr),
+            arms,
+        })
     }
 
     /// Parse arrow function: fn($x, $y) => expr
@@ -2102,16 +2393,26 @@ impl Parser {
         let expr = self.parse_expr()?;
 
         // Auto-capture: collect free variables from expr that aren't params
-        let param_names: std::collections::HashSet<&str> = params.iter().map(|p| p.name.as_str()).collect();
+        let param_names: std::collections::HashSet<&str> =
+            params.iter().map(|p| p.name.as_str()).collect();
         let mut free_vars = Vec::new();
         Self::collect_free_vars(&expr, &param_names, &mut free_vars);
 
         let body = vec![Stmt::Return(Some(expr))];
-        Ok(Expr::Closure { params, use_vars: free_vars, body, return_type })
+        Ok(Expr::Closure {
+            params,
+            use_vars: free_vars,
+            body,
+            return_type,
+        })
     }
 
     /// Collect variable names referenced in an expression that are not in `bound`.
-    fn collect_free_vars(expr: &Expr, bound: &std::collections::HashSet<&str>, out: &mut Vec<String>) {
+    fn collect_free_vars(
+        expr: &Expr,
+        bound: &std::collections::HashSet<&str>,
+        out: &mut Vec<String>,
+    ) {
         match expr {
             Expr::Variable(name) => {
                 if !bound.contains(name.as_str()) && !out.contains(name) {
@@ -2122,7 +2423,12 @@ impl Parser {
                 Self::collect_free_vars(left, bound, out);
                 Self::collect_free_vars(right, bound, out);
             }
-            Expr::UnaryMinus(inner) | Expr::Not(inner) | Expr::Throw(inner) | Expr::Empty(inner) | Expr::Print(inner) | Expr::BitwiseNot(inner) => {
+            Expr::UnaryMinus(inner)
+            | Expr::Not(inner)
+            | Expr::Throw(inner)
+            | Expr::Empty(inner)
+            | Expr::Print(inner)
+            | Expr::BitwiseNot(inner) => {
                 Self::collect_free_vars(inner, bound, out);
             }
             Expr::Assign { var, expr: inner } => {
@@ -2152,7 +2458,11 @@ impl Parser {
                     out.push(name.clone());
                 }
             }
-            Expr::Ternary { condition, then_expr, else_expr } => {
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 Self::collect_free_vars(condition, bound, out);
                 Self::collect_free_vars(then_expr, bound, out);
                 Self::collect_free_vars(else_expr, bound, out);
@@ -2214,12 +2524,20 @@ impl Parser {
             }
             Expr::StaticProperty { .. } => {}
             // Literals and constants — no variables
-            Expr::Integer(_) | Expr::Float(_) | Expr::StringLiteral(_)
-            | Expr::Bool(_) | Expr::Null | Expr::Constant(_) => {}
+            Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::StringLiteral(_)
+            | Expr::Bool(_)
+            | Expr::Null
+            | Expr::Constant(_) => {}
             // Yield — collect vars from value/key expressions
             Expr::Yield { value, key } => {
-                if let Some(v) = value { Self::collect_free_vars(v, bound, out); }
-                if let Some(k) = key { Self::collect_free_vars(k, bound, out); }
+                if let Some(v) = value {
+                    Self::collect_free_vars(v, bound, out);
+                }
+                if let Some(k) = key {
+                    Self::collect_free_vars(k, bound, out);
+                }
             }
             Expr::YieldFrom(sub) => {
                 Self::collect_free_vars(sub, bound, out);
@@ -2266,7 +2584,12 @@ impl Parser {
         }
         self.expect(&Token::RBrace)?;
 
-        Ok(Expr::Closure { params, use_vars, body, return_type })
+        Ok(Expr::Closure {
+            params,
+            use_vars,
+            body,
+            return_type,
+        })
     }
 
     fn peek(&self) -> Token {
@@ -2274,7 +2597,10 @@ impl Parser {
     }
 
     fn peek_at(&self, offset: usize) -> Token {
-        self.tokens.get(self.pos + offset).cloned().unwrap_or(Token::Eof)
+        self.tokens
+            .get(self.pos + offset)
+            .cloned()
+            .unwrap_or(Token::Eof)
     }
 
     /// Parse comma-separated call arguments supporting both positional and
@@ -2424,11 +2750,18 @@ impl Parser {
     /// Check if the current token can start a parameter declaration.
     /// Matches: type hints (identifiers, ?, array, null), &, ..., $var
     fn is_param_start(&self) -> bool {
-        matches!(self.peek(),
-            Token::Variable(_) | Token::DotDotDot | Token::Ampersand
-            | Token::Question | Token::ArrayKw | Token::Null
-            | Token::Identifier(_)
-            | Token::Public | Token::Protected | Token::Private
+        matches!(
+            self.peek(),
+            Token::Variable(_)
+                | Token::DotDotDot
+                | Token::Ampersand
+                | Token::Question
+                | Token::ArrayKw
+                | Token::Null
+                | Token::Identifier(_)
+                | Token::Public
+                | Token::Protected
+                | Token::Private
         )
     }
 
@@ -2448,13 +2781,23 @@ impl Parser {
         };
         match self.advance() {
             Token::Identifier(n) => parts.push(n),
-            other => return Err(format!("Expected identifier in qualified name, got {:?}", other)),
+            other => {
+                return Err(format!(
+                    "Expected identifier in qualified name, got {:?}",
+                    other
+                ));
+            }
         }
         while self.peek() == Token::Backslash {
             self.advance(); // consume '\'
             match self.advance() {
                 Token::Identifier(n) => parts.push(n),
-                other => return Err(format!("Expected identifier after '\\' in qualified name, got {:?}", other)),
+                other => {
+                    return Err(format!(
+                        "Expected identifier after '\\' in qualified name, got {:?}",
+                        other
+                    ));
+                }
             }
         }
         let name = parts.join("\\");
@@ -2500,12 +2843,16 @@ impl Parser {
     fn is_type_hint_start(&self) -> bool {
         match self.peek() {
             Token::Question => {
-                matches!(self.tokens.get(self.pos + 1),
-                    Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null))
+                matches!(
+                    self.tokens.get(self.pos + 1),
+                    Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
+                )
             }
             Token::Identifier(_) | Token::ArrayKw | Token::Null => {
-                matches!(self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_)) | Some(Token::Pipe))
+                matches!(
+                    self.tokens.get(self.pos + 1),
+                    Some(Token::Variable(_)) | Some(Token::Pipe)
+                )
             }
             _ => false,
         }
@@ -2519,7 +2866,8 @@ impl Parser {
             // Peek ahead: ?$var or ?... means ternary/other, not type hint
             // In param context, ?Identifier or ?ArrayKw means nullable type
             let next = self.tokens.get(self.pos + 1);
-            let is_type = matches!(next,
+            let is_type = matches!(
+                next,
                 Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
             );
             if is_type {
@@ -2535,9 +2883,12 @@ impl Parser {
         match self.peek() {
             Token::Identifier(_) => {
                 let next = self.tokens.get(self.pos + 1);
-                let is_type_context = matches!(next,
-                    Some(Token::Variable(_)) | Some(Token::Ampersand) | Some(Token::DotDotDot)
-                    | Some(Token::Pipe)
+                let is_type_context = matches!(
+                    next,
+                    Some(Token::Variable(_))
+                        | Some(Token::Ampersand)
+                        | Some(Token::DotDotDot)
+                        | Some(Token::Pipe)
                 );
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
@@ -2548,9 +2899,12 @@ impl Parser {
             }
             Token::ArrayKw => {
                 let next = self.tokens.get(self.pos + 1);
-                let is_type_context = matches!(next,
-                    Some(Token::Variable(_)) | Some(Token::Ampersand) | Some(Token::DotDotDot)
-                    | Some(Token::Pipe)
+                let is_type_context = matches!(
+                    next,
+                    Some(Token::Variable(_))
+                        | Some(Token::Ampersand)
+                        | Some(Token::DotDotDot)
+                        | Some(Token::Pipe)
                 );
                 if is_type_context {
                     self.advance(); // consume 'array'
@@ -2566,20 +2920,18 @@ impl Parser {
     /// Parse a non-nullable type hint (int, string, float, bool, array, ClassName).
     fn parse_base_type_hint(&mut self) -> Result<TypeHint, String> {
         match self.advance() {
-            Token::Identifier(name) => {
-                match name.as_str() {
-                    "int" | "integer" => Ok(TypeHint::Int),
-                    "float" | "double" => Ok(TypeHint::Float),
-                    "string" => Ok(TypeHint::String),
-                    "bool" | "boolean" => Ok(TypeHint::Bool),
-                    "callable" => Ok(TypeHint::Callable),
-                    "null" => Ok(TypeHint::Null),
-                    "void" => Ok(TypeHint::Void),
-                    "mixed" => Ok(TypeHint::Mixed),
-                    "never" => Ok(TypeHint::Never),
-                    _ => Ok(TypeHint::ClassName(name)),
-                }
-            }
+            Token::Identifier(name) => match name.as_str() {
+                "int" | "integer" => Ok(TypeHint::Int),
+                "float" | "double" => Ok(TypeHint::Float),
+                "string" => Ok(TypeHint::String),
+                "bool" | "boolean" => Ok(TypeHint::Bool),
+                "callable" => Ok(TypeHint::Callable),
+                "null" => Ok(TypeHint::Null),
+                "void" => Ok(TypeHint::Void),
+                "mixed" => Ok(TypeHint::Mixed),
+                "never" => Ok(TypeHint::Never),
+                _ => Ok(TypeHint::ClassName(name)),
+            },
             Token::ArrayKw => Ok(TypeHint::Array),
             Token::Null => Ok(TypeHint::Null),
             other => Err(format!("Expected type hint, got {:?}", other)),
@@ -2628,14 +2980,24 @@ impl Parser {
         };
         let default = if self.peek() == Token::Assign {
             if is_variadic {
-                return Err(format!("Variadic parameter ${} cannot have a default value", name));
+                return Err(format!(
+                    "Variadic parameter ${} cannot have a default value",
+                    name
+                ));
             }
             self.advance(); // consume '='
             Some(self.parse_expr()?)
         } else {
             None
         };
-        Ok(Param { name, default, is_variadic, is_ref, type_hint, promotion })
+        Ok(Param {
+            name,
+            default,
+            is_variadic,
+            is_ref,
+            type_hint,
+            promotion,
+        })
     }
 
     /// Check if an expression is a variable-like target (valid for isset/empty/unset).
@@ -2658,7 +3020,9 @@ impl Parser {
                     }
                 }
                 Token::RParen => {
-                    if depth > 1 { depth -= 1; }
+                    if depth > 1 {
+                        depth -= 1;
+                    }
                 }
                 _ => {}
             }
@@ -2736,7 +3100,10 @@ impl Parser {
                     self.expect(&Token::RParen)?;
                     targets.push(ListTarget::Nested(nested));
                 } else {
-                    return Err(format!("Expected variable in list/destructuring, got identifier '{}'", name));
+                    return Err(format!(
+                        "Expected variable in list/destructuring, got identifier '{}'",
+                        name
+                    ));
                 }
             } else if let Token::Variable(_) = self.peek() {
                 // Could be plain $var or key => $var
@@ -2751,11 +3118,22 @@ impl Parser {
                 self.expect(&Token::DoubleArrow)?;
                 let var_name = match self.advance() {
                     Token::Variable(n) => n,
-                    other => return Err(format!("Expected variable after '=>' in list, got {:?}", other)),
+                    other => {
+                        return Err(format!(
+                            "Expected variable after '=>' in list, got {:?}",
+                            other
+                        ));
+                    }
                 };
-                targets.push(ListTarget::KeyedVariable { key: key_expr, var: var_name });
+                targets.push(ListTarget::KeyedVariable {
+                    key: key_expr,
+                    var: var_name,
+                });
             } else {
-                return Err(format!("Unexpected token in list/destructuring: {:?}", self.peek()));
+                return Err(format!(
+                    "Unexpected token in list/destructuring: {:?}",
+                    self.peek()
+                ));
             }
             // Consume comma if present
             if self.peek() == Token::Comma {
@@ -2772,7 +3150,10 @@ impl Parser {
         if let Token::Integer(n) = self.peek() {
             self.advance();
             if n < 1 {
-                return Err(format!("break/continue level must be at least 1, got {}", n));
+                return Err(format!(
+                    "break/continue level must be at least 1, got {}",
+                    n
+                ));
             }
             Ok(Some(n as u32))
         } else {
@@ -2825,9 +3206,7 @@ mod tests {
 
     #[test]
     fn test_parse_function_call() {
-        let tokens = Lexer::new("<?php echo my_double(21);")
-            .tokenize()
-            .unwrap();
+        let tokens = Lexer::new("<?php echo my_double(21);").tokenize().unwrap();
         let stmts = Parser::new(tokens).parse().unwrap();
         assert_eq!(
             stmts,

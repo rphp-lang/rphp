@@ -25,14 +25,14 @@ use super::aarch64::{
 
 #[path = "straight_liveness.rs"]
 mod liveness;
+#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
+pub(crate) use liveness::straight_long_early_induction_increment_operation;
 pub(crate) use liveness::{
     straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
     straight_long_linear_live_after, straight_long_linear_shadow_store_mask,
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
-#[cfg(any(target_arch = "aarch64", target_arch = "x86_64"))]
-pub(crate) use liveness::straight_long_early_induction_increment_operation;
 
 #[path = "straight_affine.rs"]
 mod affine;

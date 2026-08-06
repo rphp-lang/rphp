@@ -1,9 +1,9 @@
 use std::mem::size_of;
 
-use crate::value::Value;
-use crate::compiler::OpArray;
 use super::function::{FunctionCommon, UserFunction};
 use super::instruction::{Instruction, OpType};
+use crate::compiler::OpArray;
+use crate::value::Value;
 
 /// Number of Value-sized slots for the ExecuteData header
 pub const CALL_FRAME_SLOTS: usize =
@@ -28,7 +28,9 @@ impl Iterator for HeapSlotIter {
 
     #[inline(always)]
     fn next(&mut self) -> Option<u32> {
-        if self.bits == 0 { return None; }
+        if self.bits == 0 {
+            return None;
+        }
         let idx = self.bits.trailing_zeros();
         self.bits &= self.bits - 1; // clear lowest set bit
         Some(idx)
@@ -108,7 +110,9 @@ impl ExecuteData {
     pub unsafe fn cv_mut(&mut self, idx: u32) -> &mut Value {
         debug_assert!(
             idx < self.num_cvs,
-            "cv_mut index {} out of bounds (num_cvs={})", idx, self.num_cvs
+            "cv_mut index {} out of bounds (num_cvs={})",
+            idx,
+            self.num_cvs
         );
         let base = (self as *mut Self as *mut Value).add(CALL_FRAME_SLOTS);
         &mut *base.add(idx as usize)
@@ -143,7 +147,11 @@ impl ExecuteData {
             OpType::Const => &op_array.literals()[operand as usize] as *const Value,
             OpType::Cv => {
                 let ptr = self.cv(operand) as *const Value;
-                if (*ptr).is_reference() { (*ptr).as_ref_ptr() as *const Value } else { ptr }
+                if (*ptr).is_reference() {
+                    (*ptr).as_ref_ptr() as *const Value
+                } else {
+                    ptr
+                }
             }
             // Tmp/Var operands already contain absolute slot offset (num_cvs + tmp_idx)
             // after resolve_tmp_offsets(), so just index from slot base.
@@ -162,7 +170,11 @@ impl ExecuteData {
         match op_type {
             OpType::Cv => {
                 let ptr = self.cv_mut(operand) as *mut Value;
-                if (*ptr).is_reference() { (*ptr).as_ref_ptr() } else { ptr }
+                if (*ptr).is_reference() {
+                    (*ptr).as_ref_ptr()
+                } else {
+                    ptr
+                }
             }
             // Tmp/Var operands already contain absolute slot offset.
             OpType::Tmp | OpType::Var => {

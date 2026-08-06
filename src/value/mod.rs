@@ -1,15 +1,15 @@
 use std::borrow::Borrow;
 use std::cell::{Cell, OnceCell, RefCell};
-use std::collections::{hash_map::Entry, HashMap};
+use std::collections::{HashMap, hash_map::Entry};
 use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
 use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
-use crate::vm::stats;
-use crate::vm::generator::GeneratorRef;
 use crate::vm::function::FunctionCommon;
+use crate::vm::generator::GeneratorRef;
+use crate::vm::stats;
 
 /// PHP converts only canonical decimal strings that fit in `i64` to integer
 /// array keys. Syntax-first validation avoids an allocating parse/format
@@ -105,7 +105,10 @@ impl SmallDynamicProperties {
 
     #[inline]
     fn len(&self) -> usize {
-        self.entries.iter().take_while(|entry| entry.is_some()).count()
+        self.entries
+            .iter()
+            .take_while(|entry| entry.is_some())
+            .count()
     }
 
     #[inline]
@@ -182,11 +185,9 @@ impl LinearDynamicProperties {
     ) -> [*const Value; 2] {
         for index in 0..2 {
             if result[index].is_null() {
-                result[index] = self
-                    .find(keys[index])
-                    .map_or(std::ptr::null(), |position| {
-                        &self.entries[position].1 as *const Value
-                    });
+                result[index] = self.find(keys[index]).map_or(std::ptr::null(), |position| {
+                    &self.entries[position].1 as *const Value
+                });
             }
         }
         result
@@ -326,9 +327,9 @@ impl DynamicPropertyMap {
     fn from_hash_map(properties: HashMap<String, Value>) -> Self {
         if properties.len() > LINEAR_DYNAMIC_PROPERTY_CAPACITY {
             return Self {
-                storage: DynamicPropertyStorage::Indexed(
-                    IndexedDynamicProperties::from_hash_map(properties),
-                ),
+                storage: DynamicPropertyStorage::Indexed(IndexedDynamicProperties::from_hash_map(
+                    properties,
+                )),
             };
         }
         let mut result = Self::with_capacity(properties.len());
@@ -344,9 +345,9 @@ impl DynamicPropertyMap {
             DynamicPropertyStorage::Small(small) => small
                 .find(key)
                 .and_then(|position| small.entries[position].as_ref().map(|entry| &entry.1)),
-            DynamicPropertyStorage::Linear(linear) => linear
-                .find(key)
-                .map(|position| &linear.entries[position].1),
+            DynamicPropertyStorage::Linear(linear) => {
+                linear.find(key).map(|position| &linear.entries[position].1)
+            }
             DynamicPropertyStorage::Indexed(indexed) => indexed
                 .find(key)
                 .and_then(|position| indexed.entries.get(position))
@@ -415,8 +416,7 @@ impl DynamicPropertyMap {
                             small.entries[position].as_ref().map(|entry| &entry.1)
                         })
                     });
-                    result[index] =
-                        value.map_or(std::ptr::null(), |value| value as *const Value);
+                    result[index] = value.map_or(std::ptr::null(), |value| value as *const Value);
                 }
             }
             DynamicPropertyStorage::Linear(linear) => {
@@ -599,11 +599,7 @@ impl PhpObject {
         }
     }
 
-    pub fn dynamic(
-        class_name: String,
-        class_id: u32,
-        properties: HashMap<String, Value>,
-    ) -> Self {
+    pub fn dynamic(class_name: String, class_id: u32, properties: HashMap<String, Value>) -> Self {
         Self {
             class_name: Rc::from(class_name),
             class_id,
@@ -627,9 +623,8 @@ impl PhpObject {
 
     /// Construct canonical `stdClass` from ordered streaming properties.
     pub(crate) fn std_class_from_properties(properties: DynamicPropertyMap) -> Self {
-        let (class_name, property_layout) = STD_CLASS_METADATA.with(|metadata| {
-            (Rc::clone(&metadata.0), Rc::clone(&metadata.1))
-        });
+        let (class_name, property_layout) =
+            STD_CLASS_METADATA.with(|metadata| (Rc::clone(&metadata.0), Rc::clone(&metadata.1)));
         Self {
             class_name,
             class_id: 0,
@@ -739,19 +734,19 @@ impl PhpObject {
 
 #[cfg(test)]
 mod object_tests {
-    use super::{
-        DynamicPropertyMap, DynamicPropertyStorage, ObjectLayout, PhpObject, Value,
-    };
+    use super::{DynamicPropertyMap, DynamicPropertyStorage, ObjectLayout, PhpObject, Value};
     use std::rc::Rc;
 
     #[test]
     fn declared_properties_use_shared_slots() {
         let layout = Rc::new(ObjectLayout::new("Counter", vec!["count".to_string()]));
-        let mut object =
-            PhpObject::with_layout(7, layout.clone(), vec![Value::long(1)]);
+        let mut object = PhpObject::with_layout(7, layout.clone(), vec![Value::long(1)]);
 
         assert_eq!(object.set_property("count", Value::long(2)), Some(0));
-        assert_eq!(object.get_property("count").and_then(Value::as_long), Some(2));
+        assert_eq!(
+            object.get_property("count").and_then(Value::as_long),
+            Some(2)
+        );
         assert!(object.dynamic_properties.is_none());
         assert!(Rc::ptr_eq(&object.property_layout, &layout));
     }
@@ -766,7 +761,10 @@ mod object_tests {
 
         assert!(object.dynamic_properties.is_none());
         assert_eq!(object.set_property("extra", Value::long(9)), None);
-        assert_eq!(object.get_property("extra").and_then(Value::as_long), Some(9));
+        assert_eq!(
+            object.get_property("extra").and_then(Value::as_long),
+            Some(9)
+        );
         assert!(object.dynamic_properties.is_some());
     }
 
@@ -777,10 +775,7 @@ mod object_tests {
 
         assert_eq!(first.class_name.as_ref(), "stdClass");
         assert!(Rc::ptr_eq(&first.class_name, &second.class_name));
-        assert!(Rc::ptr_eq(
-            &first.property_layout,
-            &second.property_layout
-        ));
+        assert!(Rc::ptr_eq(&first.property_layout, &second.property_layout));
         assert!(first.dynamic_properties.is_none());
         assert!(second.dynamic_properties.is_none());
     }
@@ -794,15 +789,15 @@ mod object_tests {
         );
 
         let mut properties = DynamicPropertyMap::with_capacity(0);
-        for (position, key) in ["a", "b", "c"]
-            .into_iter()
-            .enumerate()
-        {
+        for (position, key) in ["a", "b", "c"].into_iter().enumerate() {
             properties.insert_owned(key.to_string(), Value::long(position as i64 + 1));
         }
         properties.insert_owned("b".to_string(), Value::long(20));
         assert_eq!(properties.len(), 3);
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Small(_)));
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Small(_)
+        ));
 
         let mut keys = Vec::new();
         properties.for_each(|key, _| keys.push(key.to_string()));
@@ -813,12 +808,18 @@ mod object_tests {
         assert!(matches!(cloned.storage, DynamicPropertyStorage::Small(_)));
 
         properties.insert_owned("d".to_string(), Value::long(4));
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Linear(_)));
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Linear(_)
+        ));
         for (position, key) in ["e", "f", "g", "h"].into_iter().enumerate() {
             properties.insert_owned(key.to_string(), Value::long(position as i64 + 5));
         }
         assert_eq!(properties.len(), 8);
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Linear(_)));
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Linear(_)
+        ));
         assert_eq!(
             properties
                 .get_with_position("h")
@@ -835,7 +836,10 @@ mod object_tests {
         assert_eq!(cloned.get("h").and_then(Value::as_long), Some(8));
 
         properties.insert_owned("i".to_string(), Value::long(9));
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Indexed(_)));
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Indexed(_)
+        ));
         assert_eq!(properties.get("b").and_then(Value::as_long), Some(20));
         assert_eq!(properties.get("i").and_then(Value::as_long), Some(9));
         assert_eq!(
@@ -858,10 +862,7 @@ mod object_tests {
 
         let mut keys = Vec::new();
         properties.for_each(|key, _| keys.push(key.to_string()));
-        assert_eq!(
-            keys,
-            ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
-        );
+        assert_eq!(keys, ["a", "b", "c", "d", "e", "f", "g", "h", "i"]);
 
         properties.insert_owned("b".to_string(), Value::long(200));
         *properties.get_mut("b").unwrap() = Value::long(201);
@@ -911,26 +912,20 @@ mod object_tests {
 
         // Both cached positions intentionally describe the opposite insertion
         // order. Name fallback must resolve each property independently.
-        let pair = properties.get_pair_at_positions(
-            ["value", "name"],
-            [Some(0), Some(1)],
-        );
+        let pair = properties.get_pair_at_positions(["value", "name"], [Some(0), Some(1)]);
         assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
         assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
 
-        let missing = properties.get_pair_at_positions(
-            ["value", "missing"],
-            [Some(1), Some(2)],
-        );
+        let missing = properties.get_pair_at_positions(["value", "missing"], [Some(1), Some(2)]);
         assert!(!missing[0].is_null());
         assert!(missing[1].is_null());
 
         properties.insert_owned("fourth".to_string(), Value::long(23));
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Linear(_)));
-        let pair = properties.get_pair_at_positions(
-            ["value", "name"],
-            [Some(99), Some(99)],
-        );
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Linear(_)
+        ));
+        let pair = properties.get_pair_at_positions(["value", "name"], [Some(99), Some(99)]);
         assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
         assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
 
@@ -942,20 +937,20 @@ mod object_tests {
         ] {
             properties.insert_owned(key.to_string(), Value::long(value));
         }
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Linear(_)));
-        let pair = properties.get_pair_at_positions(
-            ["value", "name"],
-            [Some(1), Some(0)],
-        );
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Linear(_)
+        ));
+        let pair = properties.get_pair_at_positions(["value", "name"], [Some(1), Some(0)]);
         assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
         assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
 
         properties.insert_owned("ninth".to_string(), Value::long(43));
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Indexed(_)));
-        let pair = properties.get_pair_at_positions(
-            ["value", "name"],
-            [Some(8), Some(7)],
-        );
+        assert!(matches!(
+            properties.storage,
+            DynamicPropertyStorage::Indexed(_)
+        ));
+        let pair = properties.get_pair_at_positions(["value", "name"], [Some(8), Some(7)]);
         assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
         assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
     }
@@ -1132,10 +1127,7 @@ fn verified_int_prefix_len(entries: &[(ArrayEntryKey, Value)]) -> usize {
     let Some((ArrayEntryKey::Int(second), _)) = entries.get(1) else {
         return 1;
     };
-    let Some(stride) = second
-        .checked_sub(*first)
-        .filter(|stride| *stride != 0)
-    else {
+    let Some(stride) = second.checked_sub(*first).filter(|stride| *stride != 0) else {
         return 1;
     };
     let mut len = 1;
@@ -1369,9 +1361,9 @@ impl SmallHashStorage {
 
     #[inline]
     fn find_int(&self, key: i64) -> Option<usize> {
-        self.entries[..self.len()]
-            .iter()
-            .position(|entry| matches!(entry, Some((ArrayEntryKey::Int(found), _)) if *found == key))
+        self.entries[..self.len()].iter().position(
+            |entry| matches!(entry, Some((ArrayEntryKey::Int(found), _)) if *found == key),
+        )
     }
 
     #[inline]
@@ -1414,9 +1406,9 @@ fn linear_find_int(entries: &[(ArrayEntryKey, Value)], key: i64) -> Option<usize
 
 #[inline]
 fn linear_find_str(entries: &[(ArrayEntryKey, Value)], key: &str) -> Option<usize> {
-    entries.iter().position(
-        |entry| matches!(&entry.0, ArrayEntryKey::String(found) if found.as_ref() == key),
-    )
+    entries
+        .iter()
+        .position(|entry| matches!(&entry.0, ArrayEntryKey::String(found) if found.as_ref() == key))
 }
 
 #[inline(always)]
@@ -1439,18 +1431,17 @@ fn set_indexed_int(
             0 => entries.is_empty(),
             1 => matches!(entries.first(), Some((ArrayEntryKey::Int(first), _)) if *first != key),
             len => match (entries.first(), entries.get(1)) {
-                (
-                    Some((ArrayEntryKey::Int(first), _)),
-                    Some((ArrayEntryKey::Int(second), _)),
-                ) => second
-                    .checked_sub(*first)
-                    .and_then(|stride| {
-                        i64::try_from(len)
-                            .ok()
-                            .and_then(|len| stride.checked_mul(len))
-                    })
-                    .and_then(|offset| first.checked_add(offset))
-                    == Some(key),
+                (Some((ArrayEntryKey::Int(first), _)), Some((ArrayEntryKey::Int(second), _))) => {
+                    second
+                        .checked_sub(*first)
+                        .and_then(|stride| {
+                            i64::try_from(len)
+                                .ok()
+                                .and_then(|len| stride.checked_mul(len))
+                        })
+                        .and_then(|offset| first.checked_add(offset))
+                        == Some(key)
+                }
                 _ => false,
             },
         };
@@ -1580,10 +1571,7 @@ impl PhpArray {
         if !matches!(&self.storage, ArrayStorage::SmallHash(_)) {
             return;
         };
-        let small = match std::mem::replace(
-            &mut self.storage,
-            ArrayStorage::Packed(Vec::new()),
-        ) {
+        let small = match std::mem::replace(&mut self.storage, ArrayStorage::Packed(Vec::new())) {
             ArrayStorage::SmallHash(small) => small,
             _ => unreachable!(),
         };
@@ -1699,9 +1687,7 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) if small.len() == SMALL_HASH_CAPACITY => {
                 self.promote_small_hash(0, 1);
             }
-            ArrayStorage::LinearHash(linear)
-                if linear.entries.len() == LINEAR_HASH_CAPACITY =>
-            {
+            ArrayStorage::LinearHash(linear) if linear.entries.len() == LINEAR_HASH_CAPACITY => {
                 self.promote_linear_hash(0, 1);
             }
             _ => {}
@@ -1775,9 +1761,7 @@ impl PhpArray {
         }
         // Need hash mode — transition if packed
         self.transition_to_hash();
-        if let ArrayStorage::SmallHash(small) =
-            &mut self.storage
-        {
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
             if let Some(index) = small.find_int(key) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -1857,9 +1841,7 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) =
-            &mut self.storage
-        {
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
             if let Some(index) = small.find_str(key) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -1878,15 +1860,17 @@ impl PhpArray {
             }
             if linear.entries.len() < LINEAR_HASH_CAPACITY {
                 linear.invalidate_index();
-                linear.entries.push((
-                    ArrayEntryKey::String(SharedStringKey::new(key)),
-                    val,
-                ));
+                linear
+                    .entries
+                    .push((ArrayEntryKey::String(SharedStringKey::new(key)), val));
                 return;
             }
         }
         self.promote_linear_hash(1, 0);
-        if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
+        if let ArrayStorage::Hash {
+            entries, str_index, ..
+        } = &mut self.storage
+        {
             if let Some(&idx) = str_index.get(key) {
                 // Key exists — overwrite value, no allocation for key
                 entries[idx].1 = val;
@@ -1907,18 +1891,14 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) =
-            &mut self.storage
-        {
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
             if let Some(index) = small.find_str(&key) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
             }
             if small.len() < SMALL_HASH_CAPACITY {
-                let inserted = small.push(
-                    ArrayEntryKey::String(SharedStringKey::from_owned(key)),
-                    val,
-                );
+                let inserted =
+                    small.push(ArrayEntryKey::String(SharedStringKey::from_owned(key)), val);
                 debug_assert!(inserted);
                 return;
             }
@@ -1931,15 +1911,17 @@ impl PhpArray {
             }
             if linear.entries.len() < LINEAR_HASH_CAPACITY {
                 linear.invalidate_index();
-                linear.entries.push((
-                    ArrayEntryKey::String(SharedStringKey::from_owned(key)),
-                    val,
-                ));
+                linear
+                    .entries
+                    .push((ArrayEntryKey::String(SharedStringKey::from_owned(key)), val));
                 return;
             }
         }
         self.promote_linear_hash(1, 0);
-        if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
+        if let ArrayStorage::Hash {
+            entries, str_index, ..
+        } = &mut self.storage
+        {
             if let Some(&idx) = str_index.get(key.as_str()) {
                 entries[idx].1 = val;
             } else {
@@ -1982,9 +1964,7 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) =
-            &mut self.storage
-        {
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
             if let Some(index) = small.find_str(key_text) {
                 small.entries[index].as_mut().unwrap().1 = val;
                 return;
@@ -2012,7 +1992,10 @@ impl PhpArray {
             }
         }
         self.promote_linear_hash(1, 0);
-        if let ArrayStorage::Hash { entries, str_index, .. } = &mut self.storage {
+        if let ArrayStorage::Hash {
+            entries, str_index, ..
+        } = &mut self.storage
+        {
             if let Some(&idx) = str_index.get(key_text) {
                 entries[idx].1 = val;
             } else {
@@ -2038,9 +2021,7 @@ impl PhpArray {
         match &self.storage {
             ArrayStorage::Hash { entries, .. } => entries.get(position),
             ArrayStorage::LinearHash(linear) => linear.entries.get(position),
-            ArrayStorage::SmallHash(small) => {
-                small.get(position)
-            }
+            ArrayStorage::SmallHash(small) => small.get(position),
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -2050,9 +2031,7 @@ impl PhpArray {
         match &self.storage {
             ArrayStorage::Hash { entries, .. } => Some(entries.len()),
             ArrayStorage::LinearHash(linear) => Some(linear.entries.len()),
-            ArrayStorage::SmallHash(small) => {
-                Some(small.len())
-            }
+            ArrayStorage::SmallHash(small) => Some(small.len()),
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -2091,14 +2070,16 @@ impl PhpArray {
                         .checked_sub(*first_key)
                         .and_then(|offset| usize::try_from(offset).ok())
                     {
-                        if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(position) {
+                        if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(position)
+                        {
                             if *found_key == key {
                                 return Some(value);
                             }
                         }
                     }
                 } else if key >= 0 {
-                    if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(key as usize) {
+                    if let Some((ArrayEntryKey::Int(found_key), value)) = entries.get(key as usize)
+                    {
                         if *found_key == key {
                             return Some(value);
                         }
@@ -2120,7 +2101,11 @@ impl PhpArray {
             ArrayStorage::Packed(_) => None,
             ArrayStorage::SmallHash(small) => {
                 let position = small.find_int(key)?;
-                small.entries.get_mut(position)?.as_mut().map(|entry| &mut entry.1)
+                small
+                    .entries
+                    .get_mut(position)?
+                    .as_mut()
+                    .map(|entry| &mut entry.1)
             }
             ArrayStorage::LinearHash(linear) => {
                 let position = linear.find_int(key)?;
@@ -2132,8 +2117,7 @@ impl PhpArray {
                 verified_int_prefix,
                 ..
             } => {
-                let position =
-                    indexed_int_position(entries, int_index, *verified_int_prefix, key)?;
+                let position = indexed_int_position(entries, int_index, *verified_int_prefix, key)?;
                 entries.get_mut(position).map(|entry| &mut entry.1)
             }
         }
@@ -2153,10 +2137,9 @@ impl PhpArray {
             return matches!(self.hash_entry_at(0), Some((ArrayEntryKey::Int(_), _)));
         }
         match (self.hash_entry_at(0), self.hash_entry_at(1)) {
-            (
-                Some((ArrayEntryKey::Int(first), _)),
-                Some((ArrayEntryKey::Int(second), _)),
-            ) => first.checked_add(1) == Some(*second),
+            (Some((ArrayEntryKey::Int(first), _)), Some((ArrayEntryKey::Int(second), _))) => {
+                first.checked_add(1) == Some(*second)
+            }
             _ => false,
         }
     }
@@ -2190,9 +2173,7 @@ impl PhpArray {
             let (ArrayEntryKey::Int(second), _) = self.hash_entry_at(start + 1)? else {
                 return None;
             };
-            let stride = second
-                .checked_sub(*first)
-                .filter(|stride| *stride != 0)?;
+            let stride = second.checked_sub(*first).filter(|stride| *stride != 0)?;
             for (offset, position) in (start..end).enumerate() {
                 let (key, _) = self.hash_entry_at(position)?;
                 let expected = stride
@@ -2215,7 +2196,9 @@ impl PhpArray {
 
         window_hint(0).or_else(|| {
             let suffix_start = len.saturating_sub(8);
-            (suffix_start != 0).then(|| window_hint(suffix_start)).flatten()
+            (suffix_start != 0)
+                .then(|| window_hint(suffix_start))
+                .flatten()
         })
     }
 
@@ -2237,7 +2220,9 @@ impl PhpArray {
             if stride == 1 {
                 usize::try_from(offset).ok()
             } else if stride != 0 && offset.checked_rem(stride) == Some(0) {
-                offset.checked_div(stride).and_then(|value| usize::try_from(value).ok())
+                offset
+                    .checked_div(stride)
+                    .and_then(|value| usize::try_from(value).ok())
             } else {
                 None
             }
@@ -2258,9 +2243,9 @@ impl PhpArray {
                 .find_int(key)
                 .and_then(|position| linear.entries.get(position))
                 .map(|entry| &entry.1),
-            ArrayStorage::Hash { entries, int_index, .. } => {
-                int_index.get(&key).map(|&position| &entries[position].1)
-            }
+            ArrayStorage::Hash {
+                entries, int_index, ..
+            } => int_index.get(&key).map(|&position| &entries[position].1),
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -2279,9 +2264,9 @@ impl PhpArray {
                 .find_int(key)
                 .and_then(|position| linear.entries.get(position))
                 .map(|entry| &entry.1),
-            ArrayStorage::Hash { entries, int_index, .. } => {
-                int_index.get(&key).map(|&position| &entries[position].1)
-            }
+            ArrayStorage::Hash {
+                entries, int_index, ..
+            } => int_index.get(&key).map(|&position| &entries[position].1),
             ArrayStorage::Packed(_) => None,
         }
     }
@@ -2301,7 +2286,9 @@ impl PhpArray {
                 let position = linear.find_int(key)?;
                 Some((position, &linear.entries.get(position)?.1))
             }
-            ArrayStorage::Hash { entries, int_index, .. } => {
+            ArrayStorage::Hash {
+                entries, int_index, ..
+            } => {
                 let position = *int_index.get(&key)?;
                 Some((position, &entries[position].1))
             }
@@ -2325,9 +2312,9 @@ impl PhpArray {
     #[inline]
     pub fn get_str(&self, key: &str) -> Option<&Value> {
         match &self.storage {
-            ArrayStorage::Hash { entries, str_index, .. } => {
-                str_index.get(key).map(|&idx| &entries[idx].1)
-            }
+            ArrayStorage::Hash {
+                entries, str_index, ..
+            } => str_index.get(key).map(|&idx| &entries[idx].1),
             ArrayStorage::LinearHash(linear) => linear
                 .find_str(key)
                 .and_then(|position| linear.entries.get(position))
@@ -2349,13 +2336,19 @@ impl PhpArray {
             ArrayStorage::Packed(_) => None,
             ArrayStorage::SmallHash(small) => {
                 let position = small.find_str(key)?;
-                small.entries.get_mut(position)?.as_mut().map(|entry| &mut entry.1)
+                small
+                    .entries
+                    .get_mut(position)?
+                    .as_mut()
+                    .map(|entry| &mut entry.1)
             }
             ArrayStorage::LinearHash(linear) => {
                 let position = linear.find_str(key)?;
                 linear.entries.get_mut(position).map(|entry| &mut entry.1)
             }
-            ArrayStorage::Hash { entries, str_index, .. } => {
+            ArrayStorage::Hash {
+                entries, str_index, ..
+            } => {
                 let position = *str_index.get(key)?;
                 entries.get_mut(position).map(|entry| &mut entry.1)
             }
@@ -2379,9 +2372,7 @@ impl PhpArray {
     pub(crate) fn get_str_with_position(&self, key: &str) -> Option<(usize, &Value)> {
         match &self.storage {
             ArrayStorage::Hash {
-                entries,
-                str_index,
-                ..
+                entries, str_index, ..
             } => {
                 let position = *str_index.get(key)?;
                 Some((position, &entries.get(position)?.1))
@@ -2412,9 +2403,7 @@ impl PhpArray {
     pub fn is_empty(&self) -> bool {
         match &self.storage {
             ArrayStorage::Packed(values) => values.is_empty(),
-            ArrayStorage::SmallHash(small) => {
-                small.len() == 0
-            }
+            ArrayStorage::SmallHash(small) => small.len() == 0,
             ArrayStorage::LinearHash(linear) => linear.entries.is_empty(),
             ArrayStorage::Hash { entries, .. } => entries.is_empty(),
         }
@@ -2426,18 +2415,15 @@ impl PhpArray {
     #[inline]
     pub fn get_at(&self, pos: usize) -> Option<(&Value, ArrayKey)> {
         match &self.storage {
-            ArrayStorage::Packed(values) => {
-                values.get(pos).map(|v| (v, ArrayKey::Int(pos as i64)))
+            ArrayStorage::Packed(values) => values.get(pos).map(|v| (v, ArrayKey::Int(pos as i64))),
+            ArrayStorage::SmallHash(small) => {
+                small.get(pos).map(|(key, value)| (value, key.to_public()))
             }
-            ArrayStorage::SmallHash(small) => small
+            ArrayStorage::LinearHash(linear) => linear
+                .entries
                 .get(pos)
                 .map(|(key, value)| (value, key.to_public())),
-            ArrayStorage::LinearHash(linear) => {
-                linear.entries.get(pos).map(|(key, value)| (value, key.to_public()))
-            }
-            ArrayStorage::Hash { entries, .. } => {
-                entries.get(pos).map(|(k, v)| (v, k.to_public()))
-            }
+            ArrayStorage::Hash { entries, .. } => entries.get(pos).map(|(k, v)| (v, k.to_public())),
         }
     }
 
@@ -2446,12 +2432,8 @@ impl PhpArray {
     pub fn get_value_at(&self, pos: usize) -> Option<&Value> {
         match &self.storage {
             ArrayStorage::Packed(values) => values.get(pos),
-            ArrayStorage::SmallHash(small) => {
-                small.get(pos).map(|entry| &entry.1)
-            }
-            ArrayStorage::LinearHash(linear) => {
-                linear.entries.get(pos).map(|entry| &entry.1)
-            }
+            ArrayStorage::SmallHash(small) => small.get(pos).map(|entry| &entry.1),
+            ArrayStorage::LinearHash(linear) => linear.entries.get(pos).map(|entry| &entry.1),
             ArrayStorage::Hash { entries, .. } => entries.get(pos).map(|(_, v)| v),
         }
     }
@@ -2465,9 +2447,7 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => {
                 PhpArrayIterInner::Small(small.entries[..small.len()].iter())
             }
-            ArrayStorage::LinearHash(linear) => {
-                PhpArrayIterInner::Hash(linear.entries.iter())
-            }
+            ArrayStorage::LinearHash(linear) => PhpArrayIterInner::Hash(linear.entries.iter()),
             ArrayStorage::Hash { entries, .. } => PhpArrayIterInner::Hash(entries.iter()),
         };
         PhpArrayIter { inner }
@@ -2484,9 +2464,7 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => {
                 PhpArrayValuesInner::Small(small.entries[..small.len()].iter())
             }
-            ArrayStorage::LinearHash(linear) => {
-                PhpArrayValuesInner::Hash(linear.entries.iter())
-            }
+            ArrayStorage::LinearHash(linear) => PhpArrayValuesInner::Hash(linear.entries.iter()),
             ArrayStorage::Hash { entries, .. } => PhpArrayValuesInner::Hash(entries.iter()),
         };
         PhpArrayValues { inner }
@@ -2504,7 +2482,8 @@ impl PhpArray {
             ArrayStorage::SmallHash(small) => small.entries[..small.len()]
                 .iter()
                 .any(|entry| matches!(entry, Some((ArrayEntryKey::String(_), _)))),
-            ArrayStorage::LinearHash(linear) => linear.entries
+            ArrayStorage::LinearHash(linear) => linear
+                .entries
                 .iter()
                 .any(|entry| matches!(entry.0, ArrayEntryKey::String(_))),
             ArrayStorage::Hash { str_index, .. } => !str_index.is_empty(),
@@ -2528,7 +2507,8 @@ impl PhpArray {
                     (key.to_public(), value)
                 })
                 .collect(),
-            ArrayStorage::LinearHash(linear) => linear.entries
+            ArrayStorage::LinearHash(linear) => linear
+                .entries
                 .iter()
                 .map(|(key, value)| (key.to_public(), value))
                 .collect(),
@@ -2546,9 +2526,7 @@ impl PhpArray {
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
         }
-        if let ArrayStorage::SmallHash(small) =
-            &mut self.storage
-        {
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
             let position = match key {
                 ArrayKey::Int(key) => small.find_int(*key),
                 ArrayKey::String(key) => small.find_str(key),
@@ -2660,9 +2638,7 @@ impl PhpArray {
     pub fn shift(&mut self) -> Option<Value> {
         // Transition to hash — shift requires key renumbering
         self.transition_to_hash();
-        if let ArrayStorage::SmallHash(small) =
-            &mut self.storage
-        {
+        if let ArrayStorage::SmallHash(small) = &mut self.storage {
             let (_key, value) = small.remove_at(0)?;
             let mut next_int_key = 0i64;
             let len = small.len();
@@ -2698,7 +2674,9 @@ impl PhpArray {
             verified_int_prefix,
         } = &mut self.storage
         {
-            if entries.is_empty() { return None; }
+            if entries.is_empty() {
+                return None;
+            }
             let (_key, val) = entries.remove(0);
 
             // Renumber: rebuild with int keys starting from 0, string keys preserved
@@ -2722,7 +2700,6 @@ impl PhpArray {
             None
         }
     }
-
 
     /// Rebuild String positions affected by an ordered-entry removal.
     fn reindex_string_entries(
@@ -2848,9 +2825,7 @@ impl<'a> Iterator for PhpArrayIter<'a> {
                 let (key, value) = entry.as_ref().unwrap();
                 (key.to_public(), value)
             }),
-            PhpArrayIterInner::Hash(iter) => {
-                iter.next().map(|(k, v)| (k.to_public(), v))
-            }
+            PhpArrayIterInner::Hash(iter) => iter.next().map(|(k, v)| (k.to_public(), v)),
         }
     }
 
@@ -2884,9 +2859,7 @@ impl<'a> Iterator for PhpArrayValues<'a> {
     fn next(&mut self) -> Option<Self::Item> {
         match &mut self.inner {
             PhpArrayValuesInner::Packed(iter) => iter.next(),
-            PhpArrayValuesInner::Small(iter) => {
-                iter.next().map(|entry| &entry.as_ref().unwrap().1)
-            }
+            PhpArrayValuesInner::Small(iter) => iter.next().map(|entry| &entry.as_ref().unwrap().1),
             PhpArrayValuesInner::Hash(iter) => iter.next().map(|(_, value)| value),
         }
     }
@@ -2943,30 +2916,26 @@ impl Clone for PhpArray {
 impl std::fmt::Debug for PhpArray {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match &self.storage {
-            ArrayStorage::Packed(values) => {
-                f.debug_struct("PhpArray")
-                    .field("mode", &"packed")
-                    .field("len", &values.len())
-                    .finish()
-            }
-            ArrayStorage::SmallHash(small) => {
-                f.debug_struct("PhpArray")
-                    .field("mode", &"small-hash")
-                    .field("len", &small.len())
-                    .finish()
-            }
-            ArrayStorage::LinearHash(linear) => {
-                f.debug_struct("PhpArray")
-                    .field("mode", &"linear-hash")
-                    .field("len", &linear.entries.len())
-                    .finish()
-            }
-            ArrayStorage::Hash { entries, .. } => {
-                f.debug_struct("PhpArray")
-                    .field("mode", &"hash")
-                    .field("len", &entries.len())
-                    .finish()
-            }
+            ArrayStorage::Packed(values) => f
+                .debug_struct("PhpArray")
+                .field("mode", &"packed")
+                .field("len", &values.len())
+                .finish(),
+            ArrayStorage::SmallHash(small) => f
+                .debug_struct("PhpArray")
+                .field("mode", &"small-hash")
+                .field("len", &small.len())
+                .finish(),
+            ArrayStorage::LinearHash(linear) => f
+                .debug_struct("PhpArray")
+                .field("mode", &"linear-hash")
+                .field("len", &linear.entries.len())
+                .finish(),
+            ArrayStorage::Hash { entries, .. } => f
+                .debug_struct("PhpArray")
+                .field("mode", &"hash")
+                .field("len", &entries.len())
+                .finish(),
         }
     }
 }
@@ -2981,10 +2950,7 @@ mod php_array_tests {
     fn hash_entry_layout_stays_compact() {
         assert_eq!(std::mem::size_of::<ArrayEntryKey>(), 16);
         assert_eq!(std::mem::size_of::<(ArrayEntryKey, Value)>(), 32);
-        assert_eq!(
-            std::mem::size_of::<Option<(ArrayEntryKey, Value)>>(),
-            32
-        );
+        assert_eq!(std::mem::size_of::<Option<(ArrayEntryKey, Value)>>(), 32);
         assert_eq!(std::mem::size_of::<ArrayStorage>(), 112);
         assert_eq!(std::mem::size_of::<PhpArray>(), 120);
     }
@@ -2994,7 +2960,10 @@ mod php_array_tests {
         let mut array = PhpArray::with_hash_capacity(9);
         array.set_str("shared", Value::long(7));
 
-        let ArrayStorage::Hash { entries, str_index, .. } = &array.storage else {
+        let ArrayStorage::Hash {
+            entries, str_index, ..
+        } = &array.storage
+        else {
             panic!("string key should select hash storage");
         };
         let ArrayEntryKey::String(entry_key) = &entries[0].0 else {
@@ -3010,16 +2979,10 @@ mod php_array_tests {
         array.set_str("a", Value::long(1));
         array.set_int(8, Value::long(2));
         array.set_str("c", Value::long(3));
-        assert!(matches!(
-            &array.storage,
-            ArrayStorage::SmallHash(_)
-        ));
+        assert!(matches!(&array.storage, ArrayStorage::SmallHash(_)));
 
         array.set_str("a", Value::long(10));
-        assert!(matches!(
-            &array.storage,
-            ArrayStorage::SmallHash(_)
-        ));
+        assert!(matches!(&array.storage, ArrayStorage::SmallHash(_)));
         array.set_streamed_owned_str("d".to_string(), Value::long(4));
         assert!(matches!(&array.storage, ArrayStorage::LinearHash(_)));
         array.set_str("e", Value::long(5));
@@ -3036,10 +2999,7 @@ mod php_array_tests {
         assert_eq!(array.get_str("c").and_then(Value::as_long), Some(3));
         assert_eq!(array.get_str("d").and_then(Value::as_long), Some(40));
         assert_eq!(
-            array
-                .iter()
-                .map(|(key, _)| key)
-                .collect::<Vec<ArrayKey>>(),
+            array.iter().map(|(key, _)| key).collect::<Vec<ArrayKey>>(),
             vec![
                 ArrayKey::String("a".to_string()),
                 ArrayKey::Int(8),
@@ -3150,7 +3110,10 @@ mod php_array_tests {
         packed.push(Value::long(1));
         packed.push(Value::long(2));
         assert_eq!(
-            packed.values().filter_map(Value::as_long).collect::<Vec<_>>(),
+            packed
+                .values()
+                .filter_map(Value::as_long)
+                .collect::<Vec<_>>(),
             vec![1, 2]
         );
 
@@ -3243,7 +3206,9 @@ mod php_array_tests {
         assert_eq!(position, 3);
         assert_eq!(value.as_long(), Some(4));
         assert_eq!(
-            array.get_ordered_int_at(position, -4).and_then(Value::as_long),
+            array
+                .get_ordered_int_at(position, -4)
+                .and_then(Value::as_long),
             Some(4)
         );
     }
@@ -3258,8 +3223,14 @@ mod php_array_tests {
         array.set_int(-11, Value::long(22));
         array.set_int(9_000_007, Value::long(33));
 
-        assert_eq!(array.get_int(1_000_000).and_then(Value::as_long), Some(2_000_000));
-        assert_eq!(array.get_int(1_000_099).and_then(Value::as_long), Some(2_000_198));
+        assert_eq!(
+            array.get_int(1_000_000).and_then(Value::as_long),
+            Some(2_000_000)
+        );
+        assert_eq!(
+            array.get_int(1_000_099).and_then(Value::as_long),
+            Some(2_000_198)
+        );
         assert_eq!(array.get_int(-11).and_then(Value::as_long), Some(22));
         assert_eq!(array.get_int(9_000_007).and_then(Value::as_long), Some(33));
         assert!(array.get_int(1_000_101).is_none());
@@ -3312,9 +3283,7 @@ mod php_array_tests {
             Some(149)
         );
         assert_eq!(
-            array
-                .get_positioned_int(30, 44, 7)
-                .and_then(Value::as_long),
+            array.get_positioned_int(30, 44, 7).and_then(Value::as_long),
             Some(-1)
         );
 
@@ -3355,7 +3324,9 @@ mod php_array_tests {
         assert_eq!(sparse.integer_position_hint(), Some((30, 7)));
         sparse.set_streamed_int(93, Value::long(9));
         assert_eq!(
-            sparse.get_positioned_int(93, 30, 7).and_then(Value::as_long),
+            sparse
+                .get_positioned_int(93, 30, 7)
+                .and_then(Value::as_long),
             Some(9)
         );
 
@@ -3619,7 +3590,11 @@ impl Value {
     /// For heap-backed values (String/Array/Object), caller must handle refcount.
     #[inline(always)]
     pub unsafe fn raw_copy(src: *const Value, dst: *mut Value) {
-        std::ptr::copy_nonoverlapping(src as *const u8, dst as *mut u8, std::mem::size_of::<Value>());
+        std::ptr::copy_nonoverlapping(
+            src as *const u8,
+            dst as *mut u8,
+            std::mem::size_of::<Value>(),
+        );
     }
 
     /// Write Null directly into a slot.
@@ -3639,7 +3614,9 @@ impl Value {
     pub fn string(s: impl Into<String>) -> Self {
         let rc = Rc::new(s.into());
         Self {
-            data: ValueData { ptr: Rc::into_raw(rc) as *mut u8 },
+            data: ValueData {
+                ptr: Rc::into_raw(rc) as *mut u8,
+            },
             type_info: ValueType::String as u32,
             _not_send: PhantomData,
         }
@@ -3652,7 +3629,9 @@ impl Value {
     pub fn array(arr: PhpArray) -> Self {
         let rc = Rc::new(arr);
         Self {
-            data: ValueData { ptr: Rc::into_raw(rc) as *mut u8 },
+            data: ValueData {
+                ptr: Rc::into_raw(rc) as *mut u8,
+            },
             type_info: ValueType::Array as u32,
             _not_send: PhantomData,
         }
@@ -3676,7 +3655,9 @@ impl Value {
     pub fn closure(c: PhpClosure) -> Self {
         let boxed = Box::new(c);
         Self {
-            data: ValueData { ptr: Box::into_raw(boxed) as *mut u8 },
+            data: ValueData {
+                ptr: Box::into_raw(boxed) as *mut u8,
+            },
             type_info: ValueType::Closure as u32,
             _not_send: PhantomData,
         }
@@ -3709,7 +3690,9 @@ impl Value {
     pub fn as_object_rc(&self) -> Option<std::mem::ManuallyDrop<Rc<RefCell<PhpObject>>>> {
         if self.value_type() == ValueType::Object {
             Some(unsafe {
-                std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const RefCell<PhpObject>))
+                std::mem::ManuallyDrop::new(Rc::from_raw(
+                    self.data.ptr as *const RefCell<PhpObject>,
+                ))
             })
         } else {
             None
@@ -4086,9 +4069,9 @@ impl Value {
                 if a.len() != b.len() {
                     return false;
                 }
-                a.iter().zip(b.iter()).all(|((ka, va), (kb, vb))| {
-                    ka == kb && va.structurally_equal(vb)
-                })
+                a.iter()
+                    .zip(b.iter())
+                    .all(|((ka, va), (kb, vb))| ka == kb && va.structurally_equal(vb))
             }
             _ => false,
         }
@@ -4109,9 +4092,7 @@ impl Value {
                     format!("{}", d)
                 }
             }
-            ValueType::String => {
-                unsafe { &*(self.data.ptr as *const String) }.clone()
-            }
+            ValueType::String => unsafe { &*(self.data.ptr as *const String) }.clone(),
             ValueType::Array => "Array".to_string(),
             ValueType::Object => {
                 let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
@@ -4206,12 +4187,20 @@ impl Value {
             ValueType::String => {
                 let s = unsafe { &*(self.data.ptr as *const String) };
                 let s = s.trim();
-                if s.is_empty() { return 0; }
+                if s.is_empty() {
+                    return 0;
+                }
                 let bytes = s.as_bytes();
                 let mut end = 0;
-                if bytes[0] == b'-' || bytes[0] == b'+' { end = 1; }
-                while end < bytes.len() && bytes[end].is_ascii_digit() { end += 1; }
-                if end == 0 || (end == 1 && (bytes[0] == b'-' || bytes[0] == b'+')) { return 0; }
+                if bytes[0] == b'-' || bytes[0] == b'+' {
+                    end = 1;
+                }
+                while end < bytes.len() && bytes[end].is_ascii_digit() {
+                    end += 1;
+                }
+                if end == 0 || (end == 1 && (bytes[0] == b'-' || bytes[0] == b'+')) {
+                    return 0;
+                }
                 s[..end].parse().unwrap_or(0)
             }
             _ => 0,
@@ -4238,7 +4227,11 @@ impl Value {
     pub fn bool(v: bool) -> Self {
         Self {
             data: ValueData { long: 0 },
-            type_info: if v { ValueType::True as u32 } else { ValueType::False as u32 },
+            type_info: if v {
+                ValueType::True as u32
+            } else {
+                ValueType::False as u32
+            },
             _not_send: PhantomData,
         }
     }
@@ -4248,7 +4241,9 @@ impl Value {
     #[inline]
     pub fn reference(ptr: *mut Value) -> Self {
         Self {
-            data: ValueData { ptr: ptr as *mut u8 },
+            data: ValueData {
+                ptr: ptr as *mut u8,
+            },
             type_info: ValueType::Reference as u32,
             _not_send: PhantomData,
         }
@@ -4262,7 +4257,10 @@ impl Value {
 
     #[inline]
     pub fn needs_cleanup(&self) -> bool {
-        matches!(self.value_type(), ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure)
+        matches!(
+            self.value_type(),
+            ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure
+        )
     }
 
     /// Get the target pointer of a reference value.
@@ -4284,7 +4282,9 @@ impl Clone for Value {
                     Rc::increment_strong_count(self.data.ptr as *const String);
                 }
                 Self {
-                    data: ValueData { ptr: unsafe { self.data.ptr } },
+                    data: ValueData {
+                        ptr: unsafe { self.data.ptr },
+                    },
                     type_info: self.type_info,
                     _not_send: PhantomData,
                 }
@@ -4295,7 +4295,9 @@ impl Clone for Value {
                     Rc::increment_strong_count(self.data.ptr as *const PhpArray);
                 }
                 Self {
-                    data: ValueData { ptr: unsafe { self.data.ptr } },
+                    data: ValueData {
+                        ptr: unsafe { self.data.ptr },
+                    },
                     type_info: self.type_info,
                     _not_send: PhantomData,
                 }
@@ -4306,7 +4308,9 @@ impl Clone for Value {
                     Rc::increment_strong_count(self.data.ptr as *const RefCell<PhpObject>);
                 }
                 Self {
-                    data: ValueData { ptr: unsafe { self.data.ptr } },
+                    data: ValueData {
+                        ptr: unsafe { self.data.ptr },
+                    },
                     type_info: self.type_info,
                     _not_send: PhantomData,
                 }
@@ -4378,8 +4382,14 @@ impl std::fmt::Debug for Value {
             ValueType::True => write!(f, "Value(true)"),
             ValueType::Long => write!(f, "Value(long={})", unsafe { self.data.long }),
             ValueType::Double => write!(f, "Value(double={})", unsafe { self.data.double }),
-            ValueType::String => write!(f, "Value(string={:?})", unsafe { &*(self.data.ptr as *const String) }),
-            ValueType::Array => write!(f, "Value(array[{}])", unsafe { &*(self.data.ptr as *const PhpArray) }.len()),
+            ValueType::String => write!(f, "Value(string={:?})", unsafe {
+                &*(self.data.ptr as *const String)
+            }),
+            ValueType::Array => write!(
+                f,
+                "Value(array[{}])",
+                unsafe { &*(self.data.ptr as *const PhpArray) }.len()
+            ),
             ValueType::Object => {
                 let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
                 let obj = refcell.borrow();

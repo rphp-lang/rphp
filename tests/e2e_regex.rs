@@ -1,5 +1,4 @@
 /// E2E tests: preg_match and preg_replace — regex functions.
-
 mod common;
 use common::run_php;
 
@@ -7,12 +6,18 @@ use common::run_php;
 
 #[test]
 fn test_preg_match_basic_match() {
-    assert_eq!(run_php("<?php echo preg_match('/hello/', 'hello world');"), "1");
+    assert_eq!(
+        run_php("<?php echo preg_match('/hello/', 'hello world');"),
+        "1"
+    );
 }
 
 #[test]
 fn test_preg_match_basic_no_match() {
-    assert_eq!(run_php("<?php echo preg_match('/xyz/', 'hello world');"), "0");
+    assert_eq!(
+        run_php("<?php echo preg_match('/xyz/', 'hello world');"),
+        "0"
+    );
 }
 
 // === preg_match — with capture groups ===

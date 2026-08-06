@@ -1,5 +1,4 @@
 /// E2E tests: echo, arithmetic, precedence, basic assignment.
-
 mod common;
 use common::run_php;
 
@@ -160,10 +159,15 @@ fn test_unary_minus_in_arithmetic() {
 
 #[test]
 fn test_unary_minus_function_result() {
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function five() { return 5; }
 echo -five();
-"), "-5");
+"
+        ),
+        "-5"
+    );
 }
 
 #[test]
@@ -178,19 +182,26 @@ fn test_unary_minus_double_negation() {
 
 #[test]
 fn test_practical_float_average() {
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $values = [10, 20, 30];
 $sum = 0.0;
 foreach ($values as $v) {
     $sum += $v;
 }
 echo $sum / count($values);
-"), "20");
+"
+        ),
+        "20"
+    );
 }
 
 #[test]
 fn test_practical_unary_minus_abs_manual() {
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function my_abs($x) {
     if ($x < 0) {
         return -$x;
@@ -198,5 +209,8 @@ function my_abs($x) {
     return $x;
 }
 echo my_abs(-5) . ' ' . my_abs(3);
-"), "5 3");
+"
+        ),
+        "5 3"
+    );
 }

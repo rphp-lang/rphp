@@ -10,13 +10,8 @@
 #[cfg(feature = "quick-loops")]
 enum QuickLongArray {
     Empty,
-    Packed {
-        values: *const Value,
-        len: usize,
-    },
-    Hash {
-        array: *const PhpArray,
-    },
+    Packed { values: *const Value, len: usize },
+    Hash { array: *const PhpArray },
 }
 
 #[derive(Clone, Copy)]
@@ -90,9 +85,7 @@ impl QuickLongArray {
         op_array: &crate::compiler::OpArray,
     ) -> Option<i64> {
         match index {
-            QuickArrayIndex::Long(index) => {
-                self.long_at_int(quick_long_operand(slots, index))
-            }
+            QuickArrayIndex::Long(index) => self.long_at_int(quick_long_operand(slots, index)),
             QuickArrayIndex::StringLiteral(literal) => self.long_at_str(
                 op_array
                     .literals
@@ -114,9 +107,7 @@ unsafe fn mutable_long_entry_at(
     op_array: &crate::compiler::OpArray,
 ) -> Option<(i64, *mut Value)> {
     let value = match index {
-        QuickArrayIndex::Long(index) => {
-            (*array).get_int_mut(quick_long_operand(slots, index))
-        }
+        QuickArrayIndex::Long(index) => (*array).get_int_mut(quick_long_operand(slots, index)),
         QuickArrayIndex::StringLiteral(literal) => {
             let key = op_array
                 .literals
@@ -130,6 +121,5 @@ unsafe fn mutable_long_entry_at(
         }
         QuickArrayIndex::ValueSlot(_) => return None,
     }?;
-    (value.value_type() == ValueType::Long)
-        .then(|| (value.raw_long(), value as *mut Value))
+    (value.value_type() == ValueType::Long).then(|| (value.raw_long(), value as *mut Value))
 }

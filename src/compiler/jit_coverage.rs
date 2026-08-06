@@ -30,11 +30,7 @@ const CALLBACK_FUNCTIONS: &[&str] = &[
     "usort",
 ];
 
-fn named_call_matches(
-    op_array: &OpArray,
-    instruction: &Instruction,
-    names: &[&str],
-) -> bool {
+fn named_call_matches(op_array: &OpArray, instruction: &Instruction, names: &[&str]) -> bool {
     if instruction.opcode != OpCode::InitFcall {
         return false;
     }
@@ -182,8 +178,7 @@ mod tests {
             .iter()
             .enumerate()
             .find(|(ip, instruction)| {
-                instruction.opcode == OpCode::Jmp
-                    && (instruction.op1 as usize) < *ip
+                instruction.opcode == OpCode::Jmp && (instruction.op1 as usize) < *ip
             })
             .expect("test source must contain a backward loop edge");
         loop_miss_reason(&result.main, backedge.op1 as usize, backedge_ip)
@@ -192,9 +187,7 @@ mod tests {
     #[test]
     fn prioritizes_json_pipelines_over_regular_calls() {
         assert_eq!(
-            classify_loop(
-                "<?php for ($i = 0; $i < 10; $i++) { $row = json_encode($i); }"
-            ),
+            classify_loop("<?php for ($i = 0; $i < 10; $i++) { $row = json_encode($i); }"),
             JitMissReason::JsonPipeline
         );
     }
@@ -212,9 +205,7 @@ mod tests {
     #[test]
     fn prioritizes_callback_pipelines_over_array_shapes() {
         assert_eq!(
-            classify_loop(
-                "<?php for ($i = 0; $i < 10; $i++) { $row = array_map('abs', [$i]); }"
-            ),
+            classify_loop("<?php for ($i = 0; $i < 10; $i++) { $row = array_map('abs', [$i]); }"),
             JitMissReason::CallbackOrIndirectCall
         );
     }

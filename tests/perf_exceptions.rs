@@ -3,7 +3,7 @@
 ///
 /// Run with: cargo test --test perf_exceptions -- --nocapture --ignored
 mod common;
-use common::{run_php_silent, PreparedPhp};
+use common::{PreparedPhp, run_php_silent};
 use std::time::Instant;
 
 const WARMUP: u32 = 3;
@@ -25,7 +25,10 @@ fn bench(label: &str, source: &str) -> f64 {
     let median = times[times.len() / 2];
     let min = times[0];
     let max = times[times.len() - 1];
-    eprintln!("  {:<45} median={:.3}ms  min={:.3}ms  max={:.3}ms", label, median, min, max);
+    eprintln!(
+        "  {:<45} median={:.3}ms  min={:.3}ms  max={:.3}ms",
+        label, median, min, max
+    );
     median
 }
 
@@ -48,7 +51,10 @@ fn bench_rt(label: &str, source: &str) -> f64 {
     let median = times[times.len() / 2];
     let min = times[0];
     let max = times[times.len() - 1];
-    eprintln!("  {:<45} median={:.3}ms  min={:.3}ms  max={:.3}ms", label, median, min, max);
+    eprintln!(
+        "  {:<45} median={:.3}ms  min={:.3}ms  max={:.3}ms",
+        label, median, min, max
+    );
     median
 }
 
@@ -61,14 +67,22 @@ const LOOP_COUNT: &str = "10000";
 fn perf_baseline_loop() {
     eprintln!("\n=== Exception Performance Benchmarks ===\n");
 
-    let baseline = bench("baseline: for loop (10k iterations)", &format!(r#"<?php
+    let baseline = bench(
+        "baseline: for loop (10k iterations)",
+        &format!(
+            r#"<?php
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + $i;
 }}
-"#));
+"#
+        ),
+    );
 
-    let try_no_throw = bench("try/catch in loop, no throw", &format!(r#"<?php
+    let try_no_throw = bench(
+        "try/catch in loop, no throw",
+        &format!(
+            r#"<?php
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     try {{
@@ -77,9 +91,14 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
         $sum = 0;
     }}
 }}
-"#));
+"#
+        ),
+    );
 
-    let try_finally_no_throw = bench("try/finally in loop, no throw", &format!(r#"<?php
+    let try_finally_no_throw = bench(
+        "try/finally in loop, no throw",
+        &format!(
+            r#"<?php
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     try {{
@@ -87,11 +106,19 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     }} finally {{
     }}
 }}
-"#));
+"#
+        ),
+    );
 
     eprintln!();
-    eprintln!("  try/catch overhead (no throw): {:.1}x baseline", try_no_throw / baseline);
-    eprintln!("  try/finally overhead (no throw): {:.1}x baseline", try_finally_no_throw / baseline);
+    eprintln!(
+        "  try/catch overhead (no throw): {:.1}x baseline",
+        try_no_throw / baseline
+    );
+    eprintln!(
+        "  try/finally overhead (no throw): {:.1}x baseline",
+        try_finally_no_throw / baseline
+    );
 }
 
 #[test]
@@ -99,7 +126,10 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 fn perf_throw_catch_loop() {
     eprintln!("\n=== Throw/Catch in Loop ===\n");
 
-    bench("throw+catch per iteration (10k)", &format!(r#"<?php
+    bench(
+        "throw+catch per iteration (10k)",
+        &format!(
+            r#"<?php
 $count = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     try {{
@@ -108,9 +138,14 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
         $count = $count + 1;
     }}
 }}
-"#));
+"#
+        ),
+    );
 
-    bench("throw across function call (10k)", &format!(r#"<?php
+    bench(
+        "throw across function call (10k)",
+        &format!(
+            r#"<?php
 function thrower() {{
     throw new Exception("err");
 }}
@@ -122,7 +157,9 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
         $count = $count + 1;
     }}
 }}
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -130,7 +167,9 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 fn perf_finally_paths() {
     eprintln!("\n=== Finally Block Paths ===\n");
 
-    bench("try/finally with return (1k)", r#"<?php
+    bench(
+        "try/finally with return (1k)",
+        r#"<?php
 function f() {
     try {
         return 1;
@@ -140,9 +179,12 @@ function f() {
 for ($i = 0; $i < 1000; $i = $i + 1) {
     f();
 }
-"#);
+"#,
+    );
 
-    bench("try/catch/finally with throw (1k)", r#"<?php
+    bench(
+        "try/catch/finally with throw (1k)",
+        r#"<?php
 function g() {
     try {
         throw new Exception("err");
@@ -154,9 +196,12 @@ function g() {
 for ($i = 0; $i < 1000; $i = $i + 1) {
     g();
 }
-"#);
+"#,
+    );
 
-    bench("nested try/finally propagation (1k)", r#"<?php
+    bench(
+        "nested try/finally propagation (1k)",
+        r#"<?php
 $count = 0;
 for ($i = 0; $i < 1000; $i = $i + 1) {
     try {
@@ -169,7 +214,8 @@ for ($i = 0; $i < 1000; $i = $i + 1) {
         $count = $count + 1;
     }
 }
-"#);
+"#,
+    );
 }
 
 #[test]
@@ -180,7 +226,10 @@ fn perf_closure_vs_function() {
     // All hot loops wrapped in a function to avoid main-scope globals sync overhead.
     // Without this, every call from top-level syncs ALL CVs to eg.globals (clone + HashMap::insert).
 
-    bench_rt("named function call (10k)", &format!(r#"<?php
+    bench_rt(
+        "named function call (10k)",
+        &format!(
+            r#"<?php
 function add($a, $b) {{
     return $a + $b;
 }}
@@ -192,9 +241,14 @@ function bench_named() {{
     return $sum;
 }}
 bench_named();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("closure call (10k)", &format!(r#"<?php
+    bench_rt(
+        "closure call (10k)",
+        &format!(
+            r#"<?php
 function bench_closure() {{
     $add = function($a, $b) {{
         return $a + $b;
@@ -206,9 +260,14 @@ function bench_closure() {{
     return $sum;
 }}
 bench_closure();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("closure use int (10k)", &format!(r#"<?php
+    bench_rt(
+        "closure use int (10k)",
+        &format!(
+            r#"<?php
 function bench_closure_int() {{
     $base = 100;
     $add = function($x) use ($base) {{
@@ -221,9 +280,14 @@ function bench_closure_int() {{
     return $sum;
 }}
 bench_closure_int();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("closure use string (10k)", &format!(r#"<?php
+    bench_rt(
+        "closure use string (10k)",
+        &format!(
+            r#"<?php
 function bench_closure_str() {{
     $prefix = "hello";
     $f = function($x) use ($prefix) {{
@@ -236,9 +300,14 @@ function bench_closure_str() {{
     return $sum;
 }}
 bench_closure_str();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("closure use 3 ints (10k)", &format!(r#"<?php
+    bench_rt(
+        "closure use 3 ints (10k)",
+        &format!(
+            r#"<?php
 function bench_closure_3int() {{
     $a = 1;
     $b = 2;
@@ -253,7 +322,9 @@ function bench_closure_3int() {{
     return $sum;
 }}
 bench_closure_3int();
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -262,7 +333,10 @@ fn perf_main_scope_tax() {
     eprintln!("\n=== Main-scope Tax: top-level vs wrapper (runtime-only) ===\n");
 
     // Top-level: calls from main scope — measures globals sync overhead.
-    bench_rt("top-level: function (10k)", &format!(r#"<?php
+    bench_rt(
+        "top-level: function (10k)",
+        &format!(
+            r#"<?php
 function add($a, $b) {{
     return $a + $b;
 }}
@@ -270,10 +344,15 @@ $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + add($i, 1);
 }}
-"#));
+"#
+        ),
+    );
 
     // Wrapper: same code but hot loop inside a function — no globals sync.
-    bench_rt("wrapper: function (10k)", &format!(r#"<?php
+    bench_rt(
+        "wrapper: function (10k)",
+        &format!(
+            r#"<?php
 function add($a, $b) {{
     return $a + $b;
 }}
@@ -285,9 +364,14 @@ function bench_it() {{
     return $sum;
 }}
 bench_it();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("top-level: closure use int (10k)", &format!(r#"<?php
+    bench_rt(
+        "top-level: closure use int (10k)",
+        &format!(
+            r#"<?php
 $base = 100;
 $add = function($x) use ($base) {{
     return $base + $x;
@@ -296,9 +380,14 @@ $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + $add($i);
 }}
-"#));
+"#
+        ),
+    );
 
-    bench_rt("wrapper: closure use int (10k)", &format!(r#"<?php
+    bench_rt(
+        "wrapper: closure use int (10k)",
+        &format!(
+            r#"<?php
 function bench_it() {{
     $base = 100;
     $add = function($x) use ($base) {{
@@ -311,7 +400,9 @@ function bench_it() {{
     return $sum;
 }}
 bench_it();
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -319,7 +410,10 @@ bench_it();
 fn perf_array_access() {
     eprintln!("\n=== Array Access (runtime-only) ===\n");
 
-    bench_rt("int-key array read (10k)", &format!(r#"<?php
+    bench_rt(
+        "int-key array read (10k)",
+        &format!(
+            r#"<?php
 function bench_int_read() {{
     $arr = [10, 20, 30, 40, 50];
     $sum = 0;
@@ -329,9 +423,14 @@ function bench_int_read() {{
     return $sum;
 }}
 bench_int_read();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string-key array read (10k)", &format!(r#"<?php
+    bench_rt(
+        "string-key array read (10k)",
+        &format!(
+            r#"<?php
 function bench_str_read() {{
     $arr = ["name" => "John", "age" => 30, "city" => "Prague", "score" => 100];
     $sum = 0;
@@ -341,9 +440,14 @@ function bench_str_read() {{
     return $sum;
 }}
 bench_str_read();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string-key array write (10k)", &format!(r#"<?php
+    bench_rt(
+        "string-key array write (10k)",
+        &format!(
+            r#"<?php
 function bench_str_write() {{
     $arr = ["x" => 0];
     for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
@@ -352,7 +456,9 @@ function bench_str_write() {{
     return $arr["x"];
 }}
 bench_str_write();
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -362,7 +468,10 @@ fn perf_method_call() {
 
     // All hot loops wrapped in a function to avoid main-scope globals sync overhead.
 
-    bench_rt("function call (10k)", &format!(r#"<?php
+    bench_rt(
+        "function call (10k)",
+        &format!(
+            r#"<?php
 function compute($x) {{
     return $x + 1;
 }}
@@ -374,9 +483,14 @@ function bench_func() {{
     return $sum;
 }}
 bench_func();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("method call (10k)", &format!(r#"<?php
+    bench_rt(
+        "method call (10k)",
+        &format!(
+            r#"<?php
 class Math {{
     public function compute($x) {{
         return $x + 1;
@@ -391,9 +505,14 @@ function bench_method() {{
     return $sum;
 }}
 bench_method();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("method empty body (10k)", &format!(r#"<?php
+    bench_rt(
+        "method empty body (10k)",
+        &format!(
+            r#"<?php
 class Noop {{
     public function run() {{
         return 0;
@@ -408,9 +527,14 @@ function bench_noop() {{
     return $sum;
 }}
 bench_noop();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("method reads $this prop (10k)", &format!(r#"<?php
+    bench_rt(
+        "method reads $this prop (10k)",
+        &format!(
+            r#"<?php
 class Counter {{
     public $val = 1;
     public function get() {{
@@ -426,9 +550,14 @@ function bench_prop_read() {{
     return $sum;
 }}
 bench_prop_read();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("static method call (10k)", &format!(r#"<?php
+    bench_rt(
+        "static method call (10k)",
+        &format!(
+            r#"<?php
 class SMath {{
     public static function compute($x) {{
         return $x + 1;
@@ -442,9 +571,14 @@ function bench_static() {{
     return $sum;
 }}
 bench_static();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("property write (10k)", &format!(r#"<?php
+    bench_rt(
+        "property write (10k)",
+        &format!(
+            r#"<?php
 class Box {{
     public $val = 0;
 }}
@@ -455,9 +589,14 @@ function bench_prop_write() {{
     }}
 }}
 bench_prop_write();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("property read+write (10k)", &format!(r#"<?php
+    bench_rt(
+        "property read+write (10k)",
+        &format!(
+            r#"<?php
 class Acc {{
     public $sum = 0;
     public function add($x) {{
@@ -471,7 +610,9 @@ function bench_rw() {{
     }}
 }}
 bench_rw();
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -479,7 +620,10 @@ bench_rw();
 fn perf_null_coalescing() {
     eprintln!("\n=== Null Coalescing vs Isset ===\n");
 
-    bench("isset check (10k)", &format!(r#"<?php
+    bench(
+        "isset check (10k)",
+        &format!(
+            r#"<?php
 $val = 42;
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
@@ -487,23 +631,35 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
         $sum = $sum + $val;
     }}
 }}
-"#));
+"#
+        ),
+    );
 
-    bench("?? operator (10k)", &format!(r#"<?php
+    bench(
+        "?? operator (10k)",
+        &format!(
+            r#"<?php
 $val = 42;
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + ($val ?? 0);
 }}
-"#));
+"#
+        ),
+    );
 
-    bench("?? on null (10k)", &format!(r#"<?php
+    bench(
+        "?? on null (10k)",
+        &format!(
+            r#"<?php
 $val = null;
 $sum = 0;
 for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
     $sum = $sum + ($val ?? 1);
 }}
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -511,7 +667,10 @@ for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
 fn perf_string_operations() {
     eprintln!("\n=== String Operations (runtime-only) ===\n");
 
-    bench_rt("string assign (10k)", &format!(r#"<?php
+    bench_rt(
+        "string assign (10k)",
+        &format!(
+            r#"<?php
 function bench_str_assign() {{
     $s = "hello world this is a test string";
     $sum = 0;
@@ -522,9 +681,14 @@ function bench_str_assign() {{
     return $sum;
 }}
 bench_str_assign();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string pass+return (10k)", &format!(r#"<?php
+    bench_rt(
+        "string pass+return (10k)",
+        &format!(
+            r#"<?php
 function identity($s) {{
     return $s;
 }}
@@ -538,9 +702,14 @@ function bench_str_pass() {{
     return $sum;
 }}
 bench_str_pass();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string concat (10k)", &format!(r#"<?php
+    bench_rt(
+        "string concat (10k)",
+        &format!(
+            r#"<?php
 function bench_str_concat() {{
     $a = "hello";
     $b = " world";
@@ -552,9 +721,14 @@ function bench_str_concat() {{
     return $sum;
 }}
 bench_str_concat();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string .= append (10k)", &format!(r#"<?php
+    bench_rt(
+        "string .= append (10k)",
+        &format!(
+            r#"<?php
 function bench_str_append() {{
     $sum = 0;
     for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
@@ -565,9 +739,14 @@ function bench_str_append() {{
     return $sum;
 }}
 bench_str_append();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string echo (10k)", &format!(r#"<?php
+    bench_rt(
+        "string echo (10k)",
+        &format!(
+            r#"<?php
 function bench_str_echo() {{
     $s = "x";
     for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
@@ -575,9 +754,14 @@ function bench_str_echo() {{
     }}
 }}
 bench_str_echo();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("string . int concat (10k)", &format!(r#"<?php
+    bench_rt(
+        "string . int concat (10k)",
+        &format!(
+            r#"<?php
 function bench_str_int_concat() {{
     $s = "val:";
     $sum = 0;
@@ -588,16 +772,23 @@ function bench_str_int_concat() {{
     return $sum;
 }}
 bench_str_int_concat();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("echo int (10k)", &format!(r#"<?php
+    bench_rt(
+        "echo int (10k)",
+        &format!(
+            r#"<?php
 function bench_echo_int() {{
     for ($i = 0; $i < {LOOP_COUNT}; $i = $i + 1) {{
         echo $i;
     }}
 }}
 bench_echo_int();
-"#));
+"#
+        ),
+    );
 }
 
 #[test]
@@ -605,7 +796,10 @@ bench_echo_int();
 fn perf_array_cow() {
     eprintln!("\n=== Array COW (runtime-only) ===\n");
 
-    bench_rt("array copy (10k)", &format!(r#"<?php
+    bench_rt(
+        "array copy (10k)",
+        &format!(
+            r#"<?php
 function bench_arr_copy() {{
     $arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     $sum = 0;
@@ -616,9 +810,14 @@ function bench_arr_copy() {{
     return $sum;
 }}
 bench_arr_copy();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("array pass+return (10k)", &format!(r#"<?php
+    bench_rt(
+        "array pass+return (10k)",
+        &format!(
+            r#"<?php
 function identity_arr($a) {{
     return $a;
 }}
@@ -632,9 +831,14 @@ function bench_arr_pass() {{
     return $sum;
 }}
 bench_arr_pass();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("array copy+mutate (10k)", &format!(r#"<?php
+    bench_rt(
+        "array copy+mutate (10k)",
+        &format!(
+            r#"<?php
 function bench_arr_cow() {{
     $arr = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
     $sum = 0;
@@ -646,9 +850,14 @@ function bench_arr_cow() {{
     return $sum;
 }}
 bench_arr_cow();
-"#));
+"#
+        ),
+    );
 
-    bench_rt("array string-key copy (10k)", &format!(r#"<?php
+    bench_rt(
+        "array string-key copy (10k)",
+        &format!(
+            r#"<?php
 function bench_str_arr_copy() {{
     $arr = ['a' => 1, 'b' => 2, 'c' => 3, 'd' => 4, 'e' => 5];
     $sum = 0;
@@ -659,5 +868,7 @@ function bench_str_arr_copy() {{
     return $sum;
 }}
 bench_str_arr_copy();
-"#));
+"#
+        ),
+    );
 }

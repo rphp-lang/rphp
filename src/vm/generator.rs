@@ -1,11 +1,10 @@
 /// PHP Generator — suspendable execution context.
 /// Created when a generator function is called. Holds all state needed to
 /// suspend at yield and resume later.
-
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::value::{Value, ArrayKey};
+use crate::value::{ArrayKey, Value};
 use crate::vm::function::{FunctionCommon, UserFunction};
 
 /// Delegate for `yield from` — either a sub-generator or an array being iterated.
@@ -64,7 +63,12 @@ pub struct Generator {
 impl Generator {
     /// Create a new generator from a generator function.
     /// `args` are the pre-bound argument values (already validated by DoFcall).
-    pub fn new(func: *const FunctionCommon, args: Vec<Value>, num_cvs: u32, num_temps: u32) -> Self {
+    pub fn new(
+        func: *const FunctionCommon,
+        args: Vec<Value>,
+        num_cvs: u32,
+        num_temps: u32,
+    ) -> Self {
         let mut cv_values = Vec::with_capacity(num_cvs as usize);
         // Copy arguments into CV slots
         for i in 0..num_cvs as usize {

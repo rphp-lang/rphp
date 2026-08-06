@@ -5,54 +5,81 @@ use common::run_php;
 
 #[test]
 fn test_list_basic() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 list($a, $b, $c) = [10, 20, 30];
 echo "$a $b $c";
-"#), "10 20 30");
+"#
+        ),
+        "10 20 30"
+    );
 }
 
 #[test]
 fn test_short_destructuring() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 [$a, $b] = [1, 2];
 echo "$a $b";
-"#), "1 2");
+"#
+        ),
+        "1 2"
+    );
 }
 
 #[test]
 fn test_list_skip_elements() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 [, $b, , $d] = [1, 2, 3, 4];
 echo "$b $d";
-"#), "2 4");
+"#
+        ),
+        "2 4"
+    );
 }
 
 #[test]
 fn test_list_from_function() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 function pair() { return [42, "hello"]; }
 [$num, $str] = pair();
 echo "$num $str";
-"#), "42 hello");
+"#
+        ),
+        "42 hello"
+    );
 }
 
 // global keyword tests
 
 #[test]
 fn test_global_read() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 10;
 function foo() {
     global $x;
     echo $x;
 }
 foo();
-"#), "10");
+"#
+        ),
+        "10"
+    );
 }
 
 #[test]
 fn test_global_write() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 10;
 function foo() {
     global $x;
@@ -60,12 +87,17 @@ function foo() {
 }
 foo();
 echo $x;
-"#), "20");
+"#
+        ),
+        "20"
+    );
 }
 
 #[test]
 fn test_global_multiple() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $a = 1;
 $b = 2;
 function swap() {
@@ -76,7 +108,10 @@ function swap() {
 }
 swap();
 echo "$a $b";
-"#), "2 1");
+"#
+        ),
+        "2 1"
+    );
 }
 
 // Transitive global access tests — A calls B, B uses `global`
@@ -86,7 +121,9 @@ echo "$a $b";
 #[test]
 fn test_global_transitive_one_level() {
     // A() has no `global`, A() calls B(), B() has `global $x`
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 42;
 function A() {
     B();
@@ -96,13 +133,18 @@ function B() {
     echo $x;
 }
 A();
-"#), "42");
+"#
+        ),
+        "42"
+    );
 }
 
 #[test]
 fn test_global_transitive_two_levels() {
     // A() calls B(), B() calls C(), C() has `global $x`
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 99;
 function A() {
     B();
@@ -115,13 +157,18 @@ function C() {
     echo $x;
 }
 A();
-"#), "99");
+"#
+        ),
+        "99"
+    );
 }
 
 #[test]
 fn test_global_transitive_write() {
     // A() calls B(), B() writes `global $x`, verify main scope sees the change
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 1;
 function A() {
     B();
@@ -132,13 +179,18 @@ function B() {
 }
 A();
 echo $x;
-"#), "200");
+"#
+        ),
+        "200"
+    );
 }
 
 #[test]
 fn test_global_transitive_closure() {
     // Closure calls a function that uses `global`
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 77;
 function reader() {
     global $x;
@@ -148,13 +200,18 @@ $f = function() {
     return reader();
 };
 echo $f();
-"#), "77");
+"#
+        ),
+        "77"
+    );
 }
 
 #[test]
 fn test_global_transitive_method() {
     // Method calls a function that uses `global`
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 55;
 function get_global_x() {
     global $x;
@@ -167,13 +224,18 @@ class Foo {
 }
 $obj = new Foo();
 echo $obj->bar();
-"#), "55");
+"#
+        ),
+        "55"
+    );
 }
 
 #[test]
 fn test_global_after_modification_transitive() {
     // Modify $x in main scope, then A() → B() reads it
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 $x = 1;
 function A() { B(); }
 function B() { global $x; echo $x . " "; }
@@ -182,26 +244,36 @@ $x = 2;
 A();
 $x = 3;
 A();
-"#), "1 2 3 ");
+"#
+        ),
+        "1 2 3 "
+    );
 }
 
 // static variable tests
 
 #[test]
 fn test_static_counter() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 function counter() {
     static $count = 0;
     $count++;
     return $count;
 }
 echo counter() . " " . counter() . " " . counter();
-"#), "1 2 3");
+"#
+        ),
+        "1 2 3"
+    );
 }
 
 #[test]
 fn test_static_multiple_vars() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 function test() {
     static $a = 0, $b = 10;
     $a++;
@@ -210,12 +282,17 @@ function test() {
 }
 test();
 test();
-"#), "1:9 2:8 ");
+"#
+        ),
+        "1:9 2:8 "
+    );
 }
 
 #[test]
 fn test_static_default_null() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 function test() {
     static $x;
     if ($x === null) {
@@ -226,5 +303,8 @@ function test() {
 }
 test();
 test();
-"#), "initialized modified ");
+"#
+        ),
+        "initialized modified "
+    );
 }

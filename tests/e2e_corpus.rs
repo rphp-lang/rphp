@@ -17,8 +17,10 @@ fn order_pipeline_matches_reference_php_result() {
 
 #[test]
 fn typed_order_pipeline_matches_reference_php_result() {
-    let source = include_str!("../benches/corpus_typed_order_pipeline.php")
-        .replace("runTypedQuotePipeline(500000)", "runTypedQuotePipeline(5000)");
+    let source = include_str!("../benches/corpus_typed_order_pipeline.php").replace(
+        "runTypedQuotePipeline(500000)",
+        "runTypedQuotePipeline(5000)",
+    );
     let output = run_php(&source);
     let (result, _) = output
         .split_once('|')

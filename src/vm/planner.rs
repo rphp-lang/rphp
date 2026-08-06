@@ -13,9 +13,10 @@
 //! block-level planning over the existing opcode representation.
 
 use crate::compiler::OpArray;
+use crate::runtime::ExecutorGlobals;
 use crate::value::{Value, ValueType};
-use crate::vm::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use crate::vm::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy};
+use crate::vm::frame::{CALL_FRAME_SLOTS, ExecuteData};
+use crate::vm::function::{CallStrategy, FunctionCommon, FunctionType, UserFunction};
 use crate::vm::instruction::{Instruction, OpType};
 use crate::vm::opcode::OpCode;
 use crate::vm::quick::{
@@ -23,7 +24,6 @@ use crate::vm::quick::{
     QuickForeachObjectPropertyAccumulateLoop, QuickLongAccumulateLoop, QuickLongInductionLoop,
     QuickLongOpsLoop,
 };
-use crate::runtime::ExecutorGlobals;
 
 /// Basic block metadata, computed once per OpArray at compile time.
 #[derive(Debug, Clone)]
@@ -70,25 +70,44 @@ pub enum MacroStep {
     GuardLong { slot: u16 },
 
     /// Compare i64: slot[cv] <= const_val, write bool result to slot[result].
-    CmpLeLongConst { cv_slot: u16, const_val: i64, result_slot: u16 },
+    CmpLeLongConst {
+        cv_slot: u16,
+        const_val: i64,
+        result_slot: u16,
+    },
 
     /// Compare i64: slot[cv] < const_val, write bool result to slot[result].
-    CmpLtLongConst { cv_slot: u16, const_val: i64, result_slot: u16 },
+    CmpLtLongConst {
+        cv_slot: u16,
+        const_val: i64,
+        result_slot: u16,
+    },
 
     /// Conditional jump: if slot[cond] is falsy, terminate macro with Jump(target_ip).
     JmpZBool { cond_slot: u16, target_ip: u32 },
 
     /// Subtract i64: slot[cv] - const_val -> slot[result]. Overflow -> GuardFail.
-    SubLongConst { cv_slot: u16, const_val: i64, result_slot: u16 },
+    SubLongConst {
+        cv_slot: u16,
+        const_val: i64,
+        result_slot: u16,
+    },
 
     /// Add i64: slot[a] + slot[b] -> slot[result]. Overflow -> GuardFail.
-    AddLongLong { a_slot: u16, b_slot: u16, result_slot: u16 },
+    AddLongLong {
+        a_slot: u16,
+        b_slot: u16,
+        result_slot: u16,
+    },
 
     /// Return value from frame slot. Caller handles frame pop.
     ReturnSlot { slot: u16, slot_type: OpType },
 
     /// InitFcall with pre-resolved function pointer (from inline cache).
-    InitFcallCached { func_ptr: *const FunctionCommon, num_args: u32 },
+    InitFcallCached {
+        func_ptr: *const FunctionCommon,
+        num_args: u32,
+    },
 
     /// Copy slot[src] to callee's CV[arg_idx]. Raw 16-byte copy, no clone ceremony.
     SendValSlot { src_slot: u16, arg_idx: u32 },
@@ -240,7 +259,10 @@ pub fn plan_hot_block(op_array: &OpArray, block_idx: usize) -> Option<MacroPlan>
                 let cache = &op_array.cache[ip];
                 let func_ptr = cache.func;
                 if func_ptr.is_null() {
-                    eprintln!("[planner] block {} bail: InitFcall at IP {} has null cache", block_idx, ip);
+                    eprintln!(
+                        "[planner] block {} bail: InitFcall at IP {} has null cache",
+                        block_idx, ip
+                    );
                     return None; // Not cached yet — can't plan
                 }
                 // Callee eligibility: use same predicate as hot executor.
@@ -356,19 +378,30 @@ pub unsafe fn execute_macro(
                 }
             }
 
-            MacroStep::CmpLeLongConst { cv_slot, const_val, result_slot } => {
+            MacroStep::CmpLeLongConst {
+                cv_slot,
+                const_val,
+                result_slot,
+            } => {
                 let val = (*slot_base.add(*cv_slot as usize)).raw_long();
                 let result = val <= *const_val;
                 Value::write_bool(slot_base.add(*result_slot as usize), result);
             }
 
-            MacroStep::CmpLtLongConst { cv_slot, const_val, result_slot } => {
+            MacroStep::CmpLtLongConst {
+                cv_slot,
+                const_val,
+                result_slot,
+            } => {
                 let val = (*slot_base.add(*cv_slot as usize)).raw_long();
                 let result = val < *const_val;
                 Value::write_bool(slot_base.add(*result_slot as usize), result);
             }
 
-            MacroStep::JmpZBool { cond_slot, target_ip } => {
+            MacroStep::JmpZBool {
+                cond_slot,
+                target_ip,
+            } => {
                 let cond_ptr = slot_base.add(*cond_slot as usize);
                 // Bool was written by Cmp step — check type directly
                 let t = (*cond_ptr).value_type();
@@ -387,7 +420,11 @@ pub unsafe fn execute_macro(
                 return MacroResult::FallThrough;
             }
 
-            MacroStep::SubLongConst { cv_slot, const_val, result_slot } => {
+            MacroStep::SubLongConst {
+                cv_slot,
+                const_val,
+                result_slot,
+            } => {
                 let val = (*slot_base.add(*cv_slot as usize)).raw_long();
                 match val.checked_sub(*const_val) {
                     Some(result) => {
@@ -397,7 +434,11 @@ pub unsafe fn execute_macro(
                 }
             }
 
-            MacroStep::AddLongLong { a_slot, b_slot, result_slot } => {
+            MacroStep::AddLongLong {
+                a_slot,
+                b_slot,
+                result_slot,
+            } => {
                 let a = (*slot_base.add(*a_slot as usize)).raw_long();
                 let b = (*slot_base.add(*b_slot as usize)).raw_long();
                 match a.checked_add(b) {
@@ -567,7 +608,11 @@ pub unsafe fn execute_macro(
 
 /// Find the instruction IP corresponding to a macro step index.
 /// Guards don't correspond to instructions, so we skip them when counting.
-fn find_instruction_ip_for_step(plan: &MacroPlan, step_idx: usize, _instrs: &[Instruction]) -> usize {
+fn find_instruction_ip_for_step(
+    plan: &MacroPlan,
+    step_idx: usize,
+    _instrs: &[Instruction],
+) -> usize {
     let mut instr_offset = 0usize;
     for s in 0..=step_idx {
         match &plan.steps[s] {

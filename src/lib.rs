@@ -1,19 +1,19 @@
 #![allow(unsafe_op_in_unsafe_fn)]
 #![allow(unused_imports)]
 
-pub mod value;
-pub mod vm;
+pub mod base64;
+pub mod builtin_metadata;
 pub mod compiler;
-pub mod runtime;
+#[cfg(feature = "jit-prototype")]
+pub mod jit;
 pub mod lexer;
 pub mod parser;
 pub mod regex;
+pub mod runtime;
 #[allow(unused_unsafe)]
 pub mod stdlib;
-pub mod base64;
-pub mod builtin_metadata;
-#[cfg(feature = "jit-prototype")]
-pub mod jit;
+pub mod value;
+pub mod vm;
 
 /// Resolve a PHP built-in constant by name.
 /// Single source of truth — used by both compiler (property defaults) and runtime (FetchConst).

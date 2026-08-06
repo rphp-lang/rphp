@@ -1,5 +1,4 @@
 /// E2E tests: stdlib functions — count, strlen, array_*, string functions, math, type checks.
-
 mod common;
 use common::run_php;
 
@@ -74,31 +73,46 @@ fn test_e2e_strpos_found() {
 #[test]
 fn test_e2e_strpos_not_found() {
     // Returns false, which echoes as empty string
-    assert_eq!(run_php("<?php $r = strpos('hello', 'xyz'); if (!$r) { echo 'not found'; }"), "not found");
+    assert_eq!(
+        run_php("<?php $r = strpos('hello', 'xyz'); if (!$r) { echo 'not found'; }"),
+        "not found"
+    );
 }
 
 // === str_replace() ===
 
 #[test]
 fn test_e2e_str_replace() {
-    assert_eq!(run_php("<?php echo str_replace('world', 'PHP', 'hello world');"), "hello PHP");
+    assert_eq!(
+        run_php("<?php echo str_replace('world', 'PHP', 'hello world');"),
+        "hello PHP"
+    );
 }
 
 #[test]
 fn test_e2e_str_replace_multiple() {
-    assert_eq!(run_php("<?php echo str_replace('o', '0', 'foo bar boo');"), "f00 bar b00");
+    assert_eq!(
+        run_php("<?php echo str_replace('o', '0', 'foo bar boo');"),
+        "f00 bar b00"
+    );
 }
 
 // === strtolower / strtoupper ===
 
 #[test]
 fn test_e2e_strtolower() {
-    assert_eq!(run_php("<?php echo strtolower('HELLO World');"), "hello world");
+    assert_eq!(
+        run_php("<?php echo strtolower('HELLO World');"),
+        "hello world"
+    );
 }
 
 #[test]
 fn test_e2e_strtoupper() {
-    assert_eq!(run_php("<?php echo strtoupper('hello World');"), "HELLO WORLD");
+    assert_eq!(
+        run_php("<?php echo strtoupper('hello World');"),
+        "HELLO WORLD"
+    );
 }
 
 // === trim() ===
@@ -113,7 +127,9 @@ fn test_e2e_trim() {
 #[test]
 fn test_e2e_explode() {
     assert_eq!(
-        run_php("<?php $parts = explode(',', 'a,b,c'); echo $parts[0]; echo $parts[1]; echo $parts[2];"),
+        run_php(
+            "<?php $parts = explode(',', 'a,b,c'); echo $parts[0]; echo $parts[1]; echo $parts[2];"
+        ),
         "abc"
     );
 }
@@ -135,7 +151,10 @@ fn test_e2e_implode_mixed_scalar_values() {
 fn test_e2e_chain_scalar_stdlib() {
     // Chain two scalar stdlib calls
     assert_eq!(run_php("<?php $x = strlen('hello'); echo $x;"), "5");
-    assert_eq!(run_php("<?php $x = strlen('hello'); $y = strlen('world'); echo $x; echo $y;"), "55");
+    assert_eq!(
+        run_php("<?php $x = strlen('hello'); $y = strlen('world'); echo $x; echo $y;"),
+        "55"
+    );
 }
 
 #[test]
@@ -171,29 +190,44 @@ fn test_e2e_str_repeat() {
 
 #[test]
 fn test_e2e_substr_count() {
-    assert_eq!(run_php("<?php echo substr_count('hello world hello', 'hello');"), "2");
+    assert_eq!(
+        run_php("<?php echo substr_count('hello world hello', 'hello');"),
+        "2"
+    );
 }
 
 // === str_contains / str_starts_with / str_ends_with (PHP 8) ===
 
 #[test]
 fn test_e2e_str_contains_true() {
-    assert_eq!(run_php("<?php echo str_contains('hello world', 'world') ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo str_contains('hello world', 'world') ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 #[test]
 fn test_e2e_str_contains_false() {
-    assert_eq!(run_php("<?php echo str_contains('hello world', 'xyz') ? 'yes' : 'no';"), "no");
+    assert_eq!(
+        run_php("<?php echo str_contains('hello world', 'xyz') ? 'yes' : 'no';"),
+        "no"
+    );
 }
 
 #[test]
 fn test_e2e_str_starts_with() {
-    assert_eq!(run_php("<?php echo str_starts_with('hello world', 'hello') ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo str_starts_with('hello world', 'hello') ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 #[test]
 fn test_e2e_str_ends_with() {
-    assert_eq!(run_php("<?php echo str_ends_with('hello world', 'world') ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo str_ends_with('hello world', 'world') ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 // === array_reverse ===
@@ -206,7 +240,9 @@ fn test_e2e_str_ends_with() {
 #[test]
 fn test_e2e_array_key_exists_true() {
     assert_eq!(
-        run_php("<?php $a = ['name' => 'Alice']; echo array_key_exists('name', $a) ? 'yes' : 'no';"),
+        run_php(
+            "<?php $a = ['name' => 'Alice']; echo array_key_exists('name', $a) ? 'yes' : 'no';"
+        ),
         "yes"
     );
 }
@@ -221,17 +257,26 @@ fn test_e2e_array_key_exists_false() {
 
 #[test]
 fn test_e2e_in_array_found() {
-    assert_eq!(run_php("<?php echo in_array(2, [1, 2, 3]) ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo in_array(2, [1, 2, 3]) ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 #[test]
 fn test_e2e_in_array_not_found() {
-    assert_eq!(run_php("<?php echo in_array(5, [1, 2, 3]) ? 'yes' : 'no';"), "no");
+    assert_eq!(
+        run_php("<?php echo in_array(5, [1, 2, 3]) ? 'yes' : 'no';"),
+        "no"
+    );
 }
 
 #[test]
 fn test_e2e_in_array_string() {
-    assert_eq!(run_php("<?php echo in_array('b', ['a', 'b', 'c']) ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo in_array('b', ['a', 'b', 'c']) ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 // === array_reverse ===
@@ -249,7 +294,9 @@ fn test_e2e_array_reverse() {
 #[test]
 fn test_e2e_array_merge() {
     assert_eq!(
-        run_php("<?php $a = array_merge([1, 2], [3, 4]); echo $a[0]; echo $a[1]; echo $a[2]; echo $a[3];"),
+        run_php(
+            "<?php $a = array_merge([1, 2], [3, 4]); echo $a[0]; echo $a[1]; echo $a[2]; echo $a[3];"
+        ),
         "1234"
     );
 }
@@ -273,7 +320,10 @@ fn test_e2e_strval() {
 
 #[test]
 fn test_e2e_is_array_true() {
-    assert_eq!(run_php("<?php echo is_array([1, 2]) ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo is_array([1, 2]) ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 #[test]
@@ -283,7 +333,10 @@ fn test_e2e_is_array_false() {
 
 #[test]
 fn test_e2e_is_string() {
-    assert_eq!(run_php("<?php echo is_string('hello') ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo is_string('hello') ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 #[test]
@@ -303,12 +356,18 @@ fn test_e2e_is_numeric_int() {
 
 #[test]
 fn test_e2e_is_numeric_string() {
-    assert_eq!(run_php("<?php echo is_numeric('3.14') ? 'yes' : 'no';"), "yes");
+    assert_eq!(
+        run_php("<?php echo is_numeric('3.14') ? 'yes' : 'no';"),
+        "yes"
+    );
 }
 
 #[test]
 fn test_e2e_is_numeric_false() {
-    assert_eq!(run_php("<?php echo is_numeric('hello') ? 'yes' : 'no';"), "no");
+    assert_eq!(
+        run_php("<?php echo is_numeric('hello') ? 'yes' : 'no';"),
+        "no"
+    );
 }
 
 #[test]
@@ -385,7 +444,9 @@ fn test_e2e_print_r_array() {
 #[test]
 fn test_e2e_foreach_count_loop() {
     assert_eq!(
-        run_php("<?php $a = [10, 20, 30]; $n = count($a); for ($i = 0; $i < $n; $i++) { echo $a[$i]; }"),
+        run_php(
+            "<?php $a = [10, 20, 30]; $n = count($a); for ($i = 0; $i < $n; $i++) { echo $a[$i]; }"
+        ),
         "102030"
     );
 }
@@ -401,7 +462,9 @@ fn test_e2e_explode_foreach() {
 #[test]
 fn test_e2e_string_processing_pipeline() {
     assert_eq!(
-        run_php("<?php $s = '  Hello World  '; $s = trim($s); $s = strtolower($s); $s = str_replace(' ', '_', $s); echo $s;"),
+        run_php(
+            "<?php $s = '  Hello World  '; $s = trim($s); $s = strtolower($s); $s = str_replace(' ', '_', $s); echo $s;"
+        ),
         "hello_world"
     );
 }
@@ -409,7 +472,9 @@ fn test_e2e_string_processing_pipeline() {
 #[test]
 fn test_e2e_array_filter_manual() {
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3, 4, 5, 6]; $even = []; foreach ($a as $v) { if ($v % 2 == 0) { $even[] = $v; } } echo implode(',', $even);"),
+        run_php(
+            "<?php $a = [1, 2, 3, 4, 5, 6]; $even = []; foreach ($a as $v) { if ($v % 2 == 0) { $even[] = $v; } } echo implode(',', $even);"
+        ),
         "2,4,6"
     );
 }
@@ -417,7 +482,9 @@ fn test_e2e_array_filter_manual() {
 #[test]
 fn test_e2e_word_count() {
     assert_eq!(
-        run_php("<?php $s = 'the quick brown fox jumps over the lazy dog'; $words = explode(' ', $s); echo count($words);"),
+        run_php(
+            "<?php $s = 'the quick brown fox jumps over the lazy dog'; $words = explode(' ', $s); echo count($words);"
+        ),
         "9"
     );
 }

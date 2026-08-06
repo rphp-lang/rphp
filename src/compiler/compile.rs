@@ -1,23 +1,22 @@
 /// AST → OpArray compiler.
 /// Converts parsed statements into VM instructions.
-
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
-use crate::value::{
-    canonical_decimal_array_key as canonical_string_literal_array_key, ObjectLayout, Value,
-    ValueType,
-};
-use crate::parser::{Stmt, Expr, BinOp, CastType, Visibility, Param, CallArg, ListTarget};
-use crate::vm::opcode::OpCode;
-use crate::vm::instruction::{
-    Instruction, InlineCache, KnownScalarType, OpType, ARRAY_INIT_HASH_HINT,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
-};
 use super::OpArray;
+use crate::parser::{BinOp, CallArg, CastType, Expr, ListTarget, Param, Stmt, Visibility};
+use crate::value::{
+    ObjectLayout, Value, ValueType,
+    canonical_decimal_array_key as canonical_string_literal_array_key,
+};
+use crate::vm::instruction::{
+    ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
+    InlineCache, Instruction, KnownScalarType, OpType,
+};
+use crate::vm::opcode::OpCode;
 
 use super::{
     finalize_user_method, make_user_function_full, make_user_function_typed,
@@ -42,9 +41,7 @@ enum ArrayLiteralStorageHint {
 /// Unknown literals keep zero-capacity packed storage and let canonical runtime
 /// insertion choose, avoiding an allocation that an immediate transition
 /// would discard.
-fn array_literal_storage_hint(
-    elements: &[crate::parser::ArrayElement],
-) -> ArrayLiteralStorageHint {
+fn array_literal_storage_hint(elements: &[crate::parser::ArrayElement]) -> ArrayLiteralStorageHint {
     if elements.iter().any(|element| {
         matches!(
             element.key.as_ref(),
@@ -63,9 +60,7 @@ fn array_literal_storage_hint(
                 continue;
             }
             Some(Expr::Integer(key)) => *key,
-            Some(Expr::StringLiteral(key)) => {
-                canonical_string_literal_array_key(key).unwrap()
-            }
+            Some(Expr::StringLiteral(key)) => canonical_string_literal_array_key(key).unwrap(),
             _ => return ArrayLiteralStorageHint::Unknown,
         };
 
@@ -84,13 +79,15 @@ fn array_literal_storage_hint(
 #[cfg(test)]
 mod array_literal_hint_tests {
     use super::{
-        ArrayLiteralStorageHint, array_literal_storage_hint,
-        canonical_string_literal_array_key,
+        ArrayLiteralStorageHint, array_literal_storage_hint, canonical_string_literal_array_key,
     };
     use crate::parser::{ArrayElement, Expr};
 
     fn element(key: Option<Expr>) -> ArrayElement {
-        ArrayElement { key, value: Expr::Integer(1) }
+        ArrayElement {
+            key,
+            value: Expr::Integer(1),
+        }
     }
 
     #[test]
@@ -274,8 +271,7 @@ fn declared_function_return_types(
         .iter()
         .filter_map(|(name, function)| {
             let known = exact_declared_scalar_type(&function.common.sig.return_type_hint);
-            (known != KnownScalarType::Unknown)
-                .then_some((name.to_ascii_lowercase(), known))
+            (known != KnownScalarType::Unknown).then_some((name.to_ascii_lowercase(), known))
         })
         .collect()
 }
@@ -294,14 +290,10 @@ fn declared_function_parameter_types(
         .collect()
 }
 
-fn declared_function_ref_args(
-    functions: &[(String, UserFunction)],
-) -> HashMap<String, u64> {
+fn declared_function_ref_args(functions: &[(String, UserFunction)]) -> HashMap<String, u64> {
     functions
         .iter()
-        .map(|(name, function)| {
-            (name.to_ascii_lowercase(), function.common.sig.ref_args)
-        })
+        .map(|(name, function)| (name.to_ascii_lowercase(), function.common.sig.ref_args))
         .collect()
 }
 
@@ -325,9 +317,7 @@ fn declared_method_facts(
             result.insert(
                 (class_name.clone(), method_name.to_ascii_lowercase()),
                 DeclaredMethodFacts {
-                    return_type: exact_declared_scalar_type(
-                        &method.common.sig.return_type_hint,
-                    ),
+                    return_type: exact_declared_scalar_type(&method.common.sig.return_type_hint),
                     parameter_types: method.common.sig.param_type_hints.clone(),
                     ref_args: method.common.sig.ref_args,
                 },
@@ -348,10 +338,7 @@ fn declared_method_facts(
                 if owner == &parent_name
                     && !result.contains_key(&(class_name.clone(), method_name.clone()))
                 {
-                    result.insert(
-                        (class_name.clone(), method_name.clone()),
-                        facts.clone(),
-                    );
+                    result.insert((class_name.clone(), method_name.clone()), facts.clone());
                     changed = true;
                 }
             }
@@ -468,21 +455,19 @@ fn known_argument_satisfies_hint(
         ParamTypeHint::None | ParamTypeHint::Mixed => true,
         ParamTypeHint::Int => known == KnownScalarType::Long,
         ParamTypeHint::Float => {
-            known == KnownScalarType::Double
-                || (!strict && known == KnownScalarType::Long)
+            known == KnownScalarType::Double || (!strict && known == KnownScalarType::Long)
         }
         ParamTypeHint::String => known == KnownScalarType::String,
         ParamTypeHint::Bool => known == KnownScalarType::Bool,
-        ParamTypeHint::ClassName(expected) => receiver_class
-            .is_some_and(|actual| actual.eq_ignore_ascii_case(expected)),
+        ParamTypeHint::ClassName(expected) => {
+            receiver_class.is_some_and(|actual| actual.eq_ignore_ascii_case(expected))
+        }
         ParamTypeHint::Nullable(inner) => {
             known_argument_satisfies_hint(known, receiver_class, inner, strict)
         }
         ParamTypeHint::Union(types) => types
             .iter()
-            .any(|member| {
-                known_argument_satisfies_hint(known, receiver_class, member, strict)
-            }),
+            .any(|member| known_argument_satisfies_hint(known, receiver_class, member, strict)),
         _ => false,
     }
 }
@@ -567,9 +552,7 @@ fn propagate_declared_scalar_types(
             | OpCode::PreDec
             | OpCode::PostInc
             | OpCode::PostDec
-            | OpCode::BindDefaultParam => {
-                mark_param(&mut directly_mutated_params, instruction.op1)
-            }
+            | OpCode::BindDefaultParam => mark_param(&mut directly_mutated_params, instruction.op1),
             OpCode::BindGlobal | OpCode::BindStatic => {
                 mark_param(&mut directly_mutated_params, instruction.op1);
                 mark_param(&mut maybe_aliased_params, instruction.op1);
@@ -602,8 +585,7 @@ fn propagate_declared_scalar_types(
             let cv = this_offset as usize + index;
             if cv < slots.len() {
                 slots[cv] = exact_declared_scalar_type(hint);
-                receiver_classes[cv] =
-                    declared_receiver_class(hint, current_class, parent_class);
+                receiver_classes[cv] = declared_receiver_class(hint, current_class, parent_class);
             }
         }
     }
@@ -664,8 +646,8 @@ fn propagate_declared_scalar_types(
                 arguments_proven: true,
             }),
             OpCode::InitMethodCall => {
-                let nullsafe = ip > 0
-                    && op_array.instructions[ip - 1].opcode == OpCode::NullSafeCheck;
+                let nullsafe =
+                    ip > 0 && op_array.instructions[ip - 1].opcode == OpCode::NullSafeCheck;
                 let receiver_stable = match instruction.op1_type {
                     OpType::Cv => aliased_cvs
                         .get(instruction.op1 as usize)
@@ -673,28 +655,27 @@ fn propagate_declared_scalar_types(
                     OpType::Tmp | OpType::Var => true,
                     _ => false,
                 };
-                let receiver_class = if matches!(
-                    instruction.op1_type,
-                    OpType::Cv | OpType::Tmp | OpType::Var
-                ) {
-                    receiver_classes
-                        .get(instruction.op1 as usize)
-                        .and_then(|class| class.as_deref())
-                } else {
-                    None
-                };
+                let receiver_class =
+                    if matches!(instruction.op1_type, OpType::Cv | OpType::Tmp | OpType::Var) {
+                        receiver_classes
+                            .get(instruction.op1 as usize)
+                            .and_then(|class| class.as_deref())
+                    } else {
+                        None
+                    };
                 let method_name = op_array
                     .literals
                     .get(instruction.op2 as usize)
                     .and_then(Value::as_str)
                     .map(str::to_ascii_lowercase);
-                let declaration = receiver_class
-                    .zip(method_name.as_deref())
-                    .and_then(|(class, method)| {
-                        method_facts
-                            .get(&(class.to_string(), method.to_string()))
-                            .cloned()
-                    });
+                let declaration =
+                    receiver_class
+                        .zip(method_name.as_deref())
+                        .and_then(|(class, method)| {
+                            method_facts
+                                .get(&(class.to_string(), method.to_string()))
+                                .cloned()
+                        });
                 let exact_return = declaration
                     .as_ref()
                     .map(|facts| facts.return_type)
@@ -707,8 +688,7 @@ fn propagate_declared_scalar_types(
                     .then_some(exact_return)
                     .flatten();
                 if let Some(return_type) = guarded_return {
-                    op_array.instructions[ip]
-                        .set_method_return_guard_type(return_type);
+                    op_array.instructions[ip].set_method_return_guard_type(return_type);
                 }
                 let exact_long_arguments = exact_parameters.as_ref().is_some_and(|hints| {
                     !hints.is_empty()
@@ -718,8 +698,8 @@ fn propagate_declared_scalar_types(
                 if exact_long_arguments {
                     op_array.instructions[ip].set_method_long_args_guard();
                 }
-                let allow_exact_argument_skip = exact_ref_args == Some(0)
-                    && exact_parameters.is_some();
+                let allow_exact_argument_skip =
+                    exact_ref_args == Some(0) && exact_parameters.is_some();
                 pending_calls.push(PendingScalarCallFacts {
                     return_type: guarded_return.unwrap_or(KnownScalarType::Unknown),
                     parameter_types: exact_parameters,
@@ -743,28 +723,16 @@ fn propagate_declared_scalar_types(
             _ => {}
         }
 
-        let left = operand_scalar_type(
-            op_array,
-            &slots,
-            instruction.op1_type,
-            instruction.op1,
-        );
-        let right = operand_scalar_type(
-            op_array,
-            &slots,
-            instruction.op2_type,
-            instruction.op2,
-        );
-        let argument_receiver_class = if matches!(
-            instruction.op1_type,
-            OpType::Cv | OpType::Tmp | OpType::Var
-        ) {
-            receiver_classes
-                .get(instruction.op1 as usize)
-                .and_then(|class| class.as_deref())
-        } else {
-            None
-        };
+        let left = operand_scalar_type(op_array, &slots, instruction.op1_type, instruction.op1);
+        let right = operand_scalar_type(op_array, &slots, instruction.op2_type, instruction.op2);
+        let argument_receiver_class =
+            if matches!(instruction.op1_type, OpType::Cv | OpType::Tmp | OpType::Var) {
+                receiver_classes
+                    .get(instruction.op1 as usize)
+                    .and_then(|class| class.as_deref())
+            } else {
+                None
+            };
         let mut send_var_may_alias = false;
         if matches!(instruction.opcode, OpCode::SendVal) {
             if let Some(call) = pending_calls.last_mut() {
@@ -787,10 +755,12 @@ fn propagate_declared_scalar_types(
             }
         } else if instruction.opcode == OpCode::SendVarEx {
             if let Some(call) = pending_calls.last_mut() {
-                let parameter_index = (instruction.op2 as usize)
-                    .checked_sub(call.parameter_offset);
+                let parameter_index = (instruction.op2 as usize).checked_sub(call.parameter_offset);
                 let passed_by_reference = parameter_index
-                    .and_then(|index| call.ref_args.map(|mask| (index < 64) && mask & (1u64 << index) != 0))
+                    .and_then(|index| {
+                        call.ref_args
+                            .map(|mask| (index < 64) && mask & (1u64 << index) != 0)
+                    })
                     .unwrap_or(true);
                 if passed_by_reference {
                     call.arguments_proven = false;
@@ -878,10 +848,9 @@ fn propagate_declared_scalar_types(
             OpCode::DoFcall => {
                 if let Some(call) = pending_calls.pop() {
                     result = call.return_type;
-                    exact_call_arguments =
-                        call.allow_exact_argument_skip
-                            && call.arguments_proven
-                            && call.parameter_types.is_some();
+                    exact_call_arguments = call.allow_exact_argument_skip
+                        && call.arguments_proven
+                        && call.parameter_types.is_some();
                 }
             }
             OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String => {
@@ -910,10 +879,25 @@ fn propagate_declared_scalar_types(
             | OpCode::Instanceof => result = KnownScalarType::Bool,
             OpCode::AssignCv if straight_line => {
                 if instruction.op1_type == OpType::Cv {
-                    let assigned_receiver_class = if matches!(
-                        instruction.op2_type,
-                        OpType::Cv | OpType::Tmp | OpType::Var
-                    ) {
+                    let assigned_receiver_class =
+                        if matches!(instruction.op2_type, OpType::Cv | OpType::Tmp | OpType::Var) {
+                            receiver_classes
+                                .get(instruction.op2 as usize)
+                                .cloned()
+                                .flatten()
+                        } else {
+                            None
+                        };
+                    if let Some(destination) = slots.get_mut(instruction.op1 as usize) {
+                        *destination = right;
+                    }
+                    if let Some(destination) = receiver_classes.get_mut(instruction.op1 as usize) {
+                        *destination = assigned_receiver_class;
+                    }
+                }
+                result = right;
+                result_receiver_class =
+                    if matches!(instruction.op2_type, OpType::Cv | OpType::Tmp | OpType::Var) {
                         receiver_classes
                             .get(instruction.op2 as usize)
                             .cloned()
@@ -921,27 +905,6 @@ fn propagate_declared_scalar_types(
                     } else {
                         None
                     };
-                    if let Some(destination) = slots.get_mut(instruction.op1 as usize) {
-                        *destination = right;
-                    }
-                    if let Some(destination) =
-                        receiver_classes.get_mut(instruction.op1 as usize)
-                    {
-                        *destination = assigned_receiver_class;
-                    }
-                }
-                result = right;
-                result_receiver_class = if matches!(
-                    instruction.op2_type,
-                    OpType::Cv | OpType::Tmp | OpType::Var
-                ) {
-                    receiver_classes
-                        .get(instruction.op2 as usize)
-                        .cloned()
-                        .flatten()
-                } else {
-                    None
-                };
             }
             OpCode::Return => result = left,
             _ => {}
@@ -954,13 +917,19 @@ fn propagate_declared_scalar_types(
         }
         rewritten_instruction.set_known_result_type(result);
         if result != KnownScalarType::Unknown
-            && matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var)
+            && matches!(
+                instruction.result_type,
+                OpType::Cv | OpType::Tmp | OpType::Var
+            )
         {
             if let Some(destination) = slots.get_mut(instruction.result as usize) {
                 *destination = result;
             }
         }
-        if matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var) {
+        if matches!(
+            instruction.result_type,
+            OpType::Cv | OpType::Tmp | OpType::Var
+        ) {
             if let Some(destination) = receiver_classes.get_mut(instruction.result as usize) {
                 *destination = result_receiver_class;
             }
@@ -971,9 +940,9 @@ fn propagate_declared_scalar_types(
 /// A single catch clause within a try entry
 #[derive(Debug, Clone)]
 pub struct CatchEntry {
-    pub types: Vec<String>,   // catch type names (e.g., ["Exception"], ["Foo", "Bar"] for multi-catch)
-    pub catch_start: u32,     // instruction offset of catch body
-    pub catch_cv: u32,        // CV index for the exception variable
+    pub types: Vec<String>, // catch type names (e.g., ["Exception"], ["Foo", "Bar"] for multi-catch)
+    pub catch_start: u32,   // instruction offset of catch body
+    pub catch_cv: u32,      // CV index for the exception variable
 }
 
 /// Exception handler entry for try/catch
@@ -981,9 +950,9 @@ pub struct CatchEntry {
 pub struct TryEntry {
     pub try_start: u32,
     pub try_end: u32,
-    pub catches: Vec<CatchEntry>,  // ordered list of catch clauses
-    pub finally_start: u32,  // 0xFFFFFFFF if no finally
-    pub finally_end: u32,    // instruction after finally block
+    pub catches: Vec<CatchEntry>, // ordered list of catch clauses
+    pub finally_start: u32,       // 0xFFFFFFFF if no finally
+    pub finally_end: u32,         // instruction after finally block
 }
 
 /// Compiled parameter metadata from compile_params.
@@ -1008,15 +977,15 @@ pub struct ClassDef {
     pub is_final: bool,
     pub is_trait: bool,
     pub is_enum: bool,
-    pub uses: Vec<String>,  // trait names from `use Foo, Bar;`
-    pub properties: Vec<(String, Option<Value>, Visibility, String)>,  // (name, default_value, visibility, declaring_class)
+    pub uses: Vec<String>, // trait names from `use Foo, Bar;`
+    pub properties: Vec<(String, Option<Value>, Visibility, String)>, // (name, default_value, visibility, declaring_class)
     /// Shared declared-property storage-key → numeric slot layout.
     /// Rebuilt after inheritance and trait properties are merged.
     pub property_layout: std::rc::Rc<ObjectLayout>,
     /// Fully resolved initial values in property-layout order. Runtime object
     /// construction clones this immutable template instead of rebuilding it.
     pub property_defaults: std::rc::Rc<[Value]>,
-    pub readonly_props: Vec<String>,  // names of readonly properties
+    pub readonly_props: Vec<String>, // names of readonly properties
     pub methods: Vec<(String, Visibility, bool, bool, UserFunction)>, // (name, vis, is_static, is_final, func)
     /// Stable numeric ID assigned at registration time. Used as inline cache key.
     /// 0 = not yet assigned (set by ExecutorGlobals::register_class).
@@ -1078,15 +1047,14 @@ pub struct Compiler {
 /// Returns 0 for unknown/non-ref functions.
 fn builtin_ref_args(name: &str) -> u64 {
     match name {
-        "sort" | "rsort" | "shuffle"
-        | "usort" | "asort" | "arsort" | "ksort" | "krsort"
-        | "array_walk" => 0b1,                           // arg 0
-        "array_push" | "array_unshift" => 0b1,          // arg 0
-        "array_pop" | "array_shift" => 0b1,             // arg 0
-        "array_splice" => 0b1,                           // arg 0
-        "settype" => 0b1,                                // arg 0
-        "preg_match" | "preg_match_all" => 0b100,          // arg 2 (&$matches)
-        "parse_str" => 0b10,                                // arg 1 (&$result)
+        "sort" | "rsort" | "shuffle" | "usort" | "asort" | "arsort" | "ksort" | "krsort"
+        | "array_walk" => 0b1, // arg 0
+        "array_push" | "array_unshift" => 0b1,    // arg 0
+        "array_pop" | "array_shift" => 0b1,       // arg 0
+        "array_splice" => 0b1,                    // arg 0
+        "settype" => 0b1,                         // arg 0
+        "preg_match" | "preg_match_all" => 0b100, // arg 2 (&$matches)
+        "parse_str" => 0b10,                      // arg 1 (&$result)
         _ => 0,
     }
 }
@@ -1241,7 +1209,9 @@ impl Compiler {
         }
         let all_cvs = self.all_cvs();
 
-        let cache = (0..self.instructions.len()).map(|_| InlineCache::empty()).collect();
+        let cache = (0..self.instructions.len())
+            .map(|_| InlineCache::empty())
+            .collect();
         refine_function_global_access(&mut self.functions);
 
         // Consume exact scalar declarations after the first structural pass.
@@ -1343,7 +1313,12 @@ impl Compiler {
             }
             Stmt::Assign { var, expr } => {
                 // Detect $x .= expr pattern → emit AssignConcat (in-place string append)
-                if let Expr::BinaryOp { op: crate::parser::BinOp::Concat, left, right } = expr {
+                if let Expr::BinaryOp {
+                    op: crate::parser::BinOp::Concat,
+                    left,
+                    right,
+                } = expr
+                {
                     if let Expr::Variable(ref lhs_var) = **left {
                         if lhs_var == var {
                             let (rhs_op, rhs_type) = self.compile_expr(right);
@@ -1432,7 +1407,12 @@ impl Compiler {
                     self.instructions[jmp_idx].op1 = after_else;
                 }
             }
-            Stmt::Function { name, params, body, return_type } => {
+            Stmt::Function {
+                name,
+                params,
+                body,
+                return_type,
+            } => {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
@@ -1450,12 +1430,22 @@ impl Compiler {
 
                 let func_name = func_compiler.current_function_name.clone();
                 let func_all_cvs = func_compiler.all_cvs();
-                let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
+                let cache = (0..func_compiler.instructions.len())
+                    .map(|_| InlineCache::empty())
+                    .collect();
                 let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
-                        | OpCode::InitMethodCall | OpCode::InitStaticCall
-                        | OpCode::Include));
+                    || func_compiler.instructions.iter().any(|i| {
+                        matches!(
+                            i.opcode,
+                            OpCode::InitFcall
+                                | OpCode::InitDynamicCall
+                                | OpCode::InitUserCall
+                                | OpCode::CallUserFuncArray
+                                | OpCode::InitMethodCall
+                                | OpCode::InitStaticCall
+                                | OpCode::Include
+                        )
+                    });
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -1476,7 +1466,17 @@ impl Compiler {
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
                 };
-                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
+                let user_func = make_user_function_typed(
+                    op_array,
+                    cp.num_args,
+                    cp.required_num_args,
+                    cp.is_variadic,
+                    cp.variadic_cv_index,
+                    cp.ref_args,
+                    cp.type_hints,
+                    cp.param_names,
+                    cp.return_type_hint,
+                );
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
@@ -1583,7 +1583,12 @@ impl Compiler {
                     self.instructions[patch_idx].op1 = cond_pos as u16;
                 }
             }
-            Stmt::For { init, condition, update, body } => {
+            Stmt::For {
+                init,
+                condition,
+                update,
+                body,
+            } => {
                 // Compile init statements
                 for s in init {
                     self.compile_stmt(s)?;
@@ -1818,7 +1823,12 @@ impl Compiler {
                 instr.op2 = val_op;
                 self.instructions.push(instr);
             }
-            Stmt::Foreach { array, value_var, key_var, body } => {
+            Stmt::Foreach {
+                array,
+                value_var,
+                key_var,
+                body,
+            } => {
                 // Compile array expression
                 let (arr_op, arr_type) = self.compile_expr(array);
 
@@ -1843,11 +1853,11 @@ impl Compiler {
                 let done_tmp = self.alloc_tmp();
                 let mut next = Instruction::new(OpCode::ForeachNext);
                 next.op1_type = OpType::Tmp;
-                next.op1 = arr_copy_tmp;       // array copy
+                next.op1 = arr_copy_tmp; // array copy
                 next.op2_type = OpType::Tmp;
-                next.op2 = pos_tmp;             // position counter
+                next.op2 = pos_tmp; // position counter
                 next.result_type = OpType::Tmp;
-                next.result = done_tmp;         // 0 if done, 1 if has entry
+                next.result = done_tmp; // 0 if done, 1 if has entry
                 // Encode value_cv and key_cv in extended_value
                 // Low 16 bits = value_cv, high 16 bits = key_cv + 1 (0 = no key)
                 let key_encoded: u32 = match key_cv {
@@ -1917,14 +1927,20 @@ impl Compiler {
                                 instr.op2 = idx_op;
                                 self.instructions.push(instr);
                             } else {
-                                return Err("unset() only supports simple variable array access".into());
+                                return Err(
+                                    "unset() only supports simple variable array access".into()
+                                );
                             }
                         }
                         _ => return Err("unset() requires a variable".into()),
                     }
                 }
             }
-            Stmt::TryCatch { try_body, catches, finally_body } => {
+            Stmt::TryCatch {
+                try_body,
+                catches,
+                finally_body,
+            } => {
                 // Simple implementation: compile try body, if throw happens, jump to catch
                 // For now: mark try region start/end for runtime, emit catch handlers
                 // We use a "try table" approach: store try/catch info as metadata
@@ -1952,7 +1968,8 @@ impl Compiler {
                     let catch_start = self.instructions.len() as u32;
                     let catch_cv = self.resolve_cv(&catch.var) as u32;
 
-                    let resolved_types: Vec<String> = catch.types.iter().map(|t| self.resolve_name(t)).collect();
+                    let resolved_types: Vec<String> =
+                        catch.types.iter().map(|t| self.resolve_name(t)).collect();
                     catch_entries.push(CatchEntry {
                         types: resolved_types,
                         catch_start,
@@ -2020,7 +2037,11 @@ impl Compiler {
                 instr.op1_type = op_type;
                 self.instructions.push(instr);
             }
-            Stmt::AssignProp { object, property, expr } => {
+            Stmt::AssignProp {
+                object,
+                property,
+                expr,
+            } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let (val_op, val_type) = self.compile_expr(expr);
                 let prop_idx = self.add_literal(Value::string(property.clone()));
@@ -2034,7 +2055,12 @@ impl Compiler {
                 assign.result_type = val_type;
                 self.instructions.push(assign);
             }
-            Stmt::AssignObjArrayDim { object, property, index, expr } => {
+            Stmt::AssignObjArrayDim {
+                object,
+                property,
+                index,
+                expr,
+            } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let (idx_op, idx_type) = self.compile_expr(index);
                 let (val_op, val_type) = self.compile_expr(expr);
@@ -2050,14 +2076,22 @@ impl Compiler {
                 instr.extended_value = prop_idx as u32;
                 self.instructions.push(instr);
             }
-            Stmt::Include { path, is_require, is_once } => {
+            Stmt::Include {
+                path,
+                is_require,
+                is_once,
+            } => {
                 let (path_op, path_type) = self.compile_expr(path);
                 let mut instr = Instruction::new(OpCode::Include);
                 instr.op1 = path_op;
                 instr.op1_type = path_type;
                 let mut flags: u32 = 0;
-                if *is_require { flags |= 1; }
-                if *is_once { flags |= 2; }
+                if *is_require {
+                    flags |= 1;
+                }
+                if *is_once {
+                    flags |= 2;
+                }
                 instr.extended_value = flags;
                 self.instructions.push(instr);
             }
@@ -2091,7 +2125,9 @@ impl Compiler {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.
-                if let Ok(ct_val) = Self::eval_const_expr_with_constants(value, &self.known_constants) {
+                if let Ok(ct_val) =
+                    Self::eval_const_expr_with_constants(value, &self.known_constants)
+                {
                     self.known_constants.insert(name.clone(), ct_val);
                 }
                 let (val_op, val_type) = self.compile_expr(value);
@@ -2136,7 +2172,8 @@ impl Compiler {
                 for (var_name, default) in vars {
                     let cv_idx = self.resolve_cv(var_name);
                     let name_idx = self.add_literal(Value::string(var_name.clone()));
-                    let func_name_idx = self.add_literal(Value::string(self.current_function_name.clone()));
+                    let func_name_idx =
+                        self.add_literal(Value::string(self.current_function_name.clone()));
                     // If there's a default, compile it and store as extended_value
                     // We encode: op1=CV, op2=CONST(var_name), extended_value=CONST(func_name)
                     // result = default value (or Unused)
@@ -2157,7 +2194,16 @@ impl Compiler {
                     self.static_vars.push((cv_idx as u32, var_name.clone()));
                 }
             }
-            Stmt::Class { name, parent, implements, is_abstract, is_final, uses, properties, methods } => {
+            Stmt::Class {
+                name,
+                parent,
+                implements,
+                is_abstract,
+                is_final,
+                uses,
+                properties,
+                methods,
+            } => {
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
@@ -2169,7 +2215,8 @@ impl Compiler {
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
                     let context = format!("method {}::{}", name, method.name);
-                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp =
+                        self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
 
                     // Constructor property promotion: generate $this->param = $param assignments
@@ -2180,7 +2227,8 @@ impl Compiler {
                                 // Generate: $this->paramName = $paramName;
                                 let this_cv = 0u16; // $this is always CV 0
                                 let param_cv = func_compiler.resolve_cv(&param.name);
-                                let prop_name_idx = func_compiler.add_literal(Value::string(param.name.clone()));
+                                let prop_name_idx =
+                                    func_compiler.add_literal(Value::string(param.name.clone()));
                                 let mut assign = Instruction::new(OpCode::AssignObjProp);
                                 assign.op1_type = OpType::Cv;
                                 assign.op1 = this_cv;
@@ -2202,12 +2250,22 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
-                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
+                    let cache = (0..func_compiler.instructions.len())
+                        .map(|_| InlineCache::empty())
+                        .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
-                        | OpCode::InitMethodCall | OpCode::InitStaticCall
-                        | OpCode::Include));
+                        || func_compiler.instructions.iter().any(|i| {
+                            matches!(
+                                i.opcode,
+                                OpCode::InitFcall
+                                    | OpCode::InitDynamicCall
+                                    | OpCode::InitUserCall
+                                    | OpCode::CallUserFuncArray
+                                    | OpCode::InitMethodCall
+                                    | OpCode::InitStaticCall
+                                    | OpCode::Include
+                            )
+                        });
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2245,11 +2303,18 @@ impl Compiler {
                         &method.name,
                     );
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
+                    compiled_methods.push((
+                        method.name.clone(),
+                        method.visibility,
+                        method.is_static,
+                        method.is_final,
+                        user_func,
+                    ));
                 }
 
                 // Evaluate property defaults (constant expressions only)
-                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
+                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
+                    Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
@@ -2261,7 +2326,12 @@ impl Compiler {
                     if prop.is_readonly {
                         readonly_props.push(prop.name.clone());
                     }
-                    compiled_props.push((prop.name.clone(), default, prop.visibility, name.clone()));
+                    compiled_props.push((
+                        prop.name.clone(),
+                        default,
+                        prop.visibility,
+                        name.clone(),
+                    ));
                 }
 
                 // Add promoted properties
@@ -2275,8 +2345,10 @@ impl Compiler {
                 // Store class definition for runtime
                 let resolved_class = self.resolve_name(name);
                 let resolved_parent = parent.as_ref().map(|p| self.resolve_name(p));
-                let resolved_implements: Vec<String> = implements.iter().map(|i| self.resolve_name(i)).collect();
-                let resolved_uses: Vec<String> = uses.iter().map(|u| self.resolve_name(u)).collect();
+                let resolved_implements: Vec<String> =
+                    implements.iter().map(|i| self.resolve_name(i)).collect();
+                let resolved_uses: Vec<String> =
+                    uses.iter().map(|u| self.resolve_name(u)).collect();
                 self.class_defs.push(ClassDef {
                     name: resolved_class,
                     parent: resolved_parent,
@@ -2295,7 +2367,11 @@ impl Compiler {
                     class_id: 0,
                 });
             }
-            Stmt::Interface { name, extends, methods } => {
+            Stmt::Interface {
+                name,
+                extends,
+                methods,
+            } => {
                 // Interface methods have no body — we still create stub UserFunctions
                 // so they appear in the class_def for type checking, but they should
                 // never be called directly (implementing class provides the body).
@@ -2306,7 +2382,8 @@ impl Compiler {
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("interface method {}::{}", name, method.name);
-                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp =
+                        self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     let null_idx = func_compiler.add_literal(Value::null());
                     let mut ret = Instruction::new(OpCode::Return);
@@ -2314,12 +2391,22 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
-                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
+                    let cache = (0..func_compiler.instructions.len())
+                        .map(|_| InlineCache::empty())
+                        .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
-                        | OpCode::InitMethodCall | OpCode::InitStaticCall
-                        | OpCode::Include));
+                        || func_compiler.instructions.iter().any(|i| {
+                            matches!(
+                                i.opcode,
+                                OpCode::InitFcall
+                                    | OpCode::InitDynamicCall
+                                    | OpCode::InitUserCall
+                                    | OpCode::CallUserFuncArray
+                                    | OpCode::InitMethodCall
+                                    | OpCode::InitStaticCall
+                                    | OpCode::Include
+                            )
+                        });
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2340,14 +2427,31 @@ impl Compiler {
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
                     };
-                    let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
+                    let user_func = make_user_function_typed(
+                        op_array,
+                        cp.num_args,
+                        cp.required_num_args,
+                        cp.is_variadic,
+                        cp.variadic_cv_index,
+                        cp.ref_args,
+                        cp.type_hints,
+                        cp.param_names,
+                        cp.return_type_hint,
+                    );
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, false, user_func));
+                    compiled_methods.push((
+                        method.name.clone(),
+                        method.visibility,
+                        method.is_static,
+                        false,
+                        user_func,
+                    ));
                 }
 
                 // For interface "extends", all parent interfaces become the implements list
                 let resolved_iface = self.resolve_name(name);
-                let resolved_extends: Vec<String> = extends.iter().map(|e| self.resolve_name(e)).collect();
+                let resolved_extends: Vec<String> =
+                    extends.iter().map(|e| self.resolve_name(e)).collect();
                 self.class_defs.push(ClassDef {
                     name: resolved_iface,
                     parent: None,
@@ -2366,7 +2470,11 @@ impl Compiler {
                     class_id: 0,
                 });
             }
-            Stmt::Trait { name, properties, methods } => {
+            Stmt::Trait {
+                name,
+                properties,
+                methods,
+            } => {
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.
                 let mut compiled_methods = Vec::new();
@@ -2375,7 +2483,8 @@ impl Compiler {
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("trait method {}::{}", name, method.name);
-                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp =
+                        self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
@@ -2386,12 +2495,22 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
-                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
+                    let cache = (0..func_compiler.instructions.len())
+                        .map(|_| InlineCache::empty())
+                        .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
-                        | OpCode::InitMethodCall | OpCode::InitStaticCall
-                        | OpCode::Include));
+                        || func_compiler.instructions.iter().any(|i| {
+                            matches!(
+                                i.opcode,
+                                OpCode::InitFcall
+                                    | OpCode::InitDynamicCall
+                                    | OpCode::InitUserCall
+                                    | OpCode::CallUserFuncArray
+                                    | OpCode::InitMethodCall
+                                    | OpCode::InitStaticCall
+                                    | OpCode::Include
+                            )
+                        });
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2427,10 +2546,17 @@ impl Compiler {
                         &method.name,
                     );
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
+                    compiled_methods.push((
+                        method.name.clone(),
+                        method.visibility,
+                        method.is_static,
+                        method.is_final,
+                        user_func,
+                    ));
                 }
 
-                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
+                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
+                    Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
@@ -2438,7 +2564,12 @@ impl Compiler {
                         })?),
                         None => None,
                     };
-                    compiled_props.push((prop.name.clone(), default, prop.visibility, name.clone()));
+                    compiled_props.push((
+                        prop.name.clone(),
+                        default,
+                        prop.visibility,
+                        name.clone(),
+                    ));
                 }
 
                 let resolved_trait = self.resolve_name(name);
@@ -2460,7 +2591,12 @@ impl Compiler {
                     class_id: 0,
                 });
             }
-            Stmt::Enum { name, backing_type, cases, methods } => {
+            Stmt::Enum {
+                name,
+                backing_type,
+                cases,
+                methods,
+            } => {
                 // Compile enum as a class. Each case becomes a static property
                 // holding a singleton object with `name` (and optionally `value`) properties.
                 let is_backed = backing_type.is_some();
@@ -2472,7 +2608,8 @@ impl Compiler {
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("enum method {}::{}", name, method.name);
-                    let mut cp = self.compile_params(&mut func_compiler, &method.params, &context)?;
+                    let mut cp =
+                        self.compile_params(&mut func_compiler, &method.params, &context)?;
                     cp.return_type_hint = self.convert_type_hint(&method.return_type);
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
@@ -2483,12 +2620,22 @@ impl Compiler {
                     ret.op1 = null_idx;
                     func_compiler.instructions.push(ret);
 
-                    let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
+                    let cache = (0..func_compiler.instructions.len())
+                        .map(|_| InlineCache::empty())
+                        .collect();
                     let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
-                        | OpCode::InitMethodCall | OpCode::InitStaticCall
-                        | OpCode::Include));
+                        || func_compiler.instructions.iter().any(|i| {
+                            matches!(
+                                i.opcode,
+                                OpCode::InitFcall
+                                    | OpCode::InitDynamicCall
+                                    | OpCode::InitUserCall
+                                    | OpCode::CallUserFuncArray
+                                    | OpCode::InitMethodCall
+                                    | OpCode::InitStaticCall
+                                    | OpCode::Include
+                            )
+                        });
                     let op_array = OpArray {
                         num_cvs: func_compiler.next_cv,
                         num_temps: func_compiler.next_tmp,
@@ -2524,15 +2671,22 @@ impl Compiler {
                         &method.name,
                     );
                     self.functions.extend(func_compiler.functions);
-                    compiled_methods.push((method.name.clone(), method.visibility, method.is_static, method.is_final, user_func));
+                    compiled_methods.push((
+                        method.name.clone(),
+                        method.visibility,
+                        method.is_static,
+                        method.is_final,
+                        user_func,
+                    ));
                 }
 
                 // Build properties for enum cases — each case is stored as a property
                 // with a default value that is a PhpObject with name/value fields.
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
-                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> = Vec::new();
+                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
+                    Vec::new();
                 for (case_name, case_value) in cases {
-                    use crate::value::{PhpObject, PhpArray};
+                    use crate::value::{PhpArray, PhpObject};
                     let mut props = std::collections::HashMap::new();
                     props.insert("name".to_string(), Value::string(case_name.clone()));
                     if is_backed {
@@ -2548,7 +2702,12 @@ impl Compiler {
                         0, // assigned at runtime registration
                         props,
                     ));
-                    compiled_props.push((case_name.clone(), Some(obj), Visibility::Public, name.clone()));
+                    compiled_props.push((
+                        case_name.clone(),
+                        Some(obj),
+                        Visibility::Public,
+                        name.clone(),
+                    ));
                 }
 
                 let resolved_enum = self.resolve_name(name);
@@ -2582,7 +2741,10 @@ impl Compiler {
     }
 
     /// Evaluate a constant expression with access to known compile-time constants.
-    fn eval_const_expr_with_constants(expr: &Expr, known: &HashMap<String, Value>) -> Result<Value, String> {
+    fn eval_const_expr_with_constants(
+        expr: &Expr,
+        known: &HashMap<String, Value>,
+    ) -> Result<Value, String> {
         match expr {
             Expr::Integer(n) => Ok(Value::long(*n)),
             Expr::Float(f) => Ok(Value::double(*f)),
@@ -2600,17 +2762,20 @@ impl Compiler {
                 }
                 // Stream constants cannot be used in constant expressions
                 match name.as_str() {
-                    "STDIN" | "STDOUT" | "STDERR" => Err(format!("{} is not available in constant expressions", name)),
-                    _ => Err(format!("expression Constant(\"{}\") is not a compile-time constant", name)),
+                    "STDIN" | "STDOUT" | "STDERR" => {
+                        Err(format!("{} is not available in constant expressions", name))
+                    }
+                    _ => Err(format!(
+                        "expression Constant(\"{}\") is not a compile-time constant",
+                        name
+                    )),
                 }
             }
-            Expr::UnaryMinus(inner) => {
-                match inner.as_ref() {
-                    Expr::Integer(n) => Ok(Value::long(-n)),
-                    Expr::Float(f) => Ok(Value::double(-f)),
-                    _ => Err("unsupported unary expression".to_string()),
-                }
-            }
+            Expr::UnaryMinus(inner) => match inner.as_ref() {
+                Expr::Integer(n) => Ok(Value::long(-n)),
+                Expr::Float(f) => Ok(Value::double(-f)),
+                _ => Err("unsupported unary expression".to_string()),
+            },
             Expr::ArrayLiteral(elements) => {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
@@ -2622,7 +2787,9 @@ impl Compiler {
                         } else if let Some(s) = key.as_str() {
                             arr.set_str(s, val);
                         } else {
-                            return Err("unsupported array key type in constant expression".to_string());
+                            return Err(
+                                "unsupported array key type in constant expression".to_string()
+                            );
                         }
                     } else {
                         arr.push(val);
@@ -2630,13 +2797,21 @@ impl Compiler {
                 }
                 Ok(Value::array(arr))
             }
-            _ => Err(format!("expression {:?} is not a compile-time constant", expr)),
+            _ => Err(format!(
+                "expression {:?} is not a compile-time constant",
+                expr
+            )),
         }
     }
 
     /// Compile parameter list into CV slots. Returns (num_args, required_num_args, is_variadic, variadic_cv_index, ref_args).
     /// num_args counts only non-variadic params. The variadic param gets its own CV.
-    fn compile_params(&self, func_compiler: &mut Compiler, params: &[Param], context: &str) -> Result<CompiledParams, String> {
+    fn compile_params(
+        &self,
+        func_compiler: &mut Compiler,
+        params: &[Param],
+        context: &str,
+    ) -> Result<CompiledParams, String> {
         let mut required_num_args = 0u32;
         let mut seen_default = false;
         let mut is_variadic = false;
@@ -2656,7 +2831,10 @@ impl Compiler {
 
             if param.is_variadic {
                 if i != params.len() - 1 {
-                    return Err(format!("Variadic parameter ${} must be last in {}", param.name, context));
+                    return Err(format!(
+                        "Variadic parameter ${} must be last in {}",
+                        param.name, context
+                    ));
                 }
                 is_variadic = true;
                 variadic_cv_index = func_compiler.resolve_cv(&param.name) as u32;
@@ -2678,12 +2856,28 @@ impl Compiler {
             }
         }
         // num_args = non-variadic params count
-        let num_args = if is_variadic { (params.len() - 1) as u32 } else { params.len() as u32 };
-        Ok(CompiledParams { num_args, required_num_args, is_variadic, variadic_cv_index, ref_args, type_hints, param_names, return_type_hint: crate::vm::function::ParamTypeHint::None })
+        let num_args = if is_variadic {
+            (params.len() - 1) as u32
+        } else {
+            params.len() as u32
+        };
+        Ok(CompiledParams {
+            num_args,
+            required_num_args,
+            is_variadic,
+            variadic_cv_index,
+            ref_args,
+            type_hints,
+            param_names,
+            return_type_hint: crate::vm::function::ParamTypeHint::None,
+        })
     }
 
     /// Convert parser TypeHint to runtime ParamTypeHint.
-    fn convert_type_hint(&self, hint: &Option<crate::parser::TypeHint>) -> crate::vm::function::ParamTypeHint {
+    fn convert_type_hint(
+        &self,
+        hint: &Option<crate::parser::TypeHint>,
+    ) -> crate::vm::function::ParamTypeHint {
         use crate::parser::TypeHint;
         use crate::vm::function::ParamTypeHint;
         match hint {
@@ -2710,7 +2904,8 @@ impl Compiler {
             Some(TypeHint::Mixed) => ParamTypeHint::Mixed,
             Some(TypeHint::Never) => ParamTypeHint::Never,
             Some(TypeHint::Union(types)) => {
-                let converted: Vec<ParamTypeHint> = types.iter()
+                let converted: Vec<ParamTypeHint> = types
+                    .iter()
                     .map(|t| self.convert_type_hint(&Some(t.clone())))
                     .collect();
                 ParamTypeHint::Union(converted)
@@ -2980,7 +3175,11 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
-            Expr::Ternary { condition, then_expr, else_expr } => {
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
                 let (cond_op, cond_type) = self.compile_expr(condition);
                 let tmp = self.alloc_tmp();
 
@@ -3164,7 +3363,10 @@ impl Compiler {
 
                 if self.is_global_builtin_call(name, "call_user_func") {
                     if let Some((CallArg::Positional(callback), forwarded)) = args.split_first() {
-                        if forwarded.iter().all(|arg| matches!(arg, CallArg::Positional(_))) {
+                        if forwarded
+                            .iter()
+                            .all(|arg| matches!(arg, CallArg::Positional(_)))
+                        {
                             let (callback_op, callback_type) = self.compile_expr(callback);
                             let mut init = Instruction::new(OpCode::InitUserCall);
                             init.op1 = callback_op;
@@ -3185,7 +3387,9 @@ impl Compiler {
                 }
 
                 if self.is_global_builtin_call(name, "call_user_func_array") {
-                    if let [CallArg::Positional(callback), CallArg::Positional(array)] = args.as_slice() {
+                    if let [CallArg::Positional(callback), CallArg::Positional(array)] =
+                        args.as_slice()
+                    {
                         if let Expr::ArrayLiteral(elements) = array {
                             if elements.iter().all(|element| element.key.is_none()) {
                                 // A temporary packed literal cannot be observed by PHP
@@ -3549,7 +3753,10 @@ impl Compiler {
                     self.instructions.push(set);
                 } else {
                     // No default: throw UnhandledMatchError at runtime
-                    let err_obj = crate::value::make_error_value("UnhandledMatchError", "Unhandled match case");
+                    let err_obj = crate::value::make_error_value(
+                        "UnhandledMatchError",
+                        "Unhandled match case",
+                    );
                     let err_idx = self.add_literal(err_obj);
                     let mut throw = Instruction::new(OpCode::Throw);
                     throw.op1 = err_idx;
@@ -3564,7 +3771,12 @@ impl Compiler {
 
                 (result_tmp, OpType::Tmp)
             }
-            Expr::Closure { params, use_vars, body, return_type } => {
+            Expr::Closure {
+                params,
+                use_vars,
+                body,
+                return_type,
+            } => {
                 // Compile closure body into a separate function
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
@@ -3574,7 +3786,16 @@ impl Compiler {
                     Ok(r) => r,
                     Err(e) => {
                         self.deferred_error = Some(e);
-                        CompiledParams { num_args: params.len() as u32, required_num_args: params.len() as u32, is_variadic: false, variadic_cv_index: 0, ref_args: 0, type_hints: vec![], param_names: vec![], return_type_hint: crate::vm::function::ParamTypeHint::None }
+                        CompiledParams {
+                            num_args: params.len() as u32,
+                            required_num_args: params.len() as u32,
+                            is_variadic: false,
+                            variadic_cv_index: 0,
+                            ref_args: 0,
+                            type_hints: vec![],
+                            param_names: vec![],
+                            return_type_hint: crate::vm::function::ParamTypeHint::None,
+                        }
                     }
                 };
                 cp.return_type_hint = self.convert_type_hint(return_type);
@@ -3594,12 +3815,22 @@ impl Compiler {
                 func_compiler.instructions.push(ret);
 
                 let closure_all_cvs = func_compiler.all_cvs();
-                let cache = (0..func_compiler.instructions.len()).map(|_| InlineCache::empty()).collect();
+                let cache = (0..func_compiler.instructions.len())
+                    .map(|_| InlineCache::empty())
+                    .collect();
                 let may_access_globals = !func_compiler.global_vars.is_empty()
-                    || func_compiler.instructions.iter().any(|i| matches!(i.opcode,
-                        OpCode::InitFcall | OpCode::InitDynamicCall | OpCode::InitUserCall | OpCode::CallUserFuncArray
-                        | OpCode::InitMethodCall | OpCode::InitStaticCall
-                        | OpCode::Include));
+                    || func_compiler.instructions.iter().any(|i| {
+                        matches!(
+                            i.opcode,
+                            OpCode::InitFcall
+                                | OpCode::InitDynamicCall
+                                | OpCode::InitUserCall
+                                | OpCode::CallUserFuncArray
+                                | OpCode::InitMethodCall
+                                | OpCode::InitStaticCall
+                                | OpCode::Include
+                        )
+                    });
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -3620,10 +3851,23 @@ impl Compiler {
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
                 };
-                let user_func = make_user_function_typed(op_array, cp.num_args, cp.required_num_args, cp.is_variadic, cp.variadic_cv_index, cp.ref_args, cp.type_hints, cp.param_names, cp.return_type_hint);
+                let user_func = make_user_function_typed(
+                    op_array,
+                    cp.num_args,
+                    cp.required_num_args,
+                    cp.is_variadic,
+                    cp.variadic_cv_index,
+                    cp.ref_args,
+                    cp.type_hints,
+                    cp.param_names,
+                    cp.return_type_hint,
+                );
 
                 // Register closure as anonymous function with unique name
-                let closure_name = format!("__closure_{}", CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed));
+                let closure_name = format!(
+                    "__closure_{}",
+                    CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed)
+                );
                 self.functions.extend(func_compiler.functions);
                 self.functions.push((closure_name.clone(), user_func));
 
@@ -3658,7 +3902,8 @@ impl Compiler {
                 // Pre-compile arg expressions BEFORE NewObj so side effects
                 // always execute, even when the class has no __construct.
                 // Compile args, tracking which are named for SendNamed emission
-                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args.iter()
+                let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
+                    .iter()
                     .map(|arg| match arg {
                         CallArg::Positional(expr) => {
                             let (op, op_type) = self.compile_expr(expr);
@@ -3695,7 +3940,11 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::PropertyAccess { object, property, nullsafe } => {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe,
+            } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let tmp = self.alloc_tmp();
 
@@ -3730,7 +3979,12 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::MethodCall { object, method, args, nullsafe } => {
+            Expr::MethodCall {
+                object,
+                method,
+                args,
+                nullsafe,
+            } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let tmp = self.alloc_tmp();
 
@@ -3779,7 +4033,11 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::StaticCall { class_name, method, args } => {
+            Expr::StaticCall {
+                class_name,
+                method,
+                args,
+            } => {
                 let resolved_class = self.resolve_name(class_name);
                 let class_idx = self.add_literal(Value::string(resolved_class));
                 let method_idx = self.add_literal(Value::string(method.clone()));
@@ -3802,7 +4060,10 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::StaticProperty { class_name, property } => {
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => {
                 let resolved = self.resolve_name(class_name);
                 let class_idx = self.add_literal(Value::string(resolved));
                 let prop_idx = self.add_literal(Value::string(property.clone()));
@@ -3972,8 +4233,7 @@ impl Compiler {
                     | OpCode::PreDec
                     | OpCode::PostInc
                     | OpCode::PostDec
-            )
-                && instruction.result == result
+            ) && instruction.result == result
                 && instruction.result_type == OpType::Tmp
             {
                 instruction.result_type = OpType::Unused;
@@ -4013,7 +4273,10 @@ impl Compiler {
 
     /// Build list of all CVs from cv_table.
     fn all_cvs(&self) -> Vec<(u32, String)> {
-        self.cv_table.iter().map(|(name, &idx)| (idx, name.clone())).collect()
+        self.cv_table
+            .iter()
+            .map(|(name, &idx)| (idx, name.clone()))
+            .collect()
     }
 
     /// Controls how a positional argument's Send opcode is chosen.
@@ -4024,7 +4287,11 @@ impl Compiler {
         if ref_args != 0 && !use_var_ex {
             // RefAware mode (FunctionCall)
             let is_ref = index < 64 && (ref_args & (1u64 << index)) != 0;
-            if is_ref && op_type == OpType::Cv { OpCode::SendRef } else { OpCode::SendVal }
+            if is_ref && op_type == OpType::Cv {
+                OpCode::SendRef
+            } else {
+                OpCode::SendVal
+            }
         } else if use_var_ex && op_type == OpType::Cv {
             OpCode::SendVarEx
         } else {
@@ -4126,7 +4393,12 @@ impl Compiler {
     }
 
     /// Compile list destructuring targets. Each target gets a FetchDimR + AssignCv.
-    fn compile_list_targets(&mut self, targets: &[crate::parser::ListTarget], array_tmp: u16, start_index: usize) -> Result<(), String> {
+    fn compile_list_targets(
+        &mut self,
+        targets: &[crate::parser::ListTarget],
+        array_tmp: u16,
+        start_index: usize,
+    ) -> Result<(), String> {
         use crate::parser::ListTarget;
         let mut idx = start_index;
         for target in targets {

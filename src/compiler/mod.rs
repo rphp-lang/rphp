@@ -3,36 +3,30 @@ pub mod compile;
 mod jit_coverage;
 
 use crate::value::Value;
-use crate::vm::instruction::{Instruction, InlineCache, KnownScalarType, OpType};
-use std::cell::Cell;
 use crate::vm::function::{
-    FunctionCommon, FunctionType, UserFunction, ParamTypeHint,
-    DirectInternalFunctionHandler, InternalFunction, InternalFunctionHandler,
-    SignatureInfo, FrameLayout, CallPlan,
-    CallStrategy, ReturnStrategy, CleanupMode, HotStatus,
-    LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
-    PropertyGetterMethodPlan, PropertyInitAssignment, PropertyInitMethodPlan,
-    BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine,
-    LongRecursiveCondition,
-    ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
-    ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ScalarLongCall,
-    ScalarLongCallGuard, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
-    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongProgram,
-    ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
-    ScalarStringSelect, ScalarStringSource,
-    ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ScalarDoubleCall,
-    ScalarDoubleFunctionPlan, ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram,
-    ScalarDoubleSelect, ScalarDoubleSource,
+    BinaryLongRecursionPlan, CallPlan, CallStrategy, CleanupMode, ComposedScalarDoubleFunctionPlan,
+    ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
+    ComposedTypedLongFunctionPlan, ComposedTypedLongOp, DirectInternalFunctionHandler, FrameLayout,
+    FunctionCommon, FunctionType, HotStatus, InternalFunction, InternalFunctionHandler,
+    LongPlanProperty, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, LongRecursiveBase,
+    LongRecursiveCombine, LongRecursiveCondition, ObjectArrayEntry, ObjectArrayFunctionPlan,
+    ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongConditionalAdjustment,
     ObjectLongFunctionPlan, ObjectLongIntDivArm, ObjectLongModuloAnySelect,
-    ObjectLongModuloEqualTerm, ObjectLongObjectSource, ObjectLongOp,
-    ObjectLongSource, ObjectLongStringAdjustment, ObjectLongStringIntDivCase,
-    ObjectLongStringIntDivSelect, ObjectLongConditionalAdjustment,
-    ObjectLongWeightedStringScore, ObjectArrayEntry, ObjectArrayFunctionPlan,
-    ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource,
+    ObjectLongModuloEqualTerm, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource,
+    ObjectLongStringAdjustment, ObjectLongStringIntDivCase, ObjectLongStringIntDivSelect,
+    ObjectLongWeightedStringScore, ParamTypeHint, PropertyGetterMethodPlan, PropertyInitAssignment,
+    PropertyInitMethodPlan, ReturnStrategy, ScalarDoubleCall, ScalarDoubleFunctionPlan,
+    ScalarDoubleOp, ScalarDoubleOpKind, ScalarDoubleProgram, ScalarDoubleSelect,
+    ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind,
+    ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind,
+    ScalarLongProgram, ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
+    ScalarStringSelect, ScalarStringSource, SignatureInfo, UserFunction,
 };
-use std::collections::HashMap;
+use crate::vm::instruction::{InlineCache, Instruction, KnownScalarType, OpType};
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
+use std::cell::Cell;
+use std::collections::HashMap;
 
 /// Compiled function body — equivalent to zend_op_array.
 pub struct OpArray {
@@ -164,7 +158,9 @@ impl OpArray {
         // consumes the comparison's TMP result and that TMP is not used elsewhere.
         // Pass 2 active
         let len = self.instructions.len();
-        if len < 2 { return; }
+        if len < 2 {
+            return;
+        }
         let mut i = 0;
         while i < len - 1 {
             let curr = self.instructions[i];
@@ -172,37 +168,43 @@ impl OpArray {
             // Pattern A: comparison + conditional jump → fused branch
             let fused_cmp = match (curr.opcode, next.opcode) {
                 (OpCode::IsSmallerOrEqual_CvConst, OpCode::JmpZ)
-                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                    if next.op1_type == OpType::Tmp
+                        && next.op1 == curr.result
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpZ_Le_CvConst)
                 }
                 (OpCode::IsSmallerOrEqual_CvConst, OpCode::JmpNZ)
-                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                    if next.op1_type == OpType::Tmp
+                        && next.op1 == curr.result
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpNZ_Le_CvConst)
                 }
                 (OpCode::IsSmaller_CvConst, OpCode::JmpZ)
-                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                    if next.op1_type == OpType::Tmp
+                        && next.op1 == curr.result
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpZ_Lt_CvConst)
                 }
                 (OpCode::IsSmaller_CvConst, OpCode::JmpNZ)
-                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                    if next.op1_type == OpType::Tmp
+                        && next.op1 == curr.result
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpNZ_Lt_CvConst)
                 }
                 (OpCode::IsEqual_CvConst, OpCode::JmpZ)
-                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                    if next.op1_type == OpType::Tmp
+                        && next.op1 == curr.result
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpZ_Eq_CvConst)
                 }
                 (OpCode::IsEqual_CvConst, OpCode::JmpNZ)
-                    if next.op1_type == OpType::Tmp && next.op1 == curr.result
+                    if next.op1_type == OpType::Tmp
+                        && next.op1 == curr.result
                         && curr.result_type == OpType::Tmp =>
                 {
                     Some(OpCode::JmpNZ_Eq_CvConst)
@@ -215,9 +217,9 @@ impl OpArray {
                     op1_type: curr.op1_type, // Cv
                     op2_type: curr.op2_type, // Const
                     result_type: OpType::Unused,
-                    op1: curr.op1,            // CV index
-                    op2: curr.op2,            // Const index
-                    result: next.op2,         // jump target IP
+                    op1: curr.op1,    // CV index
+                    op2: curr.op2,    // Const index
+                    result: next.op2, // jump target IP
                     _pad: 0,
                     extended_value: 0,
                 };
@@ -364,48 +366,40 @@ impl OpArray {
             }
             #[cfg(feature = "vm-stats")]
             crate::vm::stats::inc_jit_loop_candidate();
-            let plan = crate::vm::quick::detect_long_induction_loop(
-                self,
-                header_ip,
-                backedge_ip,
-            )
-            .map(BlockPlan::QuickLongInduction)
-            .or_else(|| {
-                crate::vm::quick::detect_double_call_accumulate_loop(
-                    self,
-                    header_ip,
-                    backedge_ip,
-                )
-                .map(BlockPlan::QuickDoubleCallAccumulate)
-            })
-            .or_else(|| {
-                crate::vm::quick::detect_long_accumulate_loop(
-                    self,
-                    header_ip,
-                    backedge_ip,
-                )
-                .map(BlockPlan::QuickLongAccumulate)
-            })
-            .or_else(|| {
-                crate::vm::quick::detect_foreach_object_property_accumulate_loop(
-                    self,
-                    header_ip,
-                    backedge_ip,
-                )
-                .map(BlockPlan::QuickForeachObjectPropertyAccumulate)
-            })
-            .or_else(|| {
-                crate::vm::quick::detect_foreach_long_accumulate_loop(
-                    self,
-                    header_ip,
-                    backedge_ip,
-                )
-                .map(BlockPlan::QuickForeachLongAccumulate)
-            })
-            .or_else(|| {
-                crate::vm::quick::detect_long_ops_loop(self, header_ip, backedge_ip)
-                    .map(BlockPlan::QuickLongOps)
-            });
+            let plan = crate::vm::quick::detect_long_induction_loop(self, header_ip, backedge_ip)
+                .map(BlockPlan::QuickLongInduction)
+                .or_else(|| {
+                    crate::vm::quick::detect_double_call_accumulate_loop(
+                        self,
+                        header_ip,
+                        backedge_ip,
+                    )
+                    .map(BlockPlan::QuickDoubleCallAccumulate)
+                })
+                .or_else(|| {
+                    crate::vm::quick::detect_long_accumulate_loop(self, header_ip, backedge_ip)
+                        .map(BlockPlan::QuickLongAccumulate)
+                })
+                .or_else(|| {
+                    crate::vm::quick::detect_foreach_object_property_accumulate_loop(
+                        self,
+                        header_ip,
+                        backedge_ip,
+                    )
+                    .map(BlockPlan::QuickForeachObjectPropertyAccumulate)
+                })
+                .or_else(|| {
+                    crate::vm::quick::detect_foreach_long_accumulate_loop(
+                        self,
+                        header_ip,
+                        backedge_ip,
+                    )
+                    .map(BlockPlan::QuickForeachLongAccumulate)
+                })
+                .or_else(|| {
+                    crate::vm::quick::detect_long_ops_loop(self, header_ip, backedge_ip)
+                        .map(BlockPlan::QuickLongOps)
+                });
             if let Some(plan) = plan {
                 let block_idx = *self.ip_to_block.get(header_ip).unwrap_or(&u16::MAX);
                 if block_idx != u16::MAX {
@@ -430,9 +424,7 @@ impl OpArray {
                             BlockPlan::QuickLongOps(_) => {
                                 crate::vm::stats::JitRegionKind::TypedOpsLoop
                             }
-                            _ => unreachable!(
-                                "quick-loop detector returned a non-loop plan"
-                            ),
+                            _ => unreachable!("quick-loop detector returned a non-loop plan"),
                         };
                         crate::vm::stats::inc_jit_loop_admitted(kind);
                     }
@@ -444,11 +436,7 @@ impl OpArray {
 
             #[cfg(feature = "vm-stats")]
             {
-                let reason = jit_coverage::loop_miss_reason(
-                    self,
-                    header_ip,
-                    backedge_ip,
-                );
+                let reason = jit_coverage::loop_miss_reason(self, header_ip, backedge_ip);
                 crate::vm::stats::inc_jit_loop_rejected(reason);
                 if crate::vm::stats::enabled() {
                     self.instructions[backedge_ip].extended_value = reason.marker();
@@ -486,10 +474,8 @@ impl OpArray {
                 continue;
             }
             let block_end = self.block_info[block_idx as usize].end_ip as usize;
-            let last_ip = block_end.min(
-                entry_ip
-                    .saturating_add(MAX_STRAIGHT_REGION_INSTRUCTIONS - 1),
-            );
+            let last_ip =
+                block_end.min(entry_ip.saturating_add(MAX_STRAIGHT_REGION_INSTRUCTIONS - 1));
             if last_ip <= entry_ip {
                 continue;
             }
@@ -501,14 +487,14 @@ impl OpArray {
             #[cfg(feature = "vm-stats")]
             let mut admitted = false;
             for end_ip in (entry_ip + 1..=last_ip).rev() {
-                if closed_region_ip[entry_ip..=end_ip].iter().any(|covered| *covered) {
+                if closed_region_ip[entry_ip..=end_ip]
+                    .iter()
+                    .any(|covered| *covered)
+                {
                     continue;
                 }
-                let Some(plan) = crate::vm::quick::detect_long_ops_region(
-                    self,
-                    entry_ip,
-                    end_ip,
-                ) else {
+                let Some(plan) = crate::vm::quick::detect_long_ops_region(self, entry_ip, end_ip)
+                else {
                     continue;
                 };
                 #[cfg(feature = "vm-stats")]
@@ -542,7 +528,6 @@ impl OpArray {
                 }
             }
         }
-
     }
 }
 
@@ -551,7 +536,10 @@ impl Drop for OpArray {
         // A DoFcall cache may retain an Rc-backed callback-name string. Pair
         // that reference here; all other cache kinds own no heap allocation.
         for (instruction, cache) in self.instructions.iter().zip(&self.cache) {
-            if matches!(instruction.opcode, OpCode::DoFcall | OpCode::CallUserFuncArray | OpCode::InitUserCall) {
+            if matches!(
+                instruction.opcode,
+                OpCode::DoFcall | OpCode::CallUserFuncArray | OpCode::InitUserCall
+            ) {
                 let callback_string = cache.callback_string();
                 if !callback_string.is_null() {
                     unsafe { Value::release_cached_string(callback_string) };
@@ -571,10 +559,13 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
     }
 
     op_array.instructions.iter().all(|instr| {
-        if matches!(instr.opcode, OpCode::DirectInternalCall1 | OpCode::DirectInternalCall2) {
-            let Some(kind) = crate::builtin_metadata::DirectInternalKind::from_id(
-                instr.extended_value,
-            ) else {
+        if matches!(
+            instr.opcode,
+            OpCode::DirectInternalCall1 | OpCode::DirectInternalCall2
+        ) {
+            let Some(kind) =
+                crate::builtin_metadata::DirectInternalKind::from_id(instr.extended_value)
+            else {
                 return false;
             };
             if kind.result_may_need_cleanup() {
@@ -651,12 +642,24 @@ pub fn make_user_function_with_args(op_array: OpArray, num_args: u32) -> UserFun
 }
 
 /// Create a UserFunction with separate total and required arg counts (for default params).
-pub fn make_user_function_with_defaults(op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool) -> UserFunction {
+pub fn make_user_function_with_defaults(
+    op_array: OpArray,
+    num_args: u32,
+    required_num_args: u32,
+    is_variadic: bool,
+) -> UserFunction {
     make_user_function_full(op_array, num_args, required_num_args, is_variadic, 0, 0)
 }
 
 /// Full constructor with all options.
-pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_num_args: u32, is_variadic: bool, variadic_cv_index: u32, ref_args: u64) -> UserFunction {
+pub fn make_user_function_full(
+    mut op_array: OpArray,
+    num_args: u32,
+    required_num_args: u32,
+    is_variadic: bool,
+    variadic_cv_index: u32,
+    ref_args: u64,
+) -> UserFunction {
     op_array.resolve_tmp_offsets();
     op_array.specialize_opcodes();
     if op_array.cache.len() != op_array.instructions.len() {
@@ -679,12 +682,20 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
     } else {
         CallStrategy::Full
     };
-    let cleanup = if op_array_supports_cleanup_fast(&op_array) { CleanupMode::SkipScan } else { CleanupMode::ScanAll };
+    let cleanup = if op_array_supports_cleanup_fast(&op_array) {
+        CleanupMode::SkipScan
+    } else {
+        CleanupMode::ScanAll
+    };
     let ret = if op_array.global_vars.is_empty()
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.is_generator
-    { ReturnStrategy::Fast } else { ReturnStrategy::Full };
+    {
+        ReturnStrategy::Fast
+    } else {
+        ReturnStrategy::Full
+    };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
@@ -702,8 +713,17 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
                 param_names: vec![],
                 return_type_hint: ParamTypeHint::None,
             },
-            frame: FrameLayout { num_cvs, num_temps, total_slots },
-            plan: CallPlan { call, ret, cleanup, borrow_this: false },
+            frame: FrameLayout {
+                num_cvs,
+                num_temps,
+                total_slots,
+            },
+            plan: CallPlan {
+                call,
+                ret,
+                cleanup,
+                borrow_this: false,
+            },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -724,17 +744,14 @@ pub fn make_user_function_full(mut op_array: OpArray, num_args: u32, required_nu
         borrowable_heap_args: 0,
     };
     let self_name = function.op_array.name.clone();
-    function.binary_long_recursion_plan =
-        build_binary_long_recursion_plan(&function, &self_name);
+    function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.scalar_double_plan = build_scalar_double_function_plan(&function);
-    function.composed_scalar_double_plan =
-        build_composed_scalar_double_function_plan(&function);
+    function.composed_scalar_double_plan = build_composed_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
-    function.composed_scalar_long_plan =
-        build_composed_scalar_long_function_plan(&function);
+    function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
@@ -761,16 +778,23 @@ pub fn make_user_function_typed(
     op_array.prepare_quick_loops();
     // Exact all-`int` parameters use a distinct typed scalar ABI. Keeping it
     // separate leaves the original untyped FastScalar machine path untouched.
-    let has_only_compact_hints = param_type_hints.iter().all(|h| matches!(h,
-        ParamTypeHint::None | ParamTypeHint::Int | ParamTypeHint::Float
-        | ParamTypeHint::String | ParamTypeHint::Bool | ParamTypeHint::Array
-        | ParamTypeHint::ClassName(_) | ParamTypeHint::Mixed
-    ));
+    let has_only_compact_hints = param_type_hints.iter().all(|h| {
+        matches!(
+            h,
+            ParamTypeHint::None
+                | ParamTypeHint::Int
+                | ParamTypeHint::Float
+                | ParamTypeHint::String
+                | ParamTypeHint::Bool
+                | ParamTypeHint::Array
+                | ParamTypeHint::ClassName(_)
+                | ParamTypeHint::Mixed
+        )
+    });
     let has_no_type_hints = param_type_hints
         .iter()
         .all(|hint| matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed));
-    let has_no_return_type =
-        matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
+    let has_no_return_type = matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed);
     let has_exact_long_params = !param_type_hints.is_empty()
         && param_type_hints
             .iter()
@@ -796,15 +820,29 @@ pub fn make_user_function_typed(
     } else {
         CallStrategy::Full
     };
-    let cleanup = if op_array_supports_cleanup_fast(&op_array) { CleanupMode::SkipScan } else { CleanupMode::ScanAll };
+    let cleanup = if op_array_supports_cleanup_fast(&op_array) {
+        CleanupMode::SkipScan
+    } else {
+        CleanupMode::ScanAll
+    };
     let ret = if op_array.global_vars.is_empty()
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.is_generator
-        && matches!(return_type_hint, ParamTypeHint::None | ParamTypeHint::Int
-            | ParamTypeHint::Float | ParamTypeHint::String | ParamTypeHint::Bool
-            | ParamTypeHint::Array | ParamTypeHint::Mixed)
-    { ReturnStrategy::Fast } else { ReturnStrategy::Full };
+        && matches!(
+            return_type_hint,
+            ParamTypeHint::None
+                | ParamTypeHint::Int
+                | ParamTypeHint::Float
+                | ParamTypeHint::String
+                | ParamTypeHint::Bool
+                | ParamTypeHint::Array
+                | ParamTypeHint::Mixed
+        ) {
+        ReturnStrategy::Fast
+    } else {
+        ReturnStrategy::Full
+    };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
@@ -822,8 +860,17 @@ pub fn make_user_function_typed(
                 param_names,
                 return_type_hint,
             },
-            frame: FrameLayout { num_cvs, num_temps, total_slots },
-            plan: CallPlan { call, ret, cleanup, borrow_this: false },
+            frame: FrameLayout {
+                num_cvs,
+                num_temps,
+                total_slots,
+            },
+            plan: CallPlan {
+                call,
+                ret,
+                cleanup,
+                borrow_this: false,
+            },
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -844,17 +891,14 @@ pub fn make_user_function_typed(
         borrowable_heap_args: 0,
     };
     let self_name = function.op_array.name.clone();
-    function.binary_long_recursion_plan =
-        build_binary_long_recursion_plan(&function, &self_name);
+    function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.scalar_double_plan = build_scalar_double_function_plan(&function);
-    function.composed_scalar_double_plan =
-        build_composed_scalar_double_function_plan(&function);
+    function.composed_scalar_double_plan = build_composed_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
-    function.composed_scalar_long_plan =
-        build_composed_scalar_long_function_plan(&function);
+    function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
@@ -882,9 +926,7 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
 
     let clear_cv = |mask: &mut u64, cv: u16| {
         let cv = cv as u32;
-        if cv >= common.sig.this_offset
-            && cv < common.sig.this_offset + public_args
-        {
+        if cv >= common.sig.this_offset && cv < common.sig.this_offset + public_args {
             *mask &= !(1u64 << (cv - common.sig.this_offset));
         }
     };
@@ -918,9 +960,7 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             OpCode::ForeachNext => return 0,
             // A direct return transfers a Value out of the frame. Aliases made
             // through another CV are owned clones and remain eligible.
-            OpCode::Return
-                if instruction.op1_type == OpType::Cv =>
-            {
+            OpCode::Return if instruction.op1_type == OpType::Cv => {
                 clear_cv(&mut mask, instruction.op1)
             }
             _ => {}
@@ -942,9 +982,7 @@ fn scalar_long_source(
 ) -> Option<ScalarLongSource> {
     match op_type {
         OpType::Cv => {
-            if operand as u32 >= this_offset
-                && (operand as u32) < this_offset + public_args
-            {
+            if operand as u32 >= this_offset && (operand as u32) < this_offset + public_args {
                 Some(ScalarLongSource::Input(
                     (operand as u32 - this_offset) as u16,
                 ))
@@ -967,9 +1005,7 @@ fn scalar_long_source(
 /// `return ($a + 1) * $b`. This is deliberately narrower than general PHP
 /// arithmetic: runtime Long guards and checked operations must all succeed or
 /// the untouched canonical frame executes normally.
-fn build_scalar_long_function_plan(
-    function: &UserFunction,
-) -> Option<Box<ScalarLongFunctionPlan>> {
+fn build_scalar_long_function_plan(function: &UserFunction) -> Option<Box<ScalarLongFunctionPlan>> {
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
@@ -981,9 +1017,8 @@ fn build_scalar_long_function_plan(
         return None;
     }
 
-    build_straight_scalar_long_function_plan(function).or_else(|| {
-        build_conditional_scalar_long_function_plan(function)
-    })
+    build_straight_scalar_long_function_plan(function)
+        .or_else(|| build_conditional_scalar_long_function_plan(function))
 }
 
 #[derive(Clone, Copy)]
@@ -1002,13 +1037,9 @@ fn scalar_double_source(
 ) -> Option<ProvenScalarDoubleSource> {
     match op_type {
         OpType::Cv => {
-            if operand as u32 >= this_offset
-                && (operand as u32) < this_offset + public_args
-            {
+            if operand as u32 >= this_offset && (operand as u32) < this_offset + public_args {
                 Some(ProvenScalarDoubleSource {
-                    source: ScalarDoubleSource::Input(
-                        (operand as u32 - this_offset) as u16,
-                    ),
+                    source: ScalarDoubleSource::Input((operand as u32 - this_offset) as u16),
                     // The frame-free adapter admits this plan only after an
                     // exact raw-Double tag guard succeeds.
                     is_double: true,
@@ -1038,9 +1069,7 @@ fn scalar_double_source(
 
 fn scalar_double_op_kind(opcode: OpCode) -> Option<ScalarDoubleOpKind> {
     match opcode {
-        OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
-            Some(ScalarDoubleOpKind::Add)
-        }
+        OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => Some(ScalarDoubleOpKind::Add),
         OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
             Some(ScalarDoubleOpKind::Subtract)
         }
@@ -1221,8 +1250,7 @@ fn bind_scalar_double_local(
     let destination = instruction.op1 as u32;
     let first_argument = function.common.sig.this_offset;
     let argument_end = first_argument + public_args;
-    if destination < first_argument
-        || (destination >= first_argument && destination < argument_end)
+    if destination < first_argument || (destination >= first_argument && destination < argument_end)
     {
         return None;
     }
@@ -1370,9 +1398,7 @@ fn build_conditional_scalar_double_function_plan(
                 None,
             )
         }
-        OpCode::JmpZ_Eq_CvConst
-        | OpCode::JmpZ_Lt_CvConst
-        | OpCode::JmpZ_Le_CvConst => {
+        OpCode::JmpZ_Eq_CvConst | OpCode::JmpZ_Lt_CvConst | OpCode::JmpZ_Le_CvConst => {
             let (lhs, rhs) = condition_sources(condition_instruction)?;
             (
                 match condition_instruction.opcode {
@@ -1507,7 +1533,10 @@ fn build_composed_scalar_double_function_plan(
             }));
         }
 
-        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+        if matches!(
+            instruction.opcode,
+            OpCode::InitFcall | OpCode::InitMethodCall
+        ) {
             let (argument_count, parameter_offset, guard) = match instruction.opcode {
                 OpCode::InitFcall => (
                     instruction.op1 as usize,
@@ -1655,28 +1684,21 @@ fn build_composed_scalar_double_function_plan(
 
 fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
     match opcode {
-        OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
-            Some(ScalarLongOpKind::Add)
-        }
-        OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
-            Some(ScalarLongOpKind::Subtract)
-        }
+        OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => Some(ScalarLongOpKind::Add),
+        OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => Some(ScalarLongOpKind::Subtract),
         OpCode::Mul => Some(ScalarLongOpKind::Multiply),
         OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
         OpCode::BitwiseAnd => Some(ScalarLongOpKind::BitwiseAnd),
         OpCode::BitwiseOr => Some(ScalarLongOpKind::BitwiseOr),
-        OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
-            Some(ScalarLongOpKind::BitwiseXor)
-        }
+        OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => Some(ScalarLongOpKind::BitwiseXor),
         _ => None,
     }
 }
 
 fn scalar_long_instruction_kind(instruction: &Instruction) -> Option<ScalarLongOpKind> {
     if instruction.opcode == OpCode::DirectInternalCall2
-        && crate::builtin_metadata::DirectInternalKind::from_id(
-            instruction.extended_value,
-        ) == Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
+        && crate::builtin_metadata::DirectInternalKind::from_id(instruction.extended_value)
+            == Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
     {
         Some(ScalarLongOpKind::IntDivide)
     } else {
@@ -1737,8 +1759,7 @@ fn bind_scalar_long_local(
     let argument_end = first_argument + function.common.sig.public_arity();
     // Mutating `$this` or a public parameter changes what later external Input
     // sources mean. Keep those CVs canonical; local CVs are aliases here.
-    if destination < first_argument
-        || (destination >= first_argument && destination < argument_end)
+    if destination < first_argument || (destination >= first_argument && destination < argument_end)
     {
         return None;
     }
@@ -1853,12 +1874,7 @@ fn scalar_long_return_arm(
             bind_scalar_long_local(function, instruction, temporary_results)?;
             continue;
         }
-        append_scalar_long_operation(
-            function,
-            instruction,
-            temporary_results,
-            operations,
-        )?;
+        append_scalar_long_operation(function, instruction, temporary_results, operations)?;
     }
     None
 }
@@ -2021,9 +2037,7 @@ fn build_conditional_scalar_long_function_plan(
             ip,
             None,
         ),
-        OpCode::JmpZ_Eq_CvConst
-        | OpCode::JmpZ_Lt_CvConst
-        | OpCode::JmpZ_Le_CvConst => (
+        OpCode::JmpZ_Eq_CvConst | OpCode::JmpZ_Lt_CvConst | OpCode::JmpZ_Le_CvConst => (
             match condition_instruction.opcode {
                 OpCode::JmpZ_Eq_CvConst => ScalarLongConditionKind::Equal,
                 OpCode::JmpZ_Lt_CvConst => ScalarLongConditionKind::LessThan,
@@ -2264,8 +2278,12 @@ fn build_object_long_string_intdiv_select(
             return None;
         }
         let (arm_input, arm) = object_long_intdiv_arm(&operations[ip + 2..target])?;
-        if string_argument.replace(*argument).is_some_and(|found| found != *argument)
-            || input.replace(arm_input).is_some_and(|found| found != arm_input)
+        if string_argument
+            .replace(*argument)
+            .is_some_and(|found| found != *argument)
+            || input
+                .replace(arm_input)
+                .is_some_and(|found| found != arm_input)
         {
             return None;
         }
@@ -2329,9 +2347,15 @@ fn build_object_long_modulo_any_select(
         };
         let expected = match (lhs, rhs) {
             (ObjectLongSource::Slot(slot), ObjectLongSource::Constant(expected))
-                if slot == remainder => expected,
+                if slot == remainder =>
+            {
+                expected
+            }
             (ObjectLongSource::Constant(expected), ObjectLongSource::Slot(slot))
-                if slot == remainder => expected,
+                if slot == remainder =>
+            {
+                expected
+            }
             _ => break,
         };
         let ObjectLongOp::JumpIfTrue {
@@ -2365,7 +2389,10 @@ fn build_object_long_modulo_any_select(
     else {
         return None;
     };
-    let ObjectLongOp::Jump { target: branch_target } = operations[ip + 1] else {
+    let ObjectLongOp::Jump {
+        target: branch_target,
+    } = operations[ip + 1]
+    else {
         return None;
     };
     if match_target? as usize != ip + 2 || branch_target as usize != ip + 3 {
@@ -2478,9 +2505,15 @@ fn build_object_long_weighted_string_score(
     };
     let additive_input = match (base_lhs, base_rhs) {
         (ObjectLongSource::Slot(slot), input)
-            if slot == multiply_result && direct_source(input) => input,
+            if slot == multiply_result && direct_source(input) =>
+        {
+            input
+        }
         (input, ObjectLongSource::Slot(slot))
-            if slot == multiply_result && direct_source(input) => input,
+            if slot == multiply_result && direct_source(input) =>
+        {
+            input
+        }
         _ => return None,
     };
     let ObjectLongOp::IntDiv {
@@ -2558,9 +2591,15 @@ fn build_object_long_weighted_string_score(
         };
         let addend = match (lhs, rhs) {
             (ObjectLongSource::Slot(slot), ObjectLongSource::Constant(addend))
-                if slot == accumulator => addend,
+                if slot == accumulator =>
+            {
+                addend
+            }
             (ObjectLongSource::Constant(addend), ObjectLongSource::Slot(slot))
-                if slot == accumulator => addend,
+                if slot == accumulator =>
+            {
+                addend
+            }
             _ => return None,
         };
         if !matches!(
@@ -2575,8 +2614,7 @@ fn build_object_long_weighted_string_score(
         string_adjustments.push(ObjectLongStringAdjustment { literal, addend });
 
         let after_body = ip + 4;
-        if let Some(ObjectLongOp::Jump { target: end_target }) =
-            operations.get(after_body).copied()
+        if let Some(ObjectLongOp::Jump { target: end_target }) = operations.get(after_body).copied()
         {
             if target as usize != after_body + 1
                 || string_end_target.is_some_and(|target| target != end_target)
@@ -2631,9 +2669,15 @@ fn build_object_long_weighted_string_score(
         };
         let addend = match (add_lhs, add_rhs) {
             (ObjectLongSource::Slot(slot), ObjectLongSource::Constant(addend))
-                if slot == accumulator => addend,
+                if slot == accumulator =>
+            {
+                addend
+            }
             (ObjectLongSource::Constant(addend), ObjectLongSource::Slot(slot))
-                if slot == accumulator => addend,
+                if slot == accumulator =>
+            {
+                addend
+            }
             _ => return None,
         };
         if !matches!(
@@ -2683,9 +2727,7 @@ fn build_object_long_weighted_string_score(
 /// stays in checked Long operations. Keeping one plan operation per canonical
 /// instruction makes forward branches exact and leaves every unsupported edge
 /// on the ordinary PHP executor.
-fn build_object_long_function_plan(
-    function: &UserFunction,
-) -> Option<Box<ObjectLongFunctionPlan>> {
+fn build_object_long_function_plan(function: &UserFunction) -> Option<Box<ObjectLongFunctionPlan>> {
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
@@ -2750,7 +2792,11 @@ fn build_object_long_function_plan(
                 let source = if instruction.op1_type != OpType::Cv
                     && instruction.op2_type == OpType::Const
                 {
-                    match op_array.literals.get(instruction.op2 as usize)?.value_type() {
+                    match op_array
+                        .literals
+                        .get(instruction.op2 as usize)?
+                        .value_type()
+                    {
                         crate::value::ValueType::False => ObjectLongSource::Constant(0),
                         crate::value::ValueType::True => ObjectLongSource::Constant(1),
                         _ => object_long_source(
@@ -2925,9 +2971,7 @@ fn build_object_long_function_plan(
                 }
             }
             OpCode::JmpZ_Eq_CvConst | OpCode::JmpNZ_Eq_CvConst => {
-                if instruction.op1_type != OpType::Cv
-                    || instruction.op2_type != OpType::Const
-                {
+                if instruction.op1_type != OpType::Cv || instruction.op2_type != OpType::Const {
                     return None;
                 }
                 let slot = instruction.op1 as u32;
@@ -2975,9 +3019,8 @@ fn build_object_long_function_plan(
                 }
             }
             OpCode::DirectInternalCall2 => {
-                if crate::builtin_metadata::DirectInternalKind::from_id(
-                    instruction.extended_value,
-                ) != Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
+                if crate::builtin_metadata::DirectInternalKind::from_id(instruction.extended_value)
+                    != Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
                     || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
                 {
                     return None;
@@ -3036,17 +3079,15 @@ fn build_object_long_function_plan(
                     target: target as u16,
                 }
             }
-            OpCode::Return if instruction.extended_value != 0 => {
-                ObjectLongOp::Return {
-                    value: object_long_source(
-                        function,
-                        &initialized,
-                        &mut long_argument_mask,
-                        instruction.op1_type,
-                        instruction.op1,
-                    )?,
-                }
-            }
+            OpCode::Return if instruction.extended_value != 0 => ObjectLongOp::Return {
+                value: object_long_source(
+                    function,
+                    &initialized,
+                    &mut long_argument_mask,
+                    instruction.op1_type,
+                    instruction.op1,
+                )?,
+            },
             OpCode::Return => ObjectLongOp::Bail,
             _ => return None,
         };
@@ -3065,11 +3106,8 @@ fn build_object_long_function_plan(
 
     let string_intdiv_select = build_object_long_string_intdiv_select(&operations);
     let modulo_any_select = build_object_long_modulo_any_select(&operations);
-    let weighted_string_score = build_object_long_weighted_string_score(
-        &operations,
-        first_argument,
-        argument_end,
-    );
+    let weighted_string_score =
+        build_object_long_weighted_string_score(&operations, first_argument, argument_end);
     Some(Box::new(ObjectLongFunctionPlan {
         public_args: public_args as u8,
         long_argument_mask,
@@ -3106,23 +3144,29 @@ fn object_array_source(
             let argument_end = first_argument + common.sig.public_arity();
             if slot >= first_argument && slot < argument_end {
                 Some(ObjectArraySource::Argument((slot - first_argument) as u8))
-            } else if initialized_long.get(slot as usize).copied().unwrap_or(false) {
+            } else if initialized_long
+                .get(slot as usize)
+                .copied()
+                .unwrap_or(false)
+            {
                 Some(ObjectArraySource::LongSlot(operand))
             } else {
                 aliases.get(slot as usize).copied().flatten()
             }
         }
-        OpType::Tmp | OpType::Var => aliases
-            .get(operand as usize)
-            .copied()
-            .flatten()
-            .or_else(|| {
-                initialized_long
-                    .get(operand as usize)
-                    .copied()
-                    .filter(|initialized| *initialized)
-                    .map(|_| ObjectArraySource::LongSlot(operand))
-            }),
+        OpType::Tmp | OpType::Var => {
+            aliases
+                .get(operand as usize)
+                .copied()
+                .flatten()
+                .or_else(|| {
+                    initialized_long
+                        .get(operand as usize)
+                        .copied()
+                        .filter(|initialized| *initialized)
+                        .map(|_| ObjectArraySource::LongSlot(operand))
+                })
+        }
         OpType::Unused => None,
     }
 }
@@ -3471,7 +3515,10 @@ pub(crate) fn build_scalar_string_function_plan(
         || common.plan.ret != ReturnStrategy::Fast
         || instructions.len() > 32
         || !common.sig.param_type_hints.iter().all(|hint| {
-            matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int)
+            matches!(
+                hint,
+                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+            )
         })
         || !matches!(
             common.sig.return_type_hint,
@@ -3639,9 +3686,7 @@ pub(crate) fn build_scalar_string_function_plan(
             ip,
             None,
         ),
-        OpCode::JmpZ_Eq_CvConst
-        | OpCode::JmpZ_Lt_CvConst
-        | OpCode::JmpZ_Le_CvConst => (
+        OpCode::JmpZ_Eq_CvConst | OpCode::JmpZ_Lt_CvConst | OpCode::JmpZ_Le_CvConst => (
             match condition_instruction.opcode {
                 OpCode::JmpZ_Eq_CvConst => ScalarLongConditionKind::Equal,
                 OpCode::JmpZ_Lt_CvConst => ScalarLongConditionKind::LessThan,
@@ -3785,11 +3830,7 @@ fn composed_scalar_long_source(
         operand,
     )?;
     match source {
-        ScalarLongSource::Input(index)
-            if long_argument_mask & (1u8 << index) == 0 =>
-        {
-            None
-        }
+        ScalarLongSource::Input(index) if long_argument_mask & (1u8 << index) == 0 => None,
         _ => Some(source),
     }
 }
@@ -3806,8 +3847,7 @@ fn bind_composed_scalar_long_local(
     let destination = instruction.op1 as u32;
     let first_argument = function.common.sig.this_offset;
     let argument_end = first_argument + function.common.sig.public_arity();
-    if destination < first_argument
-        || (destination >= first_argument && destination < argument_end)
+    if destination < first_argument || (destination >= first_argument && destination < argument_end)
     {
         return None;
     }
@@ -3832,11 +3872,8 @@ fn build_composed_scalar_long_function_plan(
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
-    let (long_argument_mask, object_argument_mask) =
-        composed_scalar_argument_masks(function)?;
-    if common.plan.ret != ReturnStrategy::Fast
-        || op_array.instructions.len() > 32
-    {
+    let (long_argument_mask, object_argument_mask) = composed_scalar_argument_masks(function)?;
+    if common.plan.ret != ReturnStrategy::Fast || op_array.instructions.len() > 32 {
         return None;
     }
 
@@ -3870,7 +3907,10 @@ fn build_composed_scalar_long_function_plan(
             }));
         }
 
-        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+        if matches!(
+            instruction.opcode,
+            OpCode::InitFcall | OpCode::InitMethodCall
+        ) {
             let (num_args, parameter_offset, guard) = match instruction.opcode {
                 OpCode::InitFcall => (
                     instruction.op1 as usize,
@@ -3881,8 +3921,7 @@ fn build_composed_scalar_long_function_plan(
                 ),
                 OpCode::InitMethodCall if instruction.op1_type == OpType::Cv => {
                     let receiver_cv = instruction.op1 as u32;
-                    let receiver_index = receiver_cv
-                        .checked_sub(common.sig.this_offset)?;
+                    let receiver_index = receiver_cv.checked_sub(common.sig.this_offset)?;
                     if receiver_index >= public_args
                         || object_argument_mask & (1u8 << receiver_index) == 0
                     {
@@ -3934,10 +3973,7 @@ fn build_composed_scalar_long_function_plan(
                 guard,
                 arguments: arguments.into_boxed_slice(),
             }));
-            temporary_results.insert(
-                do_fcall.result,
-                ScalarLongSource::Temporary(result_index),
-            );
+            temporary_results.insert(do_fcall.result, ScalarLongSource::Temporary(result_index));
             contains_call = true;
             ip += num_args + 2;
             continue;
@@ -4001,9 +4037,7 @@ pub(crate) fn build_composed_typed_long_function_plan(
     let public_args = common.sig.public_arity();
     let (long_argument_mask, object_argument_mask, string_argument_mask) =
         composed_typed_argument_masks(function)?;
-    if common.plan.ret != ReturnStrategy::Fast
-        || op_array.instructions.len() > 32
-    {
+    if common.plan.ret != ReturnStrategy::Fast || op_array.instructions.len() > 32 {
         return None;
     }
 
@@ -4047,7 +4081,10 @@ pub(crate) fn build_composed_typed_long_function_plan(
             }));
         }
 
-        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+        if matches!(
+            instruction.opcode,
+            OpCode::InitFcall | OpCode::InitMethodCall
+        ) {
             let (num_args, parameter_offset, guard) = match instruction.opcode {
                 OpCode::InitFcall => (
                     instruction.op1 as usize,
@@ -4058,8 +4095,7 @@ pub(crate) fn build_composed_typed_long_function_plan(
                 ),
                 OpCode::InitMethodCall if instruction.op1_type == OpType::Cv => {
                     let receiver_cv = instruction.op1 as u32;
-                    let receiver_index = receiver_cv
-                        .checked_sub(common.sig.this_offset)?;
+                    let receiver_index = receiver_cv.checked_sub(common.sig.this_offset)?;
                     if receiver_index >= public_args
                         || object_argument_mask & (1u8 << receiver_index) == 0
                     {
@@ -4113,16 +4149,11 @@ pub(crate) fn build_composed_typed_long_function_plan(
             if do_fcall.known_result_type() == KnownScalarType::String {
                 operations.push(ComposedTypedLongOp::StringCall(call));
                 contains_string = true;
-                string_results.insert(
-                    do_fcall.result,
-                    ScalarStringSource::Temporary(result_index),
-                );
+                string_results.insert(do_fcall.result, ScalarStringSource::Temporary(result_index));
             } else {
                 operations.push(ComposedTypedLongOp::Call(call));
-                temporary_results.insert(
-                    do_fcall.result,
-                    ScalarLongSource::Temporary(result_index),
-                );
+                temporary_results
+                    .insert(do_fcall.result, ScalarLongSource::Temporary(result_index));
             }
             ip += num_args + 2;
             continue;
@@ -4156,7 +4187,10 @@ pub(crate) fn build_composed_typed_long_function_plan(
             continue;
         }
 
-        if matches!(instruction.opcode, OpCode::Concat | OpCode::Concat_StringString) {
+        if matches!(
+            instruction.opcode,
+            OpCode::Concat | OpCode::Concat_StringString
+        ) {
             if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
                 || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
             {
@@ -4178,8 +4212,13 @@ pub(crate) fn build_composed_typed_long_function_plan(
                 };
             let source = *string_results.get(&source_operand)?;
             let literal_len = u32::try_from(
-                op_array.literals.get(literal_operand as usize)?.as_str()?.len(),
-            ).ok()?;
+                op_array
+                    .literals
+                    .get(literal_operand as usize)?
+                    .as_str()?
+                    .len(),
+            )
+            .ok()?;
             let result_index = operations.len() as u8;
             operations.push(ComposedTypedLongOp::StringConcatLiteral {
                 value: source,
@@ -4193,8 +4232,10 @@ pub(crate) fn build_composed_typed_long_function_plan(
             continue;
         }
 
-        if matches!(instruction.opcode, OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String)
-            && matches!(instruction.op1_type, OpType::Tmp | OpType::Var | OpType::Cv)
+        if matches!(
+            instruction.opcode,
+            OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String
+        ) && matches!(instruction.op1_type, OpType::Tmp | OpType::Var | OpType::Cv)
         {
             let source = *string_results.get(&instruction.op1)?;
             if operations.len() == COMPOSED_SCALAR_LONG_PLAN_MAX_OPS
@@ -4268,7 +4309,10 @@ fn build_binary_long_recursion_plan(
         || common.sig.is_variadic
         || common.sig.ref_args != 0
         || !has_no_type_hints
-        || !matches!(common.sig.return_type_hint, ParamTypeHint::None | ParamTypeHint::Mixed)
+        || !matches!(
+            common.sig.return_type_hint,
+            ParamTypeHint::None | ParamTypeHint::Mixed
+        )
         || op_array.is_generator
         || !op_array.global_vars.is_empty()
         || !op_array.static_vars.is_empty()
@@ -4306,9 +4350,9 @@ fn build_binary_long_recursion_plan(
     }
     let base = match base_return.op1_type {
         OpType::Cv if base_return.op1 == argument_cv => LongRecursiveBase::Argument,
-        OpType::Const => LongRecursiveBase::Constant(
-            op_array.literals.get(base_return.op1 as usize)?.as_long()?,
-        ),
+        OpType::Const => {
+            LongRecursiveBase::Constant(op_array.literals.get(base_return.op1 as usize)?.as_long()?)
+        }
         _ => return None,
     };
 
@@ -4333,10 +4377,7 @@ fn build_binary_long_recursion_plan(
         {
             return None;
         }
-        let target_name = op_array
-            .literals
-            .get(initializer.op2 as usize)?
-            .as_str()?;
+        let target_name = op_array.literals.get(initializer.op2 as usize)?.as_str()?;
         if !target_name.eq_ignore_ascii_case(self_name) {
             return None;
         }
@@ -4355,10 +4396,7 @@ fn build_binary_long_recursion_plan(
         {
             return None;
         }
-        let delta = op_array
-            .literals
-            .get(subtract.op2 as usize)?
-            .as_long()?;
+        let delta = op_array.literals.get(subtract.op2 as usize)?.as_long()?;
         if delta <= 0 {
             return None;
         }
@@ -4443,9 +4481,7 @@ fn property_name<'a>(op_array: &'a OpArray, instruction: &Instruction) -> Option
 /// `return $this->property;`.  Keeping this deliberately narrower than the
 /// discarded-return property planner means the runtime may safely materialize
 /// the fetched value without replaying any other method behavior.
-fn build_property_getter_method_plan(
-    function: &UserFunction,
-) -> Option<PropertyGetterMethodPlan> {
+fn build_property_getter_method_plan(function: &UserFunction) -> Option<PropertyGetterMethodPlan> {
     let common = &function.common;
     let op_array = &function.op_array;
     if !common.supports_scalar_long_plan()
@@ -4483,9 +4519,7 @@ fn build_property_getter_method_plan(
     Some(PropertyGetterMethodPlan { cache_ip: 0 })
 }
 
-fn build_property_init_method_plan(
-    function: &UserFunction,
-) -> Option<Box<PropertyInitMethodPlan>> {
+fn build_property_init_method_plan(function: &UserFunction) -> Option<Box<PropertyInitMethodPlan>> {
     let common = &function.common;
     let op_array = &function.op_array;
     let public_args = common.sig.public_arity();
@@ -4602,8 +4636,15 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
         if instruction.opcode == OpCode::FetchObjR && ip + 2 < instructions.len() {
             let arithmetic = &instructions[ip + 1];
             let assign = &instructions[ip + 2];
-            if matches!(arithmetic.opcode, OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp | OpCode::Sub | OpCode::Sub_TmpTmp | OpCode::Sub_CvConst)
-                && assign.opcode == OpCode::AssignObjProp
+            if matches!(
+                arithmetic.opcode,
+                OpCode::Add
+                    | OpCode::Add_TmpTmp
+                    | OpCode::Add_CvTmp
+                    | OpCode::Sub
+                    | OpCode::Sub_TmpTmp
+                    | OpCode::Sub_CvConst
+            ) && assign.opcode == OpCode::AssignObjProp
                 && arithmetic.result_type != OpType::Unused
                 && assign.result_type == arithmetic.result_type
                 && assign.result == arithmetic.result
@@ -4632,11 +4673,16 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                         ip + 2,
                         3,
                     )?;
-                    operations.push(if matches!(arithmetic.opcode, OpCode::Sub | OpCode::Sub_TmpTmp | OpCode::Sub_CvConst) {
-                        LongPropertyOp::Sub { property, rhs }
-                    } else {
-                        LongPropertyOp::Add { property, rhs }
-                    });
+                    operations.push(
+                        if matches!(
+                            arithmetic.opcode,
+                            OpCode::Sub | OpCode::Sub_TmpTmp | OpCode::Sub_CvConst
+                        ) {
+                            LongPropertyOp::Sub { property, rhs }
+                        } else {
+                            LongPropertyOp::Add { property, rhs }
+                        },
+                    );
                     ip += 3;
                     continue;
                 }
@@ -4648,8 +4694,10 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
             let comparison = &instructions[ip + 1];
             let branch = &instructions[ip + 2];
             let assign = &instructions[ip + 3];
-            if matches!(comparison.opcode, OpCode::IsSmaller | OpCode::IsSmallerOrEqual)
-                && branch.opcode == OpCode::JmpZ
+            if matches!(
+                comparison.opcode,
+                OpCode::IsSmaller | OpCode::IsSmallerOrEqual
+            ) && branch.opcode == OpCode::JmpZ
                 && branch.op1_type == comparison.result_type
                 && branch.op1 == comparison.result
                 && branch.op2 as usize == ip + 4
@@ -4661,16 +4709,33 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                     let (candidate, is_min) = if comparison.op2_type == instruction.result_type
                         && comparison.op2 == instruction.result
                     {
-                        (long_plan_source(op_array, comparison.op1_type, comparison.op1, public_args), true)
+                        (
+                            long_plan_source(
+                                op_array,
+                                comparison.op1_type,
+                                comparison.op1,
+                                public_args,
+                            ),
+                            true,
+                        )
                     } else if comparison.op1_type == instruction.result_type
                         && comparison.op1 == instruction.result
                     {
-                        (long_plan_source(op_array, comparison.op2_type, comparison.op2, public_args), false)
+                        (
+                            long_plan_source(
+                                op_array,
+                                comparison.op2_type,
+                                comparison.op2,
+                                public_args,
+                            ),
+                            false,
+                        )
                     } else {
                         (None, false)
                     };
                     let candidate = candidate?;
-                    let assigned = long_plan_source(op_array, assign.result_type, assign.result, public_args)?;
+                    let assigned =
+                        long_plan_source(op_array, assign.result_type, assign.result, public_args)?;
                     if candidate != assigned {
                         return None;
                     }
@@ -4682,9 +4747,15 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                         3,
                     )?;
                     operations.push(if is_min {
-                        LongPropertyOp::Min { property, candidate }
+                        LongPropertyOp::Min {
+                            property,
+                            candidate,
+                        }
                     } else {
-                        LongPropertyOp::Max { property, candidate }
+                        LongPropertyOp::Max {
+                            property,
+                            candidate,
+                        }
                     });
                     ip += 4;
                     continue;
@@ -4701,13 +4772,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                 && ret.op1 == instruction.result
             {
                 let name = property_name(op_array, instruction)?;
-                register_long_plan_property(
-                    &mut properties,
-                    &mut property_indices,
-                    name,
-                    ip,
-                    1,
-                )?;
+                register_long_plan_property(&mut properties, &mut property_indices, name, ip, 1)?;
                 ip += 1;
                 continue;
             }
@@ -4722,13 +4787,8 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                 instruction.result,
                 public_args,
             )?;
-            let property = register_long_plan_property(
-                &mut properties,
-                &mut property_indices,
-                name,
-                ip,
-                3,
-            )?;
+            let property =
+                register_long_plan_property(&mut properties, &mut property_indices, name, ip, 3)?;
             operations.push(LongPropertyOp::Set { property, value });
             ip += 1;
             continue;
@@ -4774,7 +4834,11 @@ pub fn make_internal_function(
                 param_names,
                 return_type_hint: ParamTypeHint::None,
             },
-            frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
+            frame: FrameLayout {
+                num_cvs: num_args,
+                num_temps: 0,
+                total_slots,
+            },
             plan: CallPlan {
                 // Fixed-arity internal functions have no VM-level type hints,
                 // references, or variadic packing. DoFcall can therefore run
@@ -4804,12 +4868,7 @@ pub fn make_direct_internal_function(
     required_num_args: u32,
     param_names: Vec<String>,
 ) -> InternalFunction {
-    let mut function = make_internal_function(
-        handler,
-        num_args,
-        required_num_args,
-        param_names,
-    );
+    let mut function = make_internal_function(handler, num_args, required_num_args, param_names);
     function.direct_handler = Some(direct_handler);
     function
 }
@@ -4859,17 +4918,14 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
     function.long_property_plan = build_long_property_method_plan(&function);
     function.property_getter_plan = build_property_getter_method_plan(&function);
     function.property_init_plan = build_property_init_method_plan(&function);
-    function.binary_long_recursion_plan =
-        build_binary_long_recursion_plan(&function, method_name);
+    function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, method_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
     function.scalar_double_plan = build_scalar_double_function_plan(&function);
-    function.composed_scalar_double_plan =
-        build_composed_scalar_double_function_plan(&function);
+    function.composed_scalar_double_plan = build_composed_scalar_double_function_plan(&function);
     function.object_long_plan = build_object_long_function_plan(&function);
     function.object_array_plan = build_object_array_function_plan(&function);
     function.scalar_string_plan = build_scalar_string_function_plan(&function);
-    function.composed_scalar_long_plan =
-        build_composed_scalar_long_function_plan(&function);
+    function.composed_scalar_long_plan = build_composed_scalar_long_function_plan(&function);
     function.composed_typed_long_plan = build_composed_typed_long_function_plan(&function);
 
     function
@@ -4898,7 +4954,11 @@ pub fn make_internal_method(
                 param_names,
                 return_type_hint: ParamTypeHint::None,
             },
-            frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
+            frame: FrameLayout {
+                num_cvs: num_args,
+                num_temps: 0,
+                total_slots,
+            },
             plan: CallPlan {
                 call: CallStrategy::Fast,
                 ret: ReturnStrategy::Full,
@@ -4936,7 +4996,11 @@ pub fn make_internal_function_ref(
                 param_names,
                 return_type_hint: ParamTypeHint::None,
             },
-            frame: FrameLayout { num_cvs: num_args, num_temps: 0, total_slots },
+            frame: FrameLayout {
+                num_cvs: num_args,
+                num_temps: 0,
+                total_slots,
+            },
             plan: CallPlan {
                 call: CallStrategy::Full,
                 ret: ReturnStrategy::Full,
@@ -4973,7 +5037,11 @@ pub fn make_internal_function_variadic(
                 param_names,
                 return_type_hint: ParamTypeHint::None,
             },
-            frame: FrameLayout { num_cvs, num_temps: 0, total_slots },
+            frame: FrameLayout {
+                num_cvs,
+                num_temps: 0,
+                total_slots,
+            },
             plan: CallPlan {
                 call: CallStrategy::Full,
                 ret: ReturnStrategy::Full,

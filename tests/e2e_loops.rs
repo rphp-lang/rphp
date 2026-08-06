@@ -1,5 +1,4 @@
 /// E2E tests: for, do...while, break, continue, inc/dec, nested loops.
-
 mod common;
 use common::{run_php, run_php_expect_error};
 
@@ -40,7 +39,9 @@ fn test_e2e_for_no_body_iterations() {
 #[test]
 fn test_e2e_for_with_function() {
     assert_eq!(
-        run_php("<?php function double($x) { return $x * 2; } for ($i = 1; $i <= 3; $i++) { echo double($i); }"),
+        run_php(
+            "<?php function double($x) { return $x * 2; } for ($i = 1; $i <= 3; $i++) { echo double($i); }"
+        ),
         "246"
     );
 }
@@ -206,7 +207,9 @@ fn test_e2e_empty_typed_double_loop_skips_argument_evaluation() {
 #[test]
 fn test_e2e_for_nested() {
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 2; $j++) { echo $i . $j; } }"),
+        run_php(
+            "<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 2; $j++) { echo $i . $j; } }"
+        ),
         "000110112021"
     );
 }
@@ -357,14 +360,19 @@ fn test_e2e_continue_in_do_while() {
 fn test_e2e_break_in_function_inside_loop_error() {
     // Function body gets its own Compiler — loop_stack should NOT leak into it.
     // break inside a function (even if defined inside a loop) must be a compile error.
+    use rphp::compiler::compile::Compiler;
     use rphp::lexer::Lexer;
     use rphp::parser::Parser;
-    use rphp::compiler::compile::Compiler;
 
-    let tokens = Lexer::new("<?php for ($i = 0; $i < 3; $i++) { function bad() { break; } }").tokenize().unwrap();
+    let tokens = Lexer::new("<?php for ($i = 0; $i < 3; $i++) { function bad() { break; } }")
+        .tokenize()
+        .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts);
-    assert!(result.is_err(), "break inside function body should be a compile error");
+    assert!(
+        result.is_err(),
+        "break inside function body should be a compile error"
+    );
     assert!(result.err().unwrap().contains("break"));
 }
 
@@ -373,7 +381,9 @@ fn test_e2e_break_in_function_inside_loop_error() {
 #[test]
 fn test_e2e_break_inner_loop() {
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { break; } echo $j; } }"),
+        run_php(
+            "<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { break; } echo $j; } }"
+        ),
         "000"
     );
 }
@@ -381,7 +391,9 @@ fn test_e2e_break_inner_loop() {
 #[test]
 fn test_e2e_continue_inner_loop() {
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 2; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { continue; } echo $j; } }"),
+        run_php(
+            "<?php for ($i = 0; $i < 2; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { continue; } echo $j; } }"
+        ),
         "0202"
     );
 }
@@ -392,7 +404,9 @@ fn test_e2e_continue_inner_loop() {
 fn test_e2e_break_2_exits_outer_loop() {
     // break 2 inside inner loop exits both loops
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { break 2; } echo $j; } } echo 'done';"),
+        run_php(
+            "<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { break 2; } echo $j; } } echo 'done';"
+        ),
         "0done"
     );
 }
@@ -400,7 +414,9 @@ fn test_e2e_break_2_exits_outer_loop() {
 #[test]
 fn test_e2e_break_2_in_while() {
     assert_eq!(
-        run_php("<?php $i = 0; while ($i < 5) { $j = 0; while ($j < 5) { if ($i == 1 && $j == 2) { break 2; } $j++; } $i++; } echo $i . $j;"),
+        run_php(
+            "<?php $i = 0; while ($i < 5) { $j = 0; while ($j < 5) { if ($i == 1 && $j == 2) { break 2; } $j++; } $i++; } echo $i . $j;"
+        ),
         "12"
     );
 }
@@ -409,7 +425,9 @@ fn test_e2e_break_2_in_while() {
 fn test_e2e_continue_2_skips_outer_iteration() {
     // continue 2 inside inner loop continues the outer loop
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { continue 2; } echo $i . $j; } echo 'X'; }"),
+        run_php(
+            "<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { if ($j == 1) { continue 2; } echo $i . $j; } echo 'X'; }"
+        ),
         "001020"
     );
 }
@@ -419,7 +437,9 @@ fn test_e2e_break_2_switch_in_for() {
     // break 2 inside switch inside for loop — exits the for loop
     // Inspired by php-src/tests/lang/021.phpt
     assert_eq!(
-        run_php("<?php for ($i = 0; $i <= 5; $i++) { switch ($i) { case 3: break 2; default: echo $i; break; } } echo 'end';"),
+        run_php(
+            "<?php for ($i = 0; $i <= 5; $i++) { switch ($i) { case 3: break 2; default: echo $i; break; } } echo 'end';"
+        ),
         "012end"
     );
 }
@@ -428,7 +448,9 @@ fn test_e2e_break_2_switch_in_for() {
 fn test_e2e_continue_2_switch_in_for() {
     // continue 2 inside switch inside for loop — continues the for loop
     assert_eq!(
-        run_php("<?php $r = ''; for ($i = 0; $i < 5; $i++) { switch ($i) { case 2: continue 2; default: $r .= $i; break; } } echo $r;"),
+        run_php(
+            "<?php $r = ''; for ($i = 0; $i < 5; $i++) { switch ($i) { case 2: continue 2; default: $r .= $i; break; } } echo $r;"
+        ),
         "0134"
     );
 }
@@ -436,7 +458,9 @@ fn test_e2e_continue_2_switch_in_for() {
 #[test]
 fn test_e2e_break_3_triple_nested() {
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { for ($k = 0; $k < 3; $k++) { if ($k == 1) { break 3; } echo $k; } } } echo 'end';"),
+        run_php(
+            "<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { for ($k = 0; $k < 3; $k++) { if ($k == 1) { break 3; } echo $k; } } } echo 'end';"
+        ),
         "0end"
     );
 }
@@ -461,32 +485,45 @@ fn test_e2e_continue_1_same_as_continue() {
 #[test]
 fn test_e2e_break_too_deep_compile_error() {
     // break 3 in a 2-deep nesting should fail
+    use rphp::compiler::compile::Compiler;
     use rphp::lexer::Lexer;
     use rphp::parser::Parser;
-    use rphp::compiler::compile::Compiler;
 
-    let tokens = Lexer::new("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { break 3; } }").tokenize().unwrap();
+    let tokens =
+        Lexer::new("<?php for ($i = 0; $i < 3; $i++) { for ($j = 0; $j < 3; $j++) { break 3; } }")
+            .tokenize()
+            .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts);
-    assert!(result.is_err(), "break 3 in 2-deep nesting should be a compile error");
+    assert!(
+        result.is_err(),
+        "break 3 in 2-deep nesting should be a compile error"
+    );
 }
 
 #[test]
 fn test_e2e_continue_too_deep_compile_error() {
+    use rphp::compiler::compile::Compiler;
     use rphp::lexer::Lexer;
     use rphp::parser::Parser;
-    use rphp::compiler::compile::Compiler;
 
-    let tokens = Lexer::new("<?php while (1) { continue 2; }").tokenize().unwrap();
+    let tokens = Lexer::new("<?php while (1) { continue 2; }")
+        .tokenize()
+        .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts);
-    assert!(result.is_err(), "continue 2 in 1-deep nesting should be a compile error");
+    assert!(
+        result.is_err(),
+        "continue 2 in 1-deep nesting should be a compile error"
+    );
 }
 
 #[test]
 fn test_e2e_do_while_break_2() {
     assert_eq!(
-        run_php("<?php $i = 0; while ($i < 3) { $j = 0; do { if ($j == 1) { break 2; } echo $j; $j++; } while ($j < 3); $i++; } echo 'end';"),
+        run_php(
+            "<?php $i = 0; while ($i < 3) { $j = 0; do { if ($j == 1) { break 2; } echo $j; $j++; } while ($j < 3); $i++; } echo 'end';"
+        ),
         "0end"
     );
 }
@@ -494,7 +531,9 @@ fn test_e2e_do_while_break_2() {
 #[test]
 fn test_e2e_continue_2_do_while_in_for() {
     assert_eq!(
-        run_php("<?php for ($i = 0; $i < 3; $i++) { $j = 0; do { if ($j == 1) { continue 2; } echo $i . $j; $j++; } while ($j < 3); echo 'X'; }"),
+        run_php(
+            "<?php for ($i = 0; $i < 3; $i++) { $j = 0; do { if ($j == 1) { continue 2; } echo $i . $j; $j++; } while ($j < 3); echo 'X'; }"
+        ),
         "001020"
     );
 }

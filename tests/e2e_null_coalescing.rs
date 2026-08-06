@@ -34,17 +34,26 @@ fn test_null_coalescing_false_is_not_null() {
 
 #[test]
 fn test_null_coalescing_chain() {
-    assert_eq!(run_php("<?php $a = null; $b = null; echo $a ?? $b ?? 'end';"), "end");
+    assert_eq!(
+        run_php("<?php $a = null; $b = null; echo $a ?? $b ?? 'end';"),
+        "end"
+    );
 }
 
 #[test]
 fn test_null_coalescing_chain_first_wins() {
-    assert_eq!(run_php("<?php $a = 'first'; $b = 'second'; echo $a ?? $b ?? 'end';"), "first");
+    assert_eq!(
+        run_php("<?php $a = 'first'; $b = 'second'; echo $a ?? $b ?? 'end';"),
+        "first"
+    );
 }
 
 #[test]
 fn test_null_coalescing_chain_middle_wins() {
-    assert_eq!(run_php("<?php $a = null; $b = 'middle'; echo $a ?? $b ?? 'end';"), "middle");
+    assert_eq!(
+        run_php("<?php $a = null; $b = 'middle'; echo $a ?? $b ?? 'end';"),
+        "middle"
+    );
 }
 
 #[test]
@@ -59,5 +68,8 @@ fn test_null_coalescing_with_expression() {
 
 #[test]
 fn test_null_coalescing_string_value() {
-    assert_eq!(run_php("<?php $name = null; echo 'Hello ' . ($name ?? 'World');"), "Hello World");
+    assert_eq!(
+        run_php("<?php $name = null; echo 'Hello ' . ($name ?? 'World');"),
+        "Hello World"
+    );
 }

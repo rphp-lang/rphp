@@ -9,9 +9,7 @@ use std::fmt;
 
 use serde::de::{DeserializeSeed, Deserializer, MapAccess, SeqAccess, Visitor};
 
-use crate::value::{
-    canonical_decimal_array_key, DynamicPropertyMap, PhpArray, PhpObject, Value,
-};
+use crate::value::{DynamicPropertyMap, PhpArray, PhpObject, Value, canonical_decimal_array_key};
 
 #[derive(Clone, Copy)]
 struct PhpValueSeed {
@@ -114,8 +112,7 @@ impl<'de> Visitor<'de> for PhpValueVisitor {
         A: MapAccess<'de>,
     {
         if self.associative {
-            let mut array =
-                PhpArray::with_deferred_hash_capacity(map.size_hint().unwrap_or(0));
+            let mut array = PhpArray::with_deferred_hash_capacity(map.size_hint().unwrap_or(0));
             while let Some(key) = map.next_key::<String>()? {
                 let value = map.next_value_seed(PhpValueSeed::new(true))?;
                 if let Some(key) = canonical_decimal_array_key(&key) {
@@ -144,7 +141,9 @@ where
         let value = map.next_value_seed(PhpValueSeed::new(false))?;
         properties.insert_owned(key, value);
     }
-    Ok(Value::object(PhpObject::std_class_from_properties(properties)))
+    Ok(Value::object(PhpObject::std_class_from_properties(
+        properties,
+    )))
 }
 
 pub(super) fn decode_php_value(input: &str, associative: bool) -> Result<Value, serde_json::Error> {

@@ -13,7 +13,9 @@ fn compile_constructor_source(source: &str) -> rphp::compiler::compile::CompileR
 
 #[test]
 fn test_constructor_basic() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Dog {
     public $name;
     public function __construct($name) {
@@ -22,12 +24,17 @@ class Dog {
 }
 $d = new Dog("Rex");
 echo $d->name;
-"#), "Rex");
+"#
+        ),
+        "Rex"
+    );
 }
 
 #[test]
 fn test_constructor_multiple_args() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Point {
     public $x;
     public $y;
@@ -38,12 +45,17 @@ class Point {
 }
 $p = new Point(3, 4);
 echo $p->x . "," . $p->y;
-"#), "3,4");
+"#
+        ),
+        "3,4"
+    );
 }
 
 #[test]
 fn test_constructor_with_method() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Greeter {
     public $name;
     public function __construct($name) {
@@ -55,12 +67,17 @@ class Greeter {
 }
 $g = new Greeter("World");
 echo $g->greet();
-"#), "Hello World");
+"#
+        ),
+        "Hello World"
+    );
 }
 
 #[test]
 fn test_constructor_no_args() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Counter {
     public $count;
     public function __construct() {
@@ -74,12 +91,17 @@ $c = new Counter();
 $c->increment();
 $c->increment();
 echo $c->count;
-"#), "2");
+"#
+        ),
+        "2"
+    );
 }
 
 #[test]
 fn test_constructor_default_overridden() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Config {
     public $timeout = 30;
     public function __construct($t) {
@@ -88,22 +110,32 @@ class Config {
 }
 $c = new Config(60);
 echo $c->timeout;
-"#), "60");
+"#
+        ),
+        "60"
+    );
 }
 
 #[test]
 fn test_no_constructor_no_args() {
     // Class without constructor — new still works
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Empty2 {}
 $e = new Empty2();
 echo "ok";
-"#), "ok");
+"#
+        ),
+        "ok"
+    );
 }
 
 #[test]
 fn test_multiple_objects_different_constructor_args() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Box {
     public $value;
     public function __construct($v) {
@@ -113,36 +145,50 @@ class Box {
 $a = new Box(10);
 $b = new Box(20);
 echo $a->value . " " . $b->value;
-"#), "10 20");
+"#
+        ),
+        "10 20"
+    );
 }
 
 #[test]
 fn test_no_constructor_with_args_silently_ignored() {
     // PHP evaluates arg expressions (side effects run) but ignores values
     // when class has no __construct
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Foo {}
 function side() { echo "S"; return 1; }
 $f = new Foo(side());
 echo "X";
-"#), "SX");
+"#
+        ),
+        "SX"
+    );
 }
 
 #[test]
 fn test_no_constructor_negative_cache_keeps_argument_side_effects() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class PlainBox { public $value = 7; }
 $sum = 0;
 for ($i = 0; $i < 5; $i++) {
     $box = new PlainBox($sum = $sum + 1);
 }
 echo $sum . ':' . $box->value;
-"#), "5:7");
+"#
+        ),
+        "5:7"
+    );
 }
 
 #[test]
 fn test_declared_property_constructor_gets_init_plan() {
-    let result = compile_constructor_source(r#"<?php
+    let result = compile_constructor_source(
+        r#"<?php
 class Request {
     public $subtotal;
     public $level;
@@ -153,7 +199,8 @@ class Request {
         $this->region = $region;
     }
 }
-"#);
+"#,
+    );
     let constructor = result.class_defs[0]
         .methods
         .iter()
@@ -170,7 +217,9 @@ class Request {
 
 #[test]
 fn test_constructor_init_plan_preserves_named_type_and_dynamic_fallbacks() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class DeclaredDto {
     public $first;
     public $second;
@@ -191,5 +240,8 @@ try {
 } catch (TypeError $error) {
     echo 'typed';
 }
-"#), "3:4|19|typed");
+"#
+        ),
+        "3:4|19|typed"
+    );
 }

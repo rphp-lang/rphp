@@ -88,15 +88,10 @@ impl<'a> QuickForeachObjectPropertyBinding<'a> {
             for (index, projection) in plan.projections.iter().flatten().enumerate() {
                 let cache = op_array.cache.get(projection.cache_ip)?;
                 let instruction = op_array.instructions.get(projection.cache_ip)?;
-                if !cache.is_dynamic_property_read()
-                    || cache.dynamic_property_layout() != layout
-                {
+                if !cache.is_dynamic_property_read() || cache.dynamic_property_layout() != layout {
                     return None;
                 }
-                names[index] = op_array
-                    .literals
-                    .get(instruction.op2 as usize)?
-                    .as_str()?;
+                names[index] = op_array.literals.get(instruction.op2 as usize)?.as_str()?;
                 positions[index] = cache.dynamic_property_position();
             }
             return Some(Self::Dynamic(QuickForeachDynamicPropertyBinding {
@@ -133,10 +128,7 @@ trait QuickForeachObjectPropertyAccess: Copy {
 
     unsafe fn property_at(self, receiver: &Value, index: usize) -> *const Value;
 
-    unsafe fn guarded_property_pair(
-        self,
-        receiver: &Value,
-    ) -> Option<[*const Value; 2]>;
+    unsafe fn guarded_property_pair(self, receiver: &Value) -> Option<[*const Value; 2]>;
 }
 
 impl QuickForeachObjectPropertyAccess for QuickForeachDeclaredPropertyBinding {
@@ -154,10 +146,7 @@ impl QuickForeachObjectPropertyAccess for QuickForeachDeclaredPropertyBinding {
     }
 
     #[inline(always)]
-    unsafe fn guarded_property_pair(
-        self,
-        _receiver: &Value,
-    ) -> Option<[*const Value; 2]> {
+    unsafe fn guarded_property_pair(self, _receiver: &Value) -> Option<[*const Value; 2]> {
         None
     }
 }
@@ -174,10 +163,10 @@ impl<'a> QuickForeachObjectPropertyAccess for QuickForeachDynamicPropertyBinding
     #[inline(always)]
     unsafe fn property_at(self, receiver: &Value, index: usize) -> *const Value {
         let name = *self.names.get_unchecked(index);
-        let mut property = (*self.positions.get_unchecked(index)).map_or(
-            std::ptr::null(),
-            |position| receiver.object_dynamic_property_at_unchecked(name, position),
-        );
+        let mut property = (*self.positions.get_unchecked(index))
+            .map_or(std::ptr::null(), |position| {
+                receiver.object_dynamic_property_at_unchecked(name, position)
+            });
         if property.is_null() {
             property = receiver.object_dynamic_property_unchecked(name);
         }
@@ -187,10 +176,7 @@ impl<'a> QuickForeachObjectPropertyAccess for QuickForeachDynamicPropertyBinding
     /// Validate one dynamic receiver and resolve both planned projections
     /// without repeating the object or dynamic-storage lookup.
     #[inline(always)]
-    unsafe fn guarded_property_pair(
-        self,
-        receiver: &Value,
-    ) -> Option<[*const Value; 2]> {
+    unsafe fn guarded_property_pair(self, receiver: &Value) -> Option<[*const Value; 2]> {
         if receiver.value_type() != ValueType::Object || receiver.is_reference() {
             return None;
         }
@@ -215,15 +201,9 @@ unsafe fn publish_foreach_object_state(
     term: Option<i64>,
     done: bool,
 ) {
-    Value::write_long(
-        slot_base.add(plan.position_tmp as usize),
-        position as i64,
-    );
+    Value::write_long(slot_base.add(plan.position_tmp as usize), position as i64);
     Value::write_bool(slot_base.add(plan.done_tmp as usize), done);
-    Value::write_long(
-        slot_base.add(plan.accumulator_cv as usize),
-        accumulator,
-    );
+    Value::write_long(slot_base.add(plan.accumulator_cv as usize), accumulator);
     if !receiver.is_null() {
         frame_slot_set(
             frame,
@@ -378,9 +358,7 @@ unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
         let receiver = quick_array.value_at_position(position);
         let next_position = position + 1;
         let property_pair = if BATCH_DYNAMIC_PROPERTIES {
-            let Some(property_pair) =
-                binding.guarded_property_pair(&*receiver)
-            else {
+            let Some(property_pair) = binding.guarded_property_pair(&*receiver) else {
                 publish_foreach_object_state(
                     frame,
                     slot_base,
@@ -436,13 +414,12 @@ unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
                 None
             } else {
                 match projection.kind {
-                    QuickForeachObjectProjectionKind::Long => {
-                        ((*property).value_type() == ValueType::Long)
-                            .then(|| (*property).raw_long())
+                    QuickForeachObjectProjectionKind::Long => ((*property).value_type()
+                        == ValueType::Long)
+                        .then(|| (*property).raw_long()),
+                    QuickForeachObjectProjectionKind::StringLength => {
+                        (*property).as_str().map(|value| value.len() as i64)
                     }
-                    QuickForeachObjectProjectionKind::StringLength => (*property)
-                        .as_str()
-                        .map(|value| value.len() as i64),
                 }
             };
             let Some(projected_value) = projected_value else {
@@ -458,10 +435,7 @@ unsafe fn run_quick_foreach_object_property_accumulate_loop_inner<
                     None,
                     true,
                 );
-                (*frame).opline = op_array
-                    .instructions
-                    .as_ptr()
-                    .add(projection.cache_ip);
+                (*frame).opline = op_array.instructions.as_ptr().add(projection.cache_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(QuickLoopOutcome::Deoptimized);
             };
@@ -616,9 +590,7 @@ pub(super) unsafe fn run_quick_foreach_object_property_accumulate_loop(
                 binding,
             )
         }
-        QuickForeachObjectPropertyBinding::Dynamic(binding)
-            if plan.projection_count == 2 =>
-        {
+        QuickForeachObjectPropertyBinding::Dynamic(binding) if plan.projection_count == 2 => {
             run_quick_foreach_object_property_accumulate_loop_inner::<true, _>(
                 eg,
                 frame,

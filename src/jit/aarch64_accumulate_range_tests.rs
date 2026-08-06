@@ -1,6 +1,6 @@
 use super::{
-    CompiledQuickLongAccumulateLoop, NativeLongAccumulateState,
-    QuickLongAccumulateJitOutcome, arithmetic_long_chunk_is_range_proven,
+    CompiledQuickLongAccumulateLoop, NativeLongAccumulateState, QuickLongAccumulateJitOutcome,
+    arithmetic_long_chunk_is_range_proven,
 };
 use std::sync::atomic::AtomicBool;
 
@@ -69,8 +69,7 @@ fn rejects_any_intermediate_sum_or_term_overflow() {
 #[test]
 fn range_proven_program_has_no_checked_overflow_stubs() {
     let checked = CompiledQuickLongAccumulateLoop::compile().unwrap();
-    let range_proven =
-        CompiledQuickLongAccumulateLoop::compile_range_proven().unwrap();
+    let range_proven = CompiledQuickLongAccumulateLoop::compile_range_proven().unwrap();
     assert!(range_proven.code().len() < checked.code().len());
 
     let mut state = NativeLongAccumulateState {
@@ -89,8 +88,7 @@ fn range_proven_program_has_no_checked_overflow_stubs() {
 #[test]
 fn range_proven_program_polls_interrupt_without_rust_chunk_returns() {
     let program =
-        CompiledQuickLongAccumulateLoop::compile_range_proven_polling(None, 1_024)
-            .unwrap();
+        CompiledQuickLongAccumulateLoop::compile_range_proven_polling(None, 1_024).unwrap();
     let interrupt = AtomicBool::new(false);
     let mut completed = NativeLongAccumulateState {
         induction: 0,
@@ -199,9 +197,7 @@ fn closed_form_proof_matches_checked_execution_matrix() {
                             accumulator,
                         };
                         assert_eq!(
-                            arithmetic_long_chunk_is_range_proven(
-                                addend, state, budget,
-                            ),
+                            arithmetic_long_chunk_is_range_proven(addend, state, budget,),
                             checked_chunk_is_safe(addend, state, budget),
                             "mismatch for addend={addend}, state={state:?}, budget={budget}"
                         );

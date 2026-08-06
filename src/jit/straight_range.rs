@@ -1,8 +1,7 @@
 use super::{
-    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
-    QuickLongOperand, ScalarLongConditionKind, ScalarLongOpKind,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
-    straight_long_operation_input_mask,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongOperation, QuickLongOperand,
+    ScalarLongConditionKind, ScalarLongOpKind, straight_long_operation_input_mask,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -529,8 +528,7 @@ fn straight_operation_dominates(
     if definition_index >= use_index || use_index > config.operation_count as usize {
         return false;
     }
-    let mut reachable_without_definition =
-        [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    let mut reachable_without_definition = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
     reachable_without_definition[0] = true;
     for index in 0..use_index {
         if !reachable_without_definition[index] || index == definition_index {
@@ -638,9 +636,8 @@ fn condition_operand_range(
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
             let lhs = range(lhs)?;
             let rhs = range(rhs)?;
-            (lhs.minimum == lhs.maximum && rhs.minimum == rhs.maximum).then(|| {
-                LongInterval::exact((lhs.minimum as i64) & (rhs.minimum as i64))
-            })
+            (lhs.minimum == lhs.maximum && rhs.minimum == rhs.maximum)
+                .then(|| LongInterval::exact((lhs.minimum as i64) & (rhs.minimum as i64)))
         }
     }
 }
@@ -870,7 +867,10 @@ mod tests {
             super::super::Arm64Register::from_code(3),
             &[(1u64 << 2, super::super::Arm64Register::from_code(8))],
         );
-        assert_eq!(forwarded_register, super::super::Arm64Register::from_code(8));
+        assert_eq!(
+            forwarded_register,
+            super::super::Arm64Register::from_code(8)
+        );
         assert!(forwarded.finish().is_empty());
 
         let mut already_in_destination = super::super::Arm64Assembler::new();
@@ -903,14 +903,38 @@ mod tests {
     fn signed_small_constants_select_exact_add_sub_immediate_forms() {
         use crate::vm::function::ScalarLongOpKind::{Add, Multiply, Subtract};
 
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 11), Some((true, 11)));
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, -11), Some((false, 11)));
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Subtract, 11), Some((false, 11)));
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Subtract, -11), Some((true, 11)));
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 4_095), Some((true, 4_095)));
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, 4_096), None);
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Add, i64::MIN), None);
-        assert_eq!(super::super::straight_binary_add_sub_immediate(Multiply, 11), None);
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Add, 11),
+            Some((true, 11))
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Add, -11),
+            Some((false, 11))
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Subtract, 11),
+            Some((false, 11))
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Subtract, -11),
+            Some((true, 11))
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Add, 4_095),
+            Some((true, 4_095))
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Add, 4_096),
+            None
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Add, i64::MIN),
+            None
+        );
+        assert_eq!(
+            super::super::straight_binary_add_sub_immediate(Multiply, 11),
+            None
+        );
 
         assert_eq!(super::super::straight_multiply_shift_add(3), Some(1));
         assert_eq!(super::super::straight_multiply_shift_add(5), Some(2));
@@ -975,12 +999,10 @@ mod tests {
                     },
                     NativeStraightLongOperation::Guard {
                         kind: ScalarLongConditionKind::Equal,
-                        lhs: NativeStraightLongConditionOperand::Source(
-                            QuickLongOperand::Slot(0),
-                        ),
-                        rhs: NativeStraightLongConditionOperand::Source(
-                            QuickLongOperand::Const(needle),
-                        ),
+                        lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(0)),
+                        rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(
+                            needle,
+                        )),
                         expected: false,
                     },
                 ],
@@ -1428,9 +1450,8 @@ mod tests {
             ],
             100,
         );
-        let carried_guard_proof =
-            straight_long_remaining_range_proof(&carried_guard, &[0_i64; 64])
-                .expect("resident carried state should be available to branch conditions");
+        let carried_guard_proof = straight_long_remaining_range_proof(&carried_guard, &[0_i64; 64])
+            .expect("resident carried state should be available to branch conditions");
         assert_eq!(carried_guard_proof.carried_mask, proof.carried_mask);
 
         let dominated_delta = config(
@@ -1655,9 +1676,7 @@ mod tests {
                                 ScalarLongOpKind::BitwiseAnd => {
                                     Some((left as i64) & (right as i64))
                                 }
-                                ScalarLongOpKind::BitwiseOr => {
-                                    Some((left as i64) | (right as i64))
-                                }
+                                ScalarLongOpKind::BitwiseOr => Some((left as i64) | (right as i64)),
                                 ScalarLongOpKind::BitwiseXor => {
                                     Some((left as i64) ^ (right as i64))
                                 }

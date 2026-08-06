@@ -1,9 +1,9 @@
 use std::mem::size_of;
 
+use super::frame::{CALL_FRAME_SLOTS, ExecuteData};
+use super::function::FunctionCommon;
 use crate::value::Value;
 use crate::vm::stats;
-use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::FunctionCommon;
 
 const DEFAULT_STACK_PAGE_SIZE: usize = 256 * 1024; // 256 KB
 const PENDING_STACK_PAGE_SIZE: usize = 16 * 1024;
@@ -200,7 +200,9 @@ impl Drop for VmStack {
         while !page.is_null() {
             let prev = unsafe { (*page).prev };
             let layout = std::alloc::Layout::from_size_align(self.page_size, 4096).unwrap();
-            unsafe { std::alloc::dealloc(page as *mut u8, layout); }
+            unsafe {
+                std::alloc::dealloc(page as *mut u8, layout);
+            }
             page = prev;
         }
     }

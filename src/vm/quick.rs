@@ -16,8 +16,7 @@ use crate::vm::opcode::OpCode;
 
 pub use super::quick_foreach_plan::{
     QuickForeachObjectProjection, QuickForeachObjectProjectionKind,
-    QuickForeachObjectPropertyAccumulateLoop,
-    detect_foreach_object_property_accumulate_loop,
+    QuickForeachObjectPropertyAccumulateLoop, detect_foreach_object_property_accumulate_loop,
 };
 
 /// Number of executions of the same backward edge before quickening it.
@@ -252,13 +251,14 @@ impl QuickDoubleArgumentProgram {
     pub(crate) fn source_depends_on_induction(&self, source: QuickDoubleSource) -> bool {
         match source {
             QuickDoubleSource::Induction => true,
-            QuickDoubleSource::Temporary(index) => self
-                .operations
-                .get(index as usize)
-                .is_some_and(|operation| {
-                    self.source_depends_on_induction(operation.lhs)
-                        || self.source_depends_on_induction(operation.rhs)
-                }),
+            QuickDoubleSource::Temporary(index) => {
+                self.operations
+                    .get(index as usize)
+                    .is_some_and(|operation| {
+                        self.source_depends_on_induction(operation.lhs)
+                            || self.source_depends_on_induction(operation.rhs)
+                    })
+            }
             QuickDoubleSource::Input(_) | QuickDoubleSource::Constant(_) => false,
         }
     }
@@ -272,9 +272,7 @@ impl QuickDoubleArgumentProgram {
         self.outputs[..self.output_count as usize]
             .iter()
             .copied()
-            .filter(|output| {
-                self.source_depends_on_induction(*output) == induction_dependent
-            })
+            .filter(|output| self.source_depends_on_induction(*output) == induction_dependent)
             .any(|output| self.source_uses_operation(output, operation))
     }
 
@@ -336,8 +334,7 @@ impl QuickDoubleArgumentProgram {
             let argument = argument as u16;
             let overwrite = register as usize;
             let mut safe = true;
-            for (operation_index, operation) in
-                leaf.program.operations.iter().copied().enumerate()
+            for (operation_index, operation) in leaf.program.operations.iter().copied().enumerate()
             {
                 let lhs_uses_argument = matches!(
                     operation.lhs,
@@ -399,9 +396,7 @@ pub(crate) fn compose_scalar_double_program(
     };
 
     const MAX_OPERATIONS: usize = 8;
-    if plan.operations.len() > 16
-        || plan.operations.len() > resolved_programs.len()
-    {
+    if plan.operations.len() > 16 || plan.operations.len() > resolved_programs.len() {
         return None;
     }
 
@@ -411,12 +406,8 @@ pub(crate) fn compose_scalar_double_program(
     ) -> Option<ScalarDoubleSource> {
         match source {
             ScalarDoubleSource::Input(index) => Some(ScalarDoubleSource::Input(index)),
-            ScalarDoubleSource::Constant(value) => {
-                Some(ScalarDoubleSource::Constant(value))
-            }
-            ScalarDoubleSource::Temporary(index) => {
-                results.get(index as usize).copied().flatten()
-            }
+            ScalarDoubleSource::Constant(value) => Some(ScalarDoubleSource::Constant(value)),
+            ScalarDoubleSource::Temporary(index) => results.get(index as usize).copied().flatten(),
             ScalarDoubleSource::Selection => Some(ScalarDoubleSource::Selection),
         }
     }
@@ -441,13 +432,9 @@ pub(crate) fn compose_scalar_double_program(
                 result
             }
             ComposedScalarDoubleOp::Call(call) => {
-                let resolved = resolved_programs
-                    .get(composed_index)
-                    .copied()
-                    .flatten()?;
+                let resolved = resolved_programs.get(composed_index).copied().flatten()?;
                 if resolved.public_args as usize != call.arguments.len()
-                    || operations.len() + resolved.program.operations.len()
-                        > MAX_OPERATIONS
+                    || operations.len() + resolved.program.operations.len() > MAX_OPERATIONS
                 {
                     return None;
                 }
@@ -460,9 +447,7 @@ pub(crate) fn compose_scalar_double_program(
                 }
                 let leaf_start = operations.len();
                 let remap_leaf_source = |source| match source {
-                    ScalarDoubleSource::Input(index)
-                        if (index as usize) < call.arguments.len() =>
-                    {
+                    ScalarDoubleSource::Input(index) if (index as usize) < call.arguments.len() => {
                         Some(arguments[index as usize])
                     }
                     ScalarDoubleSource::Input(_) => None,
@@ -471,9 +456,7 @@ pub(crate) fn compose_scalar_double_program(
                     }
                     ScalarDoubleSource::Temporary(index) => leaf_start
                         .checked_add(index as usize)
-                        .filter(|index| {
-                            *index < leaf_start + resolved.program.operations.len()
-                        })
+                        .filter(|index| *index < leaf_start + resolved.program.operations.len())
                         .and_then(|index| u8::try_from(index).ok())
                         .map(ScalarDoubleSource::Temporary),
                     ScalarDoubleSource::Selection => resolved
@@ -1144,9 +1127,7 @@ impl QuickLongOpsLoop {
     }
 }
 
-fn detect_array_update_fusions(
-    ops: &[QuickLongOp],
-) -> Vec<Option<QuickArrayUpdateFusion>> {
+fn detect_array_update_fusions(ops: &[QuickLongOp]) -> Vec<Option<QuickArrayUpdateFusion>> {
     let mut fusions = vec![None; ops.len()];
     for index in 0..ops.len().saturating_sub(2) {
         let QuickLongOp::FetchArrayLong {
@@ -1167,32 +1148,31 @@ fn detect_array_update_fusions(
             continue;
         }
 
-        let (kind, lhs, rhs, result, arithmetic_next, arithmetic_resume_ip) =
-            match ops[index + 1] {
-                QuickLongOp::Add {
-                    lhs,
-                    rhs,
-                    result,
-                    next_target,
-                    resume_ip,
-                } => (
-                    ScalarLongOpKind::Add,
-                    QuickLongOperand::Slot(lhs),
-                    QuickLongOperand::Slot(rhs),
-                    result,
-                    next_target,
-                    resume_ip,
-                ),
-                QuickLongOp::Binary {
-                    kind,
-                    lhs,
-                    rhs,
-                    result,
-                    next_target,
-                    resume_ip,
-                } => (kind, lhs, rhs, result, next_target, resume_ip),
-                _ => continue,
-            };
+        let (kind, lhs, rhs, result, arithmetic_next, arithmetic_resume_ip) = match ops[index + 1] {
+            QuickLongOp::Add {
+                lhs,
+                rhs,
+                result,
+                next_target,
+                resume_ip,
+            } => (
+                ScalarLongOpKind::Add,
+                QuickLongOperand::Slot(lhs),
+                QuickLongOperand::Slot(rhs),
+                result,
+                next_target,
+                resume_ip,
+            ),
+            QuickLongOp::Binary {
+                kind,
+                lhs,
+                rhs,
+                result,
+                next_target,
+                resume_ip,
+            } => (kind, lhs, rhs, result, next_target, resume_ip),
+            _ => continue,
+        };
         if arithmetic_next.op_index() != Some(index + 2)
             || !matches!(lhs, QuickLongOperand::Slot(slot) if slot == fetch_result)
                 && !matches!(rhs, QuickLongOperand::Slot(slot) if slot == fetch_result)
@@ -1242,8 +1222,10 @@ fn object_array_add_consumer(
     add: crate::vm::instruction::Instruction,
     assign: crate::vm::instruction::Instruction,
 ) -> Option<u16> {
-    if !matches!(add.opcode, OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp)
-        || !matches!(add.result_type, OpType::Tmp | OpType::Var)
+    if !matches!(
+        add.opcode,
+        OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp
+    ) || !matches!(add.result_type, OpType::Tmp | OpType::Var)
         || assign.opcode != OpCode::AssignCv
         || assign.op1_type != OpType::Cv
         || assign.op2_type != add.result_type
@@ -1272,10 +1254,7 @@ fn object_array_add_consumer(
 /// array result. The assigned array CV must have no other syntactic use in the
 /// function, which makes non-materialization unobservable for the admitted
 /// Long-only ObjectArrayFunctionPlan result.
-pub fn detect_object_array_consumer_span(
-    op_array: &OpArray,
-    init_ip: usize,
-) -> Option<usize> {
+pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> Option<usize> {
     let initializer = *op_array.instructions.get(init_ip)?;
     if initializer.opcode != OpCode::InitMethodCall {
         return None;
@@ -1351,11 +1330,7 @@ pub fn detect_object_array_consumer_span(
         }
         if ip != do_fcall_ip
             && ip != assign_ip
-            && instruction_mentions_operand(
-                instruction,
-                do_fcall.result_type,
-                do_fcall.result,
-            )
+            && instruction_mentions_operand(instruction, do_fcall.result_type, do_fcall.result)
         {
             return None;
         }
@@ -1435,11 +1410,7 @@ pub fn detect_virtual_object_array_pipeline_span(
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
         if ip != new_ip
             && ip != object_assign_ip
-            && instruction_mentions_operand(
-                instruction,
-                new_object.result_type,
-                new_object.result,
-            )
+            && instruction_mentions_operand(instruction, new_object.result_type, new_object.result)
         {
             return None;
         }
@@ -1688,8 +1659,7 @@ fn quick_double_argument_source(
                 _ => None,
             }
         }
-        OpType::Tmp | OpType::Var => produced_temporary_slots
-            [..produced_temporary_count]
+        OpType::Tmp | OpType::Var => produced_temporary_slots[..produced_temporary_count]
             .iter()
             .position(|slot| *slot == operand)
             .map(|index| ProvenQuickDoubleSource {
@@ -1781,9 +1751,8 @@ pub fn detect_double_call_accumulate_loop(
     let mut json_parent_mask = 0u64;
     let possible_producer = *op_array.instructions.get(initializer_ip)?;
     if possible_producer.opcode == OpCode::DirectInternalCall2
-        && crate::builtin_metadata::DirectInternalKind::from_id(
-            possible_producer.extended_value,
-        ) == Some(crate::builtin_metadata::DirectInternalKind::JsonDecode)
+        && crate::builtin_metadata::DirectInternalKind::from_id(possible_producer.extended_value)
+            == Some(crate::builtin_metadata::DirectInternalKind::JsonDecode)
     {
         let source = detect_json_typed_invariant_source(op_array, region, initializer_ip)?;
         json_paths
@@ -2034,9 +2003,7 @@ pub fn detect_double_call_accumulate_loop(
             } => None,
         };
         if source.projections.is_empty()
-            || json_fetch_mask
-                & !(json_parent_mask | source.double_output_mask)
-                != 0
+            || json_fetch_mask & !(json_parent_mask | source.double_output_mask) != 0
             || source.destination == induction_cv
             || source.destination == accumulator_cv
             || matches!(bound, QuickLongBound::Cv(slot) if source.destination == slot)
@@ -2153,8 +2120,7 @@ pub(crate) fn compose_quick_scalar_leaf_program(
         || arguments.operations.len() > 8
         || body.program.operations.len() > 8
         || body.program.output_count != 1
-        || arguments.operations.len() + body.program.operations.len()
-            > MAX_FUSED_SCALAR_OPS
+        || arguments.operations.len() + body.program.operations.len() > MAX_FUSED_SCALAR_OPS
     {
         return None;
     }
@@ -2172,9 +2138,8 @@ pub(crate) fn compose_quick_scalar_leaf_program(
         }
     };
 
-    let mut operations = Vec::with_capacity(
-        argument_operation_count + body.program.operations.len(),
-    );
+    let mut operations =
+        Vec::with_capacity(argument_operation_count + body.program.operations.len());
     operations.extend(arguments.operations.iter().copied());
     for operation in body.program.operations.iter().copied() {
         operations.push(ScalarLongOp {
@@ -2273,7 +2238,9 @@ pub fn detect_foreach_long_accumulate_loop(
             .iter()
             .any(|slot| (*slot as u32) < op_array.num_cvs || (*slot as u32) >= total_slots)
         || temporary_slots.iter().enumerate().any(|(index, slot)| {
-            temporary_slots[index + 1..].iter().any(|other| other == slot)
+            temporary_slots[index + 1..]
+                .iter()
+                .any(|other| other == slot)
         })
     {
         return None;
@@ -2299,9 +2266,7 @@ pub fn detect_long_induction_loop(
     header_ip: usize,
     backedge_ip: usize,
 ) -> Option<QuickLongInductionLoop> {
-    if header_ip.checked_add(3)? != backedge_ip
-        || backedge_ip >= op_array.instructions.len()
-    {
+    if header_ip.checked_add(3)? != backedge_ip || backedge_ip >= op_array.instructions.len() {
         return None;
     }
 
@@ -2496,7 +2461,10 @@ fn detect_scalar_call_tree(
             continue;
         }
 
-        if matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall) {
+        if matches!(
+            instruction.opcode,
+            OpCode::InitFcall | OpCode::InitMethodCall
+        ) {
             let nested_do_fcall_ip = detect_scalar_call_tree(
                 op_array,
                 cursor,
@@ -2617,11 +2585,15 @@ pub fn detect_long_accumulate_loop(
             &mut object_input_mask,
             0,
         )?;
-        let contains_nested_call = op_array.instructions[call_ip + 1..do_fcall_ip]
-            .iter()
-            .any(|instruction| {
-                matches!(instruction.opcode, OpCode::InitFcall | OpCode::InitMethodCall)
-            });
+        let contains_nested_call =
+            op_array.instructions[call_ip + 1..do_fcall_ip]
+                .iter()
+                .any(|instruction| {
+                    matches!(
+                        instruction.opcode,
+                        OpCode::InitFcall | OpCode::InitMethodCall
+                    )
+                });
         if contains_nested_call {
             if long_input_mask & object_input_mask != 0 {
                 return None;
@@ -2717,9 +2689,7 @@ pub fn detect_long_accumulate_loop(
                         &produced_temporary_slots,
                         expression_count,
                     )?;
-                    if produced_temporary_slots[..expression_count]
-                        .contains(&instruction.result)
-                    {
+                    if produced_temporary_slots[..expression_count].contains(&instruction.result) {
                         return None;
                     }
                     let kind = match instruction.opcode {
@@ -2732,11 +2702,7 @@ pub fn detect_long_accumulate_loop(
                         OpCode::Mul => ScalarLongOpKind::Multiply,
                         _ => unreachable!(),
                     };
-                    operations.push(ScalarLongOp {
-                        kind,
-                        lhs,
-                        rhs,
-                    });
+                    operations.push(ScalarLongOp { kind, lhs, rhs });
                     produced_temporary_slots[expression_count] = instruction.result;
                     expression_count += 1;
                 }
@@ -2842,7 +2808,8 @@ pub fn detect_long_accumulate_loop(
     } else {
         None
     };
-    let (accumulator_cv, term, sum_tmp, sum_ip, assign_ip) = if let Some(shape) = scalar_call_shape {
+    let (accumulator_cv, term, sum_tmp, sum_ip, assign_ip) = if let Some(shape) = scalar_call_shape
+    {
         shape
     } else if first_body.opcode == OpCode::Add
         && first_body.op1_type == OpType::Cv
@@ -2872,16 +2839,13 @@ pub fn detect_long_accumulate_loop(
             header_ip + 3,
         )
     } else if backedge_ip >= header_ip + 6
-        && op_array
-            .instructions
-            .get(header_ip + 3)
-            .is_some_and(|sum| {
-                sum.opcode == OpCode::Add_CvTmp
-                    && sum.op1_type == OpType::Cv
-                    && sum.op2_type == OpType::Tmp
-                    && sum.op2 == first_body.result
-                    && sum.result_type == OpType::Tmp
-            })
+        && op_array.instructions.get(header_ip + 3).is_some_and(|sum| {
+            sum.opcode == OpCode::Add_CvTmp
+                && sum.op1_type == OpType::Cv
+                && sum.op2_type == OpType::Tmp
+                && sum.op2 == first_body.result
+                && sum.result_type == OpType::Tmp
+        })
     {
         let sum = op_array.instructions[header_ip + 3];
         if first_body.result_type != OpType::Tmp {
@@ -2920,35 +2884,29 @@ pub fn detect_long_accumulate_loop(
                     term_ip: header_ip + 2,
                 }
             }
-            (OpCode::FetchDimR, OpType::Cv, OpType::Cv) => {
-                QuickLongTerm::ArrayIndex {
-                    array_cv: first_body.op1,
-                    index: if first_body.op2 == induction_cv {
-                        QuickArrayIndex::Long(QuickLongOperand::Slot(induction_cv))
-                    } else {
-                        QuickArrayIndex::ValueSlot(first_body.op2)
-                    },
-                    term_tmp: first_body.result,
-                    destination: None,
-                    fetch_ip: header_ip + 2,
-                }
-            }
-            (OpCode::FetchDimR, OpType::Cv, OpType::Const) => {
-                QuickLongTerm::ArrayIndex {
-                    array_cv: first_body.op1,
-                    index: array_literal_index(op_array, first_body.op2)?,
-                    term_tmp: first_body.result,
-                    destination: None,
-                    fetch_ip: header_ip + 2,
-                }
-            }
-            (OpCode::Strlen_Cv, OpType::Cv, OpType::Unused) => {
-                QuickLongTerm::StringLength {
-                    string_cv: first_body.op1,
-                    term_tmp: first_body.result,
-                    term_ip: header_ip + 2,
-                }
-            }
+            (OpCode::FetchDimR, OpType::Cv, OpType::Cv) => QuickLongTerm::ArrayIndex {
+                array_cv: first_body.op1,
+                index: if first_body.op2 == induction_cv {
+                    QuickArrayIndex::Long(QuickLongOperand::Slot(induction_cv))
+                } else {
+                    QuickArrayIndex::ValueSlot(first_body.op2)
+                },
+                term_tmp: first_body.result,
+                destination: None,
+                fetch_ip: header_ip + 2,
+            },
+            (OpCode::FetchDimR, OpType::Cv, OpType::Const) => QuickLongTerm::ArrayIndex {
+                array_cv: first_body.op1,
+                index: array_literal_index(op_array, first_body.op2)?,
+                term_tmp: first_body.result,
+                destination: None,
+                fetch_ip: header_ip + 2,
+            },
+            (OpCode::Strlen_Cv, OpType::Cv, OpType::Unused) => QuickLongTerm::StringLength {
+                string_cv: first_body.op1,
+                term_tmp: first_body.result,
+                term_ip: header_ip + 2,
+            },
             (OpCode::DirectInternalCall1, OpType::Cv, OpType::Unused)
                 if crate::builtin_metadata::DirectInternalKind::from_id(
                     first_body.extended_value,
@@ -3044,9 +3002,7 @@ pub fn detect_long_accumulate_loop(
         OpCode::PostInc => QuickIncrementKind::Post,
         _ => return None,
     };
-    if increment.op1_type != OpType::Cv
-        || increment.op1 != induction_cv
-    {
+    if increment.op1_type != OpType::Cv || increment.op1 != induction_cv {
         return None;
     }
     let increment_tmp = match increment.result_type {
@@ -3261,9 +3217,7 @@ fn detect_long_tail_trace_guard(
     };
     let lhs = operand(comparison.op1_type, comparison.op1)?;
     let rhs = operand(comparison.op2_type, comparison.op2)?;
-    if comparison.result_type != OpType::Tmp
-        || u32::from(comparison.result) >= total_slots
-    {
+    if comparison.result_type != OpType::Tmp || u32::from(comparison.result) >= total_slots {
         return None;
     }
     let branch = *op_array.instructions.get(guard_ip + 1)?;
@@ -3331,10 +3285,7 @@ fn preheader_string_literal_cv(op_array: &OpArray, header_ip: usize, cv: u16) ->
         })
 }
 
-fn cv_unmodified_in_region(
-    instructions: &[crate::vm::instruction::Instruction],
-    cv: u16,
-) -> bool {
+fn cv_unmodified_in_region(instructions: &[crate::vm::instruction::Instruction], cv: u16) -> bool {
     instructions
         .iter()
         .copied()
@@ -3356,10 +3307,7 @@ fn detect_json_typed_invariant_source(
         || !matches!(producer.op1_type, OpType::Cv | OpType::Const)
         || producer.op2_type != OpType::Const
         || !matches!(producer.result_type, OpType::Tmp | OpType::Var)
-        || op_array
-            .literals
-            .get(producer.op2 as usize)?
-            .value_type()
+        || op_array.literals.get(producer.op2 as usize)?.value_type()
             != crate::value::ValueType::True
     {
         return None;
@@ -3369,10 +3317,7 @@ fn detect_json_typed_invariant_source(
             QuickInvariantInput::StringSlot(producer.op1)
         }
         OpType::Const => {
-            op_array
-                .literals
-                .get(producer.op1 as usize)?
-                .as_str()?;
+            op_array.literals.get(producer.op1 as usize)?.as_str()?;
             QuickInvariantInput::StringLiteral(producer.op1)
         }
         _ => return None,
@@ -3563,8 +3508,7 @@ fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
                 ..
             } => {
                 match condition {
-                    QuickLongCondition::Lt { lhs, rhs }
-                    | QuickLongCondition::Eq { lhs, rhs } => {
+                    QuickLongCondition::Lt { lhs, rhs } | QuickLongCondition::Eq { lhs, rhs } => {
                         straight_region_read(&mut inputs, defined, lhs)?;
                         straight_region_read_operand(&mut inputs, defined, rhs)?;
                     }
@@ -3606,9 +3550,7 @@ fn straight_long_region_inputs(ops: &[QuickLongOp]) -> Option<u64> {
             QuickLongOp::AssignLongLiteral { destination, .. } => {
                 straight_region_write(&mut defined, destination)?;
             }
-            QuickLongOp::PostInc {
-                value, result, ..
-            } => {
+            QuickLongOp::PostInc { value, result, .. } => {
                 straight_region_read(&mut inputs, defined, value)?;
                 if let Some(result) = result {
                     straight_region_write(&mut defined, result)?;
@@ -3723,8 +3665,7 @@ fn detect_long_ops_region_inner(
     let mut virtual_string_candidate_mask = 0u64;
     for (relative_ip, instruction) in region.iter().copied().enumerate() {
         if instruction.opcode != OpCode::NewObj
-            || instruction._pad
-                & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
+            || instruction._pad & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
                 == 0
         {
             continue;
@@ -3733,11 +3674,7 @@ fn detect_long_ops_region_inner(
         for index in 0..instruction.extended_value as usize {
             let send = *op_array.instructions.get(new_ip + 1 + index)?;
             if send.op1_type == OpType::Cv {
-                add_mask_slot(
-                    &mut virtual_string_candidate_mask,
-                    send.op1,
-                    total_slots,
-                )?;
+                add_mask_slot(&mut virtual_string_candidate_mask, send.op1, total_slots)?;
             }
         }
     }
@@ -3991,20 +3928,16 @@ fn detect_long_ops_region_inner(
                     instruction.extended_value,
                 ) == Some(crate::builtin_metadata::DirectInternalKind::JsonDecode) =>
             {
-                let skipped_by_prior_edge = ops.iter().skip(1).any(|operation| {
-                    match *operation {
-                        QuickLongOp::BranchUnlessLt { false_target, .. }
-                        | QuickLongOp::BranchUnlessEq { false_target, .. }
-                        | QuickLongOp::BranchUnlessLe { false_target, .. } => false_target
-                            .unresolved_ip()
-                            .is_some_and(|target| target > ip),
-                        QuickLongOp::TraceGuard { .. } | QuickLongOp::Jump { .. } => true,
-                        _ => false,
-                    }
+                let skipped_by_prior_edge = ops.iter().skip(1).any(|operation| match *operation {
+                    QuickLongOp::BranchUnlessLt { false_target, .. }
+                    | QuickLongOp::BranchUnlessEq { false_target, .. }
+                    | QuickLongOp::BranchUnlessLe { false_target, .. } => false_target
+                        .unresolved_ip()
+                        .is_some_and(|target| target > ip),
+                    QuickLongOp::TraceGuard { .. } | QuickLongOp::Jump { .. } => true,
+                    _ => false,
                 });
-                if typed_invariant_source.is_some()
-                    || skipped_by_prior_edge
-                {
+                if typed_invariant_source.is_some() || skipped_by_prior_edge {
                     return None;
                 }
                 let source = detect_json_typed_invariant_source(op_array, region, ip)?;
@@ -4048,11 +3981,7 @@ fn detect_long_ops_region_inner(
                     json_paths
                         .get_mut(instruction.result as usize)?
                         .replace(path);
-                    add_mask_slot(
-                        &mut json_fetch_mask,
-                        instruction.result,
-                        total_slots,
-                    )?;
+                    add_mask_slot(&mut json_fetch_mask, instruction.result, total_slots)?;
                     add_mask_slot(&mut json_parent_mask, array, total_slots)?;
                     let resume_ip = ip;
                     ip += 1;
@@ -4073,11 +4002,7 @@ fn detect_long_ops_region_inner(
                                 )?;
                                 QuickArrayIndex::ValueSlot(instruction.op2)
                             } else {
-                                add_mask_slot(
-                                    &mut long_input_mask,
-                                    instruction.op2,
-                                    total_slots,
-                                )?;
+                                add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
                                 QuickArrayIndex::Long(QuickLongOperand::Slot(instruction.op2))
                             }
                         }
@@ -4132,11 +4057,7 @@ fn detect_long_ops_region_inner(
                 {
                     return None;
                 }
-                add_mask_slot(
-                    &mut json_string_source_mask,
-                    instruction.op1,
-                    total_slots,
-                )?;
+                add_mask_slot(&mut json_string_source_mask, instruction.op1, total_slots)?;
                 add_mask_slot(&mut long_input_mask, instruction.result, total_slots)?;
                 json_string_length_paths
                     .get_mut(instruction.result as usize)?
@@ -4160,7 +4081,10 @@ fn detect_long_ops_region_inner(
                     return None;
                 }
                 if instruction.op1_type != OpType::Cv
-                    || !matches!(instruction.result_type, OpType::Cv | OpType::Tmp | OpType::Var)
+                    || !matches!(
+                        instruction.result_type,
+                        OpType::Cv | OpType::Tmp | OpType::Var
+                    )
                 {
                     return None;
                 }
@@ -4197,10 +4121,12 @@ fn detect_long_ops_region_inner(
                     _ => return None,
                 };
                 let (arithmetic_result, consumes_fetch) = match *arithmetic {
-                    QuickLongOp::Add { lhs, rhs, result, .. } => {
-                        (result, lhs == fetch_result || rhs == fetch_result)
-                    }
-                    QuickLongOp::Binary { lhs, rhs, result, .. } => (
+                    QuickLongOp::Add {
+                        lhs, rhs, result, ..
+                    } => (result, lhs == fetch_result || rhs == fetch_result),
+                    QuickLongOp::Binary {
+                        lhs, rhs, result, ..
+                    } => (
                         result,
                         lhs == QuickLongOperand::Slot(fetch_result)
                             || rhs == QuickLongOperand::Slot(fetch_result),
@@ -4237,9 +4163,7 @@ fn detect_long_ops_region_inner(
                 {
                     return None;
                 }
-                if instruction.op1_type != OpType::Cv
-                    || instruction.result_type != OpType::Unused
-                {
+                if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
                 }
                 let value = match instruction.op2_type {
@@ -4377,16 +4301,8 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::IsSmallerOrEqual => {
-                let lhs = quick_long_operand(
-                    op_array,
-                    instruction.op1_type,
-                    instruction.op1,
-                )?;
-                let rhs = quick_long_operand(
-                    op_array,
-                    instruction.op2_type,
-                    instruction.op2,
-                )?;
+                let lhs = quick_long_operand(op_array, instruction.op1_type, instruction.op1)?;
+                let rhs = quick_long_operand(op_array, instruction.op2_type, instruction.op2)?;
                 let branch = *op_array.instructions.get(ip + 1)?;
                 if instruction.result_type != OpType::Tmp
                     || branch.opcode != OpCode::JmpZ
@@ -4417,16 +4333,8 @@ fn detect_long_ops_region_inner(
                 if !closed_loop {
                     return None;
                 }
-                let lhs = quick_long_operand(
-                    op_array,
-                    instruction.op1_type,
-                    instruction.op1,
-                )?;
-                let rhs = quick_long_operand(
-                    op_array,
-                    instruction.op2_type,
-                    instruction.op2,
-                )?;
+                let lhs = quick_long_operand(op_array, instruction.op1_type, instruction.op1)?;
+                let rhs = quick_long_operand(op_array, instruction.op2_type, instruction.op2)?;
                 let branch = *op_array.instructions.get(ip + 1)?;
                 if instruction.result_type != OpType::Tmp
                     || branch.op1_type != OpType::Tmp
@@ -4451,11 +4359,7 @@ fn detect_long_ops_region_inner(
                         add_mask_slot(&mut long_input_mask, slot, total_slots)?;
                     }
                 }
-                add_mask_slot(
-                    &mut bool_output_mask,
-                    instruction.result,
-                    total_slots,
-                )?;
+                add_mask_slot(&mut bool_output_mask, instruction.result, total_slots)?;
                 let resume_ip = ip;
                 ip = target_ip;
                 QuickLongOp::TraceGuard {
@@ -4479,16 +4383,8 @@ fn detect_long_ops_region_inner(
                 if instruction.result_type != OpType::Tmp {
                     return None;
                 }
-                let lhs = quick_long_operand(
-                    op_array,
-                    instruction.op1_type,
-                    instruction.op1,
-                )?;
-                let rhs = quick_long_operand(
-                    op_array,
-                    instruction.op2_type,
-                    instruction.op2,
-                )?;
+                let lhs = quick_long_operand(op_array, instruction.op1_type, instruction.op1)?;
+                let rhs = quick_long_operand(op_array, instruction.op2_type, instruction.op2)?;
                 for operand in [lhs, rhs] {
                     if let QuickLongOperand::Slot(slot) = operand {
                         add_mask_slot(&mut long_input_mask, slot, total_slots)?;
@@ -4541,16 +4437,8 @@ fn detect_long_ops_region_inner(
                 if instruction.result_type != OpType::Tmp {
                     return None;
                 }
-                let lhs = quick_long_operand(
-                    op_array,
-                    instruction.op1_type,
-                    instruction.op1,
-                )?;
-                let rhs = quick_long_operand(
-                    op_array,
-                    instruction.op2_type,
-                    instruction.op2,
-                )?;
+                let lhs = quick_long_operand(op_array, instruction.op1_type, instruction.op1)?;
+                let rhs = quick_long_operand(op_array, instruction.op2_type, instruction.op2)?;
                 for operand in [lhs, rhs] {
                     if let QuickLongOperand::Slot(slot) = operand {
                         add_mask_slot(&mut long_input_mask, slot, total_slots)?;
@@ -4680,8 +4568,7 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::NewObj => {
-                if instruction._pad
-                    & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
+                if instruction._pad & crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE
                     == 0
                 {
                     return None;
@@ -4703,29 +4590,17 @@ fn detect_long_ops_region_inner(
                         OpType::Cv | OpType::Tmp => {
                             let bit = 1u64.checked_shl(u32::from(send.op1))?;
                             if string_key_assignment_mask & bit != 0 {
-                                add_mask_slot(
-                                    &mut string_input_mask,
-                                    send.op1,
-                                    total_slots,
-                                )?;
+                                add_mask_slot(&mut string_input_mask, send.op1, total_slots)?;
                                 QuickVirtualValueSource::StringSlot(send.op1)
                             } else {
-                                add_mask_slot(
-                                    &mut long_input_mask,
-                                    send.op1,
-                                    total_slots,
-                                )?;
-                                QuickVirtualValueSource::Long(
-                                    QuickLongOperand::Slot(send.op1),
-                                )
+                                add_mask_slot(&mut long_input_mask, send.op1, total_slots)?;
+                                QuickVirtualValueSource::Long(QuickLongOperand::Slot(send.op1))
                             }
                         }
                         OpType::Const => {
                             let value = op_array.literals.get(send.op1 as usize)?;
                             if let Some(value) = value.as_long() {
-                                QuickVirtualValueSource::Long(
-                                    QuickLongOperand::Const(value),
-                                )
+                                QuickVirtualValueSource::Long(QuickLongOperand::Const(value))
                             } else if value.as_str().is_some() {
                                 QuickVirtualValueSource::StringLiteral(send.op1)
                             } else {
@@ -4762,8 +4637,7 @@ fn detect_long_ops_region_inner(
                     let add = op_array.instructions.get(cursor + 1).copied();
                     let assign = op_array.instructions.get(cursor + 2).copied();
                     if let (Some(add), Some(assign)) = (add, assign)
-                        && let Some(accumulator) =
-                            object_array_add_consumer(fetch, add, assign)
+                        && let Some(accumulator) = object_array_add_consumer(fetch, add, assign)
                     {
                         add_mask_slot(&mut long_input_mask, accumulator, total_slots)?;
                         add_mask_slot(&mut long_output_mask, accumulator, total_slots)?;
@@ -4883,11 +4757,7 @@ fn detect_long_ops_region_inner(
 
                 has_object_call = true;
                 if let Some((inner_init, _inner_do, _outer_do)) = nested {
-                    add_mask_slot(
-                        &mut object_input_mask,
-                        inner_init.op1,
-                        total_slots,
-                    )?;
+                    add_mask_slot(&mut object_input_mask, inner_init.op1, total_slots)?;
                     let resume_ip = ip;
                     let inner_guard = ScalarLongCallGuard::MethodCache {
                         cache_ip: u32::try_from(ip + 1).ok()?,
@@ -4906,10 +4776,8 @@ fn detect_long_ops_region_inner(
                         return None;
                     }
                     let mut arguments = [QuickLongOperand::Const(0); 8];
-                    let mut object_long_arguments = [
-                        QuickObjectLongArgument::Long(QuickLongOperand::Const(0));
-                        8
-                    ];
+                    let mut object_long_arguments =
+                        [QuickObjectLongArgument::Long(QuickLongOperand::Const(0)); 8];
                     let mut has_string_argument = false;
                     let mut cursor = ip + 1;
                     for argument_index in 0..argument_count {
@@ -4931,17 +4799,12 @@ fn detect_long_ops_region_inner(
                         }
                         let argument = match send.op1_type {
                             OpType::Cv | OpType::Tmp | OpType::Var => {
-                                add_mask_slot(
-                                    &mut long_input_mask,
-                                    send.op1,
-                                    total_slots,
-                                )?;
+                                add_mask_slot(&mut long_input_mask, send.op1, total_slots)?;
                                 QuickLongOperand::Slot(send.op1)
                             }
-                            OpType::Const => QuickLongOperand::Const(long_literal(
-                                op_array,
-                                send.op1,
-                            )?),
+                            OpType::Const => {
+                                QuickLongOperand::Const(long_literal(op_array, send.op1)?)
+                            }
                             OpType::Unused => return None,
                         };
                         arguments[argument_index] = argument;
@@ -4953,21 +4816,18 @@ fn detect_long_ops_region_inner(
                     if do_fcall.opcode != OpCode::DoFcall {
                         return None;
                     }
-                    let destination = matches!(
-                        do_fcall.result_type,
-                        OpType::Tmp | OpType::Var
-                    )
-                    .then(|| {
-                        op_array
-                            .instructions
-                            .get(cursor + 1)
-                            .copied()
-                            .and_then(long_assign)
-                            .and_then(|(destination, source)| {
-                                (source == do_fcall.result).then_some(destination)
-                            })
-                    })
-                    .flatten();
+                    let destination = matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
+                        .then(|| {
+                            op_array
+                                .instructions
+                                .get(cursor + 1)
+                                .copied()
+                                .and_then(long_assign)
+                                .and_then(|(destination, source)| {
+                                    (source == do_fcall.result).then_some(destination)
+                                })
+                        })
+                        .flatten();
                     let resume_ip = ip;
                     ip = cursor + 1;
                     if destination.is_some() {
@@ -4989,11 +4849,7 @@ fn detect_long_ops_region_inner(
                         && argument_count != 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
                     {
-                        add_mask_slot(
-                            &mut long_output_mask,
-                            call_result,
-                            total_slots,
-                        )?;
+                        add_mask_slot(&mut long_output_mask, call_result, total_slots)?;
                         QuickLongOp::ObjectLongMethodCall {
                             call: QuickObjectLongMethodCall {
                                 guard: outer_guard,
@@ -5009,11 +4865,7 @@ fn detect_long_ops_region_inner(
                     } else if argument_count == 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
                     {
-                        add_mask_slot(
-                            &mut long_output_mask,
-                            call_result,
-                            total_slots,
-                        )?;
+                        add_mask_slot(&mut long_output_mask, call_result, total_slots)?;
                         QuickLongOp::PropertyGetterCall {
                             call,
                             result: call_result,
@@ -5021,11 +4873,7 @@ fn detect_long_ops_region_inner(
                     } else if argument_count != 0
                         && matches!(do_fcall.result_type, OpType::Tmp | OpType::Var)
                     {
-                        add_mask_slot(
-                            &mut long_output_mask,
-                            call_result,
-                            total_slots,
-                        )?;
+                        add_mask_slot(&mut long_output_mask, call_result, total_slots)?;
                         QuickLongOp::ScalarMethodCall {
                             call,
                             result: call_result,
@@ -5036,37 +4884,24 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::AssignConcat => {
-                if instruction.op1_type != OpType::Cv
-                    || instruction.result_type != OpType::Unused
-                {
+                if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
                 }
                 let source = match instruction.op2_type {
                     OpType::Const => {
-                        op_array
-                            .literals
-                            .get(instruction.op2 as usize)?
-                            .as_str()?;
+                        op_array.literals.get(instruction.op2 as usize)?.as_str()?;
                         QuickStringAppendSource::Literal(instruction.op2)
                     }
                     OpType::Cv
                         if instruction.op2 != instruction.op1
                             && cv_unmodified_in_region(region, instruction.op2) =>
                     {
-                        add_mask_slot(
-                            &mut string_input_mask,
-                            instruction.op2,
-                            total_slots,
-                        )?;
+                        add_mask_slot(&mut string_input_mask, instruction.op2, total_slots)?;
                         QuickStringAppendSource::Slot(instruction.op2)
                     }
                     _ => return None,
                 };
-                add_mask_slot(
-                    &mut string_append_mask,
-                    instruction.op1,
-                    total_slots,
-                )?;
+                add_mask_slot(&mut string_append_mask, instruction.op1, total_slots)?;
                 has_string_append = true;
                 let resume_ip = ip;
                 ip += 1;
@@ -5227,22 +5062,23 @@ fn detect_long_ops_region_inner(
         ops.push(op);
     }
 
-    if closed_loop && let (
-        Some(QuickLongOp::BranchUnlessLt {
-            lhs,
-            rhs,
-            condition_tmp,
-            false_target,
-            next_target,
-            ..
-        }),
-        Some(QuickLongOp::PostIncJump {
-            value,
-            result,
-            target,
-            resume_ip,
-        }),
-    ) = (ops.first().copied(), ops.last().copied())
+    if closed_loop
+        && let (
+            Some(QuickLongOp::BranchUnlessLt {
+                lhs,
+                rhs,
+                condition_tmp,
+                false_target,
+                next_target,
+                ..
+            }),
+            Some(QuickLongOp::PostIncJump {
+                value,
+                result,
+                target,
+                resume_ip,
+            }),
+        ) = (ops.first().copied(), ops.last().copied())
     {
         if target.unresolved_ip()? == header_ip {
             *ops.last_mut()? = QuickLongOp::PostIncLoopLt {
@@ -5321,8 +5157,7 @@ fn detect_long_ops_region_inner(
 
     if let Some(source) = typed_invariant_source.as_mut() {
         if json_fetch_mask == 0
-            || json_fetch_mask
-                & !(json_parent_mask | long_input_mask | json_string_source_mask)
+            || json_fetch_mask & !(json_parent_mask | long_input_mask | json_string_source_mask)
                 != 0
         {
             return None;
@@ -5331,10 +5166,7 @@ fn detect_long_ops_region_inner(
         while outputs != 0 {
             let result = outputs.trailing_zeros() as u16;
             outputs &= outputs - 1;
-            let path = json_paths
-                .get(result as usize)?
-                .as_ref()?
-                .clone();
+            let path = json_paths.get(result as usize)?.as_ref()?.clone();
             if path.is_empty() {
                 return None;
             }
@@ -5871,9 +5703,18 @@ for ($i = 0; $i < 100; $i++) {
         ));
         assert_eq!(plan.argument_program.output_count, 3);
         assert_eq!(plan.argument_program.input_count, 0);
-        assert_eq!(plan.argument_program.outputs[0], QuickDoubleSource::Constant(1.5));
-        assert_eq!(plan.argument_program.outputs[1], QuickDoubleSource::Constant(2.5));
-        assert_eq!(plan.argument_program.outputs[2], QuickDoubleSource::Constant(2.0));
+        assert_eq!(
+            plan.argument_program.outputs[0],
+            QuickDoubleSource::Constant(1.5)
+        );
+        assert_eq!(
+            plan.argument_program.outputs[1],
+            QuickDoubleSource::Constant(2.5)
+        );
+        assert_eq!(
+            plan.argument_program.outputs[2],
+            QuickDoubleSource::Constant(2.0)
+        );
         assert_eq!(plan.accumulator_cv, 1);
         assert_eq!(plan.induction_cv, 2);
     }
@@ -5933,11 +5774,7 @@ for ($i = 0; $i < 100; $i++) {
                     && (instruction.op1 as usize) < *ip
             })
             .find_map(|(backedge, instruction)| {
-                detect_long_induction_loop(
-                    &main.op_array,
-                    instruction.op1 as usize,
-                    backedge,
-                )
+                detect_long_induction_loop(&main.op_array, instruction.op1 as usize, backedge)
             })
             .expect("source should contain an induction-only quick loop")
     }
@@ -5981,10 +5818,11 @@ for ($i = 0; $i < 100; $i++) {
             .expect("stable associative json_decode should become a prelude");
         assert_eq!(source.projections.len(), 3);
         assert_eq!(source.long_output_mask.count_ones(), 3);
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::JsonProjectionStep { .. }
-        )));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::JsonProjectionStep { .. }))
+        );
         assert!(source.projections.iter().any(|output| {
             matches!(
                 output.path.as_ref(),
@@ -6020,14 +5858,18 @@ for ($i = 0; $i < 100; $i++) {
             .expect("fixed string projection should become a typed prelude");
         assert_eq!(source.string_output_mask.count_ones(), 1);
         assert_eq!(source.long_output_mask.count_ones(), 1);
-        assert!(source
-            .projections
-            .iter()
-            .any(|projection| projection.kind == QuickInvariantValueKind::String));
-        assert!(source
-            .projections
-            .iter()
-            .any(|projection| projection.kind == QuickInvariantValueKind::StringLength));
+        assert!(
+            source
+                .projections
+                .iter()
+                .any(|projection| projection.kind == QuickInvariantValueKind::String)
+        );
+        assert!(
+            source
+                .projections
+                .iter()
+                .any(|projection| projection.kind == QuickInvariantValueKind::StringLength)
+        );
     }
 
     #[test]
@@ -6065,10 +5907,7 @@ for ($i = 0; $i < 100; $i++) {
             .expect("associative JSON source should be retained");
         assert_eq!(source.double_output_mask.count_ones(), 1);
         assert_eq!(source.projections.len(), 1);
-        assert_eq!(
-            source.projections[0].kind,
-            QuickInvariantValueKind::Double
-        );
+        assert_eq!(source.projections[0].kind, QuickInvariantValueKind::Double);
         assert_eq!(plan.argument_program.input_count, 1);
         assert_eq!(
             plan.argument_program.input_slots[0],
@@ -6097,13 +5936,11 @@ echo $a + $b + $c;
             .iter()
             .enumerate()
             .find(|(_, instruction)| {
-                instruction.opcode == OpCode::FetchDimR
-                    && instruction.extended_value != 0
+                instruction.opcode == OpCode::FetchDimR && instruction.extended_value != 0
             })
             .expect("compiler should mark a straight typed region entry");
         let block_idx = entry.extended_value as usize - 1;
-        let BlockPlan::QuickLongOps(plan) = &main.op_array.block_plans[block_idx]
-        else {
+        let BlockPlan::QuickLongOps(plan) = &main.op_array.block_plans[block_idx] else {
             panic!("marked entry must reference a typed region plan");
         };
         assert_eq!(plan.header_ip, entry_ip);
@@ -6151,10 +5988,11 @@ for ($i = 0; $i < 100; $i++) {
                 ..
             }
         )));
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::ComposedPropertyCall { .. }
-        )));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::ComposedPropertyCall { .. }))
+        );
     }
 
     #[test]
@@ -6169,14 +6007,17 @@ for ($i = 0; $i < 100; $i++) {
 ",
         );
         assert_ne!(plan.object_input_mask, 0);
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::ObjectPropertyLong { .. }
-        )));
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::ObjectPropertyStringLength { .. }
-        )));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::ObjectPropertyLong { .. }))
+        );
+        assert!(
+            plan.ops.iter().any(|operation| matches!(
+                operation,
+                QuickLongOp::ObjectPropertyStringLength { .. }
+            ))
+        );
     }
 
     fn foreach_long_accumulate_plan(source: &str) -> QuickForeachLongAccumulateLoop {
@@ -6240,23 +6081,24 @@ foreach ($values as $key => $value) {
 }
 ",
         );
-        assert!(main
-            .op_array
-            .instructions
-            .iter()
-            .enumerate()
-            .filter(|(ip, instruction)| {
-                matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
-                    && (instruction.op1 as usize) < *ip
-            })
-            .all(|(backedge, instruction)| {
-                detect_foreach_long_accumulate_loop(
-                    &main.op_array,
-                    instruction.op1 as usize,
-                    backedge,
-                )
-                .is_none()
-            }));
+        assert!(
+            main.op_array
+                .instructions
+                .iter()
+                .enumerate()
+                .filter(|(ip, instruction)| {
+                    matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                        && (instruction.op1 as usize) < *ip
+                })
+                .all(|(backedge, instruction)| {
+                    detect_foreach_long_accumulate_loop(
+                        &main.op_array,
+                        instruction.op1 as usize,
+                        backedge,
+                    )
+                    .is_none()
+                })
+        );
     }
 
     #[test]
@@ -6383,14 +6225,8 @@ for ($i = 0; $i < 100; $i++) {
                 rhs: ScalarLongSource::Constant(1),
             }
         ));
-        assert_eq!(
-            argument_plan.outputs[0],
-            ScalarLongSource::Input(1)
-        );
-        assert_eq!(
-            argument_plan.outputs[1],
-            ScalarLongSource::Temporary(0)
-        );
+        assert_eq!(argument_plan.outputs[0], ScalarLongSource::Input(1));
+        assert_eq!(argument_plan.outputs[1], ScalarLongSource::Temporary(0));
     }
 
     #[test]
@@ -6542,13 +6378,15 @@ for ($i = 0; $i < 100; $i++) {
     #[test]
     fn detects_invariant_string_length_as_accumulate_term() {
         for update in ["$i++", "++$i"] {
-            let source = format!("<?php
+            let source = format!(
+                "<?php
 $string = 'abcd';
 $sum = 0;
 for ($i = 0; $i < 100; {update}) {{
     $sum += strlen($string);
 }}
-");
+"
+            );
             let plan = quick_plan(&source);
             assert_eq!(plan.induction_cv, 2);
             assert_eq!(plan.accumulator_cv, 1);
@@ -6579,13 +6417,15 @@ for ($i = 0; $i < 100; {update}) {{
     #[test]
     fn detects_long_abs_as_accumulate_term() {
         for expression in ["abs($value)", "abs($i)"] {
-            let source = format!("<?php
+            let source = format!(
+                "<?php
 $value = -7;
 $sum = 0;
 for ($i = 0; $i < 100; ++$i) {{
     $sum += {expression};
 }}
-");
+"
+            );
             let plan = quick_plan(&source);
             assert!(matches!(
                 plan.term,
@@ -6597,33 +6437,41 @@ for ($i = 0; $i < 100; ++$i) {{
 
     #[test]
     fn detects_prefix_and_postfix_induction_only_loops() {
-        let postfix = induction_plan("<?php
+        let postfix = induction_plan(
+            "<?php
 $limit = 100;
 $i = 0;
 while ($i < $limit) {
     $i++;
 }
-");
+",
+        );
         assert!(matches!(postfix.bound, QuickLongBound::Cv(0)));
         assert_eq!(postfix.increment_kind, QuickIncrementKind::Post);
 
-        let prefix = induction_plan("<?php
+        let prefix = induction_plan(
+            "<?php
 for ($i = 0; $i < 100; ++$i) {
 }
-");
+",
+        );
         assert!(matches!(prefix.bound, QuickLongBound::Const(100)));
         assert_eq!(prefix.increment_kind, QuickIncrementKind::Pre);
 
         #[cfg(feature = "quick-loops")]
         {
-            let main = compile_main("<?php
+            let main = compile_main(
+                "<?php
 for ($i = 0; $i < 100; ++$i) {
 }
-");
-            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
-                plan,
-                crate::vm::planner::BlockPlan::QuickLongInduction(_)
-            )));
+",
+            );
+            assert!(
+                main.op_array.block_plans.iter().any(|plan| matches!(
+                    plan,
+                    crate::vm::planner::BlockPlan::QuickLongInduction(_)
+                ))
+            );
         }
     }
 
@@ -6653,10 +6501,12 @@ for ($i = 0; $i < 100; $i++) {
         #[cfg(feature = "quick-loops")]
         {
             let main = compile_main(source);
-            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
-                plan,
-                crate::vm::planner::BlockPlan::QuickLongOps(_)
-            )));
+            assert!(
+                main.op_array
+                    .block_plans
+                    .iter()
+                    .any(|plan| matches!(plan, crate::vm::planner::BlockPlan::QuickLongOps(_)))
+            );
         }
     }
 
@@ -6747,8 +6597,7 @@ for ($i = 0; $i < 100; $i++) {{
                 plan.term,
                 QuickLongTerm::ArrayIndex {
                     array_cv: 0,
-                    index:
-                        QuickArrayIndex::StringLiteral(_)
+                    index: QuickArrayIndex::StringLiteral(_)
                         | QuickArrayIndex::Long(QuickLongOperand::Const(7)),
                     destination: Some(2),
                     ..
@@ -6837,10 +6686,9 @@ for ($i = 0; $i < 100; $i++) {
 
     #[test]
     fn detects_literal_and_invariant_string_append_as_typed_ops() {
-        for (setup, expression, expected_slot) in [
-            ("", "'x'", None),
-            ("$suffix = 'yz';", "$suffix", Some(0)),
-        ] {
+        for (setup, expression, expected_slot) in
+            [("", "'x'", None), ("$suffix = 'yz';", "$suffix", Some(0))]
+        {
             let plan = long_ops_plan(&format!(
                 "<?php
 {setup}
@@ -6877,16 +6725,13 @@ for ($i = 0; $i < 4; $i++) {
 }
 ";
         let plan = long_ops_plan(source);
-        assert!(plan
-            .ops
-            .iter()
-            .any(|op| matches!(
-                op,
-                QuickLongOp::FetchArrayLong {
-                    destination: Some(_),
-                    ..
-                }
-            )));
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            QuickLongOp::FetchArrayLong {
+                destination: Some(_),
+                ..
+            }
+        )));
         assert!(matches!(
             plan.ops.as_slice(),
             [
@@ -6899,10 +6744,12 @@ for ($i = 0; $i < 4; $i++) {
         #[cfg(feature = "quick-loops")]
         {
             let main = compile_main(source);
-            assert!(main.op_array.block_plans.iter().any(|plan| matches!(
-                plan,
-                crate::vm::planner::BlockPlan::QuickLongOps(_)
-            )));
+            assert!(
+                main.op_array
+                    .block_plans
+                    .iter()
+                    .any(|plan| matches!(plan, crate::vm::planner::BlockPlan::QuickLongOps(_)))
+            );
         }
         assert_ne!(plan.array_input_mask, 0);
         assert_eq!(
@@ -7001,24 +6848,35 @@ for ($i = 0; $i < 2; $i++) {
 }
 ",
         );
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::Binary {
-                kind: ScalarLongOpKind::BitwiseAnd,
-                ..
-            }
-        )), "{:#?}", plan.ops);
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::FetchArrayLong {
-                index: QuickArrayIndex::Long(QuickLongOperand::Slot(_)),
-                ..
-            }
-        )), "{:#?}", plan.ops);
-        assert!(plan.ops.iter().any(|operation| matches!(
-            operation,
-            QuickLongOp::AddAssign { .. }
-        )), "{:#?}", plan.ops);
+        assert!(
+            plan.ops.iter().any(|operation| matches!(
+                operation,
+                QuickLongOp::Binary {
+                    kind: ScalarLongOpKind::BitwiseAnd,
+                    ..
+                }
+            )),
+            "{:#?}",
+            plan.ops
+        );
+        assert!(
+            plan.ops.iter().any(|operation| matches!(
+                operation,
+                QuickLongOp::FetchArrayLong {
+                    index: QuickArrayIndex::Long(QuickLongOperand::Slot(_)),
+                    ..
+                }
+            )),
+            "{:#?}",
+            plan.ops
+        );
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::AddAssign { .. })),
+            "{:#?}",
+            plan.ops
+        );
     }
 
     #[test]
@@ -7046,16 +6904,13 @@ for ($i = 0; $i < 3; $i++) {
                 .count(),
             1
         );
-        assert!(plan
-            .ops
-            .iter()
-            .any(|op| matches!(
-                op,
-                QuickLongOp::FetchArrayLong {
-                    destination: Some(_),
-                    ..
-                }
-            )));
+        assert!(plan.ops.iter().any(|op| matches!(
+            op,
+            QuickLongOp::FetchArrayLong {
+                destination: Some(_),
+                ..
+            }
+        )));
     }
 
     #[test]
@@ -7082,10 +6937,11 @@ for ($i = 0; $i < 3; $i++) {
                 .count(),
             1
         );
-        assert!(plan
-            .ops
-            .iter()
-            .any(|op| matches!(op, QuickLongOp::BranchUnlessLt { .. })));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|op| matches!(op, QuickLongOp::BranchUnlessLt { .. }))
+        );
         assert!(plan.ops.iter().any(|op| matches!(
             op,
             QuickLongOp::FetchArrayLong {
@@ -7093,10 +6949,11 @@ for ($i = 0; $i < 3; $i++) {
                 ..
             }
         )));
-        assert!(plan
-            .ops
-            .iter()
-            .any(|op| matches!(op, QuickLongOp::ConditionalAddAssign { .. })));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|op| matches!(op, QuickLongOp::ConditionalAddAssign { .. }))
+        );
     }
 
     #[test]
@@ -7162,10 +7019,11 @@ for ($i = 0; $i < $n; $i++) {
 }
 ",
         );
-        assert!(plan
-            .ops
-            .iter()
-            .any(|op| matches!(op, QuickLongOp::ModConst { divisor: 2, .. })));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|op| matches!(op, QuickLongOp::ModConst { divisor: 2, .. }))
+        );
         assert!(plan.ops.iter().any(|op| matches!(
             op,
             QuickLongOp::ConditionalAddAssign {
@@ -7268,24 +7126,22 @@ for ($i = 0; $i < 100; $i++) {
 }
 ",
         );
-        assert!(plan
-            .ops
-            .iter()
-            .any(|operation| matches!(
-                operation,
-                QuickLongOp::ObjectLongMethodCall { .. }
-            )));
-        assert!(plan
-            .ops
-            .iter()
-            .any(|operation| matches!(
-                operation,
-                QuickLongOp::ScalarMethodCall { .. }
-            )));
-        assert!(!plan
-            .ops
-            .iter()
-            .any(|operation| matches!(operation, QuickLongOp::Assign { .. })));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::ObjectLongMethodCall { .. }))
+        );
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::ScalarMethodCall { .. }))
+        );
+        assert!(
+            !plan
+                .ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::Assign { .. }))
+        );
         assert!(plan.ops.iter().any(|operation| matches!(
             operation,
             QuickLongOp::TraceGuard {
@@ -7347,10 +7203,11 @@ for ($i = 0; $i < 100; $i++) {
 }
 ",
         );
-        assert!(plan
-            .ops
-            .iter()
-            .any(|operation| matches!(operation, QuickLongOp::StoreArrayLong { .. })));
+        assert!(
+            plan.ops
+                .iter()
+                .any(|operation| matches!(operation, QuickLongOp::StoreArrayLong { .. }))
+        );
         assert!(plan.array_update_fusions.iter().all(Option::is_none));
     }
 
@@ -7439,5 +7296,4 @@ for ($i = 0; $i < 100; $i++) {
             2
         );
     }
-
 }

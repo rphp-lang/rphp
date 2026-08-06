@@ -1,5 +1,5 @@
-use super::opcode::OpCode;
 use super::function::FunctionCommon;
+use super::opcode::OpCode;
 use crate::value::ObjectLayout;
 
 /// InitFcall/InitMethodCall flag: every source argument is positional and at
@@ -54,10 +54,10 @@ const METHOD_LONG_ARGS_GUARD: u16 = 1 << 9;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OpType {
     Unused = 0,
-    Const = 1,   // literal from OpArray.literals
-    Tmp = 2,     // temporary variable
-    Var = 3,     // VAR (refcounted temporary)
-    Cv = 4,      // compiled variable ($a, $b, ...)
+    Const = 1, // literal from OpArray.literals
+    Tmp = 2,   // temporary variable
+    Var = 3,   // VAR (refcounted temporary)
+    Cv = 4,    // compiled variable ($a, $b, ...)
 }
 
 /// Single VM instruction — compact, 16 bytes.
@@ -113,8 +113,8 @@ impl Instruction {
     /// result fact without repeating that guard for every operation.
     #[inline(always)]
     pub fn set_method_return_guard_type(&mut self, known: KnownScalarType) {
-        self._pad = (self._pad & !METHOD_RETURN_GUARD_MASK)
-            | ((known as u16) << METHOD_RETURN_GUARD_SHIFT);
+        self._pad =
+            (self._pad & !METHOD_RETURN_GUARD_MASK) | ((known as u16) << METHOD_RETURN_GUARD_SHIFT);
     }
 
     #[inline(always)]
@@ -140,8 +140,8 @@ impl Instruction {
 
     #[inline]
     pub fn set_known_result_type(&mut self, known: KnownScalarType) {
-        self._pad = (self._pad & !KNOWN_RESULT_TYPE_MASK)
-            | ((known as u16) << KNOWN_RESULT_TYPE_SHIFT);
+        self._pad =
+            (self._pad & !KNOWN_RESULT_TYPE_MASK) | ((known as u16) << KNOWN_RESULT_TYPE_SHIFT);
     }
 }
 
@@ -221,9 +221,7 @@ impl InlineCache {
 
     #[inline(always)]
     pub fn is_dynamic_property_read(&self) -> bool {
-        self.class_id == 0
-            && self.property_flags() == 1
-            && !self.func.is_null()
+        self.class_id == 0 && self.property_flags() == 1 && !self.func.is_null()
     }
 
     #[inline(always)]
@@ -282,9 +280,19 @@ impl InlineCache {
     ) {
         self.func = func;
         self.class_id = class_id;
-        self.prop_info = (if fusion_eligible { Self::METHOD_FUSION_ELIGIBLE } else { 0 })
-            | (if long_property_plan { Self::METHOD_LONG_PROPERTY_PLAN } else { 0 })
-            | (if property_getter_plan { Self::METHOD_PROPERTY_GETTER_PLAN } else { 0 });
+        self.prop_info = (if fusion_eligible {
+            Self::METHOD_FUSION_ELIGIBLE
+        } else {
+            0
+        }) | (if long_property_plan {
+            Self::METHOD_LONG_PROPERTY_PLAN
+        } else {
+            0
+        }) | (if property_getter_plan {
+            Self::METHOD_PROPERTY_GETTER_PLAN
+        } else {
+            0
+        });
     }
 
     #[inline(always)]

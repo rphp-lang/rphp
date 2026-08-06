@@ -1,5 +1,4 @@
 /// End-to-end tests for include/require/include_once/require_once statements.
-
 mod common;
 use common::run_php;
 
@@ -38,7 +37,8 @@ fn write_temp_php(name: &str, content: &str) -> (TempDir, String) {
     let dir = TempDir::new();
     let file_path = dir.path().join(name);
     let mut f = std::fs::File::create(&file_path).expect("failed to create temp file");
-    f.write_all(content.as_bytes()).expect("failed to write temp file");
+    f.write_all(content.as_bytes())
+        .expect("failed to write temp file");
     let abs = file_path.to_string_lossy().to_string();
     (dir, abs)
 }
@@ -64,10 +64,7 @@ fn test_include_shares_variables() {
     // Included file should be able to see variables set before the include
     // and set variables that are visible after the include.
     let (_dir, path) = write_temp_php("share_vars.php", "<?php echo $x; $y = 'world';");
-    let source = format!(
-        "<?php $x = 'hello'; include '{}'; echo $y;",
-        path
-    );
+    let source = format!("<?php $x = 'hello'; include '{}'; echo $y;", path);
     let output = run_php(&source);
     assert_eq!(output, "helloworld");
 }
@@ -115,33 +112,30 @@ fn test_include_missing_file_warning() {
 #[test]
 fn test_include_once_only_runs_once() {
     let (_dir, path) = write_temp_php("once.php", "<?php echo 'X';");
-    let source = format!(
-        "<?php include_once '{}'; include_once '{}';",
-        path, path
-    );
+    let source = format!("<?php include_once '{}'; include_once '{}';", path, path);
     let output = run_php(&source);
-    assert_eq!(output, "X", "include_once should only execute the file once");
+    assert_eq!(
+        output, "X",
+        "include_once should only execute the file once"
+    );
 }
 
 #[test]
 fn test_require_once_only_runs_once() {
     let (_dir, path) = write_temp_php("ronce.php", "<?php echo 'Y';");
-    let source = format!(
-        "<?php require_once '{}'; require_once '{}';",
-        path, path
-    );
+    let source = format!("<?php require_once '{}'; require_once '{}';", path, path);
     let output = run_php(&source);
-    assert_eq!(output, "Y", "require_once should only execute the file once");
+    assert_eq!(
+        output, "Y",
+        "require_once should only execute the file once"
+    );
 }
 
 #[test]
 fn test_include_once_and_include() {
     // include_once followed by regular include should run twice
     let (_dir, path) = write_temp_php("mixed.php", "<?php echo 'Z';");
-    let source = format!(
-        "<?php include_once '{}'; include '{}';",
-        path, path
-    );
+    let source = format!("<?php include_once '{}'; include '{}';", path, path);
     let output = run_php(&source);
     assert_eq!(output, "ZZ", "include_once + include should run file twice");
 }
@@ -156,7 +150,10 @@ fn test_nested_include() {
 
     let outer_path = dir.path().join("outer.php");
     let mut f = std::fs::File::create(&outer_path).unwrap();
-    let outer_content = format!("<?php echo 'outer'; include '{}';", inner_path.to_string_lossy());
+    let outer_content = format!(
+        "<?php echo 'outer'; include '{}';",
+        inner_path.to_string_lossy()
+    );
     f.write_all(outer_content.as_bytes()).unwrap();
 
     let source = format!("<?php include '{}';", outer_path.to_string_lossy());
@@ -175,7 +172,9 @@ function f() {{
     include '{}';
 }}
 f();
-"#, path);
+"#,
+        path
+    );
     let output = run_php(&source);
     assert_eq!(output, "42");
 }

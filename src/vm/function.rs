@@ -1,10 +1,10 @@
 use std::cell::Cell;
 use std::ptr::NonNull;
 
-use crate::compiler::OpArray;
-use crate::value::Value;
-use crate::runtime::ExecutorGlobals;
 use super::frame::ExecuteData;
+use crate::compiler::OpArray;
+use crate::runtime::ExecutorGlobals;
+use crate::value::Value;
 
 /// Scalar input consumed by a precompiled long-property method plan.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -16,11 +16,26 @@ pub enum LongPlanSource {
 /// One typed mutation in a frame-free long-property method plan.
 #[derive(Debug, Clone, Copy)]
 pub enum LongPropertyOp {
-    Add { property: u8, rhs: LongPlanSource },
-    Sub { property: u8, rhs: LongPlanSource },
-    Min { property: u8, candidate: LongPlanSource },
-    Max { property: u8, candidate: LongPlanSource },
-    Set { property: u8, value: LongPlanSource },
+    Add {
+        property: u8,
+        rhs: LongPlanSource,
+    },
+    Sub {
+        property: u8,
+        rhs: LongPlanSource,
+    },
+    Min {
+        property: u8,
+        candidate: LongPlanSource,
+    },
+    Max {
+        property: u8,
+        candidate: LongPlanSource,
+    },
+    Set {
+        property: u8,
+        value: LongPlanSource,
+    },
 }
 
 /// Inline-cache guard used to resolve a declared public property to its slot.
@@ -453,11 +468,7 @@ fn validate_scalar_double_false_edge_source(
         {
             Err("false edge references a true-edge temporary")
         }
-        _ => validate_scalar_double_register_source(
-            source,
-            available_temporaries,
-            input_count,
-        ),
+        _ => validate_scalar_double_register_source(source, available_temporaries, input_count),
     }
 }
 
@@ -848,8 +859,9 @@ impl ScalarLongCallGuard {
     #[inline(always)]
     pub const fn cache_ip(self) -> usize {
         match self {
-            Self::FunctionCache { cache_ip }
-            | Self::MethodCache { cache_ip, .. } => cache_ip as usize,
+            Self::FunctionCache { cache_ip } | Self::MethodCache { cache_ip, .. } => {
+                cache_ip as usize
+            }
         }
     }
 }
@@ -958,9 +970,11 @@ impl ParamTypeHint {
             ParamTypeHint::Void => "void".to_string(),
             ParamTypeHint::Mixed => "mixed".to_string(),
             ParamTypeHint::Never => "never".to_string(),
-            ParamTypeHint::Union(parts) => {
-                parts.iter().map(|p| p.display_name()).collect::<Vec<_>>().join("|")
-            }
+            ParamTypeHint::Union(parts) => parts
+                .iter()
+                .map(|p| p.display_name())
+                .collect::<Vec<_>>()
+                .join("|"),
         }
     }
 }
@@ -1174,7 +1188,10 @@ impl FunctionCommon {
         self.plan.call == CallStrategy::Fast
             && self.sig.ref_args == 0
             && self.sig.param_type_hints.iter().all(|hint| {
-                matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int)
+                matches!(
+                    hint,
+                    ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+                )
             })
             && matches!(
                 self.sig.return_type_hint,
@@ -1190,7 +1207,10 @@ impl FunctionCommon {
         self.plan.call.is_compact_user_call()
             && self.sig.ref_args == 0
             && self.sig.param_type_hints.iter().all(|hint| {
-                matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Float)
+                matches!(
+                    hint,
+                    ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Float
+                )
             })
             && matches!(
                 self.sig.return_type_hint,
@@ -1216,15 +1236,17 @@ impl FunctionCommon {
             && self.sig.ref_args == 0
             && self.plan.ret == ReturnStrategy::Fast
             && (self.sig.param_type_hints.is_empty()
-                || self.sig.param_type_hints.iter().all(|h|
-                    matches!(h,
+                || self.sig.param_type_hints.iter().all(|h| {
+                    matches!(
+                        h,
                         ParamTypeHint::None
                             | ParamTypeHint::Int
                             | ParamTypeHint::Float
                             | ParamTypeHint::String
                             | ParamTypeHint::Bool
                             | ParamTypeHint::Mixed
-                    )))
+                    )
+                }))
     }
 }
 
@@ -1270,8 +1292,7 @@ pub type InternalFunctionHandler = fn(
 /// and cannot access ExecutorGlobals. Built-ins that mutate arguments, retain
 /// borrows, depend on caller scope, or re-enter the VM must keep the ordinary
 /// ExecuteData ABI.
-pub type DirectInternalFunctionHandler =
-    fn(&[Value]) -> Result<Value, crate::vm::execute::VmError>;
+pub type DirectInternalFunctionHandler = fn(&[Value]) -> Result<Value, crate::vm::execute::VmError>;
 
 /// Internal (built-in) function — strlen, array_map, etc.
 #[repr(C)]

@@ -1,11 +1,11 @@
-use rphp::lexer::Lexer;
-use rphp::parser::Parser;
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
-use rphp::vm::execute::{self};
-use rphp::vm::function::FunctionCommon;
+use rphp::lexer::Lexer;
+use rphp::parser::Parser;
 use rphp::runtime::ExecutorGlobals;
 use rphp::stdlib;
+use rphp::vm::execute::{self};
+use rphp::vm::function::FunctionCommon;
 use rphp::vm::stats;
 
 fn parse_cli_args(args: &[String]) -> String {
@@ -42,10 +42,12 @@ fn parse_cli_args(args: &[String]) -> String {
     // No args — read from stdin
     use std::io::Read;
     let mut buf = String::new();
-    std::io::stdin().read_to_string(&mut buf).unwrap_or_else(|e| {
-        eprintln!("Could not read stdin: {}", e);
-        std::process::exit(1);
-    });
+    std::io::stdin()
+        .read_to_string(&mut buf)
+        .unwrap_or_else(|e| {
+            eprintln!("Could not read stdin: {}", e);
+            std::process::exit(1);
+        });
     buf
 }
 
@@ -79,10 +81,11 @@ fn main() {
 
     // Register declared functions
     for (name, func) in &result.functions {
-        eg.register_function(name, &func.common as *const FunctionCommon).unwrap_or_else(|e| {
-            eprintln!("Fatal error: {}", e);
-            std::process::exit(255);
-        });
+        eg.register_function(name, &func.common as *const FunctionCommon)
+            .unwrap_or_else(|e| {
+                eprintln!("Fatal error: {}", e);
+                std::process::exit(255);
+            });
     }
 
     // Register class definitions

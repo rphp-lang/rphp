@@ -419,11 +419,13 @@ fn same_receiver_conditional_double_method_is_flattened_into_one_native_region()
             .map(|(_, _, _, _, method)| method)
             .expect("compiled FloatPipeline method")
     };
-    assert!(method("conditional")
-        .scalar_double_plan
-        .as_deref()
-        .and_then(|plan| plan.select)
-        .is_some());
+    assert!(
+        method("conditional")
+            .scalar_double_plan
+            .as_deref()
+            .and_then(|plan| plan.select)
+            .is_some()
+    );
     assert!(method("composed").composed_scalar_double_plan.is_some());
 }
 
@@ -533,7 +535,7 @@ fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
 fn monomorphic_float_method_uses_class_cache_and_double_jit() {
     let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
     let mut source = String::from(
-        "<?php class FloatModel { public function blend(float $a, float $b, float $c): float { return (($a + 1.5) * $b) / $c; } } function callBlend($model): float { return $model->blend(2.5, 4.0, 2.0); } $model = new FloatModel(); $total = 0.0;"
+        "<?php class FloatModel { public function blend(float $a, float $b, float $c): float { return (($a + 1.5) * $b) / $c; } } function callBlend($model): float { return $model->blend(2.5, 4.0, 2.0); } $model = new FloatModel(); $total = 0.0;",
     );
     for _ in 0..call_count {
         source.push_str("$total = $total + callBlend($model);");
@@ -650,10 +652,14 @@ fn nested_double_method_loop_zero_divisor_replays_canonical_php_error() {
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("accumulate"))
         .and_then(|(_, function)| {
-            function.op_array.block_plans.iter().find_map(|plan| match plan {
-                BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
-                _ => None,
-            })
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                    _ => None,
+                })
         })
         .expect("nested method Double loop");
     assert!(loop_plan.native_jit().is_compiled());

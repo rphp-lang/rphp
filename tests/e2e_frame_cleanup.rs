@@ -1,7 +1,6 @@
 /// E2E tests: frame cleanup — bitmap-driven slot cleanup correctness.
 /// Covers: scalar/heap overwrite sequences, mixed frames, generators,
 /// and large-frame fallback paths.
-
 mod common;
 use common::run_php;
 
@@ -10,11 +9,16 @@ use common::run_php;
 #[test]
 fn test_frame_cleanup_scalar_only() {
     // Pure scalar function — no heap slots, bitmap stays 0.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function add($a, $b) { return $a + $b; }
 echo add(1, 2);
 echo add(3, 4);
-"), "37");
+"
+        ),
+        "37"
+    );
 }
 
 // === Mixed scalar/heap frames: bitmap tracks per-slot ===
@@ -24,48 +28,65 @@ fn test_frame_cleanup_mixed_scalar_heap() {
     // Function that writes both scalar and heap values to different slots.
     // $a is int (scalar), $b is string (heap), $c is int (scalar).
     // Only $b's slot should be in heap_bitmap.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function mix($a, $b) {
     $c = $a + 1;
     $d = $b . '!';
     return $c . $d;
 }
 echo mix(10, 'hello');
-"), "11hello!");
+"
+        ),
+        "11hello!"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_heap_overwrite_with_scalar() {
     // Slot starts as heap (string), gets overwritten with scalar (int).
     // Bitmap should clear the heap bit; cleanup should not try to drop scalar.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $x = 'hello';  // heap
     $x = 42;       // scalar overwrites heap — bitmap clears
     return $x;
 }
 echo f();
-"), "42");
+"
+        ),
+        "42"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_scalar_overwrite_with_heap() {
     // Slot starts as scalar (int), gets overwritten with heap (string).
     // Bitmap should set the heap bit; cleanup drops the string.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $x = 42;       // scalar
     $x = 'hello';  // heap overwrites scalar — bitmap sets
     return $x;
 }
 echo f();
-"), "hello");
+"
+        ),
+        "hello"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_multiple_overwrites() {
     // Slot alternates scalar/heap multiple times.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $x = 1;         // scalar
     $x = 'a';       // heap
@@ -75,7 +96,10 @@ function f() {
     return $x;
 }
 echo f();
-"), "3");
+"
+        ),
+        "3"
+    );
 }
 
 // === Heap args from caller (SendVal) ===
@@ -84,11 +108,16 @@ echo f();
 fn test_frame_cleanup_heap_args_from_caller() {
     // Caller passes strings (heap) as args. Callee is scalar-only body.
     // cleanup must still drop the arg slots correctly.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function len($s) { return strlen($s); }
 echo len('hello');
 echo len('world!');
-"), "56");
+"
+        ),
+        "56"
+    );
 }
 
 // === Return value propagation ===
@@ -97,23 +126,33 @@ echo len('world!');
 fn test_frame_cleanup_heap_return_to_caller() {
     // Callee returns a string (heap). mark_caller_heap_return should mark
     // the caller's result TMP slot as heap.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function make_str() { return 'hello'; }
 $a = make_str();
 $b = make_str();
 echo $a . $b;
-"), "hellohello");
+"
+        ),
+        "hellohello"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_scalar_return_to_caller() {
     // Callee returns int (scalar). No bitmap update on caller.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function make_int() { return 42; }
 $a = make_int();
 $b = make_int();
 echo $a + $b;
-"), "84");
+"
+        ),
+        "84"
+    );
 }
 
 // === Deep recursion with mixed types ===
@@ -122,7 +161,9 @@ echo $a + $b;
 fn test_frame_cleanup_recursive_mixed() {
     // Recursive function that alternates returning string/int.
     // Each frame has different bitmap state.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function rec($n) {
     if ($n <= 0) return 'done';
     if ($n % 2 == 0) {
@@ -134,7 +175,10 @@ function rec($n) {
     }
 }
 echo rec(10);
-"), "done");
+"
+        ),
+        "done"
+    );
 }
 
 // === Generator resume with heap values ===
@@ -142,7 +186,9 @@ echo rec(10);
 #[test]
 fn test_frame_cleanup_generator_heap_resume() {
     // Generator yields heap values. frame_restore_slot must update bitmap.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function gen() {
     $s = 'hello';
     yield $s;
@@ -154,13 +200,18 @@ $g->rewind();
 echo $g->current() . '|';
 $g->next();
 echo $g->current();
-"), "hello|hello world");
+"
+        ),
+        "hello|hello world"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_generator_scalar_resume() {
     // Generator with scalar values only.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function gen() {
     $x = 1;
     yield $x;
@@ -172,7 +223,10 @@ $g->rewind();
 echo $g->current() . '|';
 $g->next();
 echo $g->current();
-"), "1|11");
+"
+        ),
+        "1|11"
+    );
 }
 
 // === Exception/throw cleanup ===
@@ -181,28 +235,38 @@ echo $g->current();
 fn test_frame_cleanup_exception_with_heap() {
     // Function has heap slots when exception is thrown.
     // cleanup_frame_slots must correctly drop heap slots during unwind.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $s = 'temporary';
     $arr = [1, 2, 3];
     throw new Exception('boom');
 }
 try { f(); } catch (Exception $e) { echo $e->getMessage(); }
-"), "boom");
+"
+        ),
+        "boom"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_exception_after_heap_overwrite() {
     // Heap slot overwritten with scalar before throw.
     // Must not double-free the old heap value.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $s = 'hello';
     $s = 42;
     throw new Exception('ok');
 }
 try { f(); } catch (Exception $e) { echo $e->getMessage(); }
-"), "ok");
+"
+        ),
+        "ok"
+    );
 }
 
 // === Nested calls with bitmap tracking ===
@@ -211,7 +275,9 @@ try { f(); } catch (Exception $e) { echo $e->getMessage(); }
 fn test_frame_cleanup_nested_mixed_frames() {
     // outer() has heap, inner() is scalar-only.
     // Both frames have correct independent bitmap state.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function inner($n) { return $n * 2; }
 function outer() {
     $s = 'prefix';
@@ -219,21 +285,29 @@ function outer() {
     return $s . $n;
 }
 echo outer();
-"), "prefix42");
+"
+        ),
+        "prefix42"
+    );
 }
 
 // === Closure captures (heap values in frame) ===
 
 #[test]
 fn test_frame_cleanup_closure_capture_heap() {
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $s = 'captured';
     $fn = function() use ($s) { return $s . '!'; };
     return $fn();
 }
 echo f();
-"), "captured!");
+"
+        ),
+        "captured!"
+    );
 }
 
 // === Many TMP slots ===
@@ -241,25 +315,35 @@ echo f();
 #[test]
 fn test_frame_cleanup_many_tmps() {
     // Expression with many intermediate TMPs, all scalar.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f($a) {
     return $a + 1 + 2 + 3 + 4 + 5 + 6 + 7 + 8 + 9 + 10;
 }
 echo f(0);
-"), "55");
+"
+        ),
+        "55"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_many_heap_cvs() {
     // Many CV slots holding strings (heap).
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function f() {
     $a = 'a'; $b = 'b'; $c = 'c'; $d = 'd';
     $e = 'e'; $f = 'f'; $g = 'g'; $h = 'h';
     return $a . $b . $c . $d . $e . $f . $g . $h;
 }
 echo f();
-"), "abcdefgh");
+"
+        ),
+        "abcdefgh"
+    );
 }
 
 // === >64 slot fallback path ===
@@ -268,7 +352,9 @@ echo f();
 fn test_frame_cleanup_large_frame_fallback_scalar() {
     // Function with >64 local variables → falls back to scan-all cleanup.
     // All scalar — cleanup should be a no-op scan.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function big() {
     $v00=0;  $v01=1;  $v02=2;  $v03=3;  $v04=4;  $v05=5;  $v06=6;  $v07=7;
     $v08=8;  $v09=9;  $v10=10; $v11=11; $v12=12; $v13=13; $v14=14; $v15=15;
@@ -282,13 +368,18 @@ function big() {
     return $v00 + $v65;
 }
 echo big();
-"), "65");
+"
+        ),
+        "65"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_large_frame_fallback_heap() {
     // Function with >64 locals including heap values → scan-all must drop them.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function big_heap() {
     $v00='a'; $v01='b'; $v02='c'; $v03='d'; $v04='e'; $v05='f'; $v06='g'; $v07='h';
     $v08='i'; $v09='j'; $v10='k'; $v11='l'; $v12='m'; $v13='n'; $v14='o'; $v15='p';
@@ -302,13 +393,18 @@ function big_heap() {
     return $v00 . $v25 . $v64 . $v65;
 }
 echo big_heap();
-"), "azAABB");
+"
+        ),
+        "azAABB"
+    );
 }
 
 #[test]
 fn test_frame_cleanup_large_frame_fallback_exception() {
     // >64 locals + exception → scan-all cleanup during unwind.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function big_throw() {
     $v00='s0'; $v01='s1'; $v02='s2'; $v03='s3'; $v04='s4'; $v05='s5'; $v06='s6'; $v07='s7';
     $v08=0;  $v09=1;  $v10=2;  $v11=3;  $v12=4;  $v13=5;  $v14=6;  $v15=7;
@@ -322,7 +418,10 @@ function big_throw() {
     throw new Exception($v00 . $v64);
 }
 try { big_throw(); } catch (Exception $e) { echo $e->getMessage(); }
-"), "s0end1");
+"
+        ),
+        "s0end1"
+    );
 }
 
 // === Regression: SendVal with heap-type TMP operand ===
@@ -335,28 +434,40 @@ fn test_sendval_heap_tmp_string_concat() {
     // substr() returns a String TMP → passed as argument to another function.
     // Without proper clone in SendVal, the String would be bitwise-copied
     // and then double-freed when both the TMP slot and callee frame clean up.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function identity($s) { return $s; }
 $x = 'hello world';
 echo identity(substr($x, 0, 5));
 echo identity(substr($x, 6));
-"), "helloworld");
+"
+        ),
+        "helloworld"
+    );
 }
 
 #[test]
 fn test_sendval_heap_tmp_array_literal() {
     // Array expression result as TMP → passed to function.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function count_arr($arr) { return count($arr); }
 echo count_arr([1, 2, 3]);
 echo count_arr(array_merge([1], [2, 3, 4]));
-"), "34");
+"
+        ),
+        "34"
+    );
 }
 
 #[test]
 fn test_sendval_heap_tmp_string_repeated_calls() {
     // Multiple calls sending heap TMPs in sequence — stresses cleanup correctness.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function wrap($s) { return '[' . $s . ']'; }
 $base = 'abcdef';
 $r = '';
@@ -364,15 +475,23 @@ for ($i = 0; $i < 5; $i++) {
     $r .= wrap(substr($base, $i, 2));
 }
 echo $r;
-"), "[ab][bc][cd][de][ef]");
+"
+        ),
+        "[ab][bc][cd][de][ef]"
+    );
 }
 
 #[test]
 fn test_sendval_heap_tmp_nested_calls() {
     // Nested function calls where inner returns heap String TMP → outer receives it.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function upper($s) { return strtoupper($s); }
 function exclaim($s) { return $s . '!'; }
 echo exclaim(upper('hello'));
-"), "HELLO!");
+"
+        ),
+        "HELLO!"
+    );
 }

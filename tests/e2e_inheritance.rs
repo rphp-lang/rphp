@@ -4,7 +4,9 @@ use common::run_php;
 
 #[test]
 fn test_extends_basic() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Animal {
     public $name;
     public function speak() {
@@ -19,12 +21,17 @@ class Dog extends Animal {
 $d = new Dog();
 $d->name = "Rex";
 echo $d->name . " says " . $d->speak();
-"#), "Rex says Woof");
+"#
+        ),
+        "Rex says Woof"
+    );
 }
 
 #[test]
 fn test_extends_inherits_method() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public function hello() {
         return "Hello";
@@ -33,24 +40,34 @@ class Base {
 class Child extends Base {}
 $c = new Child();
 echo $c->hello();
-"#), "Hello");
+"#
+        ),
+        "Hello"
+    );
 }
 
 #[test]
 fn test_extends_inherits_property_default() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public $x = 42;
 }
 class Child extends Base {}
 $c = new Child();
 echo $c->x;
-"#), "42");
+"#
+        ),
+        "42"
+    );
 }
 
 #[test]
 fn test_extends_child_overrides_method() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public function value() {
         return "base";
@@ -64,12 +81,17 @@ class Child extends Base {
 $b = new Base();
 $c = new Child();
 echo $b->value() . " " . $c->value();
-"#), "base child");
+"#
+        ),
+        "base child"
+    );
 }
 
 #[test]
 fn test_extends_child_adds_property() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public $x = 1;
 }
@@ -78,12 +100,17 @@ class Child extends Base {
 }
 $c = new Child();
 echo $c->x . " " . $c->y;
-"#), "1 2");
+"#
+        ),
+        "1 2"
+    );
 }
 
 #[test]
 fn test_extends_constructor_inherited() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public $name;
     public function __construct($name) {
@@ -93,12 +120,17 @@ class Base {
 class Child extends Base {}
 $c = new Child("test");
 echo $c->name;
-"#), "test");
+"#
+        ),
+        "test"
+    );
 }
 
 #[test]
 fn test_extends_constructor_overridden() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public $x;
     public function __construct($x) {
@@ -114,12 +146,17 @@ class Child extends Base {
 }
 $c = new Child(1, 2);
 echo $c->x . " " . $c->y;
-"#), "1 2");
+"#
+        ),
+        "1 2"
+    );
 }
 
 #[test]
 fn test_extends_three_levels() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class A {
     public function who() { return "A"; }
 }
@@ -131,12 +168,17 @@ $a = new A();
 $b = new B();
 $c = new C();
 echo $a->who() . $b->who() . $c->who();
-"#), "AAC");
+"#
+        ),
+        "AAC"
+    );
 }
 
 #[test]
 fn test_extends_method_uses_this() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Base {
     public $name;
     public function greet() {
@@ -150,13 +192,18 @@ class Child extends Base {
 }
 $c = new Child("PHP");
 echo $c->greet();
-"#), "Hi PHP");
+"#
+        ),
+        "Hi PHP"
+    );
 }
 
 #[test]
 fn test_extends_grandchild_inherits_grandparent_method() {
     // Regression: transitive inheritance must work across 3+ levels
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class A {
     public function foo() { return "A"; }
 }
@@ -164,13 +211,18 @@ class B extends A {}
 class C extends B {}
 $c = new C();
 echo $c->foo();
-"#), "A");
+"#
+        ),
+        "A"
+    );
 }
 
 #[test]
 fn test_extends_grandchild_inherits_constructor() {
     // Regression: constructor must be inherited transitively
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class A {
     public $x;
     public function __construct($x) {
@@ -181,5 +233,8 @@ class B extends A {}
 class C extends B {}
 $c = new C(42);
 echo $c->x;
-"#), "42");
+"#
+        ),
+        "42"
+    );
 }

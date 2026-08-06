@@ -2,130 +2,130 @@
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Token {
-    OpenTag,        // <?php
+    OpenTag, // <?php
     // Keywords
-    Echo,           // echo
-    Function,       // function
-    Return,         // return
-    If,             // if
-    Else,           // else
-    While,          // while
-    For,            // for
-    ElseIf,         // elseif
-    Do,             // do
-    Break,          // break
-    Continue,       // continue
-    Switch,         // switch
-    Case,           // case
-    Default,        // default
-    Null,           // null
-    True,           // true
-    False,          // false
-    ArrayKw,        // array
-    Foreach,        // foreach
-    As,             // as
-    Isset,          // isset
-    Empty,          // empty
-    Unset,          // unset
-    Match,          // match
-    Try,            // try
-    Catch,          // catch
-    Finally,        // finally
-    Throw,          // throw
-    Class,          // class
-    New,            // new
-    Public,         // public
-    Protected,      // protected
-    Private,        // private
-    This,           // $this (handled as special variable)
-    Extends,        // extends
-    Static,         // static
-    Instanceof,     // instanceof
-    Const,          // const
-    Interface,      // interface
-    Trait,          // trait
-    Implements,     // implements
-    Abstract,       // abstract
-    Declare,        // declare
-    Final,          // final
-    Enum,           // enum
-    Namespace,      // namespace
-    Backslash,      // \ (namespace separator)
-    Yield,          // yield
-    From,           // from (used after yield)
-    Print,          // print
-    Global,         // global
-    Clone,          // clone
-    Include,        // include
-    IncludeOnce,    // include_once
-    Require,        // require
-    RequireOnce,    // require_once
+    Echo,        // echo
+    Function,    // function
+    Return,      // return
+    If,          // if
+    Else,        // else
+    While,       // while
+    For,         // for
+    ElseIf,      // elseif
+    Do,          // do
+    Break,       // break
+    Continue,    // continue
+    Switch,      // switch
+    Case,        // case
+    Default,     // default
+    Null,        // null
+    True,        // true
+    False,       // false
+    ArrayKw,     // array
+    Foreach,     // foreach
+    As,          // as
+    Isset,       // isset
+    Empty,       // empty
+    Unset,       // unset
+    Match,       // match
+    Try,         // try
+    Catch,       // catch
+    Finally,     // finally
+    Throw,       // throw
+    Class,       // class
+    New,         // new
+    Public,      // public
+    Protected,   // protected
+    Private,     // private
+    This,        // $this (handled as special variable)
+    Extends,     // extends
+    Static,      // static
+    Instanceof,  // instanceof
+    Const,       // const
+    Interface,   // interface
+    Trait,       // trait
+    Implements,  // implements
+    Abstract,    // abstract
+    Declare,     // declare
+    Final,       // final
+    Enum,        // enum
+    Namespace,   // namespace
+    Backslash,   // \ (namespace separator)
+    Yield,       // yield
+    From,        // from (used after yield)
+    Print,       // print
+    Global,      // global
+    Clone,       // clone
+    Include,     // include
+    IncludeOnce, // include_once
+    Require,     // require
+    RequireOnce, // require_once
     // Literals
-    Integer(i64),   // 42, -1
-    Float(f64),     // 3.14, 1.5e10
+    Integer(i64),          // 42, -1
+    Float(f64),            // 3.14, 1.5e10
     StringLiteral(String), // "hello", 'world'
-    Variable(String), // $a, $foo
-    Identifier(String), // my_double, strlen
+    Variable(String),      // $a, $foo
+    Identifier(String),    // my_double, strlen
     // Operators
-    Assign,         // =
-    Plus,           // +
-    Minus,          // -
-    Star,           // *
-    Slash,          // /
-    Percent,        // %
-    Dot,            // . (concat)
-    PlusPlus,       // ++
-    MinusMinus,     // --
-    EqualEqual,     // ==
-    IdenticalEqual, // ===
-    NotEqual,       // !=
-    NotIdentical,   // !==
-    Less,           // <
-    LessEqual,      // <=
-    Greater,        // >
-    GreaterEqual,   // >=
-    AmpAmp,         // &&
-    PipePipe,       // ||
-    Bang,           // !
-    PlusAssign,     // +=
-    MinusAssign,    // -=
-    StarAssign,     // *=
-    StarStarAssign, // **=
-    SlashAssign,    // /=
-    PercentAssign,  // %=
-    DotAssign,      // .=
-    AmpAssign,      // &=
-    PipeAssign,     // |=
-    CaretAssign,    // ^=
+    Assign,           // =
+    Plus,             // +
+    Minus,            // -
+    Star,             // *
+    Slash,            // /
+    Percent,          // %
+    Dot,              // . (concat)
+    PlusPlus,         // ++
+    MinusMinus,       // --
+    EqualEqual,       // ==
+    IdenticalEqual,   // ===
+    NotEqual,         // !=
+    NotIdentical,     // !==
+    Less,             // <
+    LessEqual,        // <=
+    Greater,          // >
+    GreaterEqual,     // >=
+    AmpAmp,           // &&
+    PipePipe,         // ||
+    Bang,             // !
+    PlusAssign,       // +=
+    MinusAssign,      // -=
+    StarAssign,       // *=
+    StarStarAssign,   // **=
+    SlashAssign,      // /=
+    PercentAssign,    // %=
+    DotAssign,        // .=
+    AmpAssign,        // &=
+    PipeAssign,       // |=
+    CaretAssign,      // ^=
     ShiftLeftAssign,  // <<=
     ShiftRightAssign, // >>=
-    Question,       // ?
+    Question,         // ?
     QuestionQuestion, // ??
-    Colon,          // :
+    Colon,            // :
     // Punctuation
-    Semicolon,      // ;
-    LParen,         // (
-    RParen,         // )
-    LBrace,         // {
-    RBrace,         // }
-    Comma,          // ,
-    LBracket,       // [
-    RBracket,       // ]
-    DoubleArrow,    // =>
-    Arrow,          // ->
-    NullSafe,       // ?->
-    DoubleColon,    // ::
-    Fn,             // fn (arrow functions)
-    Use,            // use (closure use)
-    Pipe,           // | (bitwise or, multi-catch separator)
-    Ampersand,      // & (bitwise and, reference)
-    Caret,          // ^ (bitwise xor)
-    Tilde,          // ~ (bitwise not)
-    StarStar,       // ** (power)
-    Spaceship,      // <=> (spaceship)
-    ShiftLeft,      // <<
-    ShiftRight,     // >>
-    DotDotDot,      // ... (variadic / spread)
+    Semicolon,   // ;
+    LParen,      // (
+    RParen,      // )
+    LBrace,      // {
+    RBrace,      // }
+    Comma,       // ,
+    LBracket,    // [
+    RBracket,    // ]
+    DoubleArrow, // =>
+    Arrow,       // ->
+    NullSafe,    // ?->
+    DoubleColon, // ::
+    Fn,          // fn (arrow functions)
+    Use,         // use (closure use)
+    Pipe,        // | (bitwise or, multi-catch separator)
+    Ampersand,   // & (bitwise and, reference)
+    Caret,       // ^ (bitwise xor)
+    Tilde,       // ~ (bitwise not)
+    StarStar,    // ** (power)
+    Spaceship,   // <=> (spaceship)
+    ShiftLeft,   // <<
+    ShiftRight,  // >>
+    DotDotDot,   // ... (variadic / spread)
     Eof,
 }
 
@@ -362,8 +362,12 @@ impl<'a> Lexer<'a> {
                             }
                             first = false;
                             match part {
-                                StringPart::Literal(s) => tokens.push(Token::StringLiteral(s.clone())),
-                                StringPart::Variable(name) => tokens.push(Token::Variable(name.clone())),
+                                StringPart::Literal(s) => {
+                                    tokens.push(Token::StringLiteral(s.clone()))
+                                }
+                                StringPart::Variable(name) => {
+                                    tokens.push(Token::Variable(name.clone()))
+                                }
                                 StringPart::ArrayAccess(name, idx) => {
                                     Self::emit_array_access_tokens(&mut tokens, name, idx);
                                 }
@@ -433,7 +437,9 @@ impl<'a> Lexer<'a> {
                     if self.peek_next() == Some(b'?') {
                         tokens.push(Token::QuestionQuestion);
                         self.pos += 2;
-                    } else if self.peek_next() == Some(b'-') && self.src.get(self.pos + 2) == Some(&b'>') {
+                    } else if self.peek_next() == Some(b'-')
+                        && self.src.get(self.pos + 2) == Some(&b'>')
+                    {
                         tokens.push(Token::NullSafe);
                         self.pos += 3;
                     } else {
@@ -574,7 +580,10 @@ impl<'a> Lexer<'a> {
                 self.pos += 2;
                 loop {
                     if self.pos + 1 >= self.src.len() {
-                        return Err(format!("Unterminated comment starting at position {}", start));
+                        return Err(format!(
+                            "Unterminated comment starting at position {}",
+                            start
+                        ));
                     }
                     if self.src[self.pos] == b'*' && self.src[self.pos + 1] == b'/' {
                         self.pos += 2;
@@ -609,23 +618,33 @@ impl<'a> Lexer<'a> {
                         self.pos += 1;
                     }
                     if self.pos == hex_start {
-                        return Err(format!("Expected hex digits after 0x at position {}", start));
+                        return Err(format!(
+                            "Expected hex digits after 0x at position {}",
+                            start
+                        ));
                     }
                     let s = std::str::from_utf8(&self.src[hex_start..self.pos]).unwrap();
-                    let n = i64::from_str_radix(s, 16).map_err(|_| format!("Invalid hex literal at position {}", start))?;
+                    let n = i64::from_str_radix(s, 16)
+                        .map_err(|_| format!("Invalid hex literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
                 b'b' | b'B' => {
                     self.pos += 2; // skip 0b
                     let bin_start = self.pos;
-                    while self.pos < self.src.len() && (self.src[self.pos] == b'0' || self.src[self.pos] == b'1') {
+                    while self.pos < self.src.len()
+                        && (self.src[self.pos] == b'0' || self.src[self.pos] == b'1')
+                    {
                         self.pos += 1;
                     }
                     if self.pos == bin_start {
-                        return Err(format!("Expected binary digits after 0b at position {}", start));
+                        return Err(format!(
+                            "Expected binary digits after 0b at position {}",
+                            start
+                        ));
                     }
                     let s = std::str::from_utf8(&self.src[bin_start..self.pos]).unwrap();
-                    let n = i64::from_str_radix(s, 2).map_err(|_| format!("Invalid binary literal at position {}", start))?;
+                    let n = i64::from_str_radix(s, 2)
+                        .map_err(|_| format!("Invalid binary literal at position {}", start))?;
                     return Ok(Token::Integer(n));
                 }
                 _ => {}
@@ -635,17 +654,25 @@ impl<'a> Lexer<'a> {
             self.pos += 1;
         }
         // Check for decimal point followed by digit → float
-        if self.pos < self.src.len() && self.src[self.pos] == b'.'
-            && self.src.get(self.pos + 1).map_or(false, |c| c.is_ascii_digit())
+        if self.pos < self.src.len()
+            && self.src[self.pos] == b'.'
+            && self
+                .src
+                .get(self.pos + 1)
+                .map_or(false, |c| c.is_ascii_digit())
         {
             self.pos += 1; // skip '.'
             while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
                 self.pos += 1;
             }
             // Scientific notation
-            if self.pos < self.src.len() && (self.src[self.pos] == b'e' || self.src[self.pos] == b'E') {
+            if self.pos < self.src.len()
+                && (self.src[self.pos] == b'e' || self.src[self.pos] == b'E')
+            {
                 self.pos += 1;
-                if self.pos < self.src.len() && (self.src[self.pos] == b'+' || self.src[self.pos] == b'-') {
+                if self.pos < self.src.len()
+                    && (self.src[self.pos] == b'+' || self.src[self.pos] == b'-')
+                {
                     self.pos += 1;
                 }
                 while self.pos < self.src.len() && self.src[self.pos].is_ascii_digit() {
@@ -653,11 +680,15 @@ impl<'a> Lexer<'a> {
                 }
             }
             let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
-            let f: f64 = s.parse().map_err(|_| format!("Invalid float literal at position {}", start))?;
+            let f: f64 = s
+                .parse()
+                .map_err(|_| format!("Invalid float literal at position {}", start))?;
             Ok(Token::Float(f))
         } else {
             let s = std::str::from_utf8(&self.src[start..self.pos]).unwrap();
-            let n: i64 = s.parse().map_err(|_| format!("Integer literal too large at position {}", start))?;
+            let n: i64 = s
+                .parse()
+                .map_err(|_| format!("Integer literal too large at position {}", start))?;
             Ok(Token::Integer(n))
         }
     }
@@ -866,7 +897,18 @@ impl<'a> Lexer<'a> {
     fn is_value_token(tok: Option<&Token>) -> bool {
         matches!(
             tok,
-            Some(Token::Integer(_) | Token::Float(_) | Token::Variable(_) | Token::StringLiteral(_) | Token::RParen | Token::RBracket | Token::Identifier(_) | Token::True | Token::False | Token::Null)
+            Some(
+                Token::Integer(_)
+                    | Token::Float(_)
+                    | Token::Variable(_)
+                    | Token::StringLiteral(_)
+                    | Token::RParen
+                    | Token::RBracket
+                    | Token::Identifier(_)
+                    | Token::True
+                    | Token::False
+                    | Token::Null
+            )
         )
     }
 }

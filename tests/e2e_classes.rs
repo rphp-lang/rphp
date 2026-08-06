@@ -4,19 +4,26 @@ use common::run_php;
 
 #[test]
 fn test_class_basic_property() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Dog {
     public $name;
 }
 $d = new Dog();
 $d->name = "Rex";
 echo $d->name;
-"#), "Rex");
+"#
+        ),
+        "Rex"
+    );
 }
 
 #[test]
 fn test_class_method() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Dog {
     public $name;
     public function bark() {
@@ -26,12 +33,17 @@ class Dog {
 $d = new Dog();
 $d->name = "Rex";
 $d->bark();
-"#), "Woof from Rex");
+"#
+        ),
+        "Woof from Rex"
+    );
 }
 
 #[test]
 fn test_class_method_with_params() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Calculator {
     public function add($a, $b) {
         return $a + $b;
@@ -39,24 +51,34 @@ class Calculator {
 }
 $c = new Calculator();
 echo $c->add(3, 4);
-"#), "7");
+"#
+        ),
+        "7"
+    );
 }
 
 #[test]
 fn test_class_scalar_long_method_nested_calls() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Calculator {
     public function add($a, $b) { return $a + $b; }
     public function mul($a, $b) { return $a * $b; }
 }
 $c = new Calculator();
 echo $c->add(2, $c->mul(3, 4));
-"#), "14");
+"#
+        ),
+        "14"
+    );
 }
 
 #[test]
 fn test_class_composed_scalar_call_guards_polymorphic_dispatch() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class AddMath {
     public function combine($a, $b) { return $a + $b; }
     public function inner($a, $b) { return $a * $b; }
@@ -73,12 +95,17 @@ $sub = new SubMath();
 echo calculate($add, 3) . ':' . calculate($add, 4) . '|';
 echo calculate($sub, 3) . ':' . calculate($sub, 4) . '|';
 echo calculate($add, 5);
-"#), "9:12|-2:-2|15");
+"#
+        ),
+        "9:12|-2:-2|15"
+    );
 }
 
 #[test]
 fn test_object_long_method_side_exits_across_property_layouts_and_types() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class RequestA {
     public $level;
     public $subtotal;
@@ -110,12 +137,17 @@ echo invoke($policy, $a) . ':' . invoke($policy, $a) . '|';
 echo invoke($policy, $b) . ':' . invoke($policy, $b) . '|';
 echo invoke($policy, $c) . ':' . invoke($policy, $c) . '|';
 echo invoke($policy, $a);
-"#), "575:575|325:325|400:400|575");
+"#
+        ),
+        "575:575|325:325|400:400|575"
+    );
 }
 
 #[test]
 fn test_object_long_method_handles_string_branches_and_intdiv() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class TaxPolicy {
     public function amount($net, $region) {
         if ($region == 'EU') return intdiv($net * 2100, 10000);
@@ -135,12 +167,17 @@ echo tax($policy, 10000, 'EU') . ':';
 echo tax($policy, 10000, 'US') . ':';
 echo tax($policy, 10000, 'ROW') . ':';
 echo taxByReference($policy, 10000, $eu);
-"#), "2100:725:1200:2100");
+"#
+        ),
+        "2100:725:1200:2100"
+    );
 }
 
 #[test]
 fn test_object_long_property_argument_rechecks_layout_and_dynamic_fallback() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class TaxPolicy {
     public function amount($net, $region) {
         if ($region == 'EU') return intdiv($net * 2100, 10000);
@@ -162,12 +199,17 @@ echo quoteTax($policy, $a) . ':' . quoteTax($policy, $a) . '|';
 echo quoteTax($policy, $b) . ':' . quoteTax($policy, $b) . '|';
 echo quoteTax($policy, $dynamic) . ':' . quoteTax($policy, $dynamic) . '|';
 echo quoteTax($policy, $a);
-"#), "2100:2100|725:725|1200:1200|2100");
+"#
+        ),
+        "2100:2100|725:725|1200:1200|2100"
+    );
 }
 
 #[test]
 fn test_class_multiple_properties() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Person {
     public $first;
     public $last;
@@ -176,12 +218,17 @@ $p = new Person();
 $p->first = "John";
 $p->last = "Doe";
 echo $p->first . " " . $p->last;
-"#), "John Doe");
+"#
+        ),
+        "John Doe"
+    );
 }
 
 #[test]
 fn test_class_method_using_this() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Counter {
     public $count;
     public function increment() {
@@ -197,12 +244,17 @@ $c->increment();
 $c->increment();
 $c->increment();
 echo $c->get();
-"#), "3");
+"#
+        ),
+        "3"
+    );
 }
 
 #[test]
 fn test_class_multiple_methods() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Greeter {
     public $name;
     public function hello() {
@@ -217,12 +269,17 @@ $g->name = "World";
 $g->hello();
 echo " ";
 $g->bye();
-"#), "Hello World Bye World");
+"#
+        ),
+        "Hello World Bye World"
+    );
 }
 
 #[test]
 fn test_class_multiple_instances() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Box {
     public $value;
 }
@@ -231,21 +288,31 @@ $a->value = 10;
 $b = new Box();
 $b->value = 20;
 echo $a->value . " " . $b->value;
-"#), "10 20");
+"#
+        ),
+        "10 20"
+    );
 }
 
 #[test]
 fn test_new_object_creates_instance() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Foo {}
 $f = new Foo();
 echo "ok";
-"#), "ok");
+"#
+        ),
+        "ok"
+    );
 }
 
 #[test]
 fn test_class_method_return() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Math {
     public function square($x) {
         return $x * $x;
@@ -253,12 +320,17 @@ class Math {
 }
 $m = new Math();
 echo $m->square(7);
-"#), "49");
+"#
+        ),
+        "49"
+    );
 }
 
 #[test]
 fn test_class_this_property_write_in_method() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Setter {
     public $val;
     public function set($v) {
@@ -268,69 +340,99 @@ class Setter {
 $s = new Setter();
 $s->set("hello");
 echo $s->val;
-"#), "hello");
+"#
+        ),
+        "hello"
+    );
 }
 
 #[test]
 fn test_class_property_default_int() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Config {
     public $timeout = 30;
 }
 $c = new Config();
 echo $c->timeout;
-"#), "30");
+"#
+        ),
+        "30"
+    );
 }
 
 #[test]
 fn test_class_property_default_string() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Config {
     public $name = "default";
 }
 $c = new Config();
 echo $c->name;
-"#), "default");
+"#
+        ),
+        "default"
+    );
 }
 
 #[test]
 fn test_class_property_default_override() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Config {
     public $x = 10;
 }
 $c = new Config();
 $c->x = 42;
 echo $c->x;
-"#), "42");
+"#
+        ),
+        "42"
+    );
 }
 
 #[test]
 fn test_class_property_default_bool() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Flags {
     public $active = true;
     public $deleted = false;
 }
 $f = new Flags();
 echo $f->active;
-"#), "1");
+"#
+        ),
+        "1"
+    );
 }
 
 #[test]
 fn test_class_property_no_default_is_null() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Empty2 {
     public $x;
 }
 $e = new Empty2();
 echo $e->x ?? "null";
-"#), "null");
+"#
+        ),
+        "null"
+    );
 }
 
 #[test]
 fn test_borrowed_object_parameter_materializes_before_nested_by_ref_rebind() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class BorrowBox {
     public $value;
     public function __construct($value) { $this->value = $value; }
@@ -348,5 +450,8 @@ for ($i = 0; $i < 20; $i++) {
     $last = observeAndReplaceBorrowBox($original);
 }
 echo $last . '|' . $original->value;
-"#), "3:9|3");
+"#
+        ),
+        "3:9|3"
+    );
 }

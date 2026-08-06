@@ -242,7 +242,9 @@ pub fn detect_foreach_object_property_accumulate_loop(
         .iter()
         .any(|slot| (*slot as u32) < op_array.num_cvs || (*slot as u32) >= total_slots)
         || temporary_slots.iter().enumerate().any(|(index, slot)| {
-            temporary_slots[index + 1..].iter().any(|other| other == slot)
+            temporary_slots[index + 1..]
+                .iter()
+                .any(|other| other == slot)
         })
     {
         return None;

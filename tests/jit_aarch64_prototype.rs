@@ -10,15 +10,13 @@ use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
 use rphp::jit::{
     Arm64Assembler, Arm64Register, CompiledAddMultiply, CompiledQuickLongAccumulateLoop,
-    CompiledQuickLongConditionalAccumulateLoop, CompiledScalarLongProgram,
-    CompiledQuickLongStraightLoop, NativeConditionalLongLoopCondition,
-    NativeConditionalLongLoopConfig, NativeLongAccumulateState,
-    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
-    NativeStraightLongLoopOutcome, NativeStraightLongOperation,
-    NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
-    QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
-    SCALAR_DOUBLE_JIT_HOT_THRESHOLD, SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch, ScalarLongJitError,
-    ScalarLongJitOutcome,
+    CompiledQuickLongConditionalAccumulateLoop, CompiledQuickLongStraightLoop,
+    CompiledScalarLongProgram, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeConditionalLongLoopCondition,
+    NativeConditionalLongLoopConfig, NativeLongAccumulateState, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
+    QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome, SCALAR_DOUBLE_JIT_HOT_THRESHOLD,
+    SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
 };
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
@@ -476,11 +474,13 @@ fn same_receiver_conditional_double_method_is_flattened_into_one_native_region()
             .map(|(_, _, _, _, method)| method)
             .expect("compiled FloatPipeline method")
     };
-    assert!(method("conditional")
-        .scalar_double_plan
-        .as_deref()
-        .and_then(|plan| plan.select)
-        .is_some());
+    assert!(
+        method("conditional")
+            .scalar_double_plan
+            .as_deref()
+            .and_then(|plan| plan.select)
+            .is_some()
+    );
     assert!(method("composed").composed_scalar_double_plan.is_some());
 }
 
@@ -596,7 +596,7 @@ fn recursive_composed_double_tree_is_flattened_into_one_native_region() {
 fn monomorphic_float_method_uses_class_cache_and_double_jit() {
     let call_count = usize::from(SCALAR_DOUBLE_JIT_HOT_THRESHOLD) + 8;
     let mut source = String::from(
-        "<?php class FloatModel { public function blend(float $a, float $b, float $c): float { return (($a + 1.5) * $b) / $c; } } function callBlend($model): float { return $model->blend(2.5, 4.0, 2.0); } $model = new FloatModel(); $total = 0.0;"
+        "<?php class FloatModel { public function blend(float $a, float $b, float $c): float { return (($a + 1.5) * $b) / $c; } } function callBlend($model): float { return $model->blend(2.5, 4.0, 2.0); } $model = new FloatModel(); $total = 0.0;",
     );
     for _ in 0..call_count {
         source.push_str("$total = $total + callBlend($model);");
@@ -716,10 +716,14 @@ fn nested_double_method_loop_zero_divisor_replays_canonical_php_error() {
         .iter()
         .find(|(name, _)| name.eq_ignore_ascii_case("accumulate"))
         .and_then(|(_, function)| {
-            function.op_array.block_plans.iter().find_map(|plan| match plan {
-                BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
-                _ => None,
-            })
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                    _ => None,
+                })
         })
         .expect("nested method Double loop");
     assert!(loop_plan.native_jit().is_compiled());
@@ -920,10 +924,7 @@ fn conditional_scalar_ir_skips_inactive_overflow_and_exits_on_selected_overflow(
     );
     let function = CompiledScalarLongProgram::compile(&plan).expect("select should lower");
 
-    assert_eq!(
-        function.call(&[5]).unwrap(),
-        ScalarLongJitOutcome::Value(6)
-    );
+    assert_eq!(function.call(&[5]).unwrap(), ScalarLongJitOutcome::Value(6));
     assert_eq!(
         function.call(&[100]).unwrap(),
         ScalarLongJitOutcome::SideExit
@@ -1570,8 +1571,7 @@ fn taken_simple_accumulate_guard_replays_the_cold_block() {
 
 #[test]
 fn native_accumulate_loop_preserves_chunk_and_overflow_boundaries() {
-    let program =
-        CompiledQuickLongAccumulateLoop::compile().expect("loop should lower to ARM64");
+    let program = CompiledQuickLongAccumulateLoop::compile().expect("loop should lower to ARM64");
     let mut state = NativeLongAccumulateState {
         induction: 0,
         bound: 100,
@@ -1661,7 +1661,8 @@ fn native_accumulate_loop_preserves_chunk_and_overflow_boundaries() {
 
 #[test]
 fn real_php_accumulate_loop_enters_native_region() {
-    let source = "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i; } echo $i . ':' . $sum;";
+    let source =
+        "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i; } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -1698,7 +1699,8 @@ fn real_php_accumulate_loop_enters_native_region() {
 
 #[test]
 fn negative_accumulate_loop_uses_range_proven_native_chunks() {
-    let source = "<?php $sum = 0; for ($i = -1000; $i < 1000; $i++) { $sum += $i; } echo $i . ':' . $sum;";
+    let source =
+        "<?php $sum = 0; for ($i = -1000; $i < 1000; $i++) { $sum += $i; } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -1863,10 +1865,14 @@ fn real_php_routing_holdout_enters_multi_method_native_region() {
     let plan = functions
         .iter()
         .find_map(|(_, function)| {
-            function.op_array.block_plans.iter().find_map(|plan| match plan {
-                BlockPlan::QuickLongOps(plan) => Some(plan),
-                _ => None,
-            })
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickLongOps(plan) => Some(plan),
+                    _ => None,
+                })
         })
         .expect("compiler should select the routing holdout as one typed loop");
     assert_eq!(plan.ops.len(), 28);
@@ -1923,10 +1929,9 @@ fn application_order_corpus_enters_virtual_pipeline_native_region() {
             .iter()
             .find_map(|plan| match plan {
                 BlockPlan::QuickLongOps(plan)
-                    if plan
-                        .ops
-                        .iter()
-                        .any(|operation| matches!(operation, QuickLongOp::VirtualObjectArrayPipeline { .. })) =>
+                    if plan.ops.iter().any(|operation| {
+                        matches!(operation, QuickLongOp::VirtualObjectArrayPipeline { .. })
+                    }) =>
                 {
                     Some(plan)
                 }
@@ -1987,10 +1992,9 @@ fn application_ledger_corpus_enters_property_native_region() {
             .iter()
             .find_map(|plan| match plan {
                 BlockPlan::QuickLongOps(plan)
-                    if plan
-                        .ops
-                        .iter()
-                        .any(|operation| matches!(operation, QuickLongOp::PropertyMethodCall { .. })) =>
+                    if plan.ops.iter().any(|operation| {
+                        matches!(operation, QuickLongOp::PropertyMethodCall { .. })
+                    }) =>
                 {
                     Some(plan)
                 }
@@ -2067,10 +2071,14 @@ fn native_property_method_rebinds_cached_program_to_each_activation() {
     let plan = functions
         .iter()
         .find_map(|(_, function)| {
-            function.op_array.block_plans.iter().find_map(|plan| match plan {
-                BlockPlan::QuickLongOps(plan) => Some(plan),
-                _ => None,
-            })
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickLongOps(plan) => Some(plan),
+                    _ => None,
+                })
         })
         .expect("compiler should select the rebound property loop");
     assert!(plan.native_jit().is_straight_compiled());
@@ -2722,7 +2730,8 @@ fn native_scalar_method_sum_overflow_resumes_canonical_add() {
 
 #[test]
 fn real_php_constant_term_loop_enters_specialized_native_region() {
-    let source = "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i + 1; } echo $i . ':' . $sum;";
+    let source =
+        "<?php $sum = 0; for ($i = 0; $i < 100000; $i++) { $sum += $i + 1; } echo $i . ':' . $sum;";
     let tokens = Lexer::new(source).tokenize().unwrap();
     let statements = Parser::new(tokens).parse().unwrap();
     let compilation = Compiler::new().compile(&statements).unwrap();
@@ -2840,10 +2849,7 @@ fn native_constant_term_overflow_resumes_canonical_term_instruction() {
     assert!(plan.native_jit().native_entries() >= 2);
     assert_eq!(plan.native_jit().native_calls(), 2);
     assert!(plan.native_jit().range_proven_chunks() >= 1);
-    assert!(
-        plan.native_jit().range_proven_chunks()
-            < plan.native_jit().native_chunks()
-    );
+    assert!(plan.native_jit().range_proven_chunks() < plan.native_jit().native_chunks());
     assert_eq!(plan.native_jit().range_proof_evaluations(), 3);
     assert_eq!(plan.native_jit().side_exits(), 1);
 }
@@ -3020,8 +3026,7 @@ fn general_conditional_loop_ir_lowers_modulo_equality_and_precise_guards() {
 
 #[test]
 fn straight_long_loop_lowers_linear_modulo_and_binary_assign_body() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::Modulo {
         value: QuickLongOperand::Slot(0),
         divisor: 400,
@@ -3055,8 +3060,8 @@ fn straight_long_loop_lowers_linear_modulo_and_binary_assign_body() {
         operation_count: 4,
         post_result: Some(9),
     };
-    let program = CompiledQuickLongStraightLoop::compile(config)
-        .expect("straight Long loop should lower");
+    let program =
+        CompiledQuickLongStraightLoop::compile(config).expect("straight Long loop should lower");
     let mut slots = [0_i64; 64];
     slots[1] = 100;
 
@@ -3087,8 +3092,7 @@ fn straight_long_loop_lowers_linear_modulo_and_binary_assign_body() {
 
 #[test]
 fn straight_long_loop_lowers_non_materialized_binary_chain() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::Binary {
         kind: ScalarLongOpKind::Multiply,
         lhs: QuickLongOperand::Slot(0),
@@ -3129,10 +3133,7 @@ fn straight_long_loop_lowers_non_materialized_binary_chain() {
     assert_eq!(slots[5], 670);
     assert_eq!(config.output_mask_before(0), 0);
     assert_eq!(config.output_mask_before(1), 1u64 << 2);
-    assert_eq!(
-        config.output_mask_before(2),
-        (1u64 << 2) | (1u64 << 3)
-    );
+    assert_eq!(config.output_mask_before(2), (1u64 << 2) | (1u64 << 3));
 
     let mut overflow_operations = operations;
     overflow_operations[0] = NativeStraightLongOperation::Binary {
@@ -3147,12 +3148,10 @@ fn straight_long_loop_lowers_non_materialized_binary_chain() {
         rhs: QuickLongOperand::Const(1),
         result: 3,
     };
-    let overflow_program = CompiledQuickLongStraightLoop::compile(
-        NativeStraightLongLoopConfig {
-            operations: overflow_operations,
-            ..config
-        },
-    )
+    let overflow_program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        operations: overflow_operations,
+        ..config
+    })
     .expect("checked intermediate binary operation should lower");
     slots = [0_i64; 64];
     slots[1] = 1;
@@ -3171,8 +3170,7 @@ fn straight_long_loop_lowers_non_materialized_binary_chain() {
 
 #[test]
 fn straight_long_loop_lowers_division_modulo_xor_and_move() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::Binary {
         kind: ScalarLongOpKind::IntDivide,
         lhs: QuickLongOperand::Const(17),
@@ -3222,12 +3220,10 @@ fn straight_long_loop_lowers_division_modulo_xor_and_move() {
         rhs: QuickLongOperand::Const(0),
         result: 2,
     };
-    let guarded = CompiledQuickLongStraightLoop::compile(
-        NativeStraightLongLoopConfig {
-            operations,
-            ..config
-        },
-    )
+    let guarded = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+        operations,
+        ..config
+    })
     .expect("division by zero should lower to a precise side exit");
     slots = [0_i64; 64];
     slots[1] = 1;
@@ -3243,8 +3239,7 @@ fn straight_long_loop_lowers_division_modulo_xor_and_move() {
 
 #[test]
 fn straight_binary_constant_power_of_two_modulo_avoids_signed_divide() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::Binary {
         kind: ScalarLongOpKind::Modulo,
         lhs: QuickLongOperand::Const(-17),
@@ -3312,15 +3307,13 @@ fn straight_long_loop_executes_structured_scalar_conditions() {
             result: 4,
             destination: 3,
         };
-        let program = CompiledQuickLongStraightLoop::compile(
-            NativeStraightLongLoopConfig {
-                induction_slot: 0,
-                bound: QuickLongOperand::Slot(1),
-                operations,
-                operation_count: 5,
-                post_result: None,
-            },
-        )
+        let program = CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
+            induction_slot: 0,
+            bound: QuickLongOperand::Slot(1),
+            operations,
+            operation_count: 5,
+            post_result: None,
+        })
         .expect("structured scalar condition should lower");
         let mut slots = [0_i64; 64];
         slots[1] = 4;
@@ -3331,8 +3324,7 @@ fn straight_long_loop_executes_structured_scalar_conditions() {
         assert_eq!(slots[3], expected, "condition {kind:?}");
     }
 
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::BranchUnless {
         kind: ScalarLongConditionKind::Equal,
         lhs: NativeStraightLongConditionOperand::BitwiseAnd {
@@ -3374,8 +3366,7 @@ fn straight_long_loop_executes_structured_scalar_conditions() {
     );
     assert_eq!(slots[3], 66);
 
-    operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::Jump { target: 0 };
     assert!(matches!(
         CompiledQuickLongStraightLoop::compile(NativeStraightLongLoopConfig {
@@ -3391,8 +3382,7 @@ fn straight_long_loop_executes_structured_scalar_conditions() {
 
 #[test]
 fn straight_long_guard_side_exits_after_prior_outputs_and_before_increment() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::BinaryAssign {
         kind: ScalarLongOpKind::Add,
         lhs: QuickLongOperand::Slot(3),
@@ -3426,13 +3416,15 @@ fn straight_long_guard_side_exits_after_prior_outputs_and_before_increment() {
     assert_eq!(slots[0], 2, "guard failure must precede increment");
     assert_eq!(slots[2], 3, "prior result remains in shadow state");
     assert_eq!(slots[3], 3, "prior assignment remains in shadow state");
-    assert_eq!(slots[4], 1, "last completed post-increment remains published");
+    assert_eq!(
+        slots[4], 1,
+        "last completed post-increment remains published"
+    );
 }
 
 #[test]
 fn finite_string_hash_operations_use_runtime_context_without_embedded_pointers() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::StringToken {
         token: 1,
         result: 2,
@@ -3489,8 +3481,7 @@ fn finite_string_hash_operations_use_runtime_context_without_embedded_pointers()
     assert_eq!(left, 7);
     assert_eq!(right, 15);
 
-    let missing_entries =
-        [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    let missing_entries = [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
     assert!(matches!(
         program.call_with_context(&mut slots, 8, &missing_entries),
         Err(QuickLongAccumulateJitError::InvalidProgram(_))
@@ -3499,8 +3490,7 @@ fn finite_string_hash_operations_use_runtime_context_without_embedded_pointers()
 
 #[test]
 fn straight_long_loop_reports_exact_failed_operation_transactionally() {
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     operations[0] = NativeStraightLongOperation::BinaryAssign {
         kind: ScalarLongOpKind::Add,
         lhs: QuickLongOperand::Slot(0),
@@ -3832,10 +3822,11 @@ fn general_native_trace_guard_resumes_taken_cold_edge_transactionally() {
             _ => None,
         })
         .expect("strict cold edge should retain the general Long loop IR");
-    assert!(plan
-        .ops
-        .iter()
-        .any(|operation| matches!(operation, QuickLongOp::TraceGuard { .. })));
+    assert!(
+        plan.ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::TraceGuard { .. }))
+    );
     assert!(plan.native_jit().is_straight_compiled());
     assert!(plan.native_jit().native_entries() >= 1);
     assert_eq!(plan.native_jit().side_exits(), 1);

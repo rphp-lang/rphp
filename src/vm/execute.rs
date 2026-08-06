@@ -1,17 +1,41 @@
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
 #[cfg(feature = "vm-stats")]
 use std::sync::OnceLock;
+use std::sync::atomic::Ordering;
 
-use crate::value::{
-    canonical_decimal_array_key, make_error_value, ArrayKey, PhpArray, PhpClosure, PhpObject,
-    Value, ValueType,
+use super::frame::{CALL_FRAME_SLOTS, ExecuteData, HeapSlotIter};
+use super::function::{
+    BinaryLongRecursionPlan, CallStrategy, ComposedScalarDoubleFunctionPlan,
+    ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp,
+    ComposedTypedLongFunctionPlan, ComposedTypedLongOp, FUNC_HOT_THRESHOLD, FunctionCommon,
+    FunctionType, HotStatus, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp,
+    LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ObjectArrayFunctionPlan,
+    ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan,
+    ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ParamTypeHint,
+    PropertyGetterMethodPlan, PropertyInitMethodPlan, ReturnStrategy, ScalarDoubleFunctionPlan,
+    ScalarDoubleOpKind, ScalarDoubleProgram, ScalarDoubleSource, ScalarLongCall,
+    ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand,
+    ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource,
+    ScalarStringFunctionPlan, ScalarStringSource, UserFunction,
 };
-#[cfg(feature = "quick-loops")]
-use crate::value::ExactOrderedIntLayout;
-use crate::runtime::ExecutorGlobals;
-use crate::parser::Visibility;
-use crate::vm::stats;
+use super::instruction::{
+    ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, Instruction, KnownScalarType,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
+};
+use super::opcode::OpCode;
+use super::quick::{
+    QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
+    QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT, QuickArrayIndex,
+    QuickDoubleArgumentProgram, QuickDoubleCallAccumulateLoop, QuickDoubleSource,
+    QuickIncrementKind, QuickInvariantInput, QuickInvariantPathElement, QuickInvariantValueKind,
+    QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
+    QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
+    QuickObjectArrayConsumer, QuickObjectLongArgument, QuickObjectLongMethodCall,
+    QuickStringAppendSource, QuickTypedInvariantProducer, QuickTypedMethodCall,
+    QuickVirtualValueSource, ResolvedScalarDoubleProgram, compose_quick_scalar_leaf_program,
+    compose_scalar_double_program,
+};
 #[cfg(all(
     feature = "jit-prototype",
     any(
@@ -21,8 +45,7 @@ use crate::vm::stats;
 ))]
 use crate::jit::{
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
-    NativeStraightLongConditionOperand,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
     NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongOperation,
     ScalarDoubleJitDispatch, ScalarLongJitDispatch,
 };
@@ -32,32 +55,18 @@ use crate::jit::{
     target_os = "macos"
 ))]
 use crate::jit::{
-    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig,
-    NativeLongAccumulateState, QuickLongAccumulateJitOutcome,
+    NativeConditionalLongLoopCondition, NativeConditionalLongLoopConfig, NativeLongAccumulateState,
+    QuickLongAccumulateJitOutcome,
 };
-use super::opcode::OpCode;
-use super::instruction::{
-    Instruction, KnownScalarType, OpType, ARRAY_INIT_HASH_HINT,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
-    CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
-    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
+use crate::parser::Visibility;
+use crate::runtime::ExecutorGlobals;
+#[cfg(feature = "quick-loops")]
+use crate::value::ExactOrderedIntLayout;
+use crate::value::{
+    ArrayKey, PhpArray, PhpClosure, PhpObject, Value, ValueType, canonical_decimal_array_key,
+    make_error_value,
 };
-use super::frame::{ExecuteData, HeapSlotIter, CALL_FRAME_SLOTS};
-use super::function::{FunctionCommon, FunctionType, UserFunction, CallStrategy, ReturnStrategy, ParamTypeHint, HotStatus, FUNC_HOT_THRESHOLD, LongPlanSource, LongPropertyMethodPlan, LongPropertyOp, PropertyGetterMethodPlan, PropertyInitMethodPlan, BinaryLongRecursionPlan, LongRecursiveBase, LongRecursiveCombine, LongRecursiveCondition, ComposedScalarDoubleFunctionPlan, ComposedScalarDoubleOp, ComposedScalarLongFunctionPlan, ComposedScalarLongOp, ComposedTypedLongFunctionPlan, ComposedTypedLongOp, ObjectArrayFunctionPlan, ObjectArrayLongCall, ObjectArrayLongOp, ObjectArraySource, ObjectLongFunctionPlan, ObjectLongObjectSource, ObjectLongOp, ObjectLongSource, ScalarDoubleFunctionPlan, ScalarDoubleOpKind, ScalarDoubleProgram, ScalarDoubleSource, ScalarLongCall, ScalarLongCallGuard, ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp, ScalarLongOpKind, ScalarLongProgram, ScalarLongSource, ScalarStringFunctionPlan, ScalarStringSource};
-use super::quick::{
-    compose_quick_scalar_leaf_program, compose_scalar_double_program,
-    QuickArrayIndex, QuickIncrementKind,
-    QuickDoubleArgumentProgram, QuickDoubleCallAccumulateLoop, QuickDoubleSource,
-    QuickInvariantInput, QuickInvariantPathElement, QuickInvariantValueKind,
-    QuickTypedInvariantProducer,
-    QuickLongAccumulateLoop, QuickLongBound, QuickLongCondition, QuickLongInductionLoop,
-    QuickLongOp, QuickLongOperand, QuickLongOpsLoop, QuickLongTarget, QuickLongTerm,
-    QuickObjectLongArgument, QuickObjectLongMethodCall, QuickTypedMethodCall,
-    QuickObjectArrayConsumer, QuickStringAppendSource, QuickVirtualValueSource,
-    ResolvedScalarDoubleProgram,
-    QUICK_LOOP_COUNTER_STRIDE, QUICK_LOOP_DISABLED, QUICK_LOOP_FAILURE_LIMIT,
-    QUICK_LOOP_HOT_THRESHOLD, QUICK_STRING_FETCH_CACHE_LIMIT,
-};
+use crate::vm::stats;
 // Planner module is kept as scaffolding for future hot-executor architecture.
 // Not used in baseline dispatch loop — will be integrated via function-entry dispatch.
 
@@ -79,9 +88,7 @@ fn deferred_scalar_calls_enabled() -> bool {
     #[cfg(feature = "vm-stats")]
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var_os("RPHP_DISABLE_DEFERRED_SCALAR_CALLS").is_none()
-        })
+        *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_DEFERRED_SCALAR_CALLS").is_none())
     }
     #[cfg(not(feature = "vm-stats"))]
     {
@@ -94,9 +101,7 @@ fn composed_scalar_calls_enabled() -> bool {
     #[cfg(feature = "vm-stats")]
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var_os("RPHP_DISABLE_COMPOSED_SCALAR_CALLS").is_none()
-        })
+        *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_COMPOSED_SCALAR_CALLS").is_none())
     }
     #[cfg(not(feature = "vm-stats"))]
     {
@@ -109,9 +114,7 @@ fn composed_scalar_bodies_enabled() -> bool {
     #[cfg(feature = "vm-stats")]
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var_os("RPHP_DISABLE_COMPOSED_SCALAR_BODIES").is_none()
-        })
+        *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_COMPOSED_SCALAR_BODIES").is_none())
     }
     #[cfg(not(feature = "vm-stats"))]
     {
@@ -124,9 +127,7 @@ fn direct_property_getters_enabled() -> bool {
     #[cfg(feature = "vm-stats")]
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var_os("RPHP_DISABLE_DIRECT_PROPERTY_GETTERS").is_none()
-        })
+        *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_DIRECT_PROPERTY_GETTERS").is_none())
     }
     #[cfg(not(feature = "vm-stats"))]
     {
@@ -139,9 +140,7 @@ fn composed_property_calls_enabled() -> bool {
     #[cfg(feature = "vm-stats")]
     {
         static ENABLED: OnceLock<bool> = OnceLock::new();
-        *ENABLED.get_or_init(|| {
-            std::env::var_os("RPHP_DISABLE_COMPOSED_PROPERTY_CALLS").is_none()
-        })
+        *ENABLED.get_or_init(|| std::env::var_os("RPHP_DISABLE_COMPOSED_PROPERTY_CALLS").is_none())
     }
     #[cfg(not(feature = "vm-stats"))]
     {
@@ -189,7 +188,13 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
 /// `callee_class`: the declaring class of the function whose hint is being checked.
 /// Used to resolve `self`, `parent`, `static` pseudo-types.
 /// Pass `None` for global functions.
-fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &ExecutorGlobals, strict: bool, callee_class: Option<&str>) -> bool {
+fn check_type_hint(
+    val: &Value,
+    hint: &crate::vm::function::ParamTypeHint,
+    eg: &ExecutorGlobals,
+    strict: bool,
+    callee_class: Option<&str>,
+) -> bool {
     use crate::vm::function::ParamTypeHint;
     match hint {
         ParamTypeHint::None => true,
@@ -212,9 +217,7 @@ fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &
             if let Some(obj) = val.as_object() {
                 // Resolve `self`, `parent`, `static` pseudo-types using callee's declaring class
                 let resolved = match class_name.as_str() {
-                    "self" | "static" => {
-                        callee_class.unwrap_or(class_name.as_str())
-                    }
+                    "self" | "static" => callee_class.unwrap_or(class_name.as_str()),
                     "parent" => {
                         if let Some(decl) = callee_class {
                             if let Some(class_def) = eg.class_table.get(decl) {
@@ -243,9 +246,9 @@ fn check_type_hint(val: &Value, hint: &crate::vm::function::ParamTypeHint, eg: &
         ParamTypeHint::Void => false,
         ParamTypeHint::Mixed => true,
         ParamTypeHint::Never => false,
-        ParamTypeHint::Union(types) => {
-            types.iter().any(|t| check_type_hint(val, t, eg, strict, callee_class))
-        }
+        ParamTypeHint::Union(types) => types
+            .iter()
+            .any(|t| check_type_hint(val, t, eg, strict, callee_class)),
     }
 }
 
@@ -285,14 +288,11 @@ pub(crate) fn known_scalar_satisfies_type_hint(
         ParamTypeHint::None | ParamTypeHint::Mixed => true,
         ParamTypeHint::Int => known == KnownScalarType::Long,
         ParamTypeHint::Float => {
-            known == KnownScalarType::Double
-                || (!strict && known == KnownScalarType::Long)
+            known == KnownScalarType::Double || (!strict && known == KnownScalarType::Long)
         }
         ParamTypeHint::String => known == KnownScalarType::String,
         ParamTypeHint::Bool => known == KnownScalarType::Bool,
-        ParamTypeHint::Nullable(inner) => {
-            known_scalar_satisfies_type_hint(known, inner, strict)
-        }
+        ParamTypeHint::Nullable(inner) => known_scalar_satisfies_type_hint(known, inner, strict),
         ParamTypeHint::Union(types) => types
             .iter()
             .any(|member| known_scalar_satisfies_type_hint(known, member, strict)),
@@ -301,10 +301,7 @@ pub(crate) fn known_scalar_satisfies_type_hint(
 }
 
 #[inline(always)]
-fn exact_method_return_matches(
-    hint: &ParamTypeHint,
-    expected: KnownScalarType,
-) -> bool {
+fn exact_method_return_matches(hint: &ParamTypeHint, expected: KnownScalarType) -> bool {
     matches!(
         (hint, expected),
         (ParamTypeHint::Int, KnownScalarType::Long)
@@ -377,8 +374,8 @@ pub(crate) unsafe fn compact_scalar_call_types_match(
     class_guard_cacheable &= class_count != 0;
     debug_assert!(common.fn_type == FunctionType::User);
     let user = &*(common as *const FunctionCommon as *const UserFunction);
-    let class_guard_matches = class_guard_cacheable
-        && user.compact_class_guard.get() == class_guard;
+    let class_guard_matches =
+        class_guard_cacheable && user.compact_class_guard.get() == class_guard;
 
     for (index, hint) in hints.iter().take(check_count).enumerate() {
         if matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed) {
@@ -476,7 +473,11 @@ unsafe fn bitmap_drop_and_update(frame: *mut ExecuteData, ptr: *mut Value, heap:
         if (*frame).heap_bitmap & bit != 0 {
             std::ptr::drop_in_place(ptr);
         }
-        if heap { (*frame).heap_bitmap |= bit; } else { (*frame).heap_bitmap &= !bit; }
+        if heap {
+            (*frame).heap_bitmap |= bit;
+        } else {
+            (*frame).heap_bitmap &= !bit;
+        }
     } else {
         std::ptr::drop_in_place(ptr);
     }
@@ -649,9 +650,7 @@ unsafe fn try_init_borrowed_heap_arg(
         return false;
     }
     let user = &*((*call).func as *const UserFunction);
-    if user.borrowable_heap_args & (1u64 << public_param) == 0
-        || !(*source).needs_cleanup()
-    {
+    if user.borrowable_heap_args & (1u64 << public_param) == 0 || !(*source).needs_cleanup() {
         return false;
     }
     Value::raw_copy(source, destination);
@@ -765,9 +764,7 @@ unsafe fn bind_contiguous_scalar_args(
             OpCode::SendVal => try_copy_scalar_arg(frame, call, op_array, send),
             // FastScalar construction proves that no formal parameter is by
             // reference, so SendVarEx needs only the scalar-value guard.
-            OpCode::SendVarEx if fast_scalar => {
-                try_copy_scalar_arg(frame, call, op_array, send)
-            }
+            OpCode::SendVarEx if fast_scalar => try_copy_scalar_arg(frame, call, op_array, send),
             _ => false,
         };
         if !copied {
@@ -893,7 +890,8 @@ unsafe fn try_execute_single_long_property_plan(
                 if property != 0 {
                     return false;
                 }
-                let Some(updated) = value.checked_add(resolve_long_plan_source(rhs, arguments)) else {
+                let Some(updated) = value.checked_add(resolve_long_plan_source(rhs, arguments))
+                else {
                     return false;
                 };
                 value = updated;
@@ -903,13 +901,17 @@ unsafe fn try_execute_single_long_property_plan(
                 if property != 0 {
                     return false;
                 }
-                let Some(updated) = value.checked_sub(resolve_long_plan_source(rhs, arguments)) else {
+                let Some(updated) = value.checked_sub(resolve_long_plan_source(rhs, arguments))
+                else {
                     return false;
                 };
                 value = updated;
                 written = true;
             }
-            LongPropertyOp::Min { property, candidate } => {
+            LongPropertyOp::Min {
+                property,
+                candidate,
+            } => {
                 if property != 0 {
                     return false;
                 }
@@ -919,7 +921,10 @@ unsafe fn try_execute_single_long_property_plan(
                     written = true;
                 }
             }
-            LongPropertyOp::Max { property, candidate } => {
+            LongPropertyOp::Max {
+                property,
+                candidate,
+            } => {
                 if property != 0 {
                     return false;
                 }
@@ -929,7 +934,10 @@ unsafe fn try_execute_single_long_property_plan(
                     written = true;
                 }
             }
-            LongPropertyOp::Set { property, value: source } => {
+            LongPropertyOp::Set {
+                property,
+                value: source,
+            } => {
                 if property != 0 {
                     return false;
                 }
@@ -986,7 +994,8 @@ unsafe fn try_execute_multi_long_property_plan(
         match operation {
             LongPropertyOp::Add { property, rhs } => {
                 let target = &mut property_values[property as usize];
-                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments)) else {
+                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments))
+                else {
                     return false;
                 };
                 *target = value;
@@ -994,13 +1003,17 @@ unsafe fn try_execute_multi_long_property_plan(
             }
             LongPropertyOp::Sub { property, rhs } => {
                 let target = &mut property_values[property as usize];
-                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments)) else {
+                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments))
+                else {
                     return false;
                 };
                 *target = value;
                 written |= 1 << property;
             }
-            LongPropertyOp::Min { property, candidate } => {
+            LongPropertyOp::Min {
+                property,
+                candidate,
+            } => {
                 let candidate = resolve_long_plan_source(candidate, arguments);
                 let target = &mut property_values[property as usize];
                 if candidate < *target {
@@ -1008,7 +1021,10 @@ unsafe fn try_execute_multi_long_property_plan(
                     written |= 1 << property;
                 }
             }
-            LongPropertyOp::Max { property, candidate } => {
+            LongPropertyOp::Max {
+                property,
+                candidate,
+            } => {
                 let candidate = resolve_long_plan_source(candidate, arguments);
                 let target = &mut property_values[property as usize];
                 if candidate > *target {
@@ -1065,7 +1081,8 @@ unsafe fn try_execute_resolved_long_property_plan(
                 let Some(target) = property_values.get_mut(property as usize) else {
                     return false;
                 };
-                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments)) else {
+                let Some(value) = target.checked_add(resolve_long_plan_source(rhs, arguments))
+                else {
                     return false;
                 };
                 *target = value;
@@ -1075,13 +1092,17 @@ unsafe fn try_execute_resolved_long_property_plan(
                 let Some(target) = property_values.get_mut(property as usize) else {
                     return false;
                 };
-                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments)) else {
+                let Some(value) = target.checked_sub(resolve_long_plan_source(rhs, arguments))
+                else {
                     return false;
                 };
                 *target = value;
                 written |= 1 << property;
             }
-            LongPropertyOp::Min { property, candidate } => {
+            LongPropertyOp::Min {
+                property,
+                candidate,
+            } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
                     return false;
                 };
@@ -1091,7 +1112,10 @@ unsafe fn try_execute_resolved_long_property_plan(
                     written |= 1 << property;
                 }
             }
-            LongPropertyOp::Max { property, candidate } => {
+            LongPropertyOp::Max {
+                property,
+                candidate,
+            } => {
                 let Some(target) = property_values.get_mut(property as usize) else {
                     return false;
                 };
@@ -1140,7 +1164,10 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
     }
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Unused | OpType::Tmp | OpType::Var)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Unused | OpType::Tmp | OpType::Var
+        )
     {
         return false;
     }
@@ -1157,8 +1184,7 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
 
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
         let property = &*receiver.object_property_slot_unchecked(property_slot);
-        let result_ptr = (caller as *mut Value)
-            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         if property.needs_cleanup() || property.is_reference() {
             frame_slot_set(caller, result_ptr, property.clone());
         } else {
@@ -1235,11 +1261,7 @@ pub(crate) unsafe fn try_execute_composed_long_property_call(
 
     let inner_receiver = match inner_init.op1_type {
         OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-            &*(*caller).get_op_ptr(
-                inner_init.op1 as u32,
-                inner_init.op1_type,
-                caller_op_array,
-            )
+            &*(*caller).get_op_ptr(inner_init.op1 as u32, inner_init.op1_type, caller_op_array)
         }
         OpType::Unused => return false,
     };
@@ -1274,8 +1296,7 @@ pub(crate) unsafe fn try_execute_composed_long_property_call(
     if getter_cache.class_id != inner_class_id || getter_cache.property_flags() & 1 == 0 {
         return false;
     }
-    let argument = &*inner_receiver
-        .object_property_slot_unchecked(getter_cache.property_slot());
+    let argument = &*inner_receiver.object_property_slot_unchecked(getter_cache.property_slot());
     if argument.value_type() != ValueType::Long || argument.is_reference() {
         return false;
     }
@@ -1306,11 +1327,7 @@ fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i6
 }
 
 #[inline(always)]
-fn apply_scalar_long_condition(
-    kind: ScalarLongConditionKind,
-    lhs: i64,
-    rhs: i64,
-) -> bool {
+fn apply_scalar_long_condition(kind: ScalarLongConditionKind, lhs: i64, rhs: i64) -> bool {
     match kind {
         ScalarLongConditionKind::Equal => lhs == rhs,
         ScalarLongConditionKind::NotEqual => lhs != rhs,
@@ -1333,10 +1350,7 @@ fn resolve_scalar_function_source(
 }
 
 #[inline(always)]
-fn evaluate_scalar_long_plan(
-    plan: &ScalarLongFunctionPlan,
-    arguments: &[i64; 8],
-) -> Option<i64> {
+fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]) -> Option<i64> {
     if plan.program.operations.len() > 8 || plan.program.output_count != 1 {
         return None;
     }
@@ -1351,20 +1365,14 @@ fn evaluate_scalar_long_plan(
         ScalarLongJitDispatch::Interpret => {}
         ScalarLongJitDispatch::Value(value) => {
             #[cfg(feature = "vm-stats")]
-            stats::inc_jit_native_execution(
-                stats::JitRegionKind::ScalarLongFunction,
-            );
+            stats::inc_jit_native_execution(stats::JitRegionKind::ScalarLongFunction);
             return Some(value);
         }
         ScalarLongJitDispatch::SideExit => {
             #[cfg(feature = "vm-stats")]
             {
-                stats::inc_jit_native_execution(
-                    stats::JitRegionKind::ScalarLongFunction,
-                );
-                stats::inc_jit_native_side_exit(
-                    stats::JitRegionKind::ScalarLongFunction,
-                );
+                stats::inc_jit_native_execution(stats::JitRegionKind::ScalarLongFunction);
+                stats::inc_jit_native_side_exit(stats::JitRegionKind::ScalarLongFunction);
             }
             return None;
         }
@@ -1407,11 +1415,7 @@ fn evaluate_scalar_long_plan(
             evaluate_operations(shared_end, true_end, &mut temporaries)?;
             select.when_true
         } else {
-            evaluate_operations(
-                true_end,
-                plan.program.operations.len(),
-                &mut temporaries,
-            )?;
+            evaluate_operations(true_end, plan.program.operations.len(), &mut temporaries)?;
             select.when_false
         }
     } else {
@@ -1470,20 +1474,14 @@ fn evaluate_scalar_double_plan(
         ScalarDoubleJitDispatch::Interpret => {}
         ScalarDoubleJitDispatch::Value(value) => {
             #[cfg(feature = "vm-stats")]
-            stats::inc_jit_native_execution(
-                stats::JitRegionKind::ScalarDoubleFunction,
-            );
+            stats::inc_jit_native_execution(stats::JitRegionKind::ScalarDoubleFunction);
             return Some(value);
         }
         ScalarDoubleJitDispatch::SideExit => {
             #[cfg(feature = "vm-stats")]
             {
-                stats::inc_jit_native_execution(
-                    stats::JitRegionKind::ScalarDoubleFunction,
-                );
-                stats::inc_jit_native_side_exit(
-                    stats::JitRegionKind::ScalarDoubleFunction,
-                );
+                stats::inc_jit_native_execution(stats::JitRegionKind::ScalarDoubleFunction);
+                stats::inc_jit_native_side_exit(stats::JitRegionKind::ScalarDoubleFunction);
             }
             return None;
         }
@@ -1552,11 +1550,7 @@ fn evaluate_scalar_double_plan_rust(
 }
 
 #[inline(always)]
-fn apply_scalar_double_condition(
-    kind: ScalarLongConditionKind,
-    lhs: f64,
-    rhs: f64,
-) -> bool {
+fn apply_scalar_double_condition(kind: ScalarLongConditionKind, lhs: f64, rhs: f64) -> bool {
     match kind {
         ScalarLongConditionKind::Equal => lhs == rhs,
         ScalarLongConditionKind::NotEqual => lhs != rhs,
@@ -1651,11 +1645,7 @@ pub(crate) unsafe fn try_execute_deferred_scalar_long_call(
     }
 
     let mut arguments = [0i64; 8];
-    for (index, argument) in arguments
-        .iter_mut()
-        .enumerate()
-        .take(public_args as usize)
-    {
+    for (index, argument) in arguments.iter_mut().enumerate().take(public_args as usize) {
         let cv_index = common.sig.param_cv_index(index as u32);
         let value = (*call).cv(cv_index);
         if value.value_type() != ValueType::Long || value.is_reference() {
@@ -1839,9 +1829,7 @@ unsafe fn try_execute_deferred_object_long_call(
 /// captured in its compact activation.  As with the contiguous variant, all
 /// type/cache/arithmetic guards complete before the first property write.
 #[inline(always)]
-unsafe fn try_execute_deferred_long_property_method(
-    call: *mut ExecuteData,
-) -> bool {
+unsafe fn try_execute_deferred_long_property_method(call: *mut ExecuteData) -> bool {
     let common = &*(*call).func;
     if !(*call).deferred_scalar_call
         || common.fn_type != FunctionType::User
@@ -1921,8 +1909,7 @@ pub(crate) unsafe fn resolve_deferred_scalar_call(
     do_fcall: &Instruction,
     do_fcall_ptr: *const Instruction,
 ) -> *mut ExecuteData {
-    if do_fcall.result_type == OpType::Unused
-        && try_execute_deferred_long_property_method(compact)
+    if do_fcall.result_type == OpType::Unused && try_execute_deferred_long_property_method(compact)
     {
         let common = &*(*compact).func;
         record_scalar_call(common);
@@ -1995,11 +1982,7 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
         }
         let value = match send.op1_type {
             OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                &*(*caller).get_op_ptr(
-                    send.op1 as u32,
-                    send.op1_type,
-                    caller_op_array,
-                )
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
             }
             OpType::Unused => return None,
         };
@@ -2021,7 +2004,10 @@ pub(crate) unsafe fn try_execute_direct_single_scalar_long_op(
     let do_fcall_ptr = sends.add(plan.public_args as usize);
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
     {
         return None;
     }
@@ -2040,9 +2026,7 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     common: &FunctionCommon,
     plan: &ScalarLongFunctionPlan,
 ) -> Option<(i64, *const Instruction)> {
-    if !common.supports_scalar_long_plan()
-        || common.sig.public_arity() != plan.public_args as u32
-    {
+    if !common.supports_scalar_long_plan() || common.sig.public_arity() != plan.public_args as u32 {
         return None;
     }
 
@@ -2060,11 +2044,7 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
         }
         let value = match send.op1_type {
             OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                &*(*caller).get_op_ptr(
-                    send.op1 as u32,
-                    send.op1_type,
-                    caller_op_array,
-                )
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
             }
             OpType::Unused => return None,
         };
@@ -2077,7 +2057,10 @@ pub(crate) unsafe fn try_execute_direct_scalar_long_call(
     let do_fcall_ptr = sends.add(plan.public_args as usize);
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
     {
         return None;
     }
@@ -2096,8 +2079,7 @@ pub(crate) unsafe fn try_execute_direct_scalar_double_call(
     common: &FunctionCommon,
     plan: &ScalarDoubleFunctionPlan,
 ) -> Option<(f64, *const Instruction)> {
-    if !common.supports_scalar_double_plan()
-        || common.sig.public_arity() != plan.public_args as u32
+    if !common.supports_scalar_double_plan() || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
     }
@@ -2155,8 +2137,7 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_double_call(
     owner_receiver: Option<&Value>,
     plan: &ComposedScalarDoubleFunctionPlan,
 ) -> Option<(f64, *const Instruction)> {
-    if !common.supports_scalar_double_plan()
-        || common.sig.public_arity() != plan.public_args as u32
+    if !common.supports_scalar_double_plan() || common.sig.public_arity() != plan.public_args as u32
     {
         return None;
     }
@@ -2332,9 +2313,7 @@ unsafe fn evaluate_object_long_plan(
             }
         }
         let input = resolve_object_long_source(select.input, slots, initialized)?;
-        return input
-            .checked_mul(arm.multiplier)?
-            .checked_div(arm.divisor);
+        return input.checked_mul(arm.multiplier)?.checked_div(arm.divisor);
     }
 
     if let Some(select) = plan.modulo_any_select.as_deref() {
@@ -2390,8 +2369,11 @@ unsafe fn evaluate_object_long_plan(
                 destination,
                 source,
             } => {
-                slots[destination as usize]
-                    .write(resolve_object_long_source(source, slots, initialized)?);
+                slots[destination as usize].write(resolve_object_long_source(
+                    source,
+                    slots,
+                    initialized,
+                )?);
                 initialized |= 1u64 << destination;
             }
             ObjectLongOp::FetchProperty {
@@ -2433,7 +2415,8 @@ unsafe fn evaluate_object_long_plan(
                                     return None;
                                 }
                                 VirtualPropertyValue::Borrowed(
-                                    (*pointer).object_property_slot_unchecked(cache.property_slot()),
+                                    (*pointer)
+                                        .object_property_slot_unchecked(cache.property_slot()),
                                 )
                             }
                             ObjectLongArgument::Virtual(pointer) => {
@@ -2593,13 +2576,11 @@ pub(crate) unsafe fn try_execute_direct_object_long_call(
         let instruction = &*cursor;
         let (send, value) = if matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
             let value = match instruction.op1_type {
-                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                    &*(*caller).get_op_ptr(
-                        instruction.op1 as u32,
-                        instruction.op1_type,
-                        caller_op_array,
-                    )
-                }
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller).get_op_ptr(
+                    instruction.op1 as u32,
+                    instruction.op1_type,
+                    caller_op_array,
+                ),
                 OpType::Unused => return None,
             };
             cursor = cursor.add(1);
@@ -2615,13 +2596,11 @@ pub(crate) unsafe fn try_execute_direct_object_long_call(
                 return None;
             }
             let object = match instruction.op1_type {
-                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                    &*(*caller).get_op_ptr(
-                        instruction.op1 as u32,
-                        instruction.op1_type,
-                        caller_op_array,
-                    )
-                }
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller).get_op_ptr(
+                    instruction.op1 as u32,
+                    instruction.op1_type,
+                    caller_op_array,
+                ),
                 OpType::Unused => return None,
             };
             if object.value_type() != ValueType::Object || object.is_reference() {
@@ -2689,7 +2668,10 @@ pub(crate) unsafe fn try_execute_direct_object_long_call(
     let do_fcall_ptr = cursor;
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
     {
         return None;
     }
@@ -2734,38 +2716,33 @@ unsafe fn object_array_property(
                 receiver.object_property_slot_unchecked(cache.property_slot()),
             )
         }
-        ObjectLongObjectSource::Argument(argument) => {
-            match *arguments.get(argument as usize)? {
-                ObjectLongArgument::Borrowed(pointer) => {
-                    if pointer.is_null()
-                        || (*pointer).value_type() != ValueType::Object
-                        || (*pointer).is_reference()
-                    {
-                        return None;
-                    }
-                    let class_id = (*pointer).object_class_id_unchecked();
-                    if class_id == 0
-                        || cache.class_id != class_id
-                        || cache.property_flags() & 1 == 0
-                    {
-                        return None;
-                    }
-                    VirtualPropertyValue::Borrowed(
-                        (*pointer).object_property_slot_unchecked(cache.property_slot()),
-                    )
+        ObjectLongObjectSource::Argument(argument) => match *arguments.get(argument as usize)? {
+            ObjectLongArgument::Borrowed(pointer) => {
+                if pointer.is_null()
+                    || (*pointer).value_type() != ValueType::Object
+                    || (*pointer).is_reference()
+                {
+                    return None;
                 }
-                ObjectLongArgument::Virtual(pointer) => {
-                    if pointer.is_null()
-                        || cache.class_id != (*pointer).class_id
-                        || cache.property_flags() & 1 == 0
-                    {
-                        return None;
-                    }
-                    (*pointer).property(cache.property_slot())?
+                let class_id = (*pointer).object_class_id_unchecked();
+                if class_id == 0 || cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+                    return None;
                 }
-                ObjectLongArgument::None => return None,
+                VirtualPropertyValue::Borrowed(
+                    (*pointer).object_property_slot_unchecked(cache.property_slot()),
+                )
             }
-        }
+            ObjectLongArgument::Virtual(pointer) => {
+                if pointer.is_null()
+                    || cache.class_id != (*pointer).class_id
+                    || cache.property_flags() & 1 == 0
+                {
+                    return None;
+                }
+                (*pointer).property(cache.property_slot())?
+            }
+            ObjectLongArgument::None => return None,
+        },
     };
     match property {
         VirtualPropertyValue::Long(value) => Some(ObjectArrayResolved::Long(value)),
@@ -2792,17 +2769,15 @@ unsafe fn resolve_object_array_source(
         ObjectArraySource::Receiver => {
             Some(ObjectArrayResolved::Borrowed(receiver as *const Value))
         }
-        ObjectArraySource::Argument(argument) => {
-            match *arguments.get(argument as usize)? {
-                ObjectLongArgument::Borrowed(pointer) if !pointer.is_null() => {
-                    Some(ObjectArrayResolved::Borrowed(pointer))
-                }
-                ObjectLongArgument::Virtual(pointer) if !pointer.is_null() => {
-                    Some(ObjectArrayResolved::Virtual(pointer))
-                }
-                _ => None,
+        ObjectArraySource::Argument(argument) => match *arguments.get(argument as usize)? {
+            ObjectLongArgument::Borrowed(pointer) if !pointer.is_null() => {
+                Some(ObjectArrayResolved::Borrowed(pointer))
             }
-        }
+            ObjectLongArgument::Virtual(pointer) if !pointer.is_null() => {
+                Some(ObjectArrayResolved::Virtual(pointer))
+            }
+            _ => None,
+        },
         ObjectArraySource::LongSlot(slot) => {
             let bit = 1u64.checked_shl(slot as u32)?;
             if initialized & bit == 0 {
@@ -2817,13 +2792,9 @@ unsafe fn resolve_object_array_source(
             .literals
             .get(literal as usize)
             .map(|value| ObjectArrayResolved::Borrowed(value as *const Value)),
-        ObjectArraySource::Property { object, cache_ip } => object_array_property(
-            owner,
-            receiver,
-            arguments,
-            object,
-            cache_ip,
-        ),
+        ObjectArraySource::Property { object, cache_ip } => {
+            object_array_property(owner, receiver, arguments, object, cache_ip)
+        }
     }
 }
 
@@ -2836,14 +2807,7 @@ unsafe fn resolve_object_array_long(
     slots: &[std::mem::MaybeUninit<i64>; 64],
     initialized: u64,
 ) -> Option<i64> {
-    match resolve_object_array_source(
-        source,
-        owner,
-        receiver,
-        arguments,
-        slots,
-        initialized,
-    )? {
+    match resolve_object_array_source(source, owner, receiver, arguments, slots, initialized)? {
         ObjectArrayResolved::Long(value) => Some(value),
         ObjectArrayResolved::Borrowed(pointer) => {
             if pointer.is_null()
@@ -2935,8 +2899,10 @@ unsafe fn evaluate_object_array_call(
         let bit = 1u8 << index;
         match resolved {
             ObjectArrayResolved::Long(value) => {
-                if !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int)
-                    || plan.object_argument_mask & bit != 0
+                if !matches!(
+                    hint,
+                    ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+                ) || plan.object_argument_mask & bit != 0
                     || plan.string_argument_mask & bit != 0
                 {
                     return None;
@@ -2983,12 +2949,7 @@ unsafe fn evaluate_object_array_call(
             }
             ObjectArrayResolved::Virtual(pointer) => {
                 if pointer.is_null()
-                    || !virtual_object_matches_hint(
-                        &*pointer,
-                        hint,
-                        eg,
-                        declaring_class,
-                    )
+                    || !virtual_object_matches_hint(&*pointer, hint, eg, declaring_class)
                     || plan.long_argument_mask & bit != 0
                     || plan.string_argument_mask & bit != 0
                 {
@@ -3023,12 +2984,7 @@ struct ObjectArrayEvaluated {
 impl ObjectArrayEvaluated {
     #[inline(always)]
     unsafe fn record_calls(&self) {
-        for target in self
-            .called
-            .iter()
-            .copied()
-            .take(self.called_count as usize)
-        {
+        for target in self.called.iter().copied().take(self.called_count as usize) {
             record_scalar_call(&*target);
         }
     }
@@ -3212,8 +3168,9 @@ unsafe fn direct_object_array_arguments(
             return None;
         }
         let value = match send.op1_type {
-            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller)
-                .get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array),
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
             OpType::Unused => return None,
         };
         if value.is_reference()
@@ -3237,7 +3194,10 @@ unsafe fn direct_object_array_arguments(
     let do_fcall_ptr = sends.add(plan.public_args as usize);
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
     {
         return None;
     }
@@ -3256,15 +3216,8 @@ pub(crate) unsafe fn try_execute_direct_object_array_call(
     callee: &UserFunction,
     plan: &ObjectArrayFunctionPlan,
 ) -> Option<(Value, *const Instruction)> {
-    let (arguments, do_fcall_ptr) = direct_object_array_arguments(
-        eg,
-        caller,
-        caller_op_array,
-        receiver,
-        sends,
-        callee,
-        plan,
-    )?;
+    let (arguments, do_fcall_ptr) =
+        direct_object_array_arguments(eg, caller, caller_op_array, receiver, sends, callee, plan)?;
     let evaluated = evaluate_object_array_values(eg, receiver, &arguments, callee, plan)?;
     let result = materialize_object_array_values(callee, plan, &evaluated)?;
     evaluated.record_calls();
@@ -3362,7 +3315,10 @@ unsafe fn commit_object_array_consumers(
         let add = caller_op_array.instructions.get(cursor_ip as usize + 1);
         let assign = caller_op_array.instructions.get(cursor_ip as usize + 2);
         let accumulator = if let (Some(add), Some(assign)) = (add, assign)
-            && matches!(add.opcode, OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp)
+            && matches!(
+                add.opcode,
+                OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp
+            )
             && matches!(add.result_type, OpType::Tmp | OpType::Var)
             && assign.opcode == OpCode::AssignCv
             && assign.op1_type == OpType::Cv
@@ -3558,8 +3514,9 @@ unsafe fn try_execute_virtual_object_array_pipeline(
             return None;
         }
         let value = match send.op1_type {
-            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller)
-                .get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array),
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+            }
             OpType::Unused => return None,
         };
         if value.is_reference()
@@ -3634,8 +3591,9 @@ unsafe fn try_execute_virtual_object_array_pipeline(
         return None;
     }
     let method_receiver = match method.op1_type {
-        OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller)
-            .get_op_ptr(method.op1 as u32, method.op1_type, caller_op_array),
+        OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+            &*(*caller).get_op_ptr(method.op1 as u32, method.op1_type, caller_op_array)
+        }
         OpType::Unused => return None,
     };
     if method_receiver.value_type() != ValueType::Object || method_receiver.is_reference() {
@@ -3684,12 +3642,7 @@ unsafe fn try_execute_virtual_object_array_pipeline(
             .get(index)
             .unwrap_or(&ParamTypeHint::None);
         if send.op1_type == OpType::Cv && send.op1 == object_assign.op1 {
-            if !virtual_object_matches_hint(
-                &virtual_object,
-                hint,
-                eg,
-                method_declaring_class,
-            ) {
+            if !virtual_object_matches_hint(&virtual_object, hint, eg, method_declaring_class) {
                 return None;
             }
             method_arguments[index] =
@@ -3697,8 +3650,9 @@ unsafe fn try_execute_virtual_object_array_pipeline(
             virtual_arguments += 1;
         } else {
             let value = match send.op1_type {
-                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller)
-                    .get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array),
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(send.op1 as u32, send.op1_type, caller_op_array)
+                }
                 OpType::Unused => return None,
             };
             if value.is_reference()
@@ -3754,8 +3708,7 @@ pub(crate) unsafe fn complete_direct_object_array_call(
 ) {
     let do_fcall = &*do_fcall_ptr;
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
-        let result_ptr = (caller as *mut Value)
-            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         frame_tmp_set(caller, result_ptr, result);
     }
     (*caller).opline = do_fcall_ptr.add(1);
@@ -3769,8 +3722,7 @@ pub(crate) unsafe fn complete_direct_scalar_long_call(
 ) {
     let do_fcall = &*do_fcall_ptr;
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
-        let result_ptr = (caller as *mut Value)
-            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         frame_tmp_set_long(caller, result_ptr, result);
     }
     (*caller).opline = do_fcall_ptr.add(1);
@@ -3784,8 +3736,7 @@ pub(crate) unsafe fn complete_direct_scalar_double_call(
 ) {
     let do_fcall = &*do_fcall_ptr;
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
-        let result_ptr = (caller as *mut Value)
-            .add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         frame_tmp_set(caller, result_ptr, Value::double(result));
     }
     (*caller).opline = do_fcall_ptr.add(1);
@@ -3886,9 +3837,7 @@ unsafe fn guarded_user_target(
         return None;
     }
     let common = &*target;
-    if common.fn_type != FunctionType::User
-        || common.sig.public_arity() != argument_count as u32
-    {
+    if common.fn_type != FunctionType::User || common.sig.public_arity() != argument_count as u32 {
         return None;
     }
     Some(target as *const UserFunction)
@@ -3940,12 +3889,8 @@ unsafe fn guarded_cached_scalar_call_target(
     receiver: Option<&Value>,
     argument_count: usize,
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
-    let (target, user) = guarded_cached_user_call_target(
-        op_array,
-        guard,
-        receiver,
-        argument_count,
-    )?;
+    let (target, user) =
+        guarded_cached_user_call_target(op_array, guard, receiver, argument_count)?;
     guarded_scalar_user_target(target, argument_count)?;
     Some((target, user))
 }
@@ -3997,8 +3942,8 @@ unsafe fn guarded_typed_call_target(
             {
                 return None;
             }
-            let receiver_index = (receiver_slot as u32)
-                .checked_sub(owner.common.sig.this_offset)? as usize;
+            let receiver_index =
+                (receiver_slot as u32).checked_sub(owner.common.sig.this_offset)? as usize;
             let receiver = *object_arguments.get(receiver_index)?;
             if receiver.is_null() {
                 return None;
@@ -4006,12 +3951,7 @@ unsafe fn guarded_typed_call_target(
             Some(&*receiver)
         }
     };
-    guarded_cached_user_call_target(
-        &owner.op_array,
-        call.guard,
-        receiver,
-        call.arguments.len(),
-    )
+    guarded_cached_user_call_target(&owner.op_array, call.guard, receiver, call.arguments.len())
 }
 
 unsafe fn guarded_scalar_call_target(
@@ -4020,12 +3960,7 @@ unsafe fn guarded_scalar_call_target(
     call: &ScalarLongCall,
     object_arguments: &[*const Value; 8],
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
-    let (target, user) = guarded_typed_call_target(
-        eg,
-        owner,
-        call,
-        object_arguments,
-    )?;
+    let (target, user) = guarded_typed_call_target(eg, owner, call, object_arguments)?;
     guarded_scalar_user_target(target, call.arguments.len())?;
     Some((target, user))
 }
@@ -4050,16 +3985,8 @@ unsafe fn evaluate_composed_scalar_body_plan(
     for (operation_index, operation) in plan.program.operations.iter().enumerate() {
         temporaries[operation_index] = match operation {
             ComposedScalarLongOp::Arithmetic(operation) => {
-                let lhs = resolve_composed_body_source(
-                    operation.lhs,
-                    arguments,
-                    &temporaries,
-                );
-                let rhs = resolve_composed_body_source(
-                    operation.rhs,
-                    arguments,
-                    &temporaries,
-                );
+                let lhs = resolve_composed_body_source(operation.lhs, arguments, &temporaries);
+                let rhs = resolve_composed_body_source(operation.rhs, arguments, &temporaries);
                 apply_scalar_long_op(operation.kind, lhs, rhs)?
             }
             ComposedScalarLongOp::Call(call) => {
@@ -4067,26 +3994,17 @@ unsafe fn evaluate_composed_scalar_body_plan(
                 if sources.len() > 8 || *call_count >= COMPOSED_SCALAR_MAX_CALLS {
                     return None;
                 }
-                let (target, target_user) = guarded_scalar_call_target(
-                    eg,
-                    owner,
-                    call,
-                    object_arguments,
-                )?;
+                let (target, target_user) =
+                    guarded_scalar_call_target(eg, owner, call, object_arguments)?;
                 let target_user = &*target_user;
                 let mut target_arguments = [0i64; 8];
                 for (index, source) in sources.iter().copied().enumerate() {
-                    target_arguments[index] = resolve_composed_body_source(
-                        source,
-                        arguments,
-                        &temporaries,
-                    );
+                    target_arguments[index] =
+                        resolve_composed_body_source(source, arguments, &temporaries);
                 }
                 let result = if let Some(target_plan) = target_user.scalar_long_plan.as_deref() {
                     evaluate_scalar_long_plan(target_plan, &target_arguments)?
-                } else if let Some(target_plan) =
-                    target_user.composed_scalar_long_plan.as_deref()
-                {
+                } else if let Some(target_plan) = target_user.composed_scalar_long_plan.as_deref() {
                     if target_plan.object_argument_mask != 0 {
                         return None;
                     }
@@ -4134,9 +4052,7 @@ unsafe fn resolve_quick_composed_typed_body(
     scalar_plans: &mut [*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
     string_plans: &mut [*const ScalarStringFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
 ) -> bool {
-    if plan.program.operations.len() > COMPOSED_SCALAR_MAX_OPS
-        || plan.program.output_count != 1
-    {
+    if plan.program.operations.len() > COMPOSED_SCALAR_MAX_OPS || plan.program.output_count != 1 {
         return false;
     }
     let mut call_count = 0usize;
@@ -4154,12 +4070,9 @@ unsafe fn resolve_quick_composed_typed_body(
         if call_count > COMPOSED_SCALAR_MAX_CALLS || call.arguments.len() > 8 {
             return false;
         }
-        let Some((target, target_user)) = guarded_typed_call_target(
-            eg,
-            owner,
-            call,
-            object_arguments,
-        ) else {
+        let Some((target, target_user)) =
+            guarded_typed_call_target(eg, owner, call, object_arguments)
+        else {
             return false;
         };
         targets[index] = target;
@@ -4192,9 +4105,7 @@ unsafe fn resolve_quick_composed_leaf_body(
     targets: &mut [*const FunctionCommon; COMPOSED_SCALAR_MAX_OPS],
     scalar_plans: &mut [*const ScalarLongFunctionPlan; COMPOSED_SCALAR_MAX_OPS],
 ) -> bool {
-    if plan.program.operations.len() > COMPOSED_SCALAR_MAX_OPS
-        || plan.program.output_count != 1
-    {
+    if plan.program.operations.len() > COMPOSED_SCALAR_MAX_OPS || plan.program.output_count != 1 {
         return false;
     }
     let mut call_count = 0usize;
@@ -4206,12 +4117,9 @@ unsafe fn resolve_quick_composed_leaf_body(
         if call_count > COMPOSED_SCALAR_MAX_CALLS || call.arguments.len() > 8 {
             return false;
         }
-        let Some((target, target_user)) = guarded_scalar_call_target(
-            eg,
-            owner,
-            call,
-            object_arguments,
-        ) else {
+        let Some((target, target_user)) =
+            guarded_scalar_call_target(eg, owner, call, object_arguments)
+        else {
             return false;
         };
         let Some(target_plan) = (&*target_user).scalar_long_plan.as_deref() else {
@@ -4239,16 +4147,8 @@ unsafe fn evaluate_quick_composed_leaf_body(
     for (operation_index, operation) in plan.program.operations.iter().enumerate() {
         temporaries[operation_index] = match operation {
             ComposedScalarLongOp::Arithmetic(operation) => {
-                let lhs = resolve_composed_body_source(
-                    operation.lhs,
-                    arguments,
-                    &temporaries,
-                );
-                let rhs = resolve_composed_body_source(
-                    operation.rhs,
-                    arguments,
-                    &temporaries,
-                );
+                let lhs = resolve_composed_body_source(operation.lhs, arguments, &temporaries);
+                let rhs = resolve_composed_body_source(operation.rhs, arguments, &temporaries);
                 apply_scalar_long_op(operation.kind, lhs, rhs)?
             }
             ComposedScalarLongOp::Call(call) => {
@@ -4258,11 +4158,8 @@ unsafe fn evaluate_quick_composed_leaf_body(
                 }
                 let mut target_arguments = [0i64; 8];
                 for (index, source) in call.arguments.iter().copied().enumerate() {
-                    target_arguments[index] = resolve_composed_body_source(
-                        source,
-                        arguments,
-                        &temporaries,
-                    );
+                    target_arguments[index] =
+                        resolve_composed_body_source(source, arguments, &temporaries);
                 }
                 evaluate_scalar_long_plan(&*target_plan, &target_arguments)?
             }
@@ -4292,16 +4189,8 @@ unsafe fn evaluate_quick_composed_typed_body(
     for (operation_index, operation) in plan.program.operations.iter().enumerate() {
         temporaries[operation_index] = match operation {
             ComposedTypedLongOp::Arithmetic(operation) => {
-                let lhs = resolve_composed_body_source(
-                    operation.lhs,
-                    arguments,
-                    &temporaries,
-                );
-                let rhs = resolve_composed_body_source(
-                    operation.rhs,
-                    arguments,
-                    &temporaries,
-                );
+                let lhs = resolve_composed_body_source(operation.lhs, arguments, &temporaries);
+                let rhs = resolve_composed_body_source(operation.rhs, arguments, &temporaries);
                 apply_scalar_long_op(operation.kind, lhs, rhs)?
             }
             ComposedTypedLongOp::Call(call) => {
@@ -4312,11 +4201,8 @@ unsafe fn evaluate_quick_composed_typed_body(
                 }
                 let mut target_arguments = [0i64; 8];
                 for (index, source) in sources.iter().copied().enumerate() {
-                    target_arguments[index] = resolve_composed_body_source(
-                        source,
-                        arguments,
-                        &temporaries,
-                    );
+                    target_arguments[index] =
+                        resolve_composed_body_source(source, arguments, &temporaries);
                 }
                 evaluate_scalar_long_plan(&*target_plan, &target_arguments)?
             }
@@ -4327,35 +4213,24 @@ unsafe fn evaluate_quick_composed_typed_body(
                 }
                 let mut target_arguments = [0i64; 8];
                 for (index, source) in call.arguments.iter().copied().enumerate() {
-                    target_arguments[index] = resolve_composed_body_source(
-                        source,
-                        arguments,
-                        &temporaries,
-                    );
+                    target_arguments[index] =
+                        resolve_composed_body_source(source, arguments, &temporaries);
                 }
-                string_temporaries[operation_index] = Some(
-                    evaluate_scalar_string_plan(&*target_plan, &target_arguments)?.len(),
-                );
+                string_temporaries[operation_index] =
+                    Some(evaluate_scalar_string_plan(&*target_plan, &target_arguments)?.len());
                 0
             }
             ComposedTypedLongOp::StringConcatLiteral { value, literal_len } => {
                 string_temporaries[operation_index] = Some(
-                    resolve_composed_string_source(
-                        *value,
-                        string_arguments,
-                        &string_temporaries,
-                    )?
+                    resolve_composed_string_source(*value, string_arguments, &string_temporaries)?
                         .checked_add(*literal_len as usize)?,
                 );
                 0
             }
-            ComposedTypedLongOp::StringLength(source) => {
-                i64::try_from(resolve_composed_string_source(
-                    *source,
-                    string_arguments,
-                    &string_temporaries,
-                )?).ok()?
-            }
+            ComposedTypedLongOp::StringLength(source) => i64::try_from(
+                resolve_composed_string_source(*source, string_arguments, &string_temporaries)?,
+            )
+            .ok()?,
         };
     }
 
@@ -4429,17 +4304,11 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
         }
 
         let kind = match instruction.opcode {
-            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
-                ScalarLongOpKind::Add
-            }
-            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
-                ScalarLongOpKind::Subtract
-            }
+            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => ScalarLongOpKind::Add,
+            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => ScalarLongOpKind::Subtract,
             OpCode::Mul => ScalarLongOpKind::Multiply,
             OpCode::Mod | OpCode::Mod_LongLong => ScalarLongOpKind::Modulo,
-            OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
-                ScalarLongOpKind::BitwiseXor
-            }
+            OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => ScalarLongOpKind::BitwiseXor,
             _ => return None,
         };
         if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
@@ -4473,7 +4342,10 @@ pub(crate) unsafe fn try_execute_direct_composed_scalar_body_call(
 
     let do_fcall = &*cursor;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
     {
         return None;
     }
@@ -4536,13 +4408,11 @@ unsafe fn composed_scalar_callee(
         OpCode::InitMethodCall => {
             let cache = caller_op_array.cache.get(ip)?;
             let receiver = match initializer.op1_type {
-                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                    &*(*caller).get_op_ptr(
-                        initializer.op1 as u32,
-                        initializer.op1_type,
-                        caller_op_array,
-                    )
-                }
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller).get_op_ptr(
+                    initializer.op1 as u32,
+                    initializer.op1_type,
+                    caller_op_array,
+                ),
                 OpType::Unused => return None,
             };
             if receiver.value_type() != ValueType::Object {
@@ -4596,13 +4466,11 @@ unsafe fn evaluate_composed_scalar_call(
                 return None;
             }
             let value = match instruction.op1_type {
-                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
-                    &*(*caller).get_op_ptr(
-                        instruction.op1 as u32,
-                        instruction.op1_type,
-                        caller_op_array,
-                    )
-                }
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller).get_op_ptr(
+                    instruction.op1 as u32,
+                    instruction.op1_type,
+                    caller_op_array,
+                ),
                 OpType::Unused => return None,
             };
             if value.value_type() != ValueType::Long || value.is_reference() {
@@ -4614,17 +4482,13 @@ unsafe fn evaluate_composed_scalar_call(
         }
 
         let arithmetic_kind = match instruction.opcode {
-            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => {
-                Some(ScalarLongOpKind::Add)
-            }
+            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp => Some(ScalarLongOpKind::Add),
             OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp => {
                 Some(ScalarLongOpKind::Subtract)
             }
             OpCode::Mul => Some(ScalarLongOpKind::Multiply),
             OpCode::Mod | OpCode::Mod_LongLong => Some(ScalarLongOpKind::Modulo),
-            OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => {
-                Some(ScalarLongOpKind::BitwiseXor)
-            }
+            OpCode::BitwiseXor | OpCode::BitwiseXor_LongLong => Some(ScalarLongOpKind::BitwiseXor),
             _ => None,
         };
         if let Some(kind) = arithmetic_kind {
@@ -4658,11 +4522,7 @@ unsafe fn evaluate_composed_scalar_call(
             continue;
         }
 
-        let (nested_func, nested_plan) = composed_scalar_callee(
-            caller,
-            caller_op_array,
-            cursor,
-        )?;
+        let (nested_func, nested_plan) = composed_scalar_callee(caller, caller_op_array, cursor)?;
         let (nested_result, nested_do_fcall) = evaluate_composed_scalar_call(
             caller,
             caller_op_array,
@@ -4674,7 +4534,10 @@ unsafe fn evaluate_composed_scalar_call(
             depth + 1,
         )?;
         let nested_result_instruction = &*nested_do_fcall;
-        if !matches!(nested_result_instruction.result_type, OpType::Tmp | OpType::Var) {
+        if !matches!(
+            nested_result_instruction.result_type,
+            OpType::Tmp | OpType::Var
+        ) {
             return None;
         }
         cursor = nested_do_fcall.add(1);
@@ -4692,7 +4555,10 @@ unsafe fn evaluate_composed_scalar_call(
 
     let do_fcall = &*cursor;
     if do_fcall.opcode != OpCode::DoFcall
-        || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || !matches!(
+            do_fcall.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
     {
         return None;
     }
@@ -4849,7 +4715,8 @@ unsafe fn mark_caller_heap_return(frame: *mut ExecuteData, val: &Value) {
                     debug_assert!(
                         (idx as u32) < total,
                         "mark_caller_heap_return: return_value slot idx {} out of bounds (total={})",
-                        idx, total
+                        idx,
+                        total
                     );
                     (*prev).heap_bitmap |= 1u64 << idx;
                 }
@@ -5057,7 +4924,9 @@ fn throw_in_frame<'a>(
     loop {
         let sf_op_array = unsafe { (*search_frame).op_array() };
         let current_ip = unsafe {
-            (*search_frame).opline.offset_from(sf_op_array.instructions.as_ptr()) as u32
+            (*search_frame)
+                .opline
+                .offset_from(sf_op_array.instructions.as_ptr()) as u32
         };
 
         let mut matched_entry: Option<&crate::compiler::compile::TryEntry> = None;
@@ -5069,9 +4938,10 @@ fn throw_in_frame<'a>(
         }
 
         if let Some(entry) = matched_entry {
-            let matched_catch = entry.catches.iter().find(|c| {
-                exception_matches_catch(&thrown, &c.types, eg)
-            });
+            let matched_catch = entry
+                .catches
+                .iter()
+                .find(|c| exception_matches_catch(&thrown, &c.types, eg));
 
             if let Some(catch) = matched_catch {
                 while frame != search_frame {
@@ -5086,7 +4956,8 @@ fn throw_in_frame<'a>(
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
-                let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
+                let catch_cv_ptr =
+                    unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
                 unsafe { slot_set(catch_cv_ptr, thrown.clone()) };
                 unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
@@ -5146,10 +5017,7 @@ pub(super) enum QuickLoopOutcome {
         all(target_arch = "x86_64", target_os = "linux")
     )
 ))]
-fn record_native_quick_outcome(
-    kind: stats::JitRegionKind,
-    outcome: &QuickLoopOutcome,
-) {
+fn record_native_quick_outcome(kind: stats::JitRegionKind, outcome: &QuickLoopOutcome) {
     stats::inc_jit_native_execution(kind);
     if matches!(outcome, QuickLoopOutcome::Deoptimized) {
         stats::inc_jit_native_side_exit(kind);
@@ -5277,23 +5145,18 @@ fn native_quick_long_straight_kernel(
         return None;
     }
 
-    let (
-        header_lhs,
-        header_rhs,
-        header_condition_tmp,
-        header_false_target,
-        header_next_target,
-    ) = match *plan.ops.first()? {
-        QuickLongOp::BranchUnlessLt {
-            lhs,
-            rhs,
-            condition_tmp,
-            false_target,
-            next_target,
-            ..
-        } => (lhs, rhs, condition_tmp, false_target, next_target),
-        _ => return None,
-    };
+    let (header_lhs, header_rhs, header_condition_tmp, header_false_target, header_next_target) =
+        match *plan.ops.first()? {
+            QuickLongOp::BranchUnlessLt {
+                lhs,
+                rhs,
+                condition_tmp,
+                false_target,
+                next_target,
+                ..
+            } => (lhs, rhs, condition_tmp, false_target, next_target),
+            _ => return None,
+        };
     header_false_target.exit_ip()?;
 
     let (
@@ -5340,8 +5203,7 @@ fn native_quick_long_straight_kernel(
         return None;
     }
 
-    let mut operations =
-        [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+    let mut operations = [NativeStraightLongOperation::Unused; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut operation_resume_ips = [0usize; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_operation_indices = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_condition_slots = [0u8; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
@@ -5380,9 +5242,9 @@ fn native_quick_long_straight_kernel(
                 let native_index = append_operation(
                     NativeStraightLongOperation::BranchUnless {
                         kind: ScalarLongConditionKind::LessThan,
-                        lhs: NativeStraightLongConditionOperand::Source(
-                            QuickLongOperand::Slot(lhs),
-                        ),
+                        lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(
+                            lhs,
+                        )),
                         rhs: NativeStraightLongConditionOperand::Source(rhs),
                         false_target: 0,
                     },
@@ -5403,9 +5265,9 @@ fn native_quick_long_straight_kernel(
                 let native_index = append_operation(
                     NativeStraightLongOperation::BranchUnless {
                         kind: ScalarLongConditionKind::Equal,
-                        lhs: NativeStraightLongConditionOperand::Source(
-                            QuickLongOperand::Slot(lhs),
-                        ),
+                        lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(
+                            lhs,
+                        )),
                         rhs: NativeStraightLongConditionOperand::Source(rhs),
                         false_target: 0,
                     },
@@ -5457,9 +5319,9 @@ fn native_quick_long_straight_kernel(
                 let branch_index = append_operation(
                     NativeStraightLongOperation::BranchUnless {
                         kind,
-                        lhs: NativeStraightLongConditionOperand::Source(
-                            QuickLongOperand::Slot(condition_lhs),
-                        ),
+                        lhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Slot(
+                            condition_lhs,
+                        )),
                         rhs: NativeStraightLongConditionOperand::Source(condition_rhs),
                         false_target: 0,
                     },
@@ -5518,9 +5380,7 @@ fn native_quick_long_straight_kernel(
                 resume_ip,
             } if matches!(
                 kind,
-                ScalarLongOpKind::Add
-                    | ScalarLongOpKind::Subtract
-                    | ScalarLongOpKind::Multiply
+                ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
             ) && result != post_value =>
             {
                 append_operation(
@@ -5544,9 +5404,7 @@ fn native_quick_long_straight_kernel(
                 resume_ip,
             } if matches!(
                 kind,
-                ScalarLongOpKind::Add
-                    | ScalarLongOpKind::Subtract
-                    | ScalarLongOpKind::Multiply
+                ScalarLongOpKind::Add | ScalarLongOpKind::Subtract | ScalarLongOpKind::Multiply
             ) && result != post_value
                 && destination != post_value =>
             {
@@ -5760,9 +5618,9 @@ fn publish_native_quick_long_trace_guards(
     before_operation: Option<u8>,
 ) {
     for index in 0..kernel.trace_guard_count as usize {
-        if before_operation.is_some_and(|limit| {
-            kernel.trace_guard_operation_indices[index] >= limit
-        }) {
+        if before_operation
+            .is_some_and(|limit| kernel.trace_guard_operation_indices[index] >= limit)
+        {
             continue;
         }
         let slot = kernel.trace_guard_condition_slots[index] as usize;
@@ -5844,11 +5702,7 @@ unsafe fn run_native_quick_long_straight_kernel(
             };
             result
         } else {
-            cache.dispatch_prepared_straight_chunk(
-                program,
-                slots,
-                NATIVE_LONG_SAFEPOINT_INTERVAL,
-            )
+            cache.dispatch_prepared_straight_chunk(program, slots, NATIVE_LONG_SAFEPOINT_INTERVAL)
         };
         let mut result = match native_result {
             Ok(result) => {
@@ -5874,12 +5728,7 @@ unsafe fn run_native_quick_long_straight_kernel(
                     slots[slot as usize] = 1;
                     dirty_bool_mask |= 1u64 << slot;
                 }
-                commit_quick_long_ops_slots(
-                    slot_base,
-                    slots,
-                    dirty_long_mask,
-                    dirty_bool_mask,
-                );
+                commit_quick_long_ops_slots(slot_base, slots, dirty_long_mask, dirty_bool_mask);
                 let next_ip = plan.target_ip(kernel.body_target).unwrap_unchecked();
                 (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
@@ -5888,17 +5737,14 @@ unsafe fn run_native_quick_long_straight_kernel(
         };
 
         let induction = slots[config.induction_slot as usize];
-        let completed_in_chunk =
-            (induction as u64).wrapping_sub(before_induction as u64);
+        let completed_in_chunk = (induction as u64).wrapping_sub(before_induction as u64);
         iterations = iterations.saturating_add(completed_in_chunk);
         if completed_in_chunk != 0 {
             dirty_long_mask |=
                 (1u64 << config.induction_slot) | body_output_mask | post_result_mask;
         }
 
-        if result.outcome == NativeStraightLongLoopOutcome::ChunkExhausted
-            && induction >= bound
-        {
+        if result.outcome == NativeStraightLongLoopOutcome::ChunkExhausted && induction >= bound {
             result.outcome = NativeStraightLongLoopOutcome::Completed;
         }
         let completed = result.outcome == NativeStraightLongLoopOutcome::Completed;
@@ -5917,12 +5763,7 @@ unsafe fn run_native_quick_long_straight_kernel(
                         None,
                     );
                 }
-                commit_quick_long_ops_slots(
-                    slot_base,
-                    slots,
-                    dirty_long_mask,
-                    dirty_bool_mask,
-                );
+                commit_quick_long_ops_slots(slot_base, slots, dirty_long_mask, dirty_bool_mask);
                 let next_ip = kernel.exit_target.exit_ip().unwrap_unchecked();
                 (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
                 stats::inc_quick_loop_completed(iterations);
@@ -5930,10 +5771,7 @@ unsafe fn run_native_quick_long_straight_kernel(
             }
             NativeStraightLongLoopOutcome::ChunkExhausted => {
                 debug_assert_ne!(completed_in_chunk, 0);
-                debug_assert_eq!(
-                    completed_in_chunk % NATIVE_LONG_SAFEPOINT_INTERVAL,
-                    0
-                );
+                debug_assert_eq!(completed_in_chunk % NATIVE_LONG_SAFEPOINT_INTERVAL, 0);
                 if eg.vm_interrupt.load(Ordering::Relaxed) {
                     publish_native_quick_long_trace_guards(
                         kernel,
@@ -5941,12 +5779,7 @@ unsafe fn run_native_quick_long_straight_kernel(
                         &mut dirty_bool_mask,
                         None,
                     );
-                    commit_quick_long_ops_slots(
-                        slot_base,
-                        slots,
-                        dirty_long_mask,
-                        dirty_bool_mask,
-                    );
+                    commit_quick_long_ops_slots(slot_base, slots, dirty_long_mask, dirty_bool_mask);
                     let next_ip = plan.target_ip(kernel.body_target).unwrap_unchecked();
                     (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
                     handle_interrupt(eg)?;
@@ -5956,8 +5789,7 @@ unsafe fn run_native_quick_long_straight_kernel(
                 let failed_operation = result
                     .failed_operation
                     .expect("operation side exit carries its operation index");
-                dirty_long_mask |=
-                    config.output_mask_before(failed_operation) & body_output_mask;
+                dirty_long_mask |= config.output_mask_before(failed_operation) & body_output_mask;
                 if iterations != 0 {
                     publish_native_quick_long_trace_guards(
                         kernel,
@@ -5973,36 +5805,19 @@ unsafe fn run_native_quick_long_straight_kernel(
                         Some(failed_operation),
                     );
                 }
-                commit_quick_long_ops_slots(
-                    slot_base,
-                    slots,
-                    dirty_long_mask,
-                    dirty_bool_mask,
-                );
-                (*frame).opline = op_array.instructions.as_ptr().add(
-                    kernel.operation_resume_ips[failed_operation as usize],
-                );
+                commit_quick_long_ops_slots(slot_base, slots, dirty_long_mask, dirty_bool_mask);
+                (*frame).opline = op_array
+                    .instructions
+                    .as_ptr()
+                    .add(kernel.operation_resume_ips[failed_operation as usize]);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }
             NativeStraightLongLoopOutcome::IncrementOverflow => {
                 dirty_long_mask |= body_output_mask;
-                publish_native_quick_long_trace_guards(
-                    kernel,
-                    slots,
-                    &mut dirty_bool_mask,
-                    None,
-                );
-                commit_quick_long_ops_slots(
-                    slot_base,
-                    slots,
-                    dirty_long_mask,
-                    dirty_bool_mask,
-                );
-                (*frame).opline = op_array
-                    .instructions
-                    .as_ptr()
-                    .add(kernel.post_resume_ip);
+                publish_native_quick_long_trace_guards(kernel, slots, &mut dirty_bool_mask, None);
+                commit_quick_long_ops_slots(slot_base, slots, dirty_long_mask, dirty_bool_mask);
+                (*frame).opline = op_array.instructions.as_ptr().add(kernel.post_resume_ip);
                 stats::inc_quick_loop_deoptimized(iterations);
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }
@@ -6031,14 +5846,12 @@ unsafe fn execute_quick_region_entry(
     opline: &Instruction,
 ) -> Result<bool, VmError> {
     let block_idx = opline.extended_value as usize - 1;
-    let Some(super::planner::BlockPlan::QuickLongOps(plan)) =
-        op_array.block_plans.get(block_idx)
+    let Some(super::planner::BlockPlan::QuickLongOps(plan)) = op_array.block_plans.get(block_idx)
     else {
         return Ok(false);
     };
     if plan.header_ip
-        != (opline as *const Instruction)
-            .offset_from(op_array.instructions().as_ptr()) as usize
+        != (opline as *const Instruction).offset_from(op_array.instructions().as_ptr()) as usize
     {
         return Ok(false);
     }
@@ -6105,30 +5918,22 @@ unsafe fn execute_quick_loop_backedge(
             let outcome = match plan {
                 super::planner::BlockPlan::QuickLongInduction(plan) => {
                     #[cfg(feature = "vm-stats")]
-                    stats::inc_jit_region_execution(
-                        stats::JitRegionKind::LongInduction,
-                    );
+                    stats::inc_jit_region_execution(stats::JitRegionKind::LongInduction);
                     run_quick_long_induction_loop(eg, frame, op_array, *plan)?
                 }
                 super::planner::BlockPlan::QuickLongAccumulate(plan) => {
                     #[cfg(feature = "vm-stats")]
-                    stats::inc_jit_region_execution(
-                        stats::JitRegionKind::LongAccumulate,
-                    );
+                    stats::inc_jit_region_execution(stats::JitRegionKind::LongAccumulate);
                     run_quick_long_accumulate_loop(eg, frame, op_array, plan)?
                 }
                 super::planner::BlockPlan::QuickDoubleCallAccumulate(plan) => {
                     #[cfg(feature = "vm-stats")]
-                    stats::inc_jit_region_execution(
-                        stats::JitRegionKind::DoubleCallAccumulate,
-                    );
+                    stats::inc_jit_region_execution(stats::JitRegionKind::DoubleCallAccumulate);
                     run_quick_double_call_accumulate_loop(eg, frame, op_array, plan)?
                 }
                 super::planner::BlockPlan::QuickForeachLongAccumulate(plan) => {
                     #[cfg(feature = "vm-stats")]
-                    stats::inc_jit_region_execution(
-                        stats::JitRegionKind::ForeachLongAccumulate,
-                    );
+                    stats::inc_jit_region_execution(stats::JitRegionKind::ForeachLongAccumulate);
                     super::quick_foreach::run_quick_foreach_long_accumulate_loop(
                         eg, frame, op_array, *plan,
                     )?
@@ -6144,9 +5949,7 @@ unsafe fn execute_quick_loop_backedge(
                 }
                 super::planner::BlockPlan::QuickLongOps(plan) => {
                     #[cfg(feature = "vm-stats")]
-                    stats::inc_jit_region_execution(
-                        stats::JitRegionKind::TypedOpsLoop,
-                    );
+                    stats::inc_jit_region_execution(stats::JitRegionKind::TypedOpsLoop);
                     run_quick_long_ops_loop(eg, frame, op_array, plan)?
                 }
                 _ => {
@@ -6222,9 +6025,7 @@ fn execute_fast_scalar_method_call<'a>(
             (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize)
         },
         OpType::Unused => std::ptr::null_mut(),
-        _ => unsafe {
-            (*caller).get_op_mut(do_fcall.result as u32, do_fcall.result_type)
-        },
+        _ => unsafe { (*caller).get_op_mut(do_fcall.result as u32, do_fcall.result_type) },
     };
     let user = unsafe { &*(func_ptr as *const UserFunction) };
 
@@ -6238,18 +6039,22 @@ fn execute_fast_scalar_method_call<'a>(
     if func_common.hot_status.get() == HotStatus::Hot {
         match super::hot::execute_hot_frame(eg, call)? {
             super::hot::HotResult::Completed => Ok(ColdResult::Continue),
-            super::hot::HotResult::Bailout => match super::hot::resume_after_long_comparison(eg, call)? {
-                super::hot::HotResult::Completed => Ok(ColdResult::Continue),
-                super::hot::HotResult::Bailout => {
-                    // Promotion happens only after caches are warm. If both
-                    // the hot executor and its comparison resume reject this
-                    // frame, keep later calls on the canonical baseline path
-                    // instead of paying the same failed tier entry forever.
-                    func_common.hot_status.set(HotStatus::Cold);
-                    let active = eg.current_execute_data.get();
-                    Ok(ColdResult::NewFrame(active, unsafe { (*active).op_array() }))
+            super::hot::HotResult::Bailout => {
+                match super::hot::resume_after_long_comparison(eg, call)? {
+                    super::hot::HotResult::Completed => Ok(ColdResult::Continue),
+                    super::hot::HotResult::Bailout => {
+                        // Promotion happens only after caches are warm. If both
+                        // the hot executor and its comparison resume reject this
+                        // frame, keep later calls on the canonical baseline path
+                        // instead of paying the same failed tier entry forever.
+                        func_common.hot_status.set(HotStatus::Cold);
+                        let active = eg.current_execute_data.get();
+                        Ok(ColdResult::NewFrame(active, unsafe {
+                            (*active).op_array()
+                        }))
+                    }
                 }
-            },
+            }
         }
     } else {
         Ok(ColdResult::NewFrame(call, unsafe { (*call).op_array() }))
@@ -6377,20 +6182,11 @@ fn execute_full_call<'a>(
             variadic_arr.push(arg);
         }
         if let Some(named_extras) = pending_named {
-            let variadic_hint = func_common
-                .sig
-                .param_type_hints
-                .get(public_max as usize);
+            let variadic_hint = func_common.sig.param_type_hints.get(public_max as usize);
             for (name, val) in named_extras {
                 if let Some(hint) = variadic_hint {
                     if !matches!(hint, ParamTypeHint::None)
-                        && !check_type_hint(
-                            &val,
-                            hint,
-                            eg,
-                            op_array.strict_types,
-                            callee_class_ref,
-                        )
+                        && !check_type_hint(&val, hint, eg, op_array.strict_types, callee_class_ref)
                     {
                         let type_err = make_error_value(
                             "TypeError",
@@ -6414,7 +6210,11 @@ fn execute_full_call<'a>(
         }
         let variadic_slot = unsafe { (*call).cv_mut(cv_start) };
         unsafe {
-            frame_slot_set(call, variadic_slot as *mut Value, Value::array(variadic_arr));
+            frame_slot_set(
+                call,
+                variadic_slot as *mut Value,
+                Value::array(variadic_arr),
+            );
         }
     }
 
@@ -6422,7 +6222,7 @@ fn execute_full_call<'a>(
         FunctionType::User => {
             let user = unsafe { &*((*call).func as *const UserFunction) };
             if user.op_array.is_generator {
-                use crate::vm::generator::{new_generator_ref, Generator};
+                use crate::vm::generator::{Generator, new_generator_ref};
 
                 let mut args = Vec::with_capacity(user.op_array.num_cvs as usize);
                 for i in 0..user.op_array.num_cvs {
@@ -6435,11 +6235,7 @@ fn execute_full_call<'a>(
                     user.op_array.num_temps,
                 );
                 let gen_ref = new_generator_ref(generator);
-                let mut gen_obj = PhpObject::dynamic(
-                    "Generator".to_string(),
-                    0,
-                    HashMap::new(),
-                );
+                let mut gen_obj = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
                 gen_obj.generator = Some(gen_ref);
                 if !return_value_ptr.is_null() {
                     unsafe { slot_set(return_value_ptr, Value::object(gen_obj)) };
@@ -6469,9 +6265,7 @@ fn execute_full_call<'a>(
             }
         }
         FunctionType::Internal => {
-            let internal = unsafe {
-                &*((*call).func as *const super::function::InternalFunction)
-            };
+            let internal = unsafe { &*((*call).func as *const super::function::InternalFunction) };
             if !return_value_ptr.is_null() {
                 unsafe { std::ptr::drop_in_place(return_value_ptr) };
             }

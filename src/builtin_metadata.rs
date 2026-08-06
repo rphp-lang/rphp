@@ -56,10 +56,7 @@ impl DirectInternalKind {
     pub fn result_may_need_cleanup(self) -> bool {
         matches!(
             self,
-            Self::Strtolower
-                | Self::Strtoupper
-                | Self::ChunkSplit
-                | Self::JsonDecode
+            Self::Strtolower | Self::Strtoupper | Self::ChunkSplit | Self::JsonDecode
         )
     }
 
@@ -82,22 +79,102 @@ pub struct DirectInternalSpec {
 }
 
 pub const DIRECT_INTERNAL_SPECS: &[DirectInternalSpec] = &[
-    DirectInternalSpec { name: "strlen", kind: DirectInternalKind::Strlen, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "strtolower", kind: DirectInternalKind::Strtolower, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "strtoupper", kind: DirectInternalKind::Strtoupper, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "ord", kind: DirectInternalKind::Ord, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "abs", kind: DirectInternalKind::Abs, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "floor", kind: DirectInternalKind::Floor, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "sqrt", kind: DirectInternalKind::Sqrt, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "chunk_split", kind: DirectInternalKind::ChunkSplit, max_args: 3, required_args: 1 },
-    DirectInternalSpec { name: "sin", kind: DirectInternalKind::Sin, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "tan", kind: DirectInternalKind::Tan, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "asin", kind: DirectInternalKind::Asin, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "acos", kind: DirectInternalKind::Acos, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "atan", kind: DirectInternalKind::Atan, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "exp", kind: DirectInternalKind::Exp, max_args: 1, required_args: 1 },
-    DirectInternalSpec { name: "intdiv", kind: DirectInternalKind::Intdiv, max_args: 2, required_args: 2 },
-    DirectInternalSpec { name: "json_decode", kind: DirectInternalKind::JsonDecode, max_args: 2, required_args: 1 },
+    DirectInternalSpec {
+        name: "strlen",
+        kind: DirectInternalKind::Strlen,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "strtolower",
+        kind: DirectInternalKind::Strtolower,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "strtoupper",
+        kind: DirectInternalKind::Strtoupper,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "ord",
+        kind: DirectInternalKind::Ord,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "abs",
+        kind: DirectInternalKind::Abs,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "floor",
+        kind: DirectInternalKind::Floor,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "sqrt",
+        kind: DirectInternalKind::Sqrt,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "chunk_split",
+        kind: DirectInternalKind::ChunkSplit,
+        max_args: 3,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "sin",
+        kind: DirectInternalKind::Sin,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "tan",
+        kind: DirectInternalKind::Tan,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "asin",
+        kind: DirectInternalKind::Asin,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "acos",
+        kind: DirectInternalKind::Acos,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "atan",
+        kind: DirectInternalKind::Atan,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "exp",
+        kind: DirectInternalKind::Exp,
+        max_args: 1,
+        required_args: 1,
+    },
+    DirectInternalSpec {
+        name: "intdiv",
+        kind: DirectInternalKind::Intdiv,
+        max_args: 2,
+        required_args: 2,
+    },
+    DirectInternalSpec {
+        name: "json_decode",
+        kind: DirectInternalKind::JsonDecode,
+        max_args: 2,
+        required_args: 1,
+    },
 ];
 
 #[inline]
@@ -156,10 +233,22 @@ mod tests {
         assert_eq!(direct_internal_spec("soundex"), None);
         assert!(!DirectInternalKind::Strlen.result_may_need_cleanup());
         assert!(DirectInternalKind::Strtolower.result_may_need_cleanup());
-        assert_eq!(DirectInternalKind::Strlen.lowering(), DirectInternalLowering::Strlen);
-        assert_eq!(DirectInternalKind::Abs.lowering(), DirectInternalLowering::Generic);
-        assert_eq!(DirectInternalKind::Intdiv.lowering(), DirectInternalLowering::Generic2);
-        assert_eq!(DirectInternalKind::JsonDecode.lowering(), DirectInternalLowering::Generic2);
+        assert_eq!(
+            DirectInternalKind::Strlen.lowering(),
+            DirectInternalLowering::Strlen
+        );
+        assert_eq!(
+            DirectInternalKind::Abs.lowering(),
+            DirectInternalLowering::Generic
+        );
+        assert_eq!(
+            DirectInternalKind::Intdiv.lowering(),
+            DirectInternalLowering::Generic2
+        );
+        assert_eq!(
+            DirectInternalKind::JsonDecode.lowering(),
+            DirectInternalLowering::Generic2
+        );
         assert!(DirectInternalKind::JsonDecode.result_may_need_cleanup());
     }
 }

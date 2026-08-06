@@ -18,24 +18,22 @@ mod x86_64;
 
 #[cfg(all(target_arch = "x86_64", target_os = "linux"))]
 pub use x86_64::{
-    CompiledScalarDoubleProgram, CompiledScalarLongProgram, CompiledX86AddMultiply,
-    CompiledX86StraightLongLoop, SCALAR_DOUBLE_JIT_HOT_THRESHOLD,
+    CompiledQuickDoubleCallAccumulateLoop, CompiledScalarDoubleProgram, CompiledScalarLongProgram,
+    CompiledX86AddMultiply, CompiledX86StraightLongLoop, NativeDoubleCallAccumulateState,
+    QuickDoubleCallAccumulateJitCache, QuickDoubleCallAccumulateJitError,
+    QuickDoubleCallAccumulateJitOutcome, SCALAR_DOUBLE_JIT_HOT_THRESHOLD,
     SCALAR_LONG_JIT_HOT_THRESHOLD, ScalarDoubleJitCache, ScalarDoubleJitDispatch,
     ScalarDoubleJitError, ScalarDoubleJitOutcome, ScalarLongJitCache, ScalarLongJitDispatch,
-    ScalarLongJitError, ScalarLongJitOutcome, X86_64Assembler, X86_64Register,
-    X86_64FloatRegister,
-    CompiledQuickDoubleCallAccumulateLoop, NativeDoubleCallAccumulateState,
-    QuickDoubleCallAccumulateJitCache, QuickDoubleCallAccumulateJitError,
-    QuickDoubleCallAccumulateJitOutcome,
+    ScalarLongJitError, ScalarLongJitOutcome, X86_64Assembler, X86_64FloatRegister, X86_64Register,
     X86QuickLongOpsJitCache as QuickLongAccumulateJitCache,
     X86QuickLongOpsJitCache as QuickLongOpsJitCache, X86StraightLongLoopError,
 };
 
 pub use straight::{
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
-    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
-    NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongLoopResult,
+    NativeStraightLongOperation,
 };
 
 #[cfg(all(
@@ -52,17 +50,14 @@ mod aarch64;
 ))]
 pub use aarch64::{
     Arm64Assembler, Arm64FloatRegister, Arm64Register, CompiledAddMultiply,
-    CompiledQuickLongAccumulateLoop, CompiledQuickLongConditionalAccumulateLoop,
-    CompiledQuickLongStraightLoop, CompiledScalarDoubleProgram, CompiledScalarLongProgram,
-    NativeConditionalLongLoopCondition,
+    CompiledQuickDoubleCallAccumulateLoop, CompiledQuickLongAccumulateLoop,
+    CompiledQuickLongConditionalAccumulateLoop, CompiledQuickLongStraightLoop,
+    CompiledScalarDoubleProgram, CompiledScalarLongProgram, NativeConditionalLongLoopCondition,
     NativeConditionalLongLoopConfig, NativeConditionalLongLoopResult,
-    NativeLongAccumulateState, QuickLongAccumulateJitCache, QuickLongAccumulateJitError,
-    QuickLongAccumulateJitOutcome,
-    CompiledQuickDoubleCallAccumulateLoop, NativeDoubleCallAccumulateState,
-    QuickDoubleCallAccumulateJitCache, QuickDoubleCallAccumulateJitError,
-    QuickDoubleCallAccumulateJitOutcome,
+    NativeDoubleCallAccumulateState, NativeLongAccumulateState, QuickDoubleCallAccumulateJitCache,
+    QuickDoubleCallAccumulateJitError, QuickDoubleCallAccumulateJitOutcome,
+    QuickLongAccumulateJitCache, QuickLongAccumulateJitError, QuickLongAccumulateJitOutcome,
     QuickLongOpsJitCache, SCALAR_DOUBLE_JIT_HOT_THRESHOLD, SCALAR_LONG_JIT_HOT_THRESHOLD,
-    ScalarDoubleJitCache, ScalarDoubleJitDispatch, ScalarDoubleJitError,
-    ScalarDoubleJitOutcome, ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError,
-    ScalarLongJitOutcome,
+    ScalarDoubleJitCache, ScalarDoubleJitDispatch, ScalarDoubleJitError, ScalarDoubleJitOutcome,
+    ScalarLongJitCache, ScalarLongJitDispatch, ScalarLongJitError, ScalarLongJitOutcome,
 };

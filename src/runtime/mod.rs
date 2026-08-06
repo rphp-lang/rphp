@@ -1,15 +1,15 @@
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::vm::stats;
-use crate::vm::stack::VmStack;
-use crate::vm::frame::ExecuteData;
-use crate::vm::function::FunctionCommon;
 use crate::compiler::compile::ClassDef;
 use crate::parser::Visibility;
 use crate::value::ObjectLayout;
+use crate::vm::frame::ExecuteData;
+use crate::vm::function::FunctionCommon;
+use crate::vm::stack::VmStack;
+use crate::vm::stats;
 
 /// Mangle a private property name: `ClassName\0propname`.
 /// Public/protected properties are stored under their plain name.
@@ -29,14 +29,18 @@ pub fn resolve_property_key(
 ) -> String {
     // If caller is in a class scope, check if that class declares this property as private
     if let Some(caller) = caller_class {
-        if let Some((Visibility::Private, defining_class)) = eg.find_property_visibility(caller, prop_name) {
+        if let Some((Visibility::Private, defining_class)) =
+            eg.find_property_visibility(caller, prop_name)
+        {
             if defining_class.eq_ignore_ascii_case(caller) {
                 return mangle_private_prop(&defining_class, prop_name);
             }
         }
     }
     // Otherwise, check if the property is private in the target class hierarchy
-    if let Some((Visibility::Private, defining_class)) = eg.find_property_visibility(obj_class, prop_name) {
+    if let Some((Visibility::Private, defining_class)) =
+        eg.find_property_visibility(obj_class, prop_name)
+    {
         return mangle_private_prop(&defining_class, prop_name);
     }
     prop_name.to_string()
@@ -189,18 +193,28 @@ impl ExecutorGlobals {
                 // declaration before inherited ones with the same name.
                 // Private properties with the same name in parent and child are BOTH kept
                 // (they occupy separate mangled slots). For public/protected, child overrides.
-                let child_prop_names: std::collections::HashSet<&str> = class_def.properties
-                    .iter().map(|(n, _, _, _)| n.as_str()).collect();
+                let child_prop_names: std::collections::HashSet<&str> = class_def
+                    .properties
+                    .iter()
+                    .map(|(n, _, _, _)| n.as_str())
+                    .collect();
                 let mut parent_props = Vec::new();
                 for (name, default, vis, declaring) in &parent.properties {
                     if child_prop_names.contains(name.as_str()) {
                         // Child has same name — only keep parent's if both are private
                         // (separate slots). Otherwise child overrides.
                         if *vis == Visibility::Private {
-                            let child_also_private = class_def.properties.iter()
+                            let child_also_private = class_def
+                                .properties
+                                .iter()
                                 .any(|(n, _, v, _)| n == name && *v == Visibility::Private);
                             if child_also_private {
-                                parent_props.push((name.clone(), default.clone(), *vis, declaring.clone()));
+                                parent_props.push((
+                                    name.clone(),
+                                    default.clone(),
+                                    *vis,
+                                    declaring.clone(),
+                                ));
                             }
                         }
                     } else {
@@ -221,10 +235,15 @@ impl ExecutorGlobals {
 
                 // Inherit methods: collect ALL parent::* entries from function_table
                 // (includes transitively inherited methods from grandparents)
-                let child_method_names: std::collections::HashSet<String> = class_def.methods
-                    .iter().map(|(n, _, _, _, _)| n.to_lowercase()).collect();
+                let child_method_names: std::collections::HashSet<String> = class_def
+                    .methods
+                    .iter()
+                    .map(|(n, _, _, _, _)| n.to_lowercase())
+                    .collect();
                 let parent_prefix = format!("{}::", parent_name).to_lowercase();
-                let inherited: Vec<(String, *const FunctionCommon)> = self.function_table.iter()
+                let inherited: Vec<(String, *const FunctionCommon)> = self
+                    .function_table
+                    .iter()
                     .filter(|(k, _)| k.starts_with(&parent_prefix))
                     .map(|(k, v)| {
                         let method_name = &k[parent_prefix.len()..];
@@ -251,9 +270,9 @@ impl ExecutorGlobals {
                 let mut new_props = Vec::new();
                 for (name, default, vis, _declaring) in &trait_def.properties {
                     // Check if this property already exists (from class itself or another trait)
-                    let existing = class_def.properties.iter()
-                        .find(|(n, _, _, _)| n == name);
-                    if let Some((_, _existing_default, existing_vis, existing_declaring)) = existing {
+                    let existing = class_def.properties.iter().find(|(n, _, _, _)| n == name);
+                    if let Some((_, _existing_default, existing_vis, existing_declaring)) = existing
+                    {
                         // If declared by the class itself (not a trait), class takes precedence
                         if existing_declaring == &class_name {
                             continue;
@@ -288,10 +307,15 @@ impl ExecutorGlobals {
                 class_def.properties.extend(new_props);
 
                 // Merge trait methods: copy function_table pointers
-                let child_method_names: std::collections::HashSet<String> = class_def.methods
-                    .iter().map(|(n, _, _, _, _)| n.to_lowercase()).collect();
+                let child_method_names: std::collections::HashSet<String> = class_def
+                    .methods
+                    .iter()
+                    .map(|(n, _, _, _, _)| n.to_lowercase())
+                    .collect();
                 let trait_prefix = format!("{}::", trait_name).to_lowercase();
-                let trait_methods: Vec<(String, *const FunctionCommon)> = self.function_table.iter()
+                let trait_methods: Vec<(String, *const FunctionCommon)> = self
+                    .function_table
+                    .iter()
                     .filter(|(k, _)| k.starts_with(&trait_prefix))
                     .map(|(k, v)| {
                         let method_name = &k[trait_prefix.len()..];
@@ -303,7 +327,8 @@ impl ExecutorGlobals {
                         let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
                         self.function_table.insert(child_full, func_ptr);
                         // Also record declaring class as this class for visibility purposes
-                        self.method_declaring_class.insert(func_ptr, class_name.clone());
+                        self.method_declaring_class
+                            .insert(func_ptr, class_name.clone());
                     }
                 }
             } else {
@@ -318,8 +343,11 @@ impl ExecutorGlobals {
         // Check for final method override violations:
         // If child overrides a parent method marked as final → error.
         if let Some(parent_name) = &class_def.parent {
-            let child_method_names: Vec<String> = class_def.methods
-                .iter().map(|(n, _, _, _, _)| n.to_lowercase()).collect();
+            let child_method_names: Vec<String> = class_def
+                .methods
+                .iter()
+                .map(|(n, _, _, _, _)| n.to_lowercase())
+                .collect();
             for child_method in &child_method_names {
                 // Walk parent chain to find if this method is final
                 let mut ancestor = Some(parent_name.clone());
@@ -343,7 +371,9 @@ impl ExecutorGlobals {
 
         // Property order is now final. Build one shared storage-key → slot
         // layout for every object instance of this class.
-        let property_keys = class_def.properties.iter()
+        let property_keys = class_def
+            .properties
+            .iter()
             .map(|(name, _default, visibility, declaring)| {
                 if *visibility == Visibility::Private {
                     mangle_private_prop(declaring, name)
@@ -352,11 +382,11 @@ impl ExecutorGlobals {
                 }
             })
             .collect();
-        class_def.property_layout = std::rc::Rc::new(ObjectLayout::new(
-            class_name.as_str(),
-            property_keys,
-        ));
-        class_def.property_defaults = class_def.properties.iter()
+        class_def.property_layout =
+            std::rc::Rc::new(ObjectLayout::new(class_name.as_str(), property_keys));
+        class_def.property_defaults = class_def
+            .properties
+            .iter()
             .map(|(name, default, _visibility, _declaring)| {
                 default.clone().unwrap_or_else(|| {
                     if class_def.readonly_props.contains(name) {
@@ -370,7 +400,8 @@ impl ExecutorGlobals {
             .into();
 
         // Box to get stable heap address for function pointers
-        self.class_table.insert(class_name.clone(), Box::new(class_def));
+        self.class_table
+            .insert(class_name.clone(), Box::new(class_def));
         let class_ptr = &**self.class_table.get(&class_name).unwrap() as *const ClassDef;
         let class_id = unsafe { (*class_ptr).class_id as usize };
         if self.class_by_id.len() <= class_id {
@@ -379,7 +410,9 @@ impl ExecutorGlobals {
         self.class_by_id[class_id] = class_ptr;
         // Register child's own method pointers from the stable location
         let class = self.class_table.get(&class_name).unwrap();
-        let method_entries: Vec<(String, *const FunctionCommon)> = class.methods.iter()
+        let method_entries: Vec<(String, *const FunctionCommon)> = class
+            .methods
+            .iter()
             .map(|(method_name, _vis, _is_static, _is_final, func)| {
                 let full_name = format!("{}::{}", class_name, method_name).to_lowercase();
                 let func_ptr = &func.common as *const FunctionCommon;
@@ -391,7 +424,8 @@ impl ExecutorGlobals {
         }
         // Populate declaring_class reverse map
         for (_full_name, func_ptr) in method_entries {
-            self.method_declaring_class.insert(func_ptr, class_name.clone());
+            self.method_declaring_class
+                .insert(func_ptr, class_name.clone());
         }
 
         // Validate interface contracts for concrete classes
@@ -448,12 +482,26 @@ impl ExecutorGlobals {
 
     /// Get the declaring class for a function pointer.
     pub fn declaring_class_of(&self, func_ptr: *const FunctionCommon) -> Option<&str> {
-        self.method_declaring_class.get(&func_ptr).map(|s| s.as_str())
+        self.method_declaring_class
+            .get(&func_ptr)
+            .map(|s| s.as_str())
     }
 
     /// Collect all required interface method signatures (recursively through interface extends).
     /// Returns Vec of (method_name_lower, visibility, num_args, required_num_args, is_static, interface_name, return_type_hint, param_type_hints).
-    fn collect_interface_methods(&self, iface_name: &str) -> Vec<(String, Visibility, u32, u32, bool, String, crate::vm::function::ParamTypeHint, Vec<crate::vm::function::ParamTypeHint>)> {
+    fn collect_interface_methods(
+        &self,
+        iface_name: &str,
+    ) -> Vec<(
+        String,
+        Visibility,
+        u32,
+        u32,
+        bool,
+        String,
+        crate::vm::function::ParamTypeHint,
+        Vec<crate::vm::function::ParamTypeHint>,
+    )> {
         let mut result = Vec::new();
         if let Some(iface_def) = self.class_table.get(iface_name) {
             for (method_name, vis, is_static, _is_final, func) in &iface_def.methods {
@@ -502,33 +550,60 @@ impl ExecutorGlobals {
         let all_ifaces = self.collect_all_interfaces(class_name);
         let mut seen = std::collections::HashSet::new();
         for iface_name in all_ifaces {
-            if !seen.insert(iface_name.clone()) { continue; }
+            if !seen.insert(iface_name.clone()) {
+                continue;
+            }
             let required = self.collect_interface_methods(&iface_name);
-            for (method, _iface_vis, iface_nargs, iface_required, iface_static, declaring_iface, iface_return_hint, iface_param_hints) in required {
+            for (
+                method,
+                _iface_vis,
+                iface_nargs,
+                iface_required,
+                iface_static,
+                declaring_iface,
+                iface_return_hint,
+                iface_param_hints,
+            ) in required
+            {
                 let full = format!("{}::{}", class_name, method).to_lowercase();
                 if !self.function_table.contains_key(&full) {
                     errors.push((declaring_iface.clone(), method.clone()));
                     continue;
                 }
                 // Check visibility and staticness
-                if let Some((impl_vis, impl_is_static, _)) = self.find_method_info(class_name, &method) {
+                if let Some((impl_vis, impl_is_static, _)) =
+                    self.find_method_info(class_name, &method)
+                {
                     if impl_vis != Visibility::Public {
-                        errors.push((declaring_iface.clone(), format!(
-                            "{} (must be public, is {:?})", method,
-                            match impl_vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" }
-                        )));
+                        errors.push((
+                            declaring_iface.clone(),
+                            format!(
+                                "{} (must be public, is {:?})",
+                                method,
+                                match impl_vis {
+                                    Visibility::Protected => "protected",
+                                    Visibility::Private => "private",
+                                    _ => "public",
+                                }
+                            ),
+                        ));
                     }
                     // Static mismatch: non-static interface method cannot be implemented as static
                     // and vice versa.
                     if iface_static && !impl_is_static {
-                        errors.push((declaring_iface.clone(), format!(
-                            "{} (must be static as declared in interface)", method
-                        )));
+                        errors.push((
+                            declaring_iface.clone(),
+                            format!("{} (must be static as declared in interface)", method),
+                        ));
                     }
                     if !iface_static && impl_is_static {
-                        errors.push((declaring_iface.clone(), format!(
-                            "{} (cannot be static, interface declares it non-static)", method
-                        )));
+                        errors.push((
+                            declaring_iface.clone(),
+                            format!(
+                                "{} (cannot be static, interface declares it non-static)",
+                                method
+                            ),
+                        ));
                     }
                 }
                 // Check parameter count compatibility:
@@ -548,10 +623,13 @@ impl ExecutorGlobals {
                     let impl_required = impl_common.sig.required_num_args;
                     // Implementation must accept at least as many params as the interface
                     if impl_public < iface_public {
-                        errors.push((declaring_iface.clone(), format!(
-                            "{} (requires {} params, implementation has {})",
-                            method, iface_public, impl_public
-                        )));
+                        errors.push((
+                            declaring_iface.clone(),
+                            format!(
+                                "{} (requires {} params, implementation has {})",
+                                method, iface_public, impl_public
+                            ),
+                        ));
                     }
                     // Implementation must not require more params than the interface declares
                     // (total), and also must not require more than the interface requires.
@@ -567,15 +645,23 @@ impl ExecutorGlobals {
                     // Interface param A => implementation must accept A or a supertype of A.
                     // For simplicity, we require exact match or widening (impl accepts more).
                     use crate::vm::function::ParamTypeHint;
-                    let check_count = iface_param_hints.len().max(impl_common.sig.param_type_hints.len());
+                    let check_count = iface_param_hints
+                        .len()
+                        .max(impl_common.sig.param_type_hints.len());
                     for i in 0..check_count {
                         let iface_param = iface_param_hints.get(i);
                         let impl_param = impl_common.sig.param_type_hints.get(i);
                         match (impl_param, iface_param) {
                             // Both untyped or both absent — ok
-                            (None | Some(ParamTypeHint::None), None | Some(ParamTypeHint::None)) => {}
+                            (
+                                None | Some(ParamTypeHint::None),
+                                None | Some(ParamTypeHint::None),
+                            ) => {}
                             // Impl has no type / mixed — always compatible
-                            (None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed), Some(_)) => {}
+                            (
+                                None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed),
+                                Some(_),
+                            ) => {}
                             // Interface has no type but impl adds a type — narrowing, rejected
                             (Some(impl_p), None | Some(ParamTypeHint::None)) => {
                                 if !matches!(impl_p, ParamTypeHint::Mixed) {
@@ -605,12 +691,15 @@ impl ExecutorGlobals {
                     if !matches!(iface_return_hint, ParamTypeHint::None) {
                         let impl_return = &impl_common.sig.return_type_hint;
                         if !self.is_return_type_compatible(impl_return, &iface_return_hint) {
-                            errors.push((declaring_iface.clone(), format!(
-                                "{} (return type must be compatible with {}, got {})",
-                                method,
-                                iface_return_hint.display_name(),
-                                impl_return.display_name()
-                            )));
+                            errors.push((
+                                declaring_iface.clone(),
+                                format!(
+                                    "{} (return type must be compatible with {}, got {})",
+                                    method,
+                                    iface_return_hint.display_name(),
+                                    impl_return.display_name()
+                                ),
+                            ));
                         }
                     }
                 }
@@ -621,13 +710,22 @@ impl ExecutorGlobals {
 
     /// Look up a method's visibility in a class hierarchy.
     /// Returns (visibility, declaring_class_name) — the class where the method is actually defined.
-    pub fn find_method_visibility(&self, class_name: &str, method_name: &str) -> Option<(Visibility, String)> {
-        self.find_method_info(class_name, method_name).map(|(vis, _, decl)| (vis, decl))
+    pub fn find_method_visibility(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(Visibility, String)> {
+        self.find_method_info(class_name, method_name)
+            .map(|(vis, _, decl)| (vis, decl))
     }
 
     /// Look up method visibility AND staticness in a class hierarchy.
     /// Returns (visibility, is_static, declaring_class_name).
-    pub fn find_method_info(&self, class_name: &str, method_name: &str) -> Option<(Visibility, bool, String)> {
+    pub fn find_method_info(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(Visibility, bool, String)> {
         let method_lower = method_name.to_lowercase();
         if let Some(class_def) = self.class_table.get(class_name) {
             // Check own methods
@@ -657,7 +755,11 @@ impl ExecutorGlobals {
 
     /// Look up a property's visibility in a class hierarchy.
     /// Returns (visibility, declaring_class_name).
-    pub fn find_property_visibility(&self, class_name: &str, prop_name: &str) -> Option<(Visibility, String)> {
+    pub fn find_property_visibility(
+        &self,
+        class_name: &str,
+        prop_name: &str,
+    ) -> Option<(Visibility, String)> {
         if let Some(class_def) = self.class_table.get(class_name) {
             for (name, _default, vis, declaring) in &class_def.properties {
                 if name == prop_name {
@@ -673,7 +775,12 @@ impl ExecutorGlobals {
     }
 
     /// Check if `caller_class` can access a member with `visibility` defined in `target_class`.
-    pub fn check_visibility(&self, caller_class: Option<&str>, target_class: &str, visibility: Visibility) -> bool {
+    pub fn check_visibility(
+        &self,
+        caller_class: Option<&str>,
+        target_class: &str,
+        visibility: Visibility,
+    ) -> bool {
         match visibility {
             Visibility::Public => true,
             Visibility::Protected => {
@@ -695,7 +802,11 @@ impl ExecutorGlobals {
     }
 
     /// Register a function by name. Returns error if already declared.
-    pub fn register_function(&mut self, name: &str, func: *const FunctionCommon) -> Result<(), String> {
+    pub fn register_function(
+        &mut self,
+        name: &str,
+        func: *const FunctionCommon,
+    ) -> Result<(), String> {
         let key = name.to_lowercase();
         if self.function_table.contains_key(&key) {
             return Err(format!("Cannot redeclare {}()", name));
@@ -756,7 +867,11 @@ impl ExecutorGlobals {
     /// - None (no type declared) when interface declares one → incompatible
     /// - Nullable: ?T is compatible with ?T, T is compatible with ?T (narrowing is fine)
     /// - Mixed accepts anything
-    fn is_return_type_compatible(&self, impl_hint: &crate::vm::function::ParamTypeHint, iface_hint: &crate::vm::function::ParamTypeHint) -> bool {
+    fn is_return_type_compatible(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+    ) -> bool {
         use crate::vm::function::ParamTypeHint;
 
         // If implementation has no type hint but interface does, incompatible
@@ -811,12 +926,16 @@ impl ExecutorGlobals {
                     ParamTypeHint::Union(impl_parts) => {
                         // Every impl union member must be compatible with at least one iface member
                         return impl_parts.iter().all(|ip| {
-                            iface_parts.iter().any(|ifp| self.is_return_type_compatible(ip, ifp))
+                            iface_parts
+                                .iter()
+                                .any(|ifp| self.is_return_type_compatible(ip, ifp))
                         });
                     }
                     _ => {
                         // Single impl type must be compatible with at least one iface union member
-                        return iface_parts.iter().any(|ifp| self.is_return_type_compatible(impl_hint, ifp));
+                        return iface_parts
+                            .iter()
+                            .any(|ifp| self.is_return_type_compatible(impl_hint, ifp));
                     }
                 }
             }
@@ -835,7 +954,11 @@ impl ExecutorGlobals {
     ///   impl accepts a supertype)
     /// - Nullable: ?T in impl is compatible with T in iface (impl accepts more)
     /// - Mixed in impl → always compatible (accepts anything)
-    fn is_param_type_compatible(&self, impl_hint: &crate::vm::function::ParamTypeHint, iface_hint: &crate::vm::function::ParamTypeHint) -> bool {
+    fn is_param_type_compatible(
+        &self,
+        impl_hint: &crate::vm::function::ParamTypeHint,
+        iface_hint: &crate::vm::function::ParamTypeHint,
+    ) -> bool {
         use crate::vm::function::ParamTypeHint;
 
         // Mixed accepts anything — always compatible
@@ -882,12 +1005,16 @@ impl ExecutorGlobals {
                     ParamTypeHint::Union(iface_parts) => {
                         // Every iface union member must be compatible with at least one impl member
                         return iface_parts.iter().all(|ip| {
-                            impl_parts.iter().any(|imp| self.is_param_type_compatible(imp, ip))
+                            impl_parts
+                                .iter()
+                                .any(|imp| self.is_param_type_compatible(imp, ip))
                         });
                     }
                     _ => {
                         // Single iface type must match at least one impl union member
-                        return impl_parts.iter().any(|imp| self.is_param_type_compatible(imp, iface_hint));
+                        return impl_parts
+                            .iter()
+                            .any(|imp| self.is_param_type_compatible(imp, iface_hint));
                     }
                 }
             }

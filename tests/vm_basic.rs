@@ -1,11 +1,13 @@
+use rphp::compiler::{
+    OpArray, make_internal_function, make_user_function, make_user_function_with_args,
+};
+use rphp::runtime::ExecutorGlobals;
 use rphp::value::Value;
-use rphp::vm::opcode::OpCode;
-use rphp::vm::instruction::{Instruction, OpType};
 use rphp::vm::execute;
 use rphp::vm::frame::ExecuteData;
 use rphp::vm::function::FunctionCommon;
-use rphp::compiler::{OpArray, make_user_function, make_user_function_with_args, make_internal_function};
-use rphp::runtime::ExecutorGlobals;
+use rphp::vm::instruction::{Instruction, OpType};
+use rphp::vm::opcode::OpCode;
 
 fn make_eg_with_capture() -> (ExecutorGlobals, std::sync::Arc<std::sync::Mutex<Vec<u8>>>) {
     let buf = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -434,7 +436,8 @@ fn test_internal_function_call() {
 
     let main_func = make_user_function(op_array);
     let (mut eg, buf) = make_eg_with_capture();
-    eg.register_function("my_double", &my_double_func.common as *const FunctionCommon).unwrap();
+    eg.register_function("my_double", &my_double_func.common as *const FunctionCommon)
+        .unwrap();
     execute::execute(&mut eg, &main_func).unwrap();
     assert_eq!(captured_output(&buf), "42");
 }
@@ -460,7 +463,7 @@ fn test_user_function_call() {
     fn_ret.op1 = 0;
 
     let fn_op_array = OpArray {
-        num_cvs: 1,  // $x
+        num_cvs: 1, // $x
         num_temps: 1,
         instructions: vec![add, fn_ret],
         literals: vec![Value::long(1)],
@@ -534,7 +537,8 @@ fn test_user_function_call() {
 
     let main_func = make_user_function(main_op_array);
     let (mut eg, buf) = make_eg_with_capture();
-    eg.register_function("add_one", &add_one_func.common as *const FunctionCommon).unwrap();
+    eg.register_function("add_one", &add_one_func.common as *const FunctionCommon)
+        .unwrap();
     execute::execute(&mut eg, &main_func).unwrap();
     assert_eq!(captured_output(&buf), "42");
 }
@@ -621,26 +625,29 @@ fn test_nested_calls() {
     fn_ret.op1_type = OpType::Tmp;
     fn_ret.op1 = 0;
 
-    let add_one_func = make_user_function_with_args(OpArray {
-        num_cvs: 1,
-        num_temps: 1,
-        instructions: vec![add, fn_ret],
-        literals: vec![Value::long(1)],
-        try_entries: vec![],
-        strict_types: false,
-        is_generator: false,
-        global_vars: vec![],
-        static_vars: vec![],
-        name: String::new(),
-        main_scope_vars: vec![],
-        all_cvs: vec![],
-        cache: vec![],
-        may_access_globals: false,
-        block_info: Vec::new(),
-        block_counters: Vec::new(),
-        block_plans: Vec::new(),
-        ip_to_block: Vec::new(),
-    }, 1);
+    let add_one_func = make_user_function_with_args(
+        OpArray {
+            num_cvs: 1,
+            num_temps: 1,
+            instructions: vec![add, fn_ret],
+            literals: vec![Value::long(1)],
+            try_entries: vec![],
+            strict_types: false,
+            is_generator: false,
+            global_vars: vec![],
+            static_vars: vec![],
+            name: String::new(),
+            main_scope_vars: vec![],
+            all_cvs: vec![],
+            cache: vec![],
+            may_access_globals: false,
+            block_info: Vec::new(),
+            block_counters: Vec::new(),
+            block_plans: Vec::new(),
+            ip_to_block: Vec::new(),
+        },
+        1,
+    );
 
     // --- main script ---
     // INIT_FCALL 1, "my_double"       ; prepare inner call
@@ -722,8 +729,10 @@ fn test_nested_calls() {
     });
 
     let (mut eg, buf) = make_eg_with_capture();
-    eg.register_function("my_double", &my_double_func.common as *const FunctionCommon).unwrap();
-    eg.register_function("add_one", &add_one_func.common as *const FunctionCommon).unwrap();
+    eg.register_function("my_double", &my_double_func.common as *const FunctionCommon)
+        .unwrap();
+    eg.register_function("add_one", &add_one_func.common as *const FunctionCommon)
+        .unwrap();
     execute::execute(&mut eg, &main_func).unwrap();
     assert_eq!(captured_output(&buf), "41");
 }
@@ -885,9 +894,12 @@ fn test_recursive_countdown() {
     });
 
     let (mut eg, buf) = make_eg_with_capture();
-    eg.register_function("f1", &f1_func.common as *const FunctionCommon).unwrap();
-    eg.register_function("f2", &f2_func.common as *const FunctionCommon).unwrap();
-    eg.register_function("f3", &f3_func.common as *const FunctionCommon).unwrap();
+    eg.register_function("f1", &f1_func.common as *const FunctionCommon)
+        .unwrap();
+    eg.register_function("f2", &f2_func.common as *const FunctionCommon)
+        .unwrap();
+    eg.register_function("f3", &f3_func.common as *const FunctionCommon)
+        .unwrap();
     execute::execute(&mut eg, &main_func).unwrap();
     assert_eq!(captured_output(&buf), "42");
 }
@@ -968,7 +980,8 @@ fn test_interrupt_during_deep_call() {
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
-    eg.register_function("f1", &f1_func.common as *const FunctionCommon).unwrap();
+    eg.register_function("f1", &f1_func.common as *const FunctionCommon)
+        .unwrap();
 
     // Set interrupt before execution
     eg.vm_interrupt.store(true, Ordering::Relaxed);

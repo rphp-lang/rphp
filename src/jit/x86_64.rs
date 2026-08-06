@@ -23,10 +23,10 @@ use std::fmt;
 use std::io;
 use std::mem::MaybeUninit;
 
-#[path = "x86_64_branch.rs"]
-mod branch;
 #[path = "x86_64_affine.rs"]
 mod affine;
+#[path = "x86_64_branch.rs"]
+mod branch;
 #[path = "x86_64_double.rs"]
 mod double;
 #[path = "x86_64_double_loop.rs"]
@@ -210,11 +210,7 @@ impl X86_64Assembler {
 
     /// Encode the SSE2 scalar-Double arithmetic forms. SSE2 is mandatory on
     /// x86-64, so this path needs no runtime CPU-feature probe.
-    pub fn add_double(
-        &mut self,
-        destination: X86_64FloatRegister,
-        source: X86_64FloatRegister,
-    ) {
+    pub fn add_double(&mut self, destination: X86_64FloatRegister, source: X86_64FloatRegister) {
         self.emit_scalar_double_register(0x58, destination, source);
     }
 
@@ -234,20 +230,12 @@ impl X86_64Assembler {
         self.emit_scalar_double_register(0x59, destination, source);
     }
 
-    pub fn divide_double(
-        &mut self,
-        destination: X86_64FloatRegister,
-        source: X86_64FloatRegister,
-    ) {
+    pub fn divide_double(&mut self, destination: X86_64FloatRegister, source: X86_64FloatRegister) {
         self.emit_scalar_double_register(0x5e, destination, source);
     }
 
     /// Encode ordered/unordered scalar `UCOMISD lhs, rhs` flags.
-    fn compare_doubles(
-        &mut self,
-        lhs: X86_64FloatRegister,
-        rhs: X86_64FloatRegister,
-    ) {
+    fn compare_doubles(&mut self, lhs: X86_64FloatRegister, rhs: X86_64FloatRegister) {
         self.emit_legacy_rex(0x66, false, lhs.extension(), rhs.extension());
         self.bytes.extend_from_slice(&[0x0f, 0x2e]);
         self.bytes
@@ -255,11 +243,7 @@ impl X86_64Assembler {
     }
 
     /// AVX form of `UCOMISD`; reserved VEX.vvvv remains 1111b.
-    fn compare_doubles_avx(
-        &mut self,
-        lhs: X86_64FloatRegister,
-        rhs: X86_64FloatRegister,
-    ) {
+    fn compare_doubles_avx(&mut self, lhs: X86_64FloatRegister, rhs: X86_64FloatRegister) {
         self.emit_vex_0f(0x01, false, lhs.extension(), rhs.extension(), 0x0f);
         self.bytes.push(0x2e);
         self.bytes
@@ -302,11 +286,7 @@ impl X86_64Assembler {
         self.emit_avx_scalar_double_register(0x5e, destination, lhs, rhs);
     }
 
-    fn move_double(
-        &mut self,
-        destination: X86_64FloatRegister,
-        source: X86_64FloatRegister,
-    ) {
+    fn move_double(&mut self, destination: X86_64FloatRegister, source: X86_64FloatRegister) {
         if destination == source {
             return;
         }
@@ -315,12 +295,7 @@ impl X86_64Assembler {
         // therefore create a false dependency on the preceding scalar chain.
         // MOVAPD copies all 128 bits, keeps the authoritative low Double bits
         // unchanged and breaks that dependency without requiring AVX.
-        self.emit_legacy_rex(
-            0x66,
-            false,
-            destination.extension(),
-            source.extension(),
-        );
+        self.emit_legacy_rex(0x66, false, destination.extension(), source.extension());
         self.bytes.extend_from_slice(&[0x0f, 0x28]);
         self.bytes
             .push(0xc0 | (destination.low_bits() << 3) | source.low_bits());
@@ -368,12 +343,7 @@ impl X86_64Assembler {
         self.bytes.extend_from_slice(&displacement.to_le_bytes());
     }
 
-    fn store_f64(
-        &mut self,
-        base: X86_64Register,
-        source: X86_64FloatRegister,
-        displacement: i32,
-    ) {
+    fn store_f64(&mut self, base: X86_64Register, source: X86_64FloatRegister, displacement: i32) {
         self.emit_legacy_rex(0xf2, false, source.extension(), base.extension());
         self.bytes.extend_from_slice(&[0x0f, 0x11]);
         self.bytes
@@ -577,10 +547,7 @@ impl X86_64Assembler {
         }
 
         self.bytes.push(
-            0x48
-                | (destination.extension() << 2)
-                | (source.extension() << 1)
-                | source.extension(),
+            0x48 | (destination.extension() << 2) | (source.extension() << 1) | source.extension(),
         );
         self.bytes.push(0x8d);
         let (addressing_mode, displacement_width) = if bias == 0 && source.low_bits() != 5 {
@@ -1915,21 +1882,13 @@ fn emit_scalar_straight_loop(
                 }
             }
             if shadow_store_mask & (1u64 << fusion.result) != 0 {
-                assembler.move_to_base_disp32(
-                    slots,
-                    result_register,
-                    displacement(fusion.result),
-                );
+                assembler.move_to_base_disp32(slots, result_register, displacement(fusion.result));
             }
             if let Some(destination) = fusion.destination
                 && destination != fusion.result
                 && shadow_store_mask & (1u64 << destination) != 0
             {
-                assembler.move_to_base_disp32(
-                    slots,
-                    result_register,
-                    displacement(destination),
-                );
+                assembler.move_to_base_disp32(slots, result_register, displacement(destination));
             }
             pending_affine_fusion = None;
             continue;

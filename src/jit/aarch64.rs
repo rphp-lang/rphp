@@ -1,22 +1,21 @@
-use crate::vm::function::{
-    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
-    ScalarLongOpKind, ScalarLongSource,
-};
-use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
 use super::memory::ExecutableMemory;
 use super::straight::{
     NATIVE_QUICK_LONG_MAX_CALL_TARGETS, NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES,
-    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
-    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig,
-    NativeStraightLongLoopOutcome, NativeStraightLongLoopResult, NativeStraightLongOperation,
-    StraightLongRangeProof, straight_long_best_invariant_slot_masks,
-    straight_long_carried_dependency_operations, straight_long_linear_final_publication_masks,
-    straight_long_early_induction_increment_operation, straight_long_linear_live_after,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongLoopOutcome, NativeStraightLongLoopResult,
+    NativeStraightLongOperation, StraightLongRangeProof, straight_long_best_invariant_slot_masks,
+    straight_long_carried_dependency_operations, straight_long_early_induction_increment_operation,
+    straight_long_linear_final_publication_masks, straight_long_linear_live_after,
     straight_long_linear_shadow_store_mask, straight_long_operation_input_mask,
     straight_long_remaining_range_proof, straight_long_structured_block_starts,
     straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
+use crate::vm::function::{
+    ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
+    ScalarLongOpKind, ScalarLongSource,
+};
+use crate::vm::quick::{QuickLongAccumulateLoop, QuickLongOperand, QuickLongTerm};
 use std::cell::{Cell, OnceCell};
 use std::fmt;
 use std::io;
@@ -24,13 +23,13 @@ use std::mem::MaybeUninit;
 
 #[path = "aarch64_affine.rs"]
 mod affine;
+#[cfg(test)]
+#[path = "aarch64_affine_tests.rs"]
+mod affine_tests;
 #[path = "aarch64_double.rs"]
 mod double;
 #[path = "aarch64_double_loop.rs"]
 mod double_loop;
-#[cfg(test)]
-#[path = "aarch64_affine_tests.rs"]
-mod affine_tests;
 #[cfg(test)]
 #[path = "aarch64_double_tests.rs"]
 mod double_tests;
@@ -139,8 +138,7 @@ impl Arm64Assembler {
         lhs: Arm64FloatRegister,
         rhs: Arm64FloatRegister,
     ) {
-        let instruction =
-            0x1e60_2800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        let instruction = 0x1e60_2800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -151,8 +149,7 @@ impl Arm64Assembler {
         lhs: Arm64FloatRegister,
         rhs: Arm64FloatRegister,
     ) {
-        let instruction =
-            0x1e60_3800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        let instruction = 0x1e60_3800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -163,8 +160,7 @@ impl Arm64Assembler {
         lhs: Arm64FloatRegister,
         rhs: Arm64FloatRegister,
     ) {
-        let instruction =
-            0x1e60_0800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        let instruction = 0x1e60_0800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -175,8 +171,7 @@ impl Arm64Assembler {
         lhs: Arm64FloatRegister,
         rhs: Arm64FloatRegister,
     ) {
-        let instruction =
-            0x1e60_1800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
+        let instruction = 0x1e60_1800 | (rhs.bits() << 16) | (lhs.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -193,11 +188,7 @@ impl Arm64Assembler {
     }
 
     /// Encode `FMOV Dd, Dn` without changing any IEEE-754 payload bits.
-    fn move_double(
-        &mut self,
-        destination: Arm64FloatRegister,
-        source: Arm64FloatRegister,
-    ) {
+    fn move_double(&mut self, destination: Arm64FloatRegister, source: Arm64FloatRegister) {
         if destination == source {
             return;
         }
@@ -217,11 +208,7 @@ impl Arm64Assembler {
 
     /// Encode `SCVTF Dd, Xn`, matching PHP's signed Long-to-Double numeric
     /// promotion for a mixed scalar expression.
-    fn convert_signed_to_double(
-        &mut self,
-        destination: Arm64FloatRegister,
-        source: Arm64Register,
-    ) {
+    fn convert_signed_to_double(&mut self, destination: Arm64FloatRegister, source: Arm64Register) {
         self.words
             .push(0x9e62_0000 | (source.bits() << 5) | destination.bits());
     }
@@ -251,10 +238,8 @@ impl Arm64Assembler {
         immediate: u16,
     ) {
         debug_assert!(immediate < 4_096);
-        let instruction = 0x9100_0000
-            | (u32::from(immediate) << 10)
-            | (source.bits() << 5)
-            | destination.bits();
+        let instruction =
+            0x9100_0000 | (u32::from(immediate) << 10) | (source.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -306,10 +291,8 @@ impl Arm64Assembler {
         immediate: u16,
     ) {
         debug_assert!(immediate < 4_096);
-        let instruction = 0xb100_0000
-            | (u32::from(immediate) << 10)
-            | (source.bits() << 5)
-            | destination.bits();
+        let instruction =
+            0xb100_0000 | (u32::from(immediate) << 10) | (source.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -332,10 +315,8 @@ impl Arm64Assembler {
         immediate: u16,
     ) {
         debug_assert!(immediate < 4_096);
-        let instruction = 0xf100_0000
-            | (u32::from(immediate) << 10)
-            | (source.bits() << 5)
-            | destination.bits();
+        let instruction =
+            0xf100_0000 | (u32::from(immediate) << 10) | (source.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -358,10 +339,8 @@ impl Arm64Assembler {
         immediate: u16,
     ) {
         debug_assert!(immediate < 4_096);
-        let instruction = 0xd100_0000
-            | (u32::from(immediate) << 10)
-            | (source.bits() << 5)
-            | destination.bits();
+        let instruction =
+            0xd100_0000 | (u32::from(immediate) << 10) | (source.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -490,12 +469,7 @@ impl Arm64Assembler {
     }
 
     /// Encode `LDR Dt, [Xn, #offset]` using the scaled unsigned-immediate form.
-    fn load_f64(
-        &mut self,
-        destination: Arm64FloatRegister,
-        base: Arm64Register,
-        offset: u16,
-    ) {
+    fn load_f64(&mut self, destination: Arm64FloatRegister, base: Arm64Register, offset: u16) {
         debug_assert_eq!(offset % 8, 0);
         let scaled_offset = u32::from(offset / 8);
         debug_assert!(scaled_offset < 4096);
@@ -507,10 +481,8 @@ impl Arm64Assembler {
     /// Encode `LDRB Wt, [Xn, #imm12]` for a byte-sized runtime flag.
     fn load_u8(&mut self, destination: Arm64Register, base: Arm64Register, offset: u16) {
         debug_assert!(offset < 4_096);
-        let instruction = 0x3940_0000
-            | (u32::from(offset) << 10)
-            | (base.bits() << 5)
-            | destination.bits();
+        let instruction =
+            0x3940_0000 | (u32::from(offset) << 10) | (base.bits() << 5) | destination.bits();
         self.words.push(instruction);
     }
 
@@ -528,8 +500,7 @@ impl Arm64Assembler {
         debug_assert_eq!(offset % 8, 0);
         let scaled_offset = u32::from(offset / 8);
         debug_assert!(scaled_offset < 4096);
-        let instruction =
-            0xfd00_0000 | (scaled_offset << 10) | (base.bits() << 5) | source.bits();
+        let instruction = 0xfd00_0000 | (scaled_offset << 10) | (base.bits() << 5) | source.bits();
         self.words.push(instruction);
     }
 
@@ -745,9 +716,7 @@ impl fmt::Display for QuickLongAccumulateJitError {
             Self::ZeroIterationBudget => {
                 formatter.write_str("native loop iteration budget must be non-zero")
             }
-            Self::BranchOutOfRange => {
-                formatter.write_str("ARM64 loop branch is out of range")
-            }
+            Self::BranchOutOfRange => formatter.write_str("ARM64 loop branch is out of range"),
             Self::Memory(error) => write!(formatter, "cannot create executable memory: {error}"),
             Self::InvalidNativeStatus(status) => {
                 write!(formatter, "native loop returned an unknown status {status}")
@@ -808,29 +777,25 @@ fn emit_native_polling_backedge(
     interrupt_value: Arm64Register,
 ) -> Result<NativePollingBackedge, QuickLongAccumulateJitError> {
     assembler.compare_registers(induction, chunk_end);
-    let inner_loop_branch =
-        assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+    let inner_loop_branch = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
     // Completion has the same priority as in the VM: a final partial or full
     // chunk does not service an interrupt after the loop has ended.
     assembler.compare_registers(induction, overall_end);
-    let completed_branch =
-        assembler.conditional_branch_placeholder(Arm64Condition::Equal);
+    let completed_branch = assembler.conditional_branch_placeholder(Arm64Condition::Equal);
 
     // AtomicBool's relaxed load is a byte load on ARM64. Generated code only
     // observes the flag; Rust clears it and translates timeout state.
     assembler.load_u8(interrupt_value, interrupt_pointer, 0);
     assembler.compare_with_zero(interrupt_value);
-    let interrupt_branch =
-        assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+    let interrupt_branch = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
     // Pick min(remaining iterations, interval) without signed-overflow
     // assumptions. end-induction is the exact unsigned distance even when the
     // range crosses zero.
     assembler.subtract_register(remaining, overall_end, induction);
     assembler.compare_registers(remaining, interval);
-    let final_chunk_branch =
-        assembler.conditional_branch_placeholder(Arm64Condition::LowerOrSame);
+    let final_chunk_branch = assembler.conditional_branch_placeholder(Arm64Condition::LowerOrSame);
     assembler.add_register(chunk_end, induction, interval);
     let next_chunk_branch = assembler.branch_placeholder();
 
@@ -871,9 +836,7 @@ impl CompiledQuickLongAccumulateLoop {
         Self::compile_term(None, false)
     }
 
-    fn compile_range_proven_with_addend(
-        addend: i64,
-    ) -> Result<Self, QuickLongAccumulateJitError> {
+    fn compile_range_proven_with_addend(addend: i64) -> Result<Self, QuickLongAccumulateJitError> {
         Self::compile_term((addend != 0).then_some(addend), false)
     }
 
@@ -982,8 +945,8 @@ impl CompiledQuickLongAccumulateLoop {
         let (loop_word, completed_branch) = if check_overflow {
             let word = assembler.word_count();
             assembler.compare_registers(induction, bound);
-            let completed = assembler
-                .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+            let completed =
+                assembler.conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
             (word, Some(completed))
         } else {
             // The dispatcher supplies an exclusive induction end in x1, so a
@@ -994,8 +957,7 @@ impl CompiledQuickLongAccumulateLoop {
         let (term, term_overflow_branch) = if addend.is_some() {
             if check_overflow {
                 assembler.add_register_checked(computed_term, induction, addend_register);
-                let overflow =
-                    assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+                let overflow = assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
                 (computed_term, Some(overflow))
             } else {
                 assembler.add_register(computed_term, induction, addend_register);
@@ -1008,8 +970,7 @@ impl CompiledQuickLongAccumulateLoop {
         let (sum_overflow_branch, increment_overflow_branch) = if check_overflow {
             // Keep the old accumulator live until the overflow branch has passed.
             assembler.add_register_checked(checked_result, accumulator, term);
-            let sum_overflow =
-                assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+            let sum_overflow = assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
             assembler.move_register(accumulator, checked_result);
 
             // The same transactional rule preserves the old induction value for
@@ -1033,8 +994,7 @@ impl CompiledQuickLongAccumulateLoop {
         } else {
             assembler.compare_registers(induction, Arm64Register::X1);
         }
-        let loop_branch =
-            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+        let loop_branch = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
         let chunk_exhausted_word = assembler.word_count();
         emit_long_accumulate_state(&mut assembler, induction, accumulator);
@@ -1140,12 +1100,8 @@ impl CompiledQuickLongAccumulateLoop {
     ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
         debug_assert!(state.induction < first_chunk_end);
         debug_assert!(first_chunk_end <= exclusive_induction_end);
-        type NativeFunction = unsafe extern "C" fn(
-            *mut NativeLongAccumulateState,
-            u64,
-            *const bool,
-            u64,
-        ) -> u32;
+        type NativeFunction =
+            unsafe extern "C" fn(*mut NativeLongAccumulateState, u64, *const bool, u64) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
         let status = unsafe {
             function(
@@ -1163,8 +1119,7 @@ impl CompiledQuickLongAccumulateLoop {
         state: &mut NativeLongAccumulateState,
         argument: u64,
     ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
-        type NativeFunction =
-            unsafe extern "C" fn(*mut NativeLongAccumulateState, u64) -> u32;
+        type NativeFunction = unsafe extern "C" fn(*mut NativeLongAccumulateState, u64) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
         let status = unsafe { function(state, argument) };
         Self::decode_status(status)
@@ -1174,18 +1129,12 @@ impl CompiledQuickLongAccumulateLoop {
         status: u32,
     ) -> Result<QuickLongAccumulateJitOutcome, QuickLongAccumulateJitError> {
         match status {
-            NATIVE_LONG_ACCUMULATE_COMPLETED => {
-                Ok(QuickLongAccumulateJitOutcome::Completed)
-            }
+            NATIVE_LONG_ACCUMULATE_COMPLETED => Ok(QuickLongAccumulateJitOutcome::Completed),
             NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
                 Ok(QuickLongAccumulateJitOutcome::ChunkExhausted)
             }
-            NATIVE_LONG_ACCUMULATE_TERM_OVERFLOW => {
-                Ok(QuickLongAccumulateJitOutcome::TermOverflow)
-            }
-            NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => {
-                Ok(QuickLongAccumulateJitOutcome::SumOverflow)
-            }
+            NATIVE_LONG_ACCUMULATE_TERM_OVERFLOW => Ok(QuickLongAccumulateJitOutcome::TermOverflow),
+            NATIVE_LONG_ACCUMULATE_SUM_OVERFLOW => Ok(QuickLongAccumulateJitOutcome::SumOverflow),
             NATIVE_LONG_ACCUMULATE_INCREMENT_OVERFLOW => {
                 Ok(QuickLongAccumulateJitOutcome::IncrementOverflow)
             }
@@ -1235,12 +1184,7 @@ fn arithmetic_long_chunk_is_range_proven(
 ) -> bool {
     iteration_budget != 0
         && (state.induction >= state.bound
-            || arithmetic_long_chunk_range_proven_end(
-                addend,
-                state,
-                iteration_budget,
-            )
-            .is_some())
+            || arithmetic_long_chunk_range_proven_end(addend, state, iteration_budget).is_some())
 }
 
 fn arithmetic_long_chunk_range_proven_end(
@@ -1343,8 +1287,7 @@ pub struct QuickLongAccumulateJitCache {
     range_proven_compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
     range_proven_polling_compiled: OnceCell<Option<CompiledQuickLongAccumulateLoop>>,
     straight_compiled: OnceCell<Option<CachedQuickLongStraightLoop>>,
-    straight_range_proven_polling_compiled:
-        OnceCell<Option<CompiledQuickLongStraightLoop>>,
+    straight_range_proven_polling_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
     native_entries: Cell<u64>,
     native_calls: Cell<u64>,
     native_chunks: Cell<u64>,
@@ -1377,8 +1320,7 @@ impl QuickLongAccumulateJitCache {
     ) -> bool {
         self.range_proof_evaluations
             .set(self.range_proof_evaluations.get().saturating_add(1));
-        long_accumulate_chunk_range_proven_end(plan, state, u64::MAX)
-            == Some(state.bound)
+        long_accumulate_chunk_range_proven_end(plan, state, u64::MAX) == Some(state.bound)
     }
 
     pub(crate) fn dispatch_chunk(
@@ -1411,9 +1353,7 @@ impl QuickLongAccumulateJitCache {
         } else {
             self.compiled
                 .get_or_init(|| match plan.term {
-                    QuickLongTerm::Induction => {
-                        CompiledQuickLongAccumulateLoop::compile().ok()
-                    }
+                    QuickLongTerm::Induction => CompiledQuickLongAccumulateLoop::compile().ok(),
                     QuickLongTerm::InductionPlusConst { addend, .. } => {
                         CompiledQuickLongAccumulateLoop::compile_with_addend(addend).ok()
                     }
@@ -1477,21 +1417,12 @@ impl QuickLongAccumulateJitCache {
         let before_induction = state.induction;
         self.native_calls
             .set(self.native_calls.get().saturating_add(1));
-        let outcome = program.call_range_proven_polling(
-            state,
-            state.bound,
-            interrupt_flag,
-            first_chunk_end,
-        );
-        let completed_iterations = (state.induction as u64)
-            .wrapping_sub(before_induction as u64);
-        let completed_chunks = completed_iterations
-            .div_ceil(u64::from(safepoint_interval));
-        self.native_chunks.set(
-            self.native_chunks
-                .get()
-                .saturating_add(completed_chunks),
-        );
+        let outcome =
+            program.call_range_proven_polling(state, state.bound, interrupt_flag, first_chunk_end);
+        let completed_iterations = (state.induction as u64).wrapping_sub(before_induction as u64);
+        let completed_chunks = completed_iterations.div_ceil(u64::from(safepoint_interval));
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(completed_chunks));
         self.range_proven_chunks.set(
             self.range_proven_chunks
                 .get()
@@ -1573,7 +1504,7 @@ impl QuickLongAccumulateJitCache {
         (program.config() == *config
             && program.publication_mask() == publication_mask
             && program.carried_mask() == carried_mask)
-        .then_some(program)
+            .then_some(program)
     }
 
     pub(crate) fn dispatch_prepared_proven_straight_remaining(
@@ -1595,22 +1526,15 @@ impl QuickLongAccumulateJitCache {
 
         self.native_calls
             .set(self.native_calls.get().saturating_add(1));
-        let outcome = program.call_range_proven_polling(
-            slots,
-            bound,
-            interrupt_flag,
-            first_chunk_end,
-        );
-        let completed_iterations = (slots[config.induction_slot as usize] as u64)
-            .wrapping_sub(induction as u64);
+        let outcome =
+            program.call_range_proven_polling(slots, bound, interrupt_flag, first_chunk_end);
+        let completed_iterations =
+            (slots[config.induction_slot as usize] as u64).wrapping_sub(induction as u64);
         let completed_chunks = completed_iterations
             .div_ceil(u64::from(safepoint_interval))
             .max(1);
-        self.native_chunks.set(
-            self.native_chunks
-                .get()
-                .saturating_add(completed_chunks),
-        );
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(completed_chunks));
         self.range_proven_chunks.set(
             self.range_proven_chunks
                 .get()
@@ -1692,9 +1616,11 @@ impl QuickLongAccumulateJitCache {
     }
 
     pub fn is_call_compiled(&self) -> bool {
-        self.straight_compiled
-            .get()
-            .is_some_and(|cached| cached.as_ref().is_some_and(|cached| cached.target_count != 0))
+        self.straight_compiled.get().is_some_and(|cached| {
+            cached
+                .as_ref()
+                .is_some_and(|cached| cached.target_count != 0)
+        })
     }
 
     pub fn native_entries(&self) -> u64 {
@@ -1756,13 +1682,8 @@ impl fmt::Debug for QuickLongAccumulateJitCache {
 /// are mutated by native code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeConditionalLongLoopCondition {
-    LessThan {
-        rhs: QuickLongOperand,
-    },
-    ModuloEqual {
-        divisor: i64,
-        rhs: QuickLongOperand,
-    },
+    LessThan { rhs: QuickLongOperand },
+    ModuloEqual { divisor: i64, rhs: QuickLongOperand },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1851,19 +1772,18 @@ impl CompiledQuickLongConditionalAccumulateLoop {
 
         let loop_word = assembler.word_count();
         assembler.compare_registers(induction, bound);
-        let completed_branch = assembler
-            .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+        let completed_branch =
+            assembler.conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
 
-        let (skip_add_branch, condition_side_exit_branches) =
-            emit_conditional_long_condition(
-                &mut assembler,
-                config.condition,
-                induction,
-                condition_operand,
-                condition_rhs,
-                quotient,
-                remainder,
-            );
+        let (skip_add_branch, condition_side_exit_branches) = emit_conditional_long_condition(
+            &mut assembler,
+            config.condition,
+            induction,
+            condition_operand,
+            condition_rhs,
+            quotient,
+            remainder,
+        );
         assembler.add_register_checked(checked_result, accumulator, induction);
         let sum_overflow_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
@@ -1875,13 +1795,8 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         let increment_overflow_branch =
             assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
         assembler.move_register(induction, checked_result);
-        assembler.subtract_register_checked(
-            Arm64Register::X1,
-            Arm64Register::X1,
-            one,
-        );
-        let loop_branch =
-            assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+        assembler.subtract_register_checked(Arm64Register::X1, Arm64Register::X1, one);
+        let loop_branch = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
 
         emit_conditional_long_loop_state(
             &mut assembler,
@@ -2053,16 +1968,15 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         // The dispatcher only enters this program for a non-empty region whose
         // complete accumulator range and induction increment have been proven.
         let loop_word = assembler.word_count();
-        let (skip_add_branch, condition_side_exit_branches) =
-            emit_conditional_long_condition(
-                &mut assembler,
-                config.condition,
-                induction,
-                condition_operand,
-                condition_rhs,
-                quotient,
-                remainder,
-            );
+        let (skip_add_branch, condition_side_exit_branches) = emit_conditional_long_condition(
+            &mut assembler,
+            config.condition,
+            induction,
+            condition_operand,
+            condition_rhs,
+            quotient,
+            remainder,
+        );
         assembler.add_register(accumulator, accumulator, induction);
         assembler.move_immediate(addition_executed, 1);
 
@@ -2168,11 +2082,8 @@ impl CompiledQuickLongConditionalAccumulateLoop {
         if iteration_budget == 0 {
             return Err(QuickLongAccumulateJitError::ZeroIterationBudget);
         }
-        type NativeFunction = unsafe extern "C" fn(
-            *mut i64,
-            u64,
-            *mut NativeConditionalLongLoopControl,
-        ) -> u32;
+        type NativeFunction =
+            unsafe extern "C" fn(*mut i64, u64, *mut NativeConditionalLongLoopControl) -> u32;
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
         let mut control = NativeConditionalLongLoopControl::default();
         let status = unsafe { function(slots.as_mut_ptr(), iteration_budget, &mut control) };
@@ -2215,9 +2126,7 @@ impl CompiledQuickLongConditionalAccumulateLoop {
     ) -> Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError> {
         let outcome = match status {
             NATIVE_LONG_ACCUMULATE_COMPLETED => QuickLongAccumulateJitOutcome::Completed,
-            NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
-                QuickLongAccumulateJitOutcome::ChunkExhausted
-            }
+            NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => QuickLongAccumulateJitOutcome::ChunkExhausted,
             NATIVE_LONG_ACCUMULATE_CONDITION_SIDE_EXIT => {
                 QuickLongAccumulateJitOutcome::ConditionSideExit
             }
@@ -2288,11 +2197,9 @@ fn emit_native_long_operand(
     destination: Arm64Register,
 ) {
     match operand {
-        QuickLongOperand::Slot(slot) => assembler.load_u64(
-            destination,
-            Arm64Register::X0,
-            long_slot_offset(slot),
-        ),
+        QuickLongOperand::Slot(slot) => {
+            assembler.load_u64(destination, Arm64Register::X0, long_slot_offset(slot))
+        }
         QuickLongOperand::Const(value) => assembler.move_immediate(destination, value),
     }
 }
@@ -2342,12 +2249,7 @@ fn emit_conditional_long_condition(
                 );
             } else {
                 assembler.signed_divide(quotient, induction, condition_operand);
-                assembler.multiply_subtract(
-                    remainder,
-                    quotient,
-                    condition_operand,
-                    induction,
-                );
+                assembler.multiply_subtract(remainder, quotient, condition_operand, induction);
             }
             assembler.compare_registers(remainder, condition_rhs);
             Some(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual))
@@ -2642,8 +2544,8 @@ impl CompiledQuickLongStraightLoop {
         } else {
             None
         };
-        let keeps_carried_values_resident = keeps_linear_scalar_values_resident
-            || keeps_structured_carried_values_resident;
+        let keeps_carried_values_resident =
+            keeps_linear_scalar_values_resident || keeps_structured_carried_values_resident;
 
         assembler.move_register(control, Arm64Register::X2);
         if let Some(polling_interval) = polling_interval {
@@ -2663,8 +2565,8 @@ impl CompiledQuickLongStraightLoop {
             assembler.move_immediate(one, 1);
             let word = assembler.word_count();
             assembler.compare_registers(induction, bound);
-            let completed = assembler
-                .conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
+            let completed =
+                assembler.conditional_branch_placeholder(Arm64Condition::GreaterOrEqual);
             (word, Some(completed))
         };
 
@@ -2678,17 +2580,17 @@ impl CompiledQuickLongStraightLoop {
         } else {
             [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1]
         };
-        let structured_local_resident_output_masks =
-            if keeps_structured_scalar_temporaries_resident {
-                straight_long_structured_local_resident_output_masks(
-                    &config,
-                    publication_mask,
-                    carried_mask,
-                    &structured_block_starts,
-                )
-            } else {
-                [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
-            };
+        let structured_local_resident_output_masks = if keeps_structured_scalar_temporaries_resident
+        {
+            straight_long_structured_local_resident_output_masks(
+                &config,
+                publication_mask,
+                carried_mask,
+                &structured_block_starts,
+            )
+        } else {
+            [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
+        };
         let (structured_definitely_written_before, structured_definitely_written_exit) =
             if keeps_structured_scalar_temporaries_resident {
                 straight_long_structured_definitely_written(&config)
@@ -2742,8 +2644,7 @@ impl CompiledQuickLongStraightLoop {
         } else {
             [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS]
         };
-        let mut deferred_register_by_operation =
-            [usize::MAX; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
+        let mut deferred_register_by_operation = [usize::MAX; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
         let mut deferred_exit_values = [(0u64, result); 4];
         let mut deferred_exit_value_count = 0usize;
         let mut deferred_exit_publication_mask = 0u64;
@@ -2794,9 +2695,8 @@ impl CompiledQuickLongStraightLoop {
             }
         }
         if keeps_structured_scalar_temporaries_resident {
-            let mut phi_candidates = publication_mask
-                & structured_definitely_written_exit
-                & !carried_mask;
+            let mut phi_candidates =
+                publication_mask & structured_definitely_written_exit & !carried_mask;
             while phi_candidates != 0 {
                 let slot_mask = 1u64 << phi_candidates.trailing_zeros();
                 phi_candidates &= phi_candidates - 1;
@@ -2943,24 +2843,20 @@ impl CompiledQuickLongStraightLoop {
                 } else {
                     linear_live_after[index - 1]
                 };
-                for (resident_index, (slot_mask, _)) in
-                    resident_values.iter_mut().enumerate()
-                {
+                for (resident_index, (slot_mask, _)) in resident_values.iter_mut().enumerate() {
                     if resident_index >= INVARIANT_RESIDENT_START {
-                        *slot_mask = invariant_slot_masks
-                            [resident_index - INVARIANT_RESIDENT_START];
+                        *slot_mask =
+                            invariant_slot_masks[resident_index - INVARIANT_RESIDENT_START];
                         continue;
                     }
                     *slot_mask &= live_before | active_exit_masks[resident_index];
                 }
 
-                let latest_survives_output = resident_values[0].0
-                    & linear_live_after[index]
-                    & !operation.output_mask();
+                let latest_survives_output =
+                    resident_values[0].0 & linear_live_after[index] & !operation.output_mask();
                 if latest_survives_output != 0
                     && let Some(cache_index) = (1..PUBLICATION_RESIDENT_COUNT).find(|&index| {
-                        !reserved_resident_registers[index]
-                            && resident_values[index].0 == 0
+                        !reserved_resident_registers[index] && resident_values[index].0 == 0
                     })
                 {
                     assembler.move_register(resident_values[cache_index].1, result);
@@ -2973,8 +2869,8 @@ impl CompiledQuickLongStraightLoop {
                 }
                 for resident_index in 1..resident_values.len() {
                     if resident_index >= INVARIANT_RESIDENT_START {
-                        resident_values[resident_index].0 = invariant_slot_masks
-                            [resident_index - INVARIANT_RESIDENT_START];
+                        resident_values[resident_index].0 =
+                            invariant_slot_masks[resident_index - INVARIANT_RESIDENT_START];
                         continue;
                     }
                     let carried_slots = initial_carried_masks[resident_index];
@@ -3006,8 +2902,8 @@ impl CompiledQuickLongStraightLoop {
             } else {
                 operation.shadow_output_mask()
             };
-            let structured_direct_result_register =
-                keeps_structured_scalar_temporaries_resident.then(|| {
+            let structured_direct_result_register = keeps_structured_scalar_temporaries_resident
+                .then(|| {
                     let definition_bit = 1u64 << index;
                     let resident_index =
                         (1..PUBLICATION_RESIDENT_COUNT).find(|&resident_index| {
@@ -3031,12 +2927,12 @@ impl CompiledQuickLongStraightLoop {
             let linear_direct_result_register = keeps_linear_scalar_values_resident
                 .then(|| {
                     let resident_index = deferred_register_by_operation[index];
-                    let single_carried_read_modify_write =
-                        (resident_index != usize::MAX && carried_mask.count_ones() == 1)
-                            && resident_values[resident_index].0 & carried_mask != 0
-                            && straight_long_operation_input_mask(operation)
-                                & resident_values[resident_index].0
-                                != 0;
+                    let single_carried_read_modify_write = (resident_index != usize::MAX
+                        && carried_mask.count_ones() == 1)
+                        && resident_values[resident_index].0 & carried_mask != 0
+                        && straight_long_operation_input_mask(operation)
+                            & resident_values[resident_index].0
+                            != 0;
                     // A lone ARM64 recurrence profits from computing through
                     // x8 and letting MOV rename the result into its fixed
                     // register. Multiple independent chains and non-carried
@@ -3072,8 +2968,7 @@ impl CompiledQuickLongStraightLoop {
             };
             if !emitted_multiply_accumulate
                 && polling_interval.is_some()
-                && let Some(fusion) =
-                    arm64_straight_multiply_accumulate_fusion(&config, index)
+                && let Some(fusion) = arm64_straight_multiply_accumulate_fusion(&config, index)
                 && (!keeps_structured_scalar_temporaries_resident
                     || !structured_block_starts[fusion.consumer])
                 && (early_induction_increment_operation != Some(fusion.consumer)
@@ -3089,416 +2984,411 @@ impl CompiledQuickLongStraightLoop {
             }
             if !emitted_multiply_accumulate {
                 match operation {
-                NativeStraightLongOperation::Unused => {
-                    unreachable!("validated straight operation cannot be unused")
-                }
-                NativeStraightLongOperation::Modulo {
-                    value,
-                    divisor,
-                    result: result_slot,
-                } => {
-                    let value_register = emit_straight_long_operand_with_resident(
-                        &mut assembler,
+                    NativeStraightLongOperation::Unused => {
+                        unreachable!("validated straight operation cannot be unused")
+                    }
+                    NativeStraightLongOperation::Modulo {
                         value,
-                        lhs,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    if divisor == 0 {
-                        assembler.compare_registers(induction, induction);
+                        divisor,
+                        result: result_slot,
+                    } => {
+                        let value_register = emit_straight_long_operand_with_resident(
+                            &mut assembler,
+                            value,
+                            lhs,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        if divisor == 0 {
+                            assembler.compare_registers(induction, induction);
+                            operation_side_exit_branches.push((
+                                assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+                                index as u8,
+                            ));
+                        } else if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
+                            emit_signed_power_of_two_remainder(
+                                &mut assembler,
+                                value_register,
+                                mask,
+                                result,
+                                rhs,
+                                auxiliary,
+                            );
+                            if shadow_store_mask & (1u64 << result_slot) != 0 {
+                                assembler.store_u64(
+                                    result,
+                                    Arm64Register::X0,
+                                    long_slot_offset(result_slot),
+                                );
+                            }
+                        } else {
+                            assembler.move_immediate(rhs, divisor);
+                            assembler.signed_divide(auxiliary, value_register, rhs);
+                            assembler.multiply_subtract(result, auxiliary, rhs, value_register);
+                            if shadow_store_mask & (1u64 << result_slot) != 0 {
+                                assembler.store_u64(
+                                    result,
+                                    Arm64Register::X0,
+                                    long_slot_offset(result_slot),
+                                );
+                            }
+                        }
+                    }
+                    NativeStraightLongOperation::Move {
+                        source,
+                        result: result_slot,
+                    } => {
+                        let source_register = emit_straight_long_operand_with_resident(
+                            &mut assembler,
+                            source,
+                            result,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        if source_register != result {
+                            assembler.move_register(result, source_register);
+                        }
+                        if shadow_store_mask & (1u64 << result_slot) != 0 {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(result_slot),
+                            );
+                        }
+                    }
+                    NativeStraightLongOperation::StringToken {
+                        token,
+                        result: result_slot,
+                    } => {
+                        assembler.move_immediate(result, i64::from(token));
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
+                    }
+                    NativeStraightLongOperation::StringLength {
+                        source,
+                        lengths,
+                        token_count,
+                        result: result_slot,
+                    } => {
+                        emit_straight_token_immediate_select(
+                            &mut assembler,
+                            source,
+                            &lengths,
+                            token_count,
+                            lhs,
+                            rhs,
+                            result,
+                            induction,
+                            config.induction_slot,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
+                    }
+                    NativeStraightLongOperation::HashLoad {
+                        key,
+                        entry_base,
+                        token_count,
+                        result: result_slot,
+                        destination,
+                    } => {
+                        emit_straight_context_entry_select(
+                            &mut assembler,
+                            key,
+                            entry_base,
+                            token_count,
+                            lhs,
+                            rhs,
+                            auxiliary,
+                            control,
+                            induction,
+                            config.induction_slot,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                        assembler.load_u64(result, auxiliary, 0);
+                        assembler.store_u64(
+                            result,
+                            Arm64Register::X0,
+                            long_slot_offset(result_slot),
+                        );
+                        if let Some(destination) = destination
+                            && destination != result_slot
+                        {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(destination),
+                            );
+                        }
+                    }
+                    NativeStraightLongOperation::HashStore {
+                        key,
+                        entry_base,
+                        token_count,
+                        source,
+                    } => {
+                        emit_straight_context_entry_select(
+                            &mut assembler,
+                            key,
+                            entry_base,
+                            token_count,
+                            lhs,
+                            rhs,
+                            auxiliary,
+                            control,
+                            induction,
+                            config.induction_slot,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                        emit_straight_long_operand(
+                            &mut assembler,
+                            source,
+                            result,
+                            config.induction_slot,
+                            induction,
+                        );
+                        assembler.store_u64(result, auxiliary, 0);
+                    }
+                    NativeStraightLongOperation::Binary {
+                        kind,
+                        lhs: original_lhs_operand,
+                        rhs: original_rhs_operand,
+                        result: result_slot,
+                    } => {
+                        let (lhs_operand, rhs_operand) = straight_binary_lowering_operands(
+                            kind,
+                            original_lhs_operand,
+                            original_rhs_operand,
+                        );
+                        let allow_multiply_strength_reduction = polling_interval.is_some()
+                            && carried_dependency_operations & (1u64 << index) == 0;
+                        let rhs_constant = match rhs_operand {
+                            QuickLongOperand::Const(value) => Some(value),
+                            QuickLongOperand::Slot(_) => None,
+                        };
+                        let lhs_register = emit_straight_long_operand_with_resident(
+                            &mut assembler,
+                            lhs_operand,
+                            lhs,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        let embeds_rhs = rhs_constant.is_some_and(|constant| {
+                            straight_binary_embeds_rhs(
+                                kind,
+                                allow_multiply_strength_reduction,
+                                constant,
+                            )
+                        });
+                        let rhs_register = if embeds_rhs {
+                            rhs
+                        } else {
+                            emit_straight_long_operand_with_resident(
+                                &mut assembler,
+                                rhs_operand,
+                                rhs,
+                                config.induction_slot,
+                                induction,
+                                &resident_values,
+                            )
+                        };
+                        emit_straight_binary(
+                            &mut assembler,
+                            kind,
+                            polling_interval.is_none(),
+                            allow_multiply_strength_reduction,
+                            rhs_constant,
+                            lhs_register,
+                            rhs_register,
+                            result,
+                            auxiliary,
+                            guard,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                        if shadow_store_mask & (1u64 << result_slot) != 0 {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(result_slot),
+                            );
+                        }
+                    }
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind,
+                        lhs: original_lhs_operand,
+                        rhs: original_rhs_operand,
+                        result: result_slot,
+                        destination,
+                    } => {
+                        let (lhs_operand, rhs_operand) = straight_binary_lowering_operands(
+                            kind,
+                            original_lhs_operand,
+                            original_rhs_operand,
+                        );
+                        let allow_multiply_strength_reduction = polling_interval.is_some()
+                            && carried_dependency_operations & (1u64 << index) == 0;
+                        let rhs_constant = match rhs_operand {
+                            QuickLongOperand::Const(value) => Some(value),
+                            QuickLongOperand::Slot(_) => None,
+                        };
+                        let lhs_register = emit_straight_long_operand_with_resident(
+                            &mut assembler,
+                            lhs_operand,
+                            lhs,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        let embeds_rhs = rhs_constant.is_some_and(|constant| {
+                            straight_binary_embeds_rhs(
+                                kind,
+                                allow_multiply_strength_reduction,
+                                constant,
+                            )
+                        });
+                        let rhs_register = if embeds_rhs {
+                            rhs
+                        } else {
+                            emit_straight_long_operand_with_resident(
+                                &mut assembler,
+                                rhs_operand,
+                                rhs,
+                                config.induction_slot,
+                                induction,
+                                &resident_values,
+                            )
+                        };
+                        emit_straight_binary(
+                            &mut assembler,
+                            kind,
+                            polling_interval.is_none(),
+                            allow_multiply_strength_reduction,
+                            rhs_constant,
+                            lhs_register,
+                            rhs_register,
+                            result,
+                            auxiliary,
+                            guard,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                        if shadow_store_mask & (1u64 << result_slot) != 0 {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(result_slot),
+                            );
+                        }
+                        if destination != result_slot
+                            && shadow_store_mask & (1u64 << destination) != 0
+                        {
+                            assembler.store_u64(
+                                result,
+                                Arm64Register::X0,
+                                long_slot_offset(destination),
+                            );
+                        }
+                    }
+                    NativeStraightLongOperation::Guard {
+                        kind,
+                        lhs: lhs_operand,
+                        rhs: rhs_operand,
+                        expected,
+                    } => {
+                        let condition_lhs = emit_straight_long_condition_operand(
+                            &mut assembler,
+                            lhs_operand,
+                            lhs,
+                            auxiliary,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        let condition_rhs = emit_straight_long_condition_operand(
+                            &mut assembler,
+                            rhs_operand,
+                            rhs,
+                            auxiliary,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        assembler.compare_registers(condition_lhs, condition_rhs);
+                        let mismatch = match (kind, expected) {
+                            (ScalarLongConditionKind::Equal, true)
+                            | (ScalarLongConditionKind::NotEqual, false) => {
+                                Arm64Condition::NotEqual
+                            }
+                            (ScalarLongConditionKind::Equal, false)
+                            | (ScalarLongConditionKind::NotEqual, true) => Arm64Condition::Equal,
+                            (ScalarLongConditionKind::LessThan, true) => {
+                                Arm64Condition::GreaterOrEqual
+                            }
+                            (ScalarLongConditionKind::LessThan, false) => Arm64Condition::LessThan,
+                            (ScalarLongConditionKind::LessThanOrEqual, true) => {
+                                Arm64Condition::GreaterThan
+                            }
+                            (ScalarLongConditionKind::LessThanOrEqual, false) => {
+                                Arm64Condition::LessOrEqual
+                            }
+                        };
                         operation_side_exit_branches.push((
-                            assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+                            assembler.conditional_branch_placeholder(mismatch),
                             index as u8,
                         ));
-                    } else if let Some(mask) = signed_power_of_two_remainder_mask(divisor) {
-                        emit_signed_power_of_two_remainder(
-                            &mut assembler,
-                            value_register,
-                            mask,
-                            result,
-                            rhs,
-                            auxiliary,
-                        );
-                        if shadow_store_mask & (1u64 << result_slot) != 0 {
-                            assembler.store_u64(
-                                result,
-                                Arm64Register::X0,
-                                long_slot_offset(result_slot),
-                            );
-                        }
-                    } else {
-                        assembler.move_immediate(rhs, divisor);
-                        assembler.signed_divide(auxiliary, value_register, rhs);
-                        assembler.multiply_subtract(
-                            result,
-                            auxiliary,
-                            rhs,
-                            value_register,
-                        );
-                        if shadow_store_mask & (1u64 << result_slot) != 0 {
-                            assembler.store_u64(
-                                result,
-                                Arm64Register::X0,
-                                long_slot_offset(result_slot),
-                            );
-                        }
                     }
-                }
-                NativeStraightLongOperation::Move {
-                    source,
-                    result: result_slot,
-                } => {
-                    let source_register = emit_straight_long_operand_with_resident(
-                        &mut assembler,
-                        source,
-                        result,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    if source_register != result {
-                        assembler.move_register(result, source_register);
-                    }
-                    if shadow_store_mask & (1u64 << result_slot) != 0 {
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(result_slot),
-                        );
-                    }
-                }
-                NativeStraightLongOperation::StringToken {
-                    token,
-                    result: result_slot,
-                } => {
-                    assembler.move_immediate(result, i64::from(token));
-                    assembler.store_u64(
-                        result,
-                        Arm64Register::X0,
-                        long_slot_offset(result_slot),
-                    );
-                }
-                NativeStraightLongOperation::StringLength {
-                    source,
-                    lengths,
-                    token_count,
-                    result: result_slot,
-                } => {
-                    emit_straight_token_immediate_select(
-                        &mut assembler,
-                        source,
-                        &lengths,
-                        token_count,
-                        lhs,
-                        rhs,
-                        result,
-                        induction,
-                        config.induction_slot,
-                        index as u8,
-                        &mut operation_side_exit_branches,
-                    )?;
-                    assembler.store_u64(
-                        result,
-                        Arm64Register::X0,
-                        long_slot_offset(result_slot),
-                    );
-                }
-                NativeStraightLongOperation::HashLoad {
-                    key,
-                    entry_base,
-                    token_count,
-                    result: result_slot,
-                    destination,
-                } => {
-                    emit_straight_context_entry_select(
-                        &mut assembler,
-                        key,
-                        entry_base,
-                        token_count,
-                        lhs,
-                        rhs,
-                        auxiliary,
-                        control,
-                        induction,
-                        config.induction_slot,
-                        index as u8,
-                        &mut operation_side_exit_branches,
-                    )?;
-                    assembler.load_u64(result, auxiliary, 0);
-                    assembler.store_u64(
-                        result,
-                        Arm64Register::X0,
-                        long_slot_offset(result_slot),
-                    );
-                    if let Some(destination) = destination
-                        && destination != result_slot
-                    {
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(destination),
-                        );
-                    }
-                }
-                NativeStraightLongOperation::HashStore {
-                    key,
-                    entry_base,
-                    token_count,
-                    source,
-                } => {
-                    emit_straight_context_entry_select(
-                        &mut assembler,
-                        key,
-                        entry_base,
-                        token_count,
-                        lhs,
-                        rhs,
-                        auxiliary,
-                        control,
-                        induction,
-                        config.induction_slot,
-                        index as u8,
-                        &mut operation_side_exit_branches,
-                    )?;
-                    emit_straight_long_operand(
-                        &mut assembler,
-                        source,
-                        result,
-                        config.induction_slot,
-                        induction,
-                    );
-                    assembler.store_u64(result, auxiliary, 0);
-                }
-                NativeStraightLongOperation::Binary {
-                    kind,
-                    lhs: original_lhs_operand,
-                    rhs: original_rhs_operand,
-                    result: result_slot,
-                } => {
-                    let (lhs_operand, rhs_operand) = straight_binary_lowering_operands(
+                    NativeStraightLongOperation::BranchUnless {
                         kind,
-                        original_lhs_operand,
-                        original_rhs_operand,
-                    );
-                    let allow_multiply_strength_reduction = polling_interval.is_some()
-                        && carried_dependency_operations & (1u64 << index) == 0;
-                    let rhs_constant = match rhs_operand {
-                        QuickLongOperand::Const(value) => Some(value),
-                        QuickLongOperand::Slot(_) => None,
-                    };
-                    let lhs_register = emit_straight_long_operand_with_resident(
-                        &mut assembler,
-                        lhs_operand,
-                        lhs,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    let embeds_rhs = rhs_constant.is_some_and(|constant| {
-                        straight_binary_embeds_rhs(
-                            kind,
-                            allow_multiply_strength_reduction,
-                            constant,
-                        )
-                    });
-                    let rhs_register = if embeds_rhs {
-                        rhs
-                    } else {
-                        emit_straight_long_operand_with_resident(
-                            &mut assembler,
-                            rhs_operand,
-                            rhs,
-                            config.induction_slot,
-                            induction,
-                            &resident_values,
-                        )
-                    };
-                    emit_straight_binary(
-                        &mut assembler,
-                        kind,
-                        polling_interval.is_none(),
-                        allow_multiply_strength_reduction,
-                        rhs_constant,
-                        lhs_register,
-                        rhs_register,
-                        result,
-                        auxiliary,
-                        guard,
-                        index as u8,
-                        &mut operation_side_exit_branches,
-                    )?;
-                    if shadow_store_mask & (1u64 << result_slot) != 0 {
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(result_slot),
-                        );
-                    }
-                }
-                NativeStraightLongOperation::BinaryAssign {
-                    kind,
-                    lhs: original_lhs_operand,
-                    rhs: original_rhs_operand,
-                    result: result_slot,
-                    destination,
-                } => {
-                    let (lhs_operand, rhs_operand) = straight_binary_lowering_operands(
-                        kind,
-                        original_lhs_operand,
-                        original_rhs_operand,
-                    );
-                    let allow_multiply_strength_reduction = polling_interval.is_some()
-                        && carried_dependency_operations & (1u64 << index) == 0;
-                    let rhs_constant = match rhs_operand {
-                        QuickLongOperand::Const(value) => Some(value),
-                        QuickLongOperand::Slot(_) => None,
-                    };
-                    let lhs_register = emit_straight_long_operand_with_resident(
-                        &mut assembler,
-                        lhs_operand,
-                        lhs,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    let embeds_rhs = rhs_constant.is_some_and(|constant| {
-                        straight_binary_embeds_rhs(
-                            kind,
-                            allow_multiply_strength_reduction,
-                            constant,
-                        )
-                    });
-                    let rhs_register = if embeds_rhs {
-                        rhs
-                    } else {
-                        emit_straight_long_operand_with_resident(
-                            &mut assembler,
-                            rhs_operand,
-                            rhs,
-                            config.induction_slot,
-                            induction,
-                            &resident_values,
-                        )
-                    };
-                    emit_straight_binary(
-                        &mut assembler,
-                        kind,
-                        polling_interval.is_none(),
-                        allow_multiply_strength_reduction,
-                        rhs_constant,
-                        lhs_register,
-                        rhs_register,
-                        result,
-                        auxiliary,
-                        guard,
-                        index as u8,
-                        &mut operation_side_exit_branches,
-                    )?;
-                    if shadow_store_mask & (1u64 << result_slot) != 0 {
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(result_slot),
-                        );
-                    }
-                    if destination != result_slot
-                        && shadow_store_mask & (1u64 << destination) != 0
-                    {
-                        assembler.store_u64(
-                            result,
-                            Arm64Register::X0,
-                            long_slot_offset(destination),
-                        );
-                    }
-                }
-                NativeStraightLongOperation::Guard {
-                    kind,
-                    lhs: lhs_operand,
-                    rhs: rhs_operand,
-                    expected,
-                } => {
-                    let condition_lhs = emit_straight_long_condition_operand(
-                        &mut assembler,
-                        lhs_operand,
-                        lhs,
-                        auxiliary,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    let condition_rhs = emit_straight_long_condition_operand(
-                        &mut assembler,
-                        rhs_operand,
-                        rhs,
-                        auxiliary,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    assembler.compare_registers(condition_lhs, condition_rhs);
-                    let mismatch = match (kind, expected) {
-                        (ScalarLongConditionKind::Equal, true)
-                        | (ScalarLongConditionKind::NotEqual, false) => {
-                            Arm64Condition::NotEqual
-                        }
-                        (ScalarLongConditionKind::Equal, false)
-                        | (ScalarLongConditionKind::NotEqual, true) => Arm64Condition::Equal,
-                        (ScalarLongConditionKind::LessThan, true) => {
-                            Arm64Condition::GreaterOrEqual
-                        }
-                        (ScalarLongConditionKind::LessThan, false) => Arm64Condition::LessThan,
-                        (ScalarLongConditionKind::LessThanOrEqual, true) => {
-                            Arm64Condition::GreaterThan
-                        }
-                        (ScalarLongConditionKind::LessThanOrEqual, false) => {
-                            Arm64Condition::LessOrEqual
-                        }
-                    };
-                    operation_side_exit_branches.push((
-                        assembler.conditional_branch_placeholder(mismatch),
-                        index as u8,
-                    ));
-                }
-                NativeStraightLongOperation::BranchUnless {
-                    kind,
-                    lhs: lhs_operand,
-                    rhs: rhs_operand,
-                    false_target,
-                } => {
-                    let condition_lhs = emit_straight_long_condition_operand(
-                        &mut assembler,
-                        lhs_operand,
-                        lhs,
-                        auxiliary,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    let condition_rhs = emit_straight_long_condition_operand(
-                        &mut assembler,
-                        rhs_operand,
-                        rhs,
-                        auxiliary,
-                        config.induction_slot,
-                        induction,
-                        &resident_values,
-                    );
-                    assembler.compare_registers(condition_lhs, condition_rhs);
-                    let false_condition = match kind {
-                        ScalarLongConditionKind::Equal => Arm64Condition::NotEqual,
-                        ScalarLongConditionKind::NotEqual => Arm64Condition::Equal,
-                        ScalarLongConditionKind::LessThan => Arm64Condition::GreaterOrEqual,
-                        ScalarLongConditionKind::LessThanOrEqual => Arm64Condition::GreaterThan,
-                    };
-                    structured_conditional_branches.push((
-                        assembler.conditional_branch_placeholder(false_condition),
+                        lhs: lhs_operand,
+                        rhs: rhs_operand,
                         false_target,
-                    ));
-                }
-                NativeStraightLongOperation::Jump { target } => {
-                    structured_jumps.push((assembler.branch_placeholder(), target));
-                }
+                    } => {
+                        let condition_lhs = emit_straight_long_condition_operand(
+                            &mut assembler,
+                            lhs_operand,
+                            lhs,
+                            auxiliary,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        let condition_rhs = emit_straight_long_condition_operand(
+                            &mut assembler,
+                            rhs_operand,
+                            rhs,
+                            auxiliary,
+                            config.induction_slot,
+                            induction,
+                            &resident_values,
+                        );
+                        assembler.compare_registers(condition_lhs, condition_rhs);
+                        let false_condition = match kind {
+                            ScalarLongConditionKind::Equal => Arm64Condition::NotEqual,
+                            ScalarLongConditionKind::NotEqual => Arm64Condition::Equal,
+                            ScalarLongConditionKind::LessThan => Arm64Condition::GreaterOrEqual,
+                            ScalarLongConditionKind::LessThanOrEqual => Arm64Condition::GreaterThan,
+                        };
+                        structured_conditional_branches.push((
+                            assembler.conditional_branch_placeholder(false_condition),
+                            false_target,
+                        ));
+                    }
+                    NativeStraightLongOperation::Jump { target } => {
+                        structured_jumps.push((assembler.branch_placeholder(), target));
+                    }
                 }
             }
             if keeps_linear_scalar_values_resident {
@@ -3515,15 +3405,11 @@ impl CompiledQuickLongStraightLoop {
                 if deferred_register != usize::MAX {
                     if deferred_register != 0 {
                         if resident_values[deferred_register].1 != result {
-                            assembler.move_register(
-                                resident_values[deferred_register].1,
-                                result,
-                            );
+                            assembler.move_register(resident_values[deferred_register].1, result);
                         }
                         resident_values[deferred_register].0 = output_mask;
                     }
-                    active_exit_masks[deferred_register] =
-                        final_publication_masks[index];
+                    active_exit_masks[deferred_register] = final_publication_masks[index];
                 }
             } else if keeps_structured_scalar_temporaries_resident {
                 resident_values[0].0 = if result == resident_values[0].1 {
@@ -3547,51 +3433,39 @@ impl CompiledQuickLongStraightLoop {
         }
         operation_words[config.operation_count as usize] = assembler.word_count();
 
-        let (increment_overflow_branch, loop_branch, polling_backedge) =
-            if polling_interval.is_some() {
-                if let Some(post_result) = config.post_result {
-                    assembler.store_u64(
-                        induction,
-                        Arm64Register::X0,
-                        long_slot_offset(post_result),
-                    );
-                }
-                if early_induction_increment_operation.is_none() {
-                    assembler.add_immediate(induction, induction, 1);
-                }
-                let backedge = emit_native_polling_backedge(
-                    &mut assembler,
-                    loop_word,
-                    induction,
-                    Arm64Register::X1,
-                    chunk_end,
-                    interval,
-                    remaining,
-                    interrupt_pointer,
-                    interrupt_value,
-                )?;
-                (None, None, Some(backedge))
-            } else {
-                assembler.add_register_checked(result, induction, one);
-                let increment_overflow =
-                    assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
-                if let Some(post_result) = config.post_result {
-                    assembler.store_u64(
-                        induction,
-                        Arm64Register::X0,
-                        long_slot_offset(post_result),
-                    );
-                }
-                assembler.move_register(induction, result);
-                assembler.subtract_register_checked(
-                    Arm64Register::X1,
-                    Arm64Register::X1,
-                    one,
-                );
-                let backedge =
-                    assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
-                (Some(increment_overflow), Some(backedge), None)
-            };
+        let (increment_overflow_branch, loop_branch, polling_backedge) = if polling_interval
+            .is_some()
+        {
+            if let Some(post_result) = config.post_result {
+                assembler.store_u64(induction, Arm64Register::X0, long_slot_offset(post_result));
+            }
+            if early_induction_increment_operation.is_none() {
+                assembler.add_immediate(induction, induction, 1);
+            }
+            let backedge = emit_native_polling_backedge(
+                &mut assembler,
+                loop_word,
+                induction,
+                Arm64Register::X1,
+                chunk_end,
+                interval,
+                remaining,
+                interrupt_pointer,
+                interrupt_value,
+            )?;
+            (None, None, Some(backedge))
+        } else {
+            assembler.add_register_checked(result, induction, one);
+            let increment_overflow =
+                assembler.conditional_branch_placeholder(Arm64Condition::Overflow);
+            if let Some(post_result) = config.post_result {
+                assembler.store_u64(induction, Arm64Register::X0, long_slot_offset(post_result));
+            }
+            assembler.move_register(induction, result);
+            assembler.subtract_register_checked(Arm64Register::X1, Arm64Register::X1, one);
+            let backedge = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+            (Some(increment_overflow), Some(backedge), None)
+        };
 
         let chunk_exhausted_word = assembler.word_count();
         for (slot_mask, register) in deferred_exit_values
@@ -3677,8 +3551,8 @@ impl CompiledQuickLongStraightLoop {
             }
         }
         for (branch, operation_index) in operation_side_exit_branches {
-            let target = operation_exit_words[operation_index as usize]
-                .expect("operation side exit stub");
+            let target =
+                operation_exit_words[operation_index as usize].expect("operation side exit stub");
             if !assembler.patch_conditional_branch(branch, target) {
                 return Err(QuickLongAccumulateJitError::BranchOutOfRange);
             }
@@ -3722,8 +3596,7 @@ impl CompiledQuickLongStraightLoop {
         }
         let mut control = std::mem::MaybeUninit::<NativeStraightLongLoopControl>::uninit();
         unsafe {
-            std::ptr::addr_of_mut!((*control.as_mut_ptr()).failed_operation)
-                .write(u64::MAX);
+            std::ptr::addr_of_mut!((*control.as_mut_ptr()).failed_operation).write(u64::MAX);
             self.call_with_control(slots, iteration_budget, control.as_mut_ptr())
         }
     }
@@ -3772,8 +3645,7 @@ impl CompiledQuickLongStraightLoop {
         let function: NativeFunction = unsafe { std::mem::transmute(self.memory.entry()) };
         let mut control = std::mem::MaybeUninit::<NativeStraightLongLoopControl>::uninit();
         unsafe {
-            std::ptr::addr_of_mut!((*control.as_mut_ptr()).failed_operation)
-                .write(u64::MAX);
+            std::ptr::addr_of_mut!((*control.as_mut_ptr()).failed_operation).write(u64::MAX);
             let status = function(
                 slots.as_mut_ptr(),
                 exclusive_induction_end as u64,
@@ -3791,11 +3663,8 @@ impl CompiledQuickLongStraightLoop {
         iteration_budget: u64,
         control: *mut NativeStraightLongLoopControl,
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
-        type NativeFunction = unsafe extern "C" fn(
-            *mut i64,
-            u64,
-            *mut NativeStraightLongLoopControl,
-        ) -> u32;
+        type NativeFunction =
+            unsafe extern "C" fn(*mut i64, u64, *mut NativeStraightLongLoopControl) -> u32;
         let function: NativeFunction = std::mem::transmute(self.memory.entry());
         let status = function(slots.as_mut_ptr(), iteration_budget, control);
         self.decode_result(status, control)
@@ -3808,9 +3677,7 @@ impl CompiledQuickLongStraightLoop {
     ) -> Result<NativeStraightLongLoopResult, QuickLongAccumulateJitError> {
         let outcome = match status {
             NATIVE_LONG_ACCUMULATE_COMPLETED => NativeStraightLongLoopOutcome::Completed,
-            NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => {
-                NativeStraightLongLoopOutcome::ChunkExhausted
-            }
+            NATIVE_LONG_ACCUMULATE_CHUNK_EXHAUSTED => NativeStraightLongLoopOutcome::ChunkExhausted,
             NATIVE_LONG_STRAIGHT_OPERATION_SIDE_EXIT => {
                 NativeStraightLongLoopOutcome::OperationSideExit
             }
@@ -3820,12 +3687,10 @@ impl CompiledQuickLongStraightLoop {
             status => return Err(QuickLongAccumulateJitError::InvalidNativeStatus(status)),
         };
         let failed_operation = if outcome == NativeStraightLongLoopOutcome::OperationSideExit {
-            let failed_operation = unsafe {
-                std::ptr::addr_of!((*control).failed_operation).read()
-            };
-            let operation = u8::try_from(failed_operation).map_err(|_| {
-                QuickLongAccumulateJitError::InvalidNativeStatus(status)
-            })?;
+            let failed_operation =
+                unsafe { std::ptr::addr_of!((*control).failed_operation).read() };
+            let operation = u8::try_from(failed_operation)
+                .map_err(|_| QuickLongAccumulateJitError::InvalidNativeStatus(status))?;
             if operation >= self.config.operation_count {
                 return Err(QuickLongAccumulateJitError::InvalidNativeStatus(status));
             }
@@ -3896,9 +3761,7 @@ fn validate_straight_long_loop_config(
                     "an active straight-loop operation is unused",
                 ));
             }
-            NativeStraightLongOperation::Modulo {
-                value, result, ..
-            } => {
+            NativeStraightLongOperation::Modulo { value, result, .. } => {
                 validate_straight_long_operand(value)?;
                 validate_straight_long_output(result, config.induction_slot)?;
                 output_mask |= 1u64 << result;
@@ -3994,9 +3857,7 @@ fn validate_straight_long_loop_config(
                 }
             }
             NativeStraightLongOperation::Jump { target } => {
-                if target as usize <= index
-                    || target as usize > config.operation_count as usize
-                {
+                if target as usize <= index || target as usize > config.operation_count as usize {
                     return Err(QuickLongAccumulateJitError::InvalidProgram(
                         "straight-loop jump target is not forward and in range",
                     ));
@@ -4032,8 +3893,7 @@ fn validate_straight_context_input(
     token_count: u8,
 ) -> Result<(), QuickLongAccumulateJitError> {
     validate_straight_token_input(key, token_count)?;
-    if usize::from(entry_base) + usize::from(token_count)
-        > NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
+    if usize::from(entry_base) + usize::from(token_count) > NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
     {
         return Err(QuickLongAccumulateJitError::InvalidProgram(
             "straight-loop hash context exceeds the native entry table",
@@ -4132,8 +3992,8 @@ fn emit_straight_binary(
     operation_index: u8,
     side_exit_branches: &mut Vec<(usize, u8)>,
 ) -> Result<(), QuickLongAccumulateJitError> {
-    if let Some((add, immediate)) = rhs_constant
-        .and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
+    if let Some((add, immediate)) =
+        rhs_constant.and_then(|constant| straight_binary_add_sub_immediate(kind, constant))
     {
         if check_side_exits {
             if add {
@@ -4209,9 +4069,7 @@ fn emit_straight_binary(
         }
         ScalarLongOpKind::Modulo => {
             if let Some(mask) = rhs_constant.and_then(signed_power_of_two_remainder_mask) {
-                emit_signed_power_of_two_remainder(
-                    assembler, lhs, mask, result, rhs, auxiliary,
-                );
+                emit_signed_power_of_two_remainder(assembler, lhs, mask, result, rhs, auxiliary);
             } else {
                 if check_side_exits {
                     emit_straight_division_guards(
@@ -4257,8 +4115,7 @@ fn emit_straight_division_guards(
 
     assembler.move_immediate(guard, -1);
     assembler.compare_registers(rhs, guard);
-    let not_minus_one =
-        assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
+    let not_minus_one = assembler.conditional_branch_placeholder(Arm64Condition::NotEqual);
     assembler.move_immediate(guard, i64::MIN);
     assembler.compare_registers(lhs, guard);
     side_exit_branches.push((
@@ -4320,11 +4177,9 @@ fn emit_straight_long_operand(
         QuickLongOperand::Slot(slot) if slot == induction_slot => {
             assembler.move_register(destination, induction);
         }
-        QuickLongOperand::Slot(slot) => assembler.load_u64(
-            destination,
-            Arm64Register::X0,
-            long_slot_offset(slot),
-        ),
+        QuickLongOperand::Slot(slot) => {
+            assembler.load_u64(destination, Arm64Register::X0, long_slot_offset(slot))
+        }
         QuickLongOperand::Const(value) => assembler.move_immediate(destination, value),
     }
 }
@@ -4349,13 +4204,7 @@ pub(super) fn emit_straight_long_operand_with_resident(
             return *resident;
         }
     }
-    emit_straight_long_operand(
-        assembler,
-        operand,
-        destination,
-        induction_slot,
-        induction,
-    );
+    emit_straight_long_operand(assembler, operand, destination, induction_slot, induction);
     destination
 }
 
@@ -4398,11 +4247,7 @@ fn emit_straight_token_immediate_select(
         operation_index,
     ));
     let selected_word = assembler.word_count();
-    for branch in selected_branches
-        .iter()
-        .copied()
-        .take(token_count as usize)
-    {
+    for branch in selected_branches.iter().copied().take(token_count as usize) {
         if !assembler.patch_branch(branch, selected_word) {
             return Err(QuickLongAccumulateJitError::BranchOutOfRange);
         }
@@ -4460,11 +4305,7 @@ fn emit_straight_context_entry_select(
         operation_index,
     ));
     let selected_word = assembler.word_count();
-    for branch in selected_branches
-        .iter()
-        .copied()
-        .take(token_count as usize)
-    {
+    for branch in selected_branches.iter().copied().take(token_count as usize) {
         if !assembler.patch_branch(branch, selected_word) {
             return Err(QuickLongAccumulateJitError::BranchOutOfRange);
         }
@@ -4503,13 +4344,7 @@ fn emit_straight_long_condition_operand(
             );
         }
         NativeStraightLongConditionOperand::Source(source) => {
-            emit_straight_long_operand(
-                assembler,
-                source,
-                destination,
-                induction_slot,
-                induction,
-            );
+            emit_straight_long_operand(assembler, source, destination, induction_slot, induction);
         }
         NativeStraightLongConditionOperand::BitwiseAnd { lhs, rhs } => {
             let lhs_register = emit_straight_long_operand_with_resident(
@@ -4563,8 +4398,7 @@ pub struct QuickLongOpsJitCache {
     conditional_range_proven_polling_compiled:
         OnceCell<Option<CompiledQuickLongConditionalAccumulateLoop>>,
     straight_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
-    straight_range_proven_polling_compiled:
-        OnceCell<Option<CompiledQuickLongStraightLoop>>,
+    straight_range_proven_polling_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
     native_entries: Cell<u64>,
     native_calls: Cell<u64>,
     native_chunks: Cell<u64>,
@@ -4606,11 +4440,8 @@ impl QuickLongOpsJitCache {
         interrupt_flag: *const bool,
         safepoint_interval: u16,
     ) -> Option<Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError>> {
-        let (bound, first_chunk_end) = conditional_long_nonempty_chunk_end(
-            config,
-            slots,
-            u64::from(safepoint_interval),
-        )?;
+        let (bound, first_chunk_end) =
+            conditional_long_nonempty_chunk_end(config, slots, u64::from(safepoint_interval))?;
         let program = self
             .conditional_range_proven_polling_compiled
             .get_or_init(|| {
@@ -4626,22 +4457,15 @@ impl QuickLongOpsJitCache {
         let before_induction = slots[config.induction_slot as usize];
         self.native_calls
             .set(self.native_calls.get().saturating_add(1));
-        let outcome = program.call_range_proven_polling(
-            slots,
-            bound,
-            interrupt_flag,
-            first_chunk_end,
-        );
-        let completed_iterations = (slots[config.induction_slot as usize] as u64)
-            .wrapping_sub(before_induction as u64);
+        let outcome =
+            program.call_range_proven_polling(slots, bound, interrupt_flag, first_chunk_end);
+        let completed_iterations =
+            (slots[config.induction_slot as usize] as u64).wrapping_sub(before_induction as u64);
         let completed_chunks = completed_iterations
             .div_ceil(u64::from(safepoint_interval))
             .max(1);
-        self.native_chunks.set(
-            self.native_chunks
-                .get()
-                .saturating_add(completed_chunks),
-        );
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(completed_chunks));
         self.range_proven_chunks.set(
             self.range_proven_chunks
                 .get()
@@ -4667,9 +4491,7 @@ impl QuickLongOpsJitCache {
     ) -> Result<NativeConditionalLongLoopResult, QuickLongAccumulateJitError> {
         let Some(program) = self
             .conditional_compiled
-            .get_or_init(|| {
-                CompiledQuickLongConditionalAccumulateLoop::compile(config).ok()
-            })
+            .get_or_init(|| CompiledQuickLongConditionalAccumulateLoop::compile(config).ok())
             .as_ref()
         else {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
@@ -4742,7 +4564,7 @@ impl QuickLongOpsJitCache {
         (program.config() == *config
             && program.publication_mask() == publication_mask
             && program.carried_mask() == carried_mask)
-        .then_some(program)
+            .then_some(program)
     }
 
     pub(crate) fn dispatch_prepared_proven_straight_remaining(
@@ -4760,27 +4582,19 @@ impl QuickLongOpsJitCache {
         }
         let distance = (bound as u64).wrapping_sub(induction as u64);
         let first_iterations = distance.min(u64::from(safepoint_interval));
-        let first_chunk_end =
-            (induction as u64).wrapping_add(first_iterations) as i64;
+        let first_chunk_end = (induction as u64).wrapping_add(first_iterations) as i64;
 
         self.native_calls
             .set(self.native_calls.get().saturating_add(1));
-        let outcome = program.call_range_proven_polling(
-            slots,
-            bound,
-            interrupt_flag,
-            first_chunk_end,
-        );
-        let completed_iterations = (slots[config.induction_slot as usize] as u64)
-            .wrapping_sub(induction as u64);
+        let outcome =
+            program.call_range_proven_polling(slots, bound, interrupt_flag, first_chunk_end);
+        let completed_iterations =
+            (slots[config.induction_slot as usize] as u64).wrapping_sub(induction as u64);
         let completed_chunks = completed_iterations
             .div_ceil(u64::from(safepoint_interval))
             .max(1);
-        self.native_chunks.set(
-            self.native_chunks
-                .get()
-                .saturating_add(completed_chunks),
-        );
+        self.native_chunks
+            .set(self.native_chunks.get().saturating_add(completed_chunks));
         self.range_proven_chunks.set(
             self.range_proven_chunks
                 .get()
@@ -5121,8 +4935,7 @@ impl CompiledScalarLongProgram {
                 ScalarLongConditionKind::LessThan => Arm64Condition::GreaterOrEqual,
                 ScalarLongConditionKind::LessThanOrEqual => Arm64Condition::GreaterThan,
             };
-            let selected_false_branch =
-                assembler.conditional_branch_placeholder(false_condition);
+            let selected_false_branch = assembler.conditional_branch_placeholder(false_condition);
 
             emit_scalar_operations(
                 &mut assembler,
@@ -5360,12 +5173,7 @@ fn emit_scalar_operations(
     side_exit_branches: &mut Vec<usize>,
 ) -> Result<(), ScalarLongJitError> {
     for (index, operation) in operations[start..end].iter().copied().enumerate() {
-        emit_scalar_operation(
-            assembler,
-            start + index,
-            operation,
-            side_exit_branches,
-        )?;
+        emit_scalar_operation(assembler, start + index, operation, side_exit_branches)?;
     }
     Ok(())
 }
@@ -5395,10 +5203,7 @@ fn emit_scalar_operation(
             assembler.multiply_register(destination, lhs, rhs);
             assembler.signed_multiply_high(Arm64Register::from_code(2), lhs, rhs);
             assembler.arithmetic_shift_right(Arm64Register::from_code(3), destination, 63);
-            assembler.compare_registers(
-                Arm64Register::from_code(2),
-                Arm64Register::from_code(3),
-            );
+            assembler.compare_registers(Arm64Register::from_code(2), Arm64Register::from_code(3));
             side_exit_branches
                 .push(assembler.conditional_branch_placeholder(Arm64Condition::NotEqual));
         }

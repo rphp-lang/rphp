@@ -297,11 +297,8 @@ impl CompiledScalarDoubleProgram {
 fn validate_scalar_double_plan(
     plan: &ScalarDoubleFunctionPlan,
 ) -> Result<(), ScalarDoubleJitError> {
-    plan.validate_register_program(
-        MAX_SCALAR_DOUBLE_INPUTS,
-        MAX_SCALAR_DOUBLE_OPERATIONS,
-    )
-    .map_err(ScalarDoubleJitError::InvalidProgram)
+    plan.validate_register_program(MAX_SCALAR_DOUBLE_INPUTS, MAX_SCALAR_DOUBLE_OPERATIONS)
+        .map_err(ScalarDoubleJitError::InvalidProgram)
 }
 
 fn emit_scalar_double_operations(

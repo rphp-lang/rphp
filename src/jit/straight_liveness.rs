@@ -1,6 +1,6 @@
 use super::{
-    NativeStraightLongConditionOperand, NativeStraightLongLoopConfig, NativeStraightLongOperation,
-    QuickLongOperand, NATIVE_STRAIGHT_LONG_MAX_OPERATIONS,
+    NATIVE_STRAIGHT_LONG_MAX_OPERATIONS, NativeStraightLongConditionOperand,
+    NativeStraightLongLoopConfig, NativeStraightLongOperation, QuickLongOperand,
     straight_long_best_invariant_slot_masks, straight_long_operation_input_mask,
 };
 
@@ -87,8 +87,7 @@ fn straight_long_operation_dominates_exit(
     candidate: usize,
 ) -> bool {
     let operation_count = config.operation_count as usize;
-    let mut reachable_without_candidate =
-        [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
+    let mut reachable_without_candidate = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS + 1];
     reachable_without_candidate[0] = true;
     for index in 0..operation_count {
         if !reachable_without_candidate[index] || index == candidate {
@@ -171,12 +170,7 @@ pub(crate) fn straight_long_structured_definitely_written(
         match config.operations[index] {
             NativeStraightLongOperation::BranchUnless { false_target, .. } => {
                 merge_forward_fact(&mut incoming, &mut reachable, index + 1, after);
-                merge_forward_fact(
-                    &mut incoming,
-                    &mut reachable,
-                    false_target as usize,
-                    after,
-                );
+                merge_forward_fact(&mut incoming, &mut reachable, false_target as usize, after);
             }
             NativeStraightLongOperation::Jump { target } => {
                 merge_forward_fact(&mut incoming, &mut reachable, target as usize, after);
@@ -232,9 +226,8 @@ pub(crate) fn straight_long_structured_local_resident_output_masks(
     let operation_count = config.operation_count as usize;
     let mut resident_masks = [0u64; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     for producer in 0..operation_count {
-        let mut candidates = config.operations[producer].shadow_output_mask()
-            & !publication_mask
-            & !carried_mask;
+        let mut candidates =
+            config.operations[producer].shadow_output_mask() & !publication_mask & !carried_mask;
         while candidates != 0 {
             let slot_mask = 1u64 << candidates.trailing_zeros();
             candidates &= candidates - 1;
@@ -374,7 +367,10 @@ mod tests {
             operation_count: 7,
             post_result: None,
         };
-        assert_eq!(straight_long_early_induction_increment_operation(&config), Some(6));
+        assert_eq!(
+            straight_long_early_induction_increment_operation(&config),
+            Some(6)
+        );
 
         let mut materializes_post_increment = config;
         materializes_post_increment.post_result = Some(8);
@@ -566,8 +562,7 @@ mod tests {
             rhs: NativeStraightLongConditionOperand::Source(QuickLongOperand::Const(50)),
             false_target: 6,
         };
-        let (partial_before, partial_exit) =
-            straight_long_structured_definitely_written(&partial);
+        let (partial_before, partial_exit) = straight_long_structured_definitely_written(&partial);
         assert_eq!(partial_before[6] & (1u64 << 1), 0);
         assert_eq!(partial_exit & (1u64 << 1), 0);
         assert_ne!(partial_exit & (1u64 << 2), 0);
@@ -1041,7 +1036,10 @@ mod tests {
             super::super::NativeStraightLongLoopOutcome::Completed
         );
         assert_eq!(never_slots[1], 10);
-        assert_eq!(never_slots[2], 777, "skipped result alias must remain untouched");
+        assert_eq!(
+            never_slots[2], 777,
+            "skipped result alias must remain untouched"
+        );
         assert_eq!(never_slots[3], 95);
     }
 
@@ -1131,7 +1129,10 @@ mod tests {
         assert_eq!(slots[0], 1_024);
         assert_eq!(slots[1], 4_035);
         assert_eq!(slots[3], 1_019);
-        assert_eq!((slots[2], slots[4], slots[6], slots[7]), (222, 444, 666, 777));
+        assert_eq!(
+            (slots[2], slots[4], slots[6], slots[7]),
+            (222, 444, 666, 777)
+        );
 
         interrupt.store(false, Ordering::Relaxed);
         let completed = program
@@ -1144,7 +1145,10 @@ mod tests {
         assert_eq!(slots[0], 10_000);
         assert_eq!(slots[1], 4_035);
         assert_eq!(slots[3], 9_995);
-        assert_eq!((slots[2], slots[4], slots[6], slots[7]), (222, 444, 666, 777));
+        assert_eq!(
+            (slots[2], slots[4], slots[6], slots[7]),
+            (222, 444, 666, 777)
+        );
     }
 
     #[cfg(all(target_arch = "aarch64", target_os = "macos"))]
@@ -1364,8 +1368,7 @@ mod tests {
             operation_count: 5,
             post_result: None,
         };
-        let publication_mask =
-            (1u64 << 10) | (1u64 << 11) | (1u64 << 12) | (1u64 << 13);
+        let publication_mask = (1u64 << 10) | (1u64 << 11) | (1u64 << 12) | (1u64 << 13);
         let program = super::super::CompiledQuickLongStraightLoop::compile_range_proven_polling_with_publication(
             config,
             1_024,
@@ -1584,10 +1587,7 @@ mod tests {
             .chunks_exact(4)
             .map(|bytes| u32::from_le_bytes(bytes.try_into().unwrap()))
             .collect::<Vec<_>>();
-        assert_eq!(
-            words.iter().filter(|&&word| word == 0xf940_0c0a).count(),
-            1
-        );
+        assert_eq!(words.iter().filter(|&&word| word == 0xf940_0c0a).count(), 1);
         assert!(!words.contains(&0xf940_1009));
         assert!(words.contains(&0xf940_1007));
 

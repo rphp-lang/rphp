@@ -9,20 +9,25 @@
 ///   - `arg_float!(ed, N)` → f64 (type-juggling)
 ///   - `arg_opt!(ed, N)` → Option<&Value> (None if Undef — for optional params)
 ///   - `ret!(rv, expr)` → writes to return_value with null check
-
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
-use crate::value::{Value, ValueType, PhpArray, ArrayKey};
+use crate::compiler::{
+    make_direct_internal_function, make_internal_function, make_internal_function_ref,
+    make_internal_function_variadic, make_internal_method,
+};
+use crate::parser::Visibility;
+use crate::runtime::ExecutorGlobals;
+use crate::value::{ArrayKey, PhpArray, Value, ValueType};
+use crate::vm::execute::{
+    VmError, call_function, call_function_iter, call_function_owned_iter,
+    call_function_readback_arg0_iter,
+};
 use crate::vm::frame::ExecuteData;
+use crate::vm::function::InternalFunction;
 use crate::vm::function::{FunctionCommon, FunctionType};
 use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
-use crate::runtime::ExecutorGlobals;
-use crate::compiler::{make_direct_internal_function, make_internal_function, make_internal_function_ref, make_internal_function_variadic, make_internal_method};
-use crate::vm::function::InternalFunction;
-use crate::vm::execute::{call_function, call_function_iter, call_function_owned_iter, call_function_readback_arg0_iter, VmError};
-use crate::parser::Visibility;
 
 mod json_decode;
 
@@ -35,7 +40,11 @@ mod json_decode;
 macro_rules! arg {
     ($ed:expr, $n:expr) => {{
         let v = unsafe { (*$ed).cv($n) };
-        if v.is_reference() { unsafe { &*v.as_ref_ptr() } } else { v }
+        if v.is_reference() {
+            unsafe { &*v.as_ref_ptr() }
+        } else {
+            v
+        }
     }};
 }
 
@@ -44,7 +53,11 @@ macro_rules! arg {
 macro_rules! arg_mut {
     ($ed:expr, $n:expr) => {{
         let ptr = unsafe { (*$ed).cv_mut($n) as *mut Value };
-        if unsafe { (*ptr).is_reference() } { unsafe { (*ptr).as_ref_ptr() } } else { ptr }
+        if unsafe { (*ptr).is_reference() } {
+            unsafe { (*ptr).as_ref_ptr() }
+        } else {
+            ptr
+        }
     }};
 }
 
@@ -77,7 +90,11 @@ macro_rules! arg_float {
 macro_rules! arg_opt {
     ($ed:expr, $n:expr) => {{
         let v = arg!($ed, $n);
-        if v.value_type() == ValueType::Undef { None } else { Some(v) }
+        if v.value_type() == ValueType::Undef {
+            None
+        } else {
+            Some(v)
+        }
     }};
 }
 
@@ -180,11 +197,9 @@ pub(crate) fn invoke_direct_internal1(
         DirectInternalKind::Acos => direct_acos(args),
         DirectInternalKind::Atan => direct_atan(args),
         DirectInternalKind::Exp => direct_exp(args),
-        DirectInternalKind::Intdiv | DirectInternalKind::JsonDecode => {
-            Err(VmError::Fatal(
-                "Invalid unary invocation of binary direct builtin".into(),
-            ))
-        }
+        DirectInternalKind::Intdiv | DirectInternalKind::JsonDecode => Err(VmError::Fatal(
+            "Invalid unary invocation of binary direct builtin".into(),
+        )),
     }
 }
 
@@ -314,21 +329,52 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("array_push", fn_array_push, 2, 2, 0b1, "array", "value");
     reg_ref!("array_pop", fn_array_pop, 1, 1, 0b1, "array");
     reg_ref!("array_shift", fn_array_shift, 1, 1, 0b1, "array");
-    reg_ref!("array_unshift", fn_array_unshift, 2, 2, 0b1, "array", "value");
-    reg!("array_key_exists", fn_array_key_exists, 2, 2, "key", "array");
+    reg_ref!(
+        "array_unshift",
+        fn_array_unshift,
+        2,
+        2,
+        0b1,
+        "array",
+        "value"
+    );
+    reg!(
+        "array_key_exists",
+        fn_array_key_exists,
+        2,
+        2,
+        "key",
+        "array"
+    );
     reg!("in_array", fn_in_array, 2, 2, "needle", "haystack");
     reg!("array_reverse", fn_array_reverse, 1, 1, "array");
     reg!("array_merge", fn_array_merge, 2, 2, "array1", "array2");
     reg!("array_keys", fn_array_keys, 1, 1, "array");
     reg!("array_values", fn_array_values, 1, 1, "array");
-    reg!("array_slice", fn_array_slice, 3, 2, "array", "offset", "length");
+    reg!(
+        "array_slice",
+        fn_array_slice,
+        3,
+        2,
+        "array",
+        "offset",
+        "length"
+    );
     reg!("array_unique", fn_array_unique, 1, 1, "array");
     reg!("array_flip", fn_array_flip, 1, 1, "array");
     reg!("array_combine", fn_array_combine, 2, 2, "keys", "values");
     reg!("array_sum", fn_array_sum, 1, 1, "array");
     reg!("array_product", fn_array_product, 1, 1, "array");
     reg!("array_count_values", fn_array_count_values, 1, 1, "array");
-    reg!("array_fill", fn_array_fill, 3, 3, "start_index", "count", "value");
+    reg!(
+        "array_fill",
+        fn_array_fill,
+        3,
+        3,
+        "start_index",
+        "count",
+        "value"
+    );
     reg!("array_pad", fn_array_pad, 3, 3, "array", "length", "value");
     reg!("array_chunk", fn_array_chunk, 2, 2, "array", "length");
     reg!("array_column", fn_array_column, 2, 2, "array", "column_key");
@@ -336,7 +382,17 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!("rsort", fn_rsort, 1, 1, 0b1, "array");
     reg!("array_search", fn_array_search, 2, 2, "needle", "haystack");
     reg!("range", fn_range, 2, 2, "start", "end");
-    reg_ref!("array_splice", fn_array_splice, 4, 2, 0b1, "array", "offset", "length", "replacement");
+    reg_ref!(
+        "array_splice",
+        fn_array_splice,
+        4,
+        2,
+        0b1,
+        "array",
+        "offset",
+        "length",
+        "replacement"
+    );
     reg!("array_rand", fn_array_rand, 1, 1, "array");
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
     reg!("array_map", fn_array_map, 2, 2, "callback", "array");
@@ -348,9 +404,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("substr", fn_substr, 3, 2, "string", "offset", "length");
     reg!("strpos", fn_strpos, 2, 2, "haystack", "needle");
     reg!("strrpos", fn_strrpos, 2, 2, "haystack", "needle");
-    reg!("str_replace", fn_str_replace, 3, 3, "search", "replace", "subject");
-    reg_direct!("strtolower", fn_strtolower, direct_strtolower, 1, 1, "string");
-    reg_direct!("strtoupper", fn_strtoupper, direct_strtoupper, 1, 1, "string");
+    reg!(
+        "str_replace",
+        fn_str_replace,
+        3,
+        3,
+        "search",
+        "replace",
+        "subject"
+    );
+    reg_direct!(
+        "strtolower",
+        fn_strtolower,
+        direct_strtolower,
+        1,
+        1,
+        "string"
+    );
+    reg_direct!(
+        "strtoupper",
+        fn_strtoupper,
+        direct_strtoupper,
+        1,
+        1,
+        "string"
+    );
     reg!("trim", fn_trim, 1, 1, "string");
     reg!("rtrim", fn_rtrim, 1, 1, "string");
     reg!("ltrim", fn_ltrim, 1, 1, "string");
@@ -360,24 +438,81 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
     reg!("substr_count", fn_substr_count, 2, 2, "haystack", "needle");
     reg!("str_contains", fn_str_contains, 2, 2, "haystack", "needle");
-    reg!("str_starts_with", fn_str_starts_with, 2, 2, "haystack", "needle");
-    reg!("str_ends_with", fn_str_ends_with, 2, 2, "haystack", "needle");
-    reg!("str_pad", fn_str_pad, 3, 2, "string", "length", "pad_string");
+    reg!(
+        "str_starts_with",
+        fn_str_starts_with,
+        2,
+        2,
+        "haystack",
+        "needle"
+    );
+    reg!(
+        "str_ends_with",
+        fn_str_ends_with,
+        2,
+        2,
+        "haystack",
+        "needle"
+    );
+    reg!(
+        "str_pad",
+        fn_str_pad,
+        3,
+        2,
+        "string",
+        "length",
+        "pad_string"
+    );
     reg!("str_split", fn_str_split, 2, 1, "string", "length");
     reg!("ucfirst", fn_ucfirst, 1, 1, "string");
     reg!("lcfirst", fn_lcfirst, 1, 1, "string");
     reg!("str_word_count", fn_str_word_count, 1, 1, "string");
-    reg!("wordwrap", fn_wordwrap, 4, 1, "string", "width", "break_str", "cut_long_words");
+    reg!(
+        "wordwrap",
+        fn_wordwrap,
+        4,
+        1,
+        "string",
+        "width",
+        "break_str",
+        "cut_long_words"
+    );
     reg!("nl2br", fn_nl2br, 1, 1, "string");
     reg!("str_rev", fn_str_rev, 1, 1, "string");
-    reg!("number_format", fn_number_format, 4, 1, "num", "decimals", "decimal_separator", "thousands_separator");
+    reg!(
+        "number_format",
+        fn_number_format,
+        4,
+        1,
+        "num",
+        "decimals",
+        "decimal_separator",
+        "thousands_separator"
+    );
     reg_direct!("ord", fn_ord, direct_ord, 1, 1, "character");
     reg!("chr", fn_chr, 1, 1, "codepoint");
     reg_var!("sprintf", fn_sprintf, 1, "format");
 
     // --- Regex functions ---
-    reg_ref!("preg_match", fn_preg_match, 3, 2, 0b100, "pattern", "subject", "matches");
-    reg!("preg_replace", fn_preg_replace, 3, 3, "pattern", "replacement", "subject");
+    reg_ref!(
+        "preg_match",
+        fn_preg_match,
+        3,
+        2,
+        0b100,
+        "pattern",
+        "subject",
+        "matches"
+    );
+    reg!(
+        "preg_replace",
+        fn_preg_replace,
+        3,
+        3,
+        "pattern",
+        "replacement",
+        "subject"
+    );
 
     // --- Type functions ---
     reg!("intval", fn_intval, 1, 1, "value");
@@ -400,8 +535,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Reflection / class introspection ---
     reg!("get_class", fn_get_class, 1, 0, "object");
-    reg!("class_exists", fn_class_exists, 2, 1, "class_name", "autoload");
-    reg!("method_exists", fn_method_exists, 2, 2, "object_or_class", "method");
+    reg!(
+        "class_exists",
+        fn_class_exists,
+        2,
+        1,
+        "class_name",
+        "autoload"
+    );
+    reg!(
+        "method_exists",
+        fn_method_exists,
+        2,
+        2,
+        "object_or_class",
+        "method"
+    );
 
     // --- Math functions ---
     reg_direct!("abs", fn_abs, direct_abs, 1, 1, "num");
@@ -412,7 +561,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("round", fn_round, 2, 1, "num", "precision");
     reg!("pow", fn_pow, 2, 2, "base", "exponent");
     reg_direct!("sqrt", fn_sqrt, direct_sqrt, 1, 1, "num");
-    reg_direct!("intdiv", fn_intdiv, direct_intdiv, 2, 2, "dividend", "divisor");
+    reg_direct!(
+        "intdiv",
+        fn_intdiv,
+        direct_intdiv,
+        2,
+        2,
+        "dividend",
+        "divisor"
+    );
     reg!("fmod", fn_fmod, 2, 2, "x", "y");
     reg!("log", fn_log, 1, 1, "num");
     reg!("log10", fn_log10, 1, 1, "num");
@@ -433,7 +590,15 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- JSON ---
     reg!("json_encode", fn_json_encode, 1, 1, "value");
-    reg_direct!("json_decode", fn_json_decode, direct_json_decode, 2, 1, "json", "associative");
+    reg_direct!(
+        "json_decode",
+        fn_json_decode,
+        direct_json_decode,
+        2,
+        1,
+        "json",
+        "associative"
+    );
 
     // --- Misc ---
     reg!("isset_func", fn_isset_func, 1, 1, "value");
@@ -442,7 +607,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Callable functions ---
     reg_var!("call_user_func", fn_call_user_func, 1, "callback");
-    reg!("call_user_func_array", fn_call_user_func_array, 2, 2, "callback", "args");
+    reg!(
+        "call_user_func_array",
+        fn_call_user_func_array,
+        2,
+        2,
+        "callback",
+        "args"
+    );
     reg!("is_callable", fn_is_callable, 1, 1, "value");
     reg!("is_scalar", fn_is_scalar, 1, 1, "value");
     reg!("function_exists", fn_function_exists, 1, 1, "function");
@@ -452,7 +624,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("hrtime", fn_hrtime, 1, 0, "as_nanoseconds");
     reg!("time", fn_time, 0, 0);
     reg!("date", fn_date, 2, 1, "format", "timestamp");
-    reg!("mktime", fn_mktime, 6, 1, "hour", "minute", "second", "month", "day", "year");
+    reg!(
+        "mktime", fn_mktime, 6, 1, "hour", "minute", "second", "month", "day", "year"
+    );
 
     // --- exit / die ---
     reg!("exit", fn_exit, 1, 0, "status");
@@ -460,7 +634,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Filesystem ---
     reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");
-    reg!("file_put_contents", fn_file_put_contents, 2, 2, "filename", "data");
+    reg!(
+        "file_put_contents",
+        fn_file_put_contents,
+        2,
+        2,
+        "filename",
+        "data"
+    );
     reg!("file_exists", fn_file_exists, 1, 1, "filename");
     reg!("is_file", fn_is_file, 1, 1, "filename");
     reg!("is_dir", fn_is_dir, 1, 1, "filename");
@@ -485,16 +666,55 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // --- URL / query ---
     reg!("parse_url", fn_parse_url, 2, 1, "url", "component");
     reg_ref!("parse_str", fn_parse_str, 2, 2, 0b10, "string", "result");
-    reg!("http_build_query", fn_http_build_query, 3, 1, "data", "numeric_prefix", "arg_separator");
+    reg!(
+        "http_build_query",
+        fn_http_build_query,
+        3,
+        1,
+        "data",
+        "numeric_prefix",
+        "arg_separator"
+    );
 
     // --- Regex (extended) ---
-    reg_ref!("preg_match_all", fn_preg_match_all, 3, 2, 0b100, "pattern", "subject", "matches");
-    reg!("preg_split", fn_preg_split, 3, 2, "pattern", "subject", "limit");
-    reg!("preg_replace_callback", fn_preg_replace_callback, 3, 3, "pattern", "callback", "subject");
+    reg_ref!(
+        "preg_match_all",
+        fn_preg_match_all,
+        3,
+        2,
+        0b100,
+        "pattern",
+        "subject",
+        "matches"
+    );
+    reg!(
+        "preg_split",
+        fn_preg_split,
+        3,
+        2,
+        "pattern",
+        "subject",
+        "limit"
+    );
+    reg!(
+        "preg_replace_callback",
+        fn_preg_replace_callback,
+        3,
+        3,
+        "pattern",
+        "callback",
+        "subject"
+    );
 
     // --- String encoding ---
     reg!("htmlspecialchars", fn_htmlspecialchars, 1, 1, "string");
-    reg!("htmlspecialchars_decode", fn_htmlspecialchars_decode, 1, 1, "string");
+    reg!(
+        "htmlspecialchars_decode",
+        fn_htmlspecialchars_decode,
+        1,
+        1,
+        "string"
+    );
     reg!("htmlentities", fn_htmlentities, 1, 1, "string");
     reg!("urlencode", fn_urlencode, 1, 1, "string");
     reg!("urldecode", fn_urldecode, 1, 1, "string");
@@ -506,16 +726,65 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // --- Case-insensitive string functions ---
     reg!("stripos", fn_stripos, 2, 2, "haystack", "needle");
     reg!("strripos", fn_strripos, 2, 2, "haystack", "needle");
-    reg!("str_ireplace", fn_str_ireplace, 3, 3, "search", "replace", "subject");
-    reg!("substr_replace", fn_substr_replace, 4, 3, "string", "replacement", "start", "length");
-    reg!("str_getcsv", fn_str_getcsv, 3, 1, "string", "separator", "enclosure");
-    reg_direct!("chunk_split", fn_chunk_split, direct_chunk_split, 3, 1, "string", "chunklen", "end");
+    reg!(
+        "str_ireplace",
+        fn_str_ireplace,
+        3,
+        3,
+        "search",
+        "replace",
+        "subject"
+    );
+    reg!(
+        "substr_replace",
+        fn_substr_replace,
+        4,
+        3,
+        "string",
+        "replacement",
+        "start",
+        "length"
+    );
+    reg!(
+        "str_getcsv",
+        fn_str_getcsv,
+        3,
+        1,
+        "string",
+        "separator",
+        "enclosure"
+    );
+    reg_direct!(
+        "chunk_split",
+        fn_chunk_split,
+        direct_chunk_split,
+        3,
+        1,
+        "string",
+        "chunklen",
+        "end"
+    );
 
     // --- Additional array functions ---
-    reg!("array_reduce", fn_array_reduce, 3, 2, "array", "callback", "initial");
+    reg!(
+        "array_reduce",
+        fn_array_reduce,
+        3,
+        2,
+        "array",
+        "callback",
+        "initial"
+    );
     reg_ref!("usort", fn_usort, 2, 2, 0b1, "array", "callback");
     reg!("array_diff", fn_array_diff, 2, 2, "array1", "array2");
-    reg!("array_intersect", fn_array_intersect, 2, 2, "array1", "array2");
+    reg!(
+        "array_intersect",
+        fn_array_intersect,
+        2,
+        2,
+        "array1",
+        "array2"
+    );
     reg_ref!("array_walk", fn_array_walk, 2, 2, 0b1, "array", "callback");
     reg_ref!("asort", fn_asort, 1, 1, 0b1, "array");
     reg_ref!("arsort", fn_arsort, 1, 1, 0b1, "array");
@@ -566,7 +835,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
 /// Internal handler for Error/Exception __construct($message = "")
 /// CV 0 = $this, CV 1 = $message
-fn fn_throwable_construct(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_throwable_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
     let message = arg_opt!(ed, 1);
     if let Some(mut obj) = this_val.as_object_mut() {
@@ -581,10 +854,17 @@ fn fn_throwable_construct(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut Execu
 
 /// Internal handler for Error/Exception getMessage()
 /// CV 0 = $this
-fn fn_throwable_get_message(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_throwable_get_message(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let this_val = arg!(ed, 0);
     if let Some(obj) = this_val.as_object() {
-        let msg = obj.get_property("message").cloned().unwrap_or(Value::string(""));
+        let msg = obj
+            .get_property("message")
+            .cloned()
+            .unwrap_or(Value::string(""));
         ret!(rv, msg);
     }
     ret!(rv, Value::string(""));
@@ -635,7 +915,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Exception implements Throwable
     eg.register_class(ClassDef {
@@ -648,13 +929,19 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_trait: false,
         is_enum: false,
         uses: vec![],
-        properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Exception".to_string())],
+        properties: vec![(
+            "message".to_string(),
+            Some(Value::string("")),
+            Visibility::Protected,
+            "Exception".to_string(),
+        )],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Error implements Throwable
     eg.register_class(ClassDef {
@@ -667,13 +954,19 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_trait: false,
         is_enum: false,
         uses: vec![],
-        properties: vec![("message".to_string(), Some(Value::string("")), Visibility::Protected, "Error".to_string())],
+        properties: vec![(
+            "message".to_string(),
+            Some(Value::string("")),
+            Visibility::Protected,
+            "Error".to_string(),
+        )],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // TypeError extends Error
     eg.register_class(ClassDef {
@@ -692,7 +985,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // ArgumentCountError extends Error
     eg.register_class(ClassDef {
@@ -711,7 +1005,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // UnhandledMatchError extends Error
     eg.register_class(ClassDef {
@@ -730,14 +1025,29 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Register __construct and getMessage for each throwable class
     // num_args = 2 for __construct (CV 0 = $this, CV 1 = $message)
     // num_args = 1 for getMessage (CV 0 = $this)
-    for class in &["Throwable", "Exception", "Error", "TypeError", "ArgumentCountError", "UnhandledMatchError"] {
+    for class in &[
+        "Throwable",
+        "Exception",
+        "Error",
+        "TypeError",
+        "ArgumentCountError",
+        "UnhandledMatchError",
+    ] {
         // __construct: num_args=2 (CV 0=$this, CV 1=$message), required=0 ($message is optional)
-        reg_method!(class, "__construct", fn_throwable_construct, 2, 0, "message");
+        reg_method!(
+            class,
+            "__construct",
+            fn_throwable_construct,
+            2,
+            0,
+            "message"
+        );
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
     }
@@ -759,7 +1069,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         readonly_props: vec![],
         methods: vec![],
         class_id: 0,
-    }).unwrap();
+    })
+    .unwrap();
 
     // Generator methods: $this is CV 0
     reg_method!("Generator", "current", fn_generator_current, 1, 0);
@@ -777,16 +1088,30 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
 // Array functions
 // ============================================================================
 
-fn fn_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let n = match v.as_array() {
         Some(arr) => arr.len() as i64,
-        None => if v.value_type() == ValueType::Null { 0 } else { 1 },
+        None => {
+            if v.value_type() == ValueType::Null {
+                0
+            } else {
+                1
+            }
+        }
     };
     ret!(rv, Value::long(n));
 }
 
-fn fn_array_push(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_push(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let val = arg!(ed, 1).clone();
     let arr = unsafe { &mut *ptr };
@@ -798,7 +1123,11 @@ fn fn_array_push(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     }
 }
 
-fn fn_array_pop(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_pop(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         ret!(rv, a.pop().unwrap_or(Value::null()));
@@ -807,7 +1136,11 @@ fn fn_array_pop(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
     }
 }
 
-fn fn_array_shift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_shift(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         ret!(rv, a.shift().unwrap_or(Value::null()));
@@ -816,7 +1149,11 @@ fn fn_array_shift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
     }
 }
 
-fn fn_array_unshift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_unshift(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let val = arg!(ed, 1).clone();
     let arr = unsafe { &mut *ptr };
@@ -831,13 +1168,20 @@ fn fn_array_unshift(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
             }
         }
         *arr = Value::array(new);
-        ret!(rv, Value::long(arr.as_array().map(|a| a.len()).unwrap_or(0) as i64));
+        ret!(
+            rv,
+            Value::long(arr.as_array().map(|a| a.len()).unwrap_or(0) as i64)
+        );
     } else {
         ret!(rv, Value::long(0));
     }
 }
 
-fn fn_array_key_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_key_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let key = arg!(ed, 0);
     let arr = arg!(ed, 1);
     let exists = if let Some(a) = arr.as_array() {
@@ -852,16 +1196,25 @@ fn fn_array_key_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorG
     ret!(rv, Value::bool(exists));
 }
 
-fn fn_in_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_in_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
-    let found = haystack.as_array()
+    let found = haystack
+        .as_array()
         .map(|a| a.values().any(|v| values_equal(needle, v)))
         .unwrap_or(false);
     ret!(rv, Value::bool(found));
 }
 
-fn fn_array_reverse(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_reverse(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut new = PhpArray::new();
@@ -878,7 +1231,11 @@ fn fn_array_reverse(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
     }
 }
 
-fn fn_array_merge(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_merge(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let a1 = arg!(ed, 0);
     let a2 = arg!(ed, 1);
     if let (Some(a1), Some(a2)) = (a1.as_array(), a2.as_array()) {
@@ -901,7 +1258,11 @@ fn fn_array_merge(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
     }
 }
 
-fn fn_array_keys(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_keys(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -917,7 +1278,11 @@ fn fn_array_keys(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     }
 }
 
-fn fn_array_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_values(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -930,16 +1295,28 @@ fn fn_array_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     }
 }
 
-fn fn_array_slice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_slice(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     if let Some(arr) = arr_arg.as_array() {
         let len = arr.len() as i64;
         let raw_offset = arg_long!(ed, 1);
-        let start = if raw_offset < 0 { (len + raw_offset).max(0) as usize } else { raw_offset as usize };
+        let start = if raw_offset < 0 {
+            (len + raw_offset).max(0) as usize
+        } else {
+            raw_offset as usize
+        };
         let end = match arg_opt!(ed, 2) {
             Some(v) => {
                 let l = v.to_long_val();
-                if l < 0 { (len + l).max(start as i64) as usize } else { (start + l as usize).min(arr.len()) }
+                if l < 0 {
+                    (len + l).max(start as i64) as usize
+                } else {
+                    (start + l as usize).min(arr.len())
+                }
             }
             None => arr.len(),
         };
@@ -953,7 +1330,11 @@ fn fn_array_slice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
     }
 }
 
-fn fn_array_unique(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_unique(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -971,7 +1352,11 @@ fn fn_array_unique(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     }
 }
 
-fn fn_array_flip(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_flip(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut result = PhpArray::new();
@@ -993,14 +1378,20 @@ fn fn_array_flip(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     }
 }
 
-fn fn_array_combine(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_combine(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let keys_arg = arg!(ed, 0);
     let vals_arg = arg!(ed, 1);
     if let (Some(keys), Some(vals)) = (keys_arg.as_array(), vals_arg.as_array()) {
         let mut result = PhpArray::new();
         for (kv, vv) in keys.values().zip(vals.values()) {
             let key = match kv {
-                val if val.as_str().is_some() => ArrayKey::String(val.as_str().unwrap().to_string()),
+                val if val.as_str().is_some() => {
+                    ArrayKey::String(val.as_str().unwrap().to_string())
+                }
                 val => ArrayKey::Int(val.as_long().unwrap_or(0)),
             };
             result.set(key, vv.clone());
@@ -1011,7 +1402,11 @@ fn fn_array_combine(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
     }
 }
 
-fn fn_array_sum(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_sum(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut has_float = false;
@@ -1020,17 +1415,31 @@ fn fn_array_sum(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         for val in arr.values() {
             match val.value_type() {
                 ValueType::Long => sum_int = sum_int.wrapping_add(val.as_long().unwrap()),
-                ValueType::Double => { has_float = true; sum_float += val.as_double().unwrap(); }
+                ValueType::Double => {
+                    has_float = true;
+                    sum_float += val.as_double().unwrap();
+                }
                 _ => {}
             }
         }
-        ret!(rv, if has_float { Value::double(sum_float + sum_int as f64) } else { Value::long(sum_int) });
+        ret!(
+            rv,
+            if has_float {
+                Value::double(sum_float + sum_int as f64)
+            } else {
+                Value::long(sum_int)
+            }
+        );
     } else {
         ret!(rv, Value::long(0));
     }
 }
 
-fn fn_array_product(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_product(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut has_float = false;
@@ -1039,17 +1448,31 @@ fn fn_array_product(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
         for val in arr.values() {
             match val.value_type() {
                 ValueType::Long => prod_int = prod_int.wrapping_mul(val.as_long().unwrap()),
-                ValueType::Double => { has_float = true; prod_float *= val.as_double().unwrap(); }
+                ValueType::Double => {
+                    has_float = true;
+                    prod_float *= val.as_double().unwrap();
+                }
                 _ => {}
             }
         }
-        ret!(rv, if has_float { Value::double(prod_float * prod_int as f64) } else { Value::long(prod_int) });
+        ret!(
+            rv,
+            if has_float {
+                Value::double(prod_float * prod_int as f64)
+            } else {
+                Value::long(prod_int)
+            }
+        );
     } else {
         ret!(rv, Value::long(0));
     }
 }
 
-fn fn_array_count_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_count_values(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         let mut counts: Vec<(String, i64)> = Vec::new();
@@ -1071,7 +1494,11 @@ fn fn_array_count_values(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Executo
     }
 }
 
-fn fn_array_fill(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_fill(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let start = arg_long!(ed, 0) as i64;
     let count = arg_long!(ed, 1).max(0) as usize;
     let value = arg!(ed, 2);
@@ -1082,7 +1509,11 @@ fn fn_array_fill(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     ret!(rv, Value::array(result));
 }
 
-fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_pad(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     let size = arg_long!(ed, 1);
     let value = arg!(ed, 2);
@@ -1091,11 +1522,17 @@ fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         let abs_size = size.unsigned_abs() as usize;
         let pad_count = abs_size.saturating_sub(arr.len());
         if size < 0 {
-            for _ in 0..pad_count { result.push(value.clone()); }
+            for _ in 0..pad_count {
+                result.push(value.clone());
+            }
         }
-        for v in arr.values() { result.push(v.clone()); }
+        for v in arr.values() {
+            result.push(v.clone());
+        }
         if size >= 0 {
-            for _ in 0..pad_count { result.push(value.clone()); }
+            for _ in 0..pad_count {
+                result.push(value.clone());
+            }
         }
         ret!(rv, Value::array(result));
     } else {
@@ -1103,7 +1540,11 @@ fn fn_array_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
     }
 }
 
-fn fn_array_chunk(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_chunk(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     let size = arg_long!(ed, 1).max(1) as usize;
     if let Some(arr) = arr_arg.as_array() {
@@ -1128,7 +1569,11 @@ fn fn_array_chunk(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
     }
 }
 
-fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_column(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_arg = arg!(ed, 0);
     let col_key = arg!(ed, 1);
     if let Some(arr) = arr_arg.as_array() {
@@ -1137,7 +1582,8 @@ fn fn_array_column(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
         for row in arr.values() {
             if let Some(inner) = row.as_array() {
                 // Try string key first, then integer
-                let val = inner.get_str(&key_str)
+                let val = inner
+                    .get_str(&key_str)
                     .or_else(|| col_key.as_long().and_then(|k| inner.get_int(k)));
                 if let Some(v) = val {
                     result.push(v.clone());
@@ -1156,7 +1602,9 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
         let mut entries: Vec<Value> = a.values().cloned().collect();
         entries.sort_by(|a, b| cmp_val(compare_values(a, b)));
         let mut new = PhpArray::new();
-        for v in entries { new.push(v); }
+        for v in entries {
+            new.push(v);
+        }
         *arr = Value::array(new);
         ret!(rv, Value::bool(true));
     } else {
@@ -1164,13 +1612,19 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     }
 }
 
-fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rsort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.values().cloned().collect();
         entries.sort_by(|a, b| cmp_val(compare_values(b, a)));
         let mut new = PhpArray::new();
-        for v in entries { new.push(v); }
+        for v in entries {
+            new.push(v);
+        }
         *arr = Value::array(new);
         ret!(rv, Value::bool(true));
     } else {
@@ -1178,7 +1632,11 @@ fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
     }
 }
 
-fn fn_array_search(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_search(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
     if let Some(arr) = haystack.as_array() {
@@ -1195,25 +1653,41 @@ fn fn_array_search(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     ret!(rv, Value::bool(false));
 }
 
-fn fn_range(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_range(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let start = arg_long!(ed, 0);
     let end = arg_long!(ed, 1);
     let mut arr = PhpArray::new();
     if start <= end {
-        for i in start..=end { arr.push(Value::long(i)); }
+        for i in start..=end {
+            arr.push(Value::long(i));
+        }
     } else {
-        for i in (end..=start).rev() { arr.push(Value::long(i)); }
+        for i in (end..=start).rev() {
+            arr.push(Value::long(i));
+        }
     }
     ret!(rv, Value::array(arr));
 }
 
-fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_splice(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let offset = arg_long!(ed, 1);
     let arr = unsafe { &mut *ptr };
     if let Some(a) = arr.as_array_mut() {
         let len = a.len() as i64;
-        let start = if offset < 0 { (len + offset).max(0) as usize } else { (offset as usize).min(a.len()) };
+        let start = if offset < 0 {
+            (len + offset).max(0) as usize
+        } else {
+            (offset as usize).min(a.len())
+        };
         let del_count = match arg_opt!(ed, 2) {
             Some(v) => v.to_long_val().max(0) as usize,
             None => a.len() - start,
@@ -1231,7 +1705,9 @@ fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
                 removed.push(v.clone());
                 if i == start {
                     if let Some(repl) = replacement {
-                        for rv in repl.values() { new.push(rv.clone()); }
+                        for rv in repl.values() {
+                            new.push(rv.clone());
+                        }
                     }
                 }
             }
@@ -1243,7 +1719,11 @@ fn fn_array_splice(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
     }
 }
 
-fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_rand(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if let Some(arr) = v.as_array() {
         if arr.is_empty() {
@@ -1253,7 +1733,8 @@ fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
             let idx = (std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap_or_default()
-                .subsec_nanos() as usize) % arr.len();
+                .subsec_nanos() as usize)
+                % arr.len();
             let (_, key) = arr.get_at(idx).unwrap();
             let result = match key {
                 ArrayKey::Int(k) => Value::long(k),
@@ -1266,7 +1747,11 @@ fn fn_array_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     }
 }
 
-fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_shuffle(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(a) = arr.as_array_mut() {
         let mut entries: Vec<Value> = a.values().cloned().collect();
@@ -1281,7 +1766,9 @@ fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
             entries.swap(i, j);
         }
         let mut new = PhpArray::new();
-        for v in entries { new.push(v); }
+        for v in entries {
+            new.push(v);
+        }
         *arr = Value::array(new);
         ret!(rv, Value::bool(true));
     } else {
@@ -1290,15 +1777,23 @@ fn fn_shuffle(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 }
 
 /// array_map($callback, $array) — apply callback to each element, return new array
-fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_map(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let callback_name = arg_str!(ed, 0);
     let arr_val = arg!(ed, 1);
     let func_ptr = match eg.find_function(&callback_name) {
         Some(ptr) => ptr,
         None => {
-            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
-                "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found", callback_name
-            )));
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found",
+                    callback_name
+                ),
+            ));
             return Ok(());
         }
     };
@@ -1306,7 +1801,9 @@ fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
         let mut result = PhpArray::new();
         for (key, val) in arr.iter() {
             let mapped = call_function(eg, func_ptr, std::slice::from_ref(val))?;
-            if eg.exception.is_some() { return Ok(()); }
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             result.set(key, mapped);
         }
         ret!(rv, Value::array(result));
@@ -1316,7 +1813,11 @@ fn fn_array_map(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
 }
 
 /// array_filter($array [, $callback]) — filter elements by callback (or truthiness)
-fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_filter(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_val = arg!(ed, 0);
     let callback = arg_opt!(ed, 1);
     if let Some(arr) = arr_val.as_array() {
@@ -1330,15 +1831,21 @@ fn fn_array_filter(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
                 let func_ptr = match eg.find_function(&cb_name) {
                     Some(ptr) => ptr,
                     None => {
-                        eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
-                            "array_filter(): Argument #2 ($callback) must be a valid callback, function \"{}\" not found", cb_name
-                        )));
+                        eg.exception = Some(crate::value::make_error_value(
+                            "TypeError",
+                            &format!(
+                                "array_filter(): Argument #2 ($callback) must be a valid callback, function \"{}\" not found",
+                                cb_name
+                            ),
+                        ));
                         return Ok(());
                     }
                 };
                 for (key, val) in arr.iter() {
                     let ret_val = call_function(eg, func_ptr, std::slice::from_ref(val))?;
-                    if eg.exception.is_some() { return Ok(()); }
+                    if eg.exception.is_some() {
+                        return Ok(());
+                    }
                     if ret_val.is_truthy() {
                         result.set(key, val.clone());
                     }
@@ -1383,54 +1890,94 @@ fn direct_strlen(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::long(direct_strlen_len(&args[0])))
 }
 
-fn fn_strlen(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strlen(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let result = direct_strlen(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
 
-fn fn_substr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_substr(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let bytes = s.as_bytes();
     let len = bytes.len() as i64;
     let start_raw = arg_long!(ed, 1);
-    let start = if start_raw < 0 { (len + start_raw).max(0) as usize } else { start_raw as usize };
+    let start = if start_raw < 0 {
+        (len + start_raw).max(0) as usize
+    } else {
+        start_raw as usize
+    };
     let end = match arg_opt!(ed, 2) {
         Some(v) => {
             let l = v.to_long_val();
-            if l < 0 { ((len + l) as usize).max(start) } else { (start + l as usize).min(bytes.len()) }
+            if l < 0 {
+                ((len + l) as usize).max(start)
+            } else {
+                (start + l as usize).min(bytes.len())
+            }
         }
         None => bytes.len(),
     };
     if start >= bytes.len() {
         ret!(rv, Value::string(""));
     } else {
-        ret!(rv, Value::string(String::from_utf8_lossy(&bytes[start..end]).into_owned()));
+        ret!(
+            rv,
+            Value::string(String::from_utf8_lossy(&bytes[start..end]).into_owned())
+        );
     }
 }
 
-fn fn_strpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strpos(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
-    ret!(rv, match h.find(n.as_ref()) {
-        Some(pos) => Value::long(pos as i64),
-        None => Value::bool(false),
-    });
+    ret!(
+        rv,
+        match h.find(n.as_ref()) {
+            Some(pos) => Value::long(pos as i64),
+            None => Value::bool(false),
+        }
+    );
 }
 
-fn fn_strrpos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strrpos(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
-    ret!(rv, match h.rfind(n.as_ref()) {
-        Some(pos) => Value::long(pos as i64),
-        None => Value::bool(false),
-    });
+    ret!(
+        rv,
+        match h.rfind(n.as_ref()) {
+            Some(pos) => Value::long(pos as i64),
+            None => Value::bool(false),
+        }
+    );
 }
 
-fn fn_str_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_replace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let search = arg_str!(ed, 0);
     let replace = arg_str!(ed, 1);
     let subject = arg_str!(ed, 2);
-    ret!(rv, Value::string(subject.replace(search.as_ref(), replace.as_ref())));
+    ret!(
+        rv,
+        Value::string(subject.replace(search.as_ref(), replace.as_ref()))
+    );
 }
 
 #[inline(always)]
@@ -1442,7 +1989,11 @@ fn direct_strtolower(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::string(unsafe { String::from_utf8_unchecked(bytes) }))
 }
 
-fn fn_strtolower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strtolower(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let result = direct_strtolower(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
@@ -1455,7 +2006,11 @@ fn direct_strtoupper(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::string(unsafe { String::from_utf8_unchecked(bytes) }))
 }
 
-fn fn_strtoupper(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strtoupper(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let result = direct_strtoupper(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
@@ -1465,17 +2020,29 @@ fn fn_trim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::string(s.trim()));
 }
 
-fn fn_rtrim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rtrim(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.trim_end()));
 }
 
-fn fn_ltrim(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ltrim(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.trim_start()));
 }
 
-fn fn_explode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_explode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let d = arg_str!(ed, 0);
     let s = arg_str!(ed, 1);
     let mut arr = PhpArray::new();
@@ -1485,7 +2052,11 @@ fn fn_explode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
     ret!(rv, Value::array(arr));
 }
 
-fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_implode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let glue = arg_str!(ed, 0);
     let pieces = arg!(ed, 1);
     if let Some(arr) = pieces.as_array() {
@@ -1504,38 +2075,66 @@ fn fn_implode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
     }
 }
 
-fn fn_str_repeat(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_repeat(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let times = arg_long!(ed, 1).max(0) as usize;
     ret!(rv, Value::string(s.repeat(times)));
 }
 
-fn fn_substr_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_substr_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
-    let count = if n.is_empty() { 0 } else { h.matches(n.as_ref()).count() as i64 };
+    let count = if n.is_empty() {
+        0
+    } else {
+        h.matches(n.as_ref()).count() as i64
+    };
     ret!(rv, Value::long(count));
 }
 
-fn fn_str_contains(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_contains(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, Value::bool(h.contains(n.as_ref())));
 }
 
-fn fn_str_starts_with(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_starts_with(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, Value::bool(h.starts_with(n.as_ref())));
 }
 
-fn fn_str_ends_with(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_ends_with(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let h = arg_str!(ed, 0);
     let n = arg_str!(ed, 1);
     ret!(rv, Value::bool(h.ends_with(n.as_ref())));
 }
 
-fn fn_str_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_pad(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let input = arg_str!(ed, 0);
     let length = arg_long!(ed, 1) as usize;
     let pad = match arg_opt!(ed, 2) {
@@ -1551,7 +2150,11 @@ fn fn_str_pad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
     }
 }
 
-fn fn_str_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_split(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let chunk = match arg_opt!(ed, 1) {
         Some(v) => v.to_long_val().max(1) as usize,
@@ -1562,14 +2165,22 @@ fn fn_str_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
     let mut i = 0;
     while i < bytes.len() {
         let end = (i + chunk).min(bytes.len());
-        arr.push(Value::string(String::from_utf8_lossy(&bytes[i..end]).into_owned()));
+        arr.push(Value::string(
+            String::from_utf8_lossy(&bytes[i..end]).into_owned(),
+        ));
         i = end;
     }
-    if arr.is_empty() { arr.push(Value::string("")); }
+    if arr.is_empty() {
+        arr.push(Value::string(""));
+    }
     ret!(rv, Value::array(arr));
 }
 
-fn fn_ucfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ucfirst(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     if s.is_empty() {
         ret!(rv, Value::string(""));
@@ -1577,27 +2188,45 @@ fn fn_ucfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
         // PHP ucfirst is ASCII-only
         let mut bytes = s.as_bytes().to_vec();
         bytes[0] = bytes[0].to_ascii_uppercase();
-        ret!(rv, Value::string(unsafe { String::from_utf8_unchecked(bytes) }));
+        ret!(
+            rv,
+            Value::string(unsafe { String::from_utf8_unchecked(bytes) })
+        );
     }
 }
 
-fn fn_lcfirst(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_lcfirst(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     if s.is_empty() {
         ret!(rv, Value::string(""));
     } else {
         let mut bytes = s.as_bytes().to_vec();
         bytes[0] = bytes[0].to_ascii_lowercase();
-        ret!(rv, Value::string(unsafe { String::from_utf8_unchecked(bytes) }));
+        ret!(
+            rv,
+            Value::string(unsafe { String::from_utf8_unchecked(bytes) })
+        );
     }
 }
 
-fn fn_str_word_count(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_word_count(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::long(s.split_whitespace().count() as i64));
 }
 
-fn fn_wordwrap(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_wordwrap(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let width = match arg_opt!(ed, 1) {
         Some(v) => v.to_long_val().max(1) as usize,
@@ -1638,21 +2267,36 @@ fn fn_wordwrap(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) 
     ret!(rv, Value::string(result));
 }
 
-fn fn_nl2br(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_nl2br(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(s.replace('\n', "<br />\n")));
 }
 
-fn fn_str_rev(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_rev(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     // PHP strrev reverses bytes, not Unicode codepoints
     let reversed: String = s.chars().rev().collect();
     ret!(rv, Value::string(reversed));
 }
 
-fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_number_format(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let num = arg_float!(ed, 0);
-    let decimals = match arg_opt!(ed, 1) { Some(v) => v.to_long_val().max(0) as usize, None => 0 };
+    let decimals = match arg_opt!(ed, 1) {
+        Some(v) => v.to_long_val().max(0) as usize,
+        None => 0,
+    };
     let dec_point = arg_opt!(ed, 2).and_then(Value::as_str).unwrap_or(".");
     let thousands_sep = arg_opt!(ed, 3).and_then(Value::as_str).unwrap_or(",");
 
@@ -1690,7 +2334,9 @@ fn fn_number_format(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
 #[inline(always)]
 fn direct_ord(args: &[Value]) -> Result<Value, VmError> {
     let s = direct_arg_str(args, 0);
-    Ok(Value::long(s.as_bytes().first().copied().unwrap_or(0) as i64))
+    Ok(Value::long(
+        s.as_bytes().first().copied().unwrap_or(0) as i64
+    ))
 }
 
 fn fn_ord(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -1703,15 +2349,19 @@ fn fn_chr(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
     ret!(rv, Value::string(String::from(code as char)));
 }
 
-fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_sprintf(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let fmt = arg_str!(ed, 0);
     // Variadic: VM packs extra args into an array at CV(1)
     // Read values directly from that array without cloning them into another Vec.
     let variadic_arr = arg!(ed, 1);
     let args = variadic_arr.as_array();
-    let args_count = args.map(|array| array.len()).unwrap_or_else(|| {
-        usize::from(variadic_arr.value_type() != ValueType::Undef)
-    });
+    let args_count = args
+        .map(|array| array.len())
+        .unwrap_or_else(|| usize::from(variadic_arr.value_type() != ValueType::Undef));
 
     let mut result = String::with_capacity(fmt.len().saturating_add(args_count * 8));
     let bytes = fmt.as_bytes();
@@ -1771,7 +2421,11 @@ fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
                             let code = arg.map(|value| value.to_long_val()).unwrap_or(0);
                             result.push((code & 0xFF) as u8 as char);
                         }
-                        _ => { result.push('%'); result.push(spec); arg_idx -= 1; }
+                        _ => {
+                            result.push('%');
+                            result.push(spec);
+                            arg_idx -= 1;
+                        }
                     }
                 }
                 index += 2;
@@ -1794,23 +2448,43 @@ fn fn_sprintf(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 // Type functions
 // ============================================================================
 
-fn fn_intval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_intval(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::long(arg!(ed, 0).to_long_val()));
 }
 
-fn fn_strval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strval(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::string(arg!(ed, 0).echo_to_string()));
 }
 
-fn fn_floatval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_floatval(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::double(arg!(ed, 0).to_float_val()));
 }
 
-fn fn_boolval(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_boolval(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).is_truthy()));
 }
 
-fn fn_settype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_settype(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
     let type_name = arg_str!(ed, 1);
     let val = unsafe { &*ptr };
@@ -1820,42 +2494,92 @@ fn fn_settype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
         "string" => Value::string(val.echo_to_string()),
         "bool" | "boolean" => Value::bool(val.is_truthy()),
         "array" => {
-            if val.value_type() == ValueType::Array { val.clone() }
-            else { let mut a = PhpArray::new(); a.push(val.clone()); Value::array(a) }
+            if val.value_type() == ValueType::Array {
+                val.clone()
+            } else {
+                let mut a = PhpArray::new();
+                a.push(val.clone());
+                Value::array(a)
+            }
         }
         "null" => Value::null(),
-        _ => { ret!(rv, Value::bool(false)); }
+        _ => {
+            ret!(rv, Value::bool(false));
+        }
     };
-    unsafe { std::ptr::drop_in_place(ptr); ptr.write(new_val); }
+    unsafe {
+        std::ptr::drop_in_place(ptr);
+        ptr.write(new_val);
+    }
     ret!(rv, Value::bool(true));
 }
 
-fn fn_is_array(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Array));
+fn fn_is_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(arg!(ed, 0).value_type() == ValueType::Array)
+    );
 }
 
-fn fn_is_string(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::String));
+fn fn_is_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(arg!(ed, 0).value_type() == ValueType::String)
+    );
 }
 
-fn fn_is_int(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_int(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Long));
 }
 
-fn fn_is_float(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Double));
+fn fn_is_float(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(arg!(ed, 0).value_type() == ValueType::Double)
+    );
 }
 
-fn fn_is_null(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_null(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Null));
 }
 
-fn fn_is_bool(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_bool(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let t = arg!(ed, 0).value_type();
-    ret!(rv, Value::bool(t == ValueType::True || t == ValueType::False));
+    ret!(
+        rv,
+        Value::bool(t == ValueType::True || t == ValueType::False)
+    );
 }
 
-fn fn_is_numeric(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_numeric(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let result = match v.value_type() {
         ValueType::Long | ValueType::Double => true,
@@ -1868,11 +2592,22 @@ fn fn_is_numeric(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
     ret!(rv, Value::bool(result));
 }
 
-fn fn_is_object(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::bool(arg!(ed, 0).value_type() == ValueType::Object));
+fn fn_is_object(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::bool(arg!(ed, 0).value_type() == ValueType::Object)
+    );
 }
 
-fn fn_gettype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_gettype(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = match arg!(ed, 0).value_type() {
         ValueType::Null => "NULL",
         ValueType::True | ValueType::False => "boolean",
@@ -1891,7 +2626,11 @@ fn fn_gettype(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 // Reflection / class introspection
 // ============================================================================
 
-fn fn_get_class(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_get_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     if v.value_type() == ValueType::Undef {
         // No argument — return the current class name (deprecated in PHP 8 but still works)
@@ -1902,7 +2641,8 @@ fn fn_get_class(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
         }
         // Outside class scope: PHP throws Error
         eg.exception = Some(crate::value::make_error_value(
-            "Error", "get_class() without arguments must be called from within a class"
+            "Error",
+            "get_class() without arguments must be called from within a class",
         ));
         return Ok(());
     }
@@ -1912,16 +2652,25 @@ fn fn_get_class(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) 
     ret!(rv, Value::bool(false));
 }
 
-fn fn_class_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_class_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     let lower = name.to_ascii_lowercase();
-    let found = eg.class_table.iter().any(|(k, cd)| {
-        k.to_ascii_lowercase() == lower && !cd.is_interface && !cd.is_trait
-    });
+    let found = eg
+        .class_table
+        .iter()
+        .any(|(k, cd)| k.to_ascii_lowercase() == lower && !cd.is_interface && !cd.is_trait);
     ret!(rv, Value::bool(found));
 }
 
-fn fn_method_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_method_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let first = arg!(ed, 0);
     let method_name = arg_str!(ed, 1);
 
@@ -1961,13 +2710,27 @@ fn fn_abs(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
 fn fn_max(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a = arg!(ed, 0);
     let b = arg!(ed, 1);
-    ret!(rv, if compare_values(a, b) >= 0 { a.clone() } else { b.clone() });
+    ret!(
+        rv,
+        if compare_values(a, b) >= 0 {
+            a.clone()
+        } else {
+            b.clone()
+        }
+    );
 }
 
 fn fn_min(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let a = arg!(ed, 0);
     let b = arg!(ed, 1);
-    ret!(rv, if compare_values(a, b) <= 0 { a.clone() } else { b.clone() });
+    ret!(
+        rv,
+        if compare_values(a, b) <= 0 {
+            a.clone()
+        } else {
+            b.clone()
+        }
+    );
 }
 
 #[inline(always)]
@@ -1975,7 +2738,11 @@ fn direct_floor(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::double(direct_arg(args, 0).to_float_val().floor()))
 }
 
-fn fn_floor(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_floor(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let result = direct_floor(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
@@ -1984,9 +2751,16 @@ fn fn_ceil(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     ret!(rv, Value::double(arg_float!(ed, 0).ceil()));
 }
 
-fn fn_round(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_round(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let d = arg_float!(ed, 0);
-    let precision = match arg_opt!(ed, 1) { Some(v) => v.to_long_val(), None => 0 };
+    let precision = match arg_opt!(ed, 1) {
+        Some(v) => v.to_long_val(),
+        None => 0,
+    };
     if precision == 0 {
         ret!(rv, Value::double(d.round()));
     } else {
@@ -2003,7 +2777,10 @@ fn fn_pow(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
             ret!(rv, Value::long(b.wrapping_pow(e as u32)));
         }
     }
-    ret!(rv, Value::double(base.to_float_val().powf(exp.to_float_val())));
+    ret!(
+        rv,
+        Value::double(base.to_float_val().powf(exp.to_float_val()))
+    );
 }
 
 #[inline(always)]
@@ -2022,12 +2799,14 @@ fn direct_intdiv_values(first: &Value, second: &Value) -> Result<Value, VmError>
         unsafe { &*first.as_ref_ptr() }
     } else {
         first
-    }.to_long_val();
+    }
+    .to_long_val();
     let b = if second.is_reference() {
         unsafe { &*second.as_ref_ptr() }
     } else {
         second
-    }.to_long_val();
+    }
+    .to_long_val();
     if b == 0 {
         Ok(Value::bool(false)) // PHP throws DivisionByZeroError
     } else {
@@ -2040,7 +2819,11 @@ fn direct_intdiv(args: &[Value]) -> Result<Value, VmError> {
     direct_intdiv_values(direct_arg(args, 0), direct_arg(args, 1))
 }
 
-fn fn_intdiv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_intdiv(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let result = direct_intdiv_values(arg!(ed, 0), arg!(ed, 1))?;
     ret!(rv, result);
 }
@@ -2055,7 +2838,11 @@ fn fn_log(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Re
     ret!(rv, Value::double(arg_float!(ed, 0).ln()));
 }
 
-fn fn_log10(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_log10(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).log10()));
 }
 
@@ -2074,7 +2861,13 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
         .unwrap_or_default()
         .subsec_nanos();
     let (lo, hi) = match arg_opt!(ed, 0) {
-        Some(v) => (v.to_long_val(), match arg_opt!(ed, 1) { Some(v2) => v2.to_long_val(), None => i32::MAX as i64 }),
+        Some(v) => (
+            v.to_long_val(),
+            match arg_opt!(ed, 1) {
+                Some(v2) => v2.to_long_val(),
+                None => i32::MAX as i64,
+            },
+        ),
         None => (0, i32::MAX as i64),
     };
     let range = (hi - lo + 1).max(1);
@@ -2086,23 +2879,38 @@ fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 // Output functions
 // ============================================================================
 
-fn fn_var_dump(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_var_dump(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = var_dump_value(v, 0);
     eg.write_output(output.as_bytes());
     Ok(())
 }
 
-fn fn_print_r(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_print_r(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     let output = print_r_value(v, 0);
     eg.write_output(output.as_bytes());
     ret!(rv, Value::bool(true));
 }
 
-fn fn_var_export(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_var_export(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
-    let return_str = match arg_opt!(ed, 1) { Some(v) => v.is_truthy(), None => false };
+    let return_str = match arg_opt!(ed, 1) {
+        Some(v) => v.is_truthy(),
+        None => false,
+    };
     let output = var_export_value(v);
     if return_str {
         ret!(rv, Value::string(output));
@@ -2116,7 +2924,11 @@ fn fn_var_export(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
 // Constant functions
 // ============================================================================
 
-fn fn_define(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_define(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     if name.is_empty() {
         ret!(rv, Value::bool(false));
@@ -2126,12 +2938,20 @@ fn fn_define(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> 
     ret!(rv, Value::bool(result.is_ok()));
 }
 
-fn fn_defined(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_defined(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     ret!(rv, Value::bool(eg.find_constant(&name).is_some()));
 }
 
-fn fn_constant(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_constant(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     ret!(rv, eg.find_constant(&name).unwrap_or(Value::null()));
 }
@@ -2140,14 +2960,25 @@ fn fn_constant(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -
 // JSON functions
 // ============================================================================
 
-fn fn_json_encode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_json_encode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
     ret!(rv, Value::string(json_encode_value(v)));
 }
 
-fn fn_json_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_json_decode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let assoc = match arg_opt!(ed, 1) { Some(v) => v.is_truthy(), None => false };
+    let assoc = match arg_opt!(ed, 1) {
+        Some(v) => v.is_truthy(),
+        None => false,
+    };
     ret!(rv, json_decode_string(&s, assoc));
 }
 
@@ -2155,18 +2986,36 @@ fn fn_json_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 // Misc functions
 // ============================================================================
 
-fn fn_isset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_isset_func(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let v = arg!(ed, 0);
-    ret!(rv, Value::bool(v.value_type() != ValueType::Null && v.value_type() != ValueType::Undef));
+    ret!(
+        rv,
+        Value::bool(v.value_type() != ValueType::Null && v.value_type() != ValueType::Undef)
+    );
 }
 
-fn fn_empty_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_empty_func(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::bool(!arg!(ed, 0).is_truthy()));
 }
 
-fn fn_unset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_unset_func(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let ptr = arg_mut!(ed, 0);
-    unsafe { std::ptr::drop_in_place(ptr); ptr.write(Value::null()); }
+    unsafe {
+        std::ptr::drop_in_place(ptr);
+        ptr.write(Value::null());
+    }
     ret!(rv, Value::null());
 }
 
@@ -2176,27 +3025,42 @@ fn fn_unset_func(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
 
 #[inline]
 fn cmp_val(cmp: i32) -> std::cmp::Ordering {
-    if cmp < 0 { std::cmp::Ordering::Less }
-    else if cmp > 0 { std::cmp::Ordering::Greater }
-    else { std::cmp::Ordering::Equal }
+    if cmp < 0 {
+        std::cmp::Ordering::Less
+    } else if cmp > 0 {
+        std::cmp::Ordering::Greater
+    } else {
+        std::cmp::Ordering::Equal
+    }
 }
 
 fn compare_values(a: &Value, b: &Value) -> i32 {
     let ad = a.to_float_val();
     let bd = b.to_float_val();
-    if ad < bd { -1 } else if ad > bd { 1 } else { 0 }
+    if ad < bd {
+        -1
+    } else if ad > bd {
+        1
+    } else {
+        0
+    }
 }
 
 fn values_equal(a: &Value, b: &Value) -> bool {
     match (a.value_type(), b.value_type()) {
         (ValueType::Long, ValueType::Long) => a.as_long() == b.as_long(),
         (ValueType::String, ValueType::String) => a.as_str() == b.as_str(),
-        (ValueType::Long, ValueType::Double) | (ValueType::Double, ValueType::Long) |
-        (ValueType::Double, ValueType::Double) => a.to_double() == b.to_double(),
+        (ValueType::Long, ValueType::Double)
+        | (ValueType::Double, ValueType::Long)
+        | (ValueType::Double, ValueType::Double) => a.to_double() == b.to_double(),
         (ValueType::Null, ValueType::Null) => true,
         (ValueType::True, ValueType::True) | (ValueType::False, ValueType::False) => true,
         (ValueType::String, ValueType::Long) | (ValueType::Long, ValueType::String) => {
-            let (s_val, i_val) = if a.value_type() == ValueType::String { (a, b) } else { (b, a) };
+            let (s_val, i_val) = if a.value_type() == ValueType::String {
+                (a, b)
+            } else {
+                (b, a)
+            };
             s_val.as_str().unwrap().parse::<i64>().ok() == i_val.as_long()
         }
         _ => false,
@@ -2241,7 +3105,11 @@ fn print_r_value(val: &Value, indent: usize) -> String {
         ValueType::Long => val.as_long().unwrap().to_string(),
         ValueType::Double => {
             let d = val.as_double().unwrap();
-            if d == d.floor() && d.abs() < 1e15 { format!("{}", d as i64) } else { format!("{}", d) }
+            if d == d.floor() && d.abs() < 1e15 {
+                format!("{}", d as i64)
+            } else {
+                format!("{}", d)
+            }
         }
         ValueType::String => val.as_str().unwrap().to_string(),
         ValueType::Array => {
@@ -2255,8 +3123,15 @@ fn print_r_value(val: &Value, indent: usize) -> String {
                     ArrayKey::Int(k) => format!("{}", k),
                     ArrayKey::String(k) => k.clone(),
                 };
-                out.push_str(&format!("{}[{}] => {}", inner, key_str, print_r_value(v, indent + 1)));
-                if v.value_type() != ValueType::Array { out.push('\n'); }
+                out.push_str(&format!(
+                    "{}[{}] => {}",
+                    inner,
+                    key_str,
+                    print_r_value(v, indent + 1)
+                ));
+                if v.value_type() != ValueType::Array {
+                    out.push('\n');
+                }
             }
             out.push_str(&format!("{})\n", prefix));
             out
@@ -2272,7 +3147,13 @@ fn var_export_value(val: &Value) -> String {
         ValueType::False => "false".to_string(),
         ValueType::Long => val.as_long().unwrap().to_string(),
         ValueType::Double => format!("{}", val.as_double().unwrap()),
-        ValueType::String => format!("'{}'", val.as_str().unwrap().replace('\\', "\\\\").replace('\'', "\\'")),
+        ValueType::String => format!(
+            "'{}'",
+            val.as_str()
+                .unwrap()
+                .replace('\\', "\\\\")
+                .replace('\'', "\\'")
+        ),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
             let mut out = "array (\n".to_string();
@@ -2297,9 +3178,9 @@ fn value_to_json(val: &Value) -> serde_json::Value {
         ValueType::Null | ValueType::Undef => serde_json::Value::Null,
         ValueType::True => serde_json::Value::Bool(true),
         ValueType::False => serde_json::Value::Bool(false),
-        ValueType::Long => serde_json::Value::Number(
-            serde_json::Number::from(val.as_long().unwrap())
-        ),
+        ValueType::Long => {
+            serde_json::Value::Number(serde_json::Number::from(val.as_long().unwrap()))
+        }
         ValueType::Double => {
             let d = val.as_double().unwrap();
             if d.is_finite() {
@@ -2313,13 +3194,12 @@ fn value_to_json(val: &Value) -> serde_json::Value {
         ValueType::String => serde_json::Value::String(val.as_str().unwrap().to_string()),
         ValueType::Array => {
             let arr = val.as_array().unwrap();
-            let is_list = arr.iter().enumerate().all(|(i, (k, _))| {
-                matches!(k, ArrayKey::Int(n) if n == i as i64)
-            });
+            let is_list = arr
+                .iter()
+                .enumerate()
+                .all(|(i, (k, _))| matches!(k, ArrayKey::Int(n) if n == i as i64));
             if is_list {
-                serde_json::Value::Array(
-                    arr.values().map(value_to_json).collect()
-                )
+                serde_json::Value::Array(arr.values().map(value_to_json).collect())
             } else {
                 let mut map = serde_json::Map::new();
                 for (k, v) in arr.iter() {
@@ -2374,7 +3254,10 @@ fn get_generator_ref(ed: *mut ExecuteData) -> Option<crate::vm::generator::Gener
 }
 
 /// Ensure generator is started (first next/send/rewind triggers initial execution)
-fn ensure_generator_started(gen_ref: &crate::vm::generator::GeneratorRef, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn ensure_generator_started(
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     use crate::vm::generator::GeneratorState;
     let state = gen_ref.borrow().state;
     if state == GeneratorState::Created {
@@ -2383,7 +3266,11 @@ fn ensure_generator_started(gen_ref: &crate::vm::generator::GeneratorRef, eg: &m
     Ok(())
 }
 
-fn fn_generator_current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_current(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(&gen_ref, eg)?;
         let val = gen_ref.borrow().value.clone();
@@ -2392,7 +3279,11 @@ fn fn_generator_current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorG
     ret!(rv, Value::null());
 }
 
-fn fn_generator_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_key(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(&gen_ref, eg)?;
         let gen_data = gen_ref.borrow();
@@ -2406,7 +3297,11 @@ fn fn_generator_key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGloba
     ret!(rv, Value::null());
 }
 
-fn fn_generator_next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_next(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(&gen_ref, eg)?;
         // Advance past current yield
@@ -2418,7 +3313,11 @@ fn fn_generator_next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
     ret!(rv, Value::null());
 }
 
-fn fn_generator_valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_valid(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(&gen_ref, eg)?;
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
@@ -2427,14 +3326,22 @@ fn fn_generator_valid(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlo
     ret!(rv, Value::bool(false));
 }
 
-fn fn_generator_rewind(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_rewind(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         ensure_generator_started(&gen_ref, eg)?;
     }
     ret!(rv, Value::null());
 }
 
-fn fn_generator_send(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_send(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         let send_val = arg!(ed, 1).clone();
 
@@ -2461,11 +3368,17 @@ fn fn_generator_send(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
     ret!(rv, Value::null());
 }
 
-fn fn_generator_get_return(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_generator_get_return(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         let gen_data = gen_ref.borrow();
         if gen_data.state != crate::vm::generator::GeneratorState::Completed {
-            return Err(VmError::Fatal("Cannot get return value of a generator that hasn't returned".into()));
+            return Err(VmError::Fatal(
+                "Cannot get return value of a generator that hasn't returned".into(),
+            ));
         }
         ret!(rv, gen_data.return_value.clone());
     }
@@ -2477,7 +3390,11 @@ fn fn_generator_get_return(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Execu
 // ============================================================================
 
 /// preg_match($pattern, $subject [, &$matches]) -> int (0 or 1)
-fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_match(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
 
@@ -2515,14 +3432,20 @@ fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
                         arr.set_str(name, Value::string(m.as_str(&subject)));
                     }
                 }
-                unsafe { std::ptr::drop_in_place(matches_ptr); matches_ptr.write(Value::array(arr)); }
+                unsafe {
+                    std::ptr::drop_in_place(matches_ptr);
+                    matches_ptr.write(Value::array(arr));
+                }
             }
             ret!(rv, Value::long(1));
         }
         None => {
             if has_matches {
                 let matches_ptr = arg_mut!(ed, 2);
-                unsafe { std::ptr::drop_in_place(matches_ptr); matches_ptr.write(Value::array(PhpArray::new())); }
+                unsafe {
+                    std::ptr::drop_in_place(matches_ptr);
+                    matches_ptr.write(Value::array(PhpArray::new()));
+                }
             }
             ret!(rv, Value::long(0));
         }
@@ -2530,7 +3453,11 @@ fn fn_preg_match(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
 }
 
 /// preg_replace($pattern, $replacement, $subject) -> string
-fn fn_preg_replace(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_replace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let replacement = arg_str!(ed, 1);
     let subject = arg_str!(ed, 2);
@@ -2558,11 +3485,15 @@ fn find_class_case_insensitive<'a>(
     eg: &'a ExecutorGlobals,
     class_name: &str,
 ) -> Option<&'a crate::compiler::compile::ClassDef> {
-    eg.class_table.get(class_name).map(|class| class.as_ref()).or_else(|| {
-        eg.class_table.iter()
-            .find(|(name, _)| name.eq_ignore_ascii_case(class_name))
-            .map(|(_, class)| class.as_ref())
-    })
+    eg.class_table
+        .get(class_name)
+        .map(|class| class.as_ref())
+        .or_else(|| {
+            eg.class_table
+                .iter()
+                .find(|(name, _)| name.eq_ignore_ascii_case(class_name))
+                .map(|(_, class)| class.as_ref())
+        })
 }
 
 /// Search for a method in a class hierarchy and return its direct function
@@ -2575,7 +3506,9 @@ fn find_method_in_class_hierarchy<'a>(
 ) -> Option<(Visibility, bool, *const FunctionCommon, &'a str)> {
     let mut current = find_class_case_insensitive(eg, class_name);
     while let Some(class) = current {
-        if let Some((_, visibility, is_static, _, function)) = class.methods.iter()
+        if let Some((_, visibility, is_static, _, function)) = class
+            .methods
+            .iter()
             .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
         {
             return Some((
@@ -2592,7 +3525,9 @@ fn find_method_in_class_hierarchy<'a>(
             let Some(trait_def) = find_class_case_insensitive(eg, trait_name) else {
                 continue;
             };
-            if let Some((_, visibility, is_static, _, function)) = trait_def.methods.iter()
+            if let Some((_, visibility, is_static, _, function)) = trait_def
+                .methods
+                .iter()
                 .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method_name))
             {
                 return Some((
@@ -2604,7 +3539,9 @@ fn find_method_in_class_hierarchy<'a>(
             }
         }
 
-        current = class.parent.as_deref()
+        current = class
+            .parent
+            .as_deref()
             .and_then(|parent| find_class_case_insensitive(eg, parent));
     }
     None
@@ -2628,12 +3565,18 @@ fn get_calling_scope_class<'a>(
     ed: *mut crate::vm::frame::ExecuteData,
     eg: &'a ExecutorGlobals,
 ) -> Option<&'a str> {
-    if ed.is_null() { return None; }
+    if ed.is_null() {
+        return None;
+    }
     // ed is the stdlib function's own frame; the caller is prev_execute_data
     let caller = unsafe { (*ed).prev_execute_data };
-    if caller.is_null() { return None; }
+    if caller.is_null() {
+        return None;
+    }
     let func = unsafe { (*caller).func };
-    if func.is_null() { return None; }
+    if func.is_null() {
+        return None;
+    }
     eg.declaring_class_of(func)
 }
 
@@ -2642,7 +3585,11 @@ fn get_calling_scope_class<'a>(
 /// array [object, "method"], and objects with __invoke.
 /// `caller_class` is the class scope of the call site — used to allow
 /// private/protected method callbacks when called from the declaring class.
-fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str>) -> Option<ResolvedCallback> {
+fn resolve_callback(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    caller_class: Option<&str>,
+) -> Option<ResolvedCallback> {
     match val.value_type() {
         ValueType::Closure => {
             let closure = val.as_closure().unwrap();
@@ -2655,12 +3602,16 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
         ValueType::String => {
             let name = val.as_str().unwrap();
             eg.find_function(name).map(|ptr| ResolvedCallback {
-                func_ptr: ptr, prepend_args: vec![], use_vars: vec![],
+                func_ptr: ptr,
+                prepend_args: vec![],
+                use_vars: vec![],
             })
         }
         ValueType::Array => {
             let arr = val.as_array()?;
-            if arr.is_empty() { return None; }
+            if arr.is_empty() {
+                return None;
+            }
 
             // Case 1: Closure descriptor array [func_name_string, use_val1, ...]
             if let Some(func_name) = arr.get_value_at(0)?.as_str() {
@@ -2668,13 +3619,17 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
                     let func_ptr = eg.find_function(func_name)?;
                     let use_vars: Vec<Value> = arr.values().skip(1).cloned().collect();
                     return Some(ResolvedCallback {
-                        func_ptr, prepend_args: vec![], use_vars,
+                        func_ptr,
+                        prepend_args: vec![],
+                        use_vars,
                     });
                 }
             }
 
             // Case 2: Method callback [object_or_class, "method_name"]
-            if arr.len() != 2 { return None; }
+            if arr.len() != 2 {
+                return None;
+            }
             let obj_val = arr.get_value_at(0)?;
             let method_val = arr.get_value_at(1)?;
             let method_name = method_val.as_str()?;
@@ -2691,40 +3646,54 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
                         let allowed = caller_class.map_or(false, |cc| {
                             eg.class_is_a(class_name, cc) || eg.class_is_a(cc, class_name)
                         });
-                        if !allowed { return None; }
+                        if !allowed {
+                            return None;
+                        }
                     }
                     Visibility::Private => {
                         // Private: caller must be exactly the declaring class
-                        let allowed = caller_class
-                            .map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
-                        if !allowed { return None; }
+                        let allowed =
+                            caller_class.map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
+                        if !allowed {
+                            return None;
+                        }
                     }
                 }
                 drop(obj);
                 Some(ResolvedCallback {
-                    func_ptr, prepend_args: vec![obj_val.clone()], use_vars: vec![],
+                    func_ptr,
+                    prepend_args: vec![obj_val.clone()],
+                    use_vars: vec![],
                 })
             } else if let Some(class_str) = obj_val.as_str() {
                 // Static method: ["ClassName", "method"] — must be static; visibility depends on scope
                 let (visibility, is_static, func_ptr, declaring) =
                     find_method_in_class_hierarchy(eg, class_str, method_name)?;
-                if !is_static { return None; }
+                if !is_static {
+                    return None;
+                }
                 match visibility {
                     Visibility::Public => {}
                     Visibility::Protected => {
                         let allowed = caller_class.map_or(false, |cc| {
                             eg.class_is_a(class_str, cc) || eg.class_is_a(cc, class_str)
                         });
-                        if !allowed { return None; }
+                        if !allowed {
+                            return None;
+                        }
                     }
                     Visibility::Private => {
-                        let allowed = caller_class
-                            .map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
-                        if !allowed { return None; }
+                        let allowed =
+                            caller_class.map_or(false, |cc| cc.eq_ignore_ascii_case(declaring));
+                        if !allowed {
+                            return None;
+                        }
                     }
                 }
                 Some(ResolvedCallback {
-                    func_ptr, prepend_args: vec![Value::null()], use_vars: vec![],
+                    func_ptr,
+                    prepend_args: vec![Value::null()],
+                    use_vars: vec![],
                 })
             } else {
                 None
@@ -2736,7 +3705,9 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
                 find_method_in_class_hierarchy(eg, &obj.class_name, "__invoke")?;
             drop(obj);
             Some(ResolvedCallback {
-                func_ptr, prepend_args: vec![val.clone()], use_vars: vec![],
+                func_ptr,
+                prepend_args: vec![val.clone()],
+                use_vars: vec![],
             })
         }
         _ => None,
@@ -2747,9 +3718,13 @@ fn resolve_callback(val: &Value, eg: &ExecutorGlobals, caller_class: Option<&str
 /// instruction that entered the current internal callback helper.
 #[inline(always)]
 fn callback_cache_slot(ed: *mut ExecuteData) -> Option<*mut InlineCache> {
-    if ed.is_null() { return None; }
+    if ed.is_null() {
+        return None;
+    }
     let caller = unsafe { (*ed).prev_execute_data };
-    if caller.is_null() { return None; }
+    if caller.is_null() {
+        return None;
+    }
 
     let func = unsafe { (*caller).func };
     if func.is_null() || unsafe { (*func).fn_type } != FunctionType::User {
@@ -2805,7 +3780,9 @@ fn cache_resolved_string_callback(
     resolved: &ResolvedCallback,
     cache_slot: *mut InlineCache,
 ) {
-    let Some(name_ptr) = val.string_rc_ptr() else { return; };
+    let Some(name_ptr) = val.string_rc_ptr() else {
+        return;
+    };
     let old_ptr = unsafe { (*cache_slot).callback_string() };
     if old_ptr != name_ptr {
         unsafe { Value::retain_cached_string(name_ptr) };
@@ -2898,7 +3875,9 @@ fn call_resolved_with_array(
         eg,
         resolved.func_ptr,
         num_args,
-        resolved.prepend_args.iter()
+        resolved
+            .prepend_args
+            .iter()
             .chain(args.values())
             .chain(resolved.use_vars.iter()),
     )
@@ -2932,8 +3911,10 @@ fn call_resolved_with_php_array(
                 if let Some(idx) = param_names.iter().position(|p| p == name.as_str()) {
                     if idx < num_params {
                         if !positional[idx].is_undef() {
-                            eg.exception = Some(crate::value::make_error_value("Error",
-                                &format!("Named parameter ${} overwrites previous argument", name)));
+                            eg.exception = Some(crate::value::make_error_value(
+                                "Error",
+                                &format!("Named parameter ${} overwrites previous argument", name),
+                            ));
                             return Ok(Value::null());
                         }
                         positional[idx] = val.clone();
@@ -2941,15 +3922,19 @@ fn call_resolved_with_php_array(
                         extra_positional.push(val.clone());
                     }
                 } else {
-                    eg.exception = Some(crate::value::make_error_value("Error",
-                        &format!("Unknown named parameter ${}", name)));
+                    eg.exception = Some(crate::value::make_error_value(
+                        "Error",
+                        &format!("Unknown named parameter ${}", name),
+                    ));
                     return Ok(Value::null());
                 }
             }
             ArrayKey::Int(_) => {
                 if seen_named {
-                    eg.exception = Some(crate::value::make_error_value("Error",
-                        "Cannot use positional argument after named argument"));
+                    eg.exception = Some(crate::value::make_error_value(
+                        "Error",
+                        "Cannot use positional argument after named argument",
+                    ));
                     return Ok(Value::null());
                 }
                 if pos_cursor < num_params {
@@ -2965,8 +3950,14 @@ fn call_resolved_with_php_array(
     for i in 0..required {
         if positional[i].is_undef() {
             let name = param_names.get(i).map(|s| s.as_str()).unwrap_or("?");
-            eg.exception = Some(crate::value::make_error_value("ArgumentCountError",
-                &format!("call_user_func_array(): Argument #{} (${}): not passed", i + 1, name)));
+            eg.exception = Some(crate::value::make_error_value(
+                "ArgumentCountError",
+                &format!(
+                    "call_user_func_array(): Argument #{} (${}): not passed",
+                    i + 1,
+                    name
+                ),
+            ));
             return Ok(Value::null());
         }
     }
@@ -2982,7 +3973,9 @@ fn call_resolved_with_php_array(
         eg,
         resolved.func_ptr,
         num_args,
-        resolved.prepend_args.into_iter()
+        resolved
+            .prepend_args
+            .into_iter()
             .chain(normalized)
             .chain(resolved.use_vars),
     )
@@ -3001,24 +3994,25 @@ pub(crate) fn invoke_call_user_func_array(
     let args = match args_value.as_array() {
         Some(args) => args,
         None => {
-            eg.exception = Some(crate::value::make_error_value("TypeError",
-                "call_user_func_array(): Argument #2 ($args) must be of type array, given non-array"));
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "call_user_func_array(): Argument #2 ($args) must be of type array, given non-array",
+            ));
             return Ok(Value::null());
         }
     };
 
-    let resolved = match resolve_callback_with_cache(
-        callback,
-        eg,
-        caller_class,
-        cache_slot,
-    ) {
+    let resolved = match resolve_callback_with_cache(callback, eg, caller_class, cache_slot) {
         Some(resolved) => resolved,
         None => {
             let desc = callback.echo_to_string();
-            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
-                "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable", desc
-            )));
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "call_user_func_array(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
+                    desc
+                ),
+            ));
             return Ok(Value::null());
         }
     };
@@ -3028,7 +4022,11 @@ pub(crate) fn invoke_call_user_func_array(
 
 /// call_user_func($callback, ...$args)
 /// CV 0 = callback, CV 1 = variadic array of extra args
-fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_call_user_func(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
     // Variadic args packed at CV(1)
     let variadic_val = arg!(ed, 1);
@@ -3037,9 +4035,13 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
         Some(r) => r,
         None => {
             let desc = callback.echo_to_string();
-            eg.exception = Some(crate::value::make_error_value("TypeError", &format!(
-                "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable", desc
-            )));
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                &format!(
+                    "call_user_func(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found or not callable",
+                    desc
+                ),
+            ));
             return Ok(());
         }
     };
@@ -3054,7 +4056,9 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
             eg,
             resolved.func_ptr,
             num_args,
-            resolved.prepend_args.iter()
+            resolved
+                .prepend_args
+                .iter()
                 .chain(std::iter::once(variadic_val))
                 .chain(resolved.use_vars.iter()),
         )?
@@ -3064,17 +4068,25 @@ fn fn_call_user_func(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
             eg,
             resolved.func_ptr,
             num_args,
-            resolved.prepend_args.iter()
+            resolved
+                .prepend_args
+                .iter()
                 .chain(std::iter::empty())
                 .chain(resolved.use_vars.iter()),
         )?
     };
-    if eg.exception.is_some() { return Ok(()); }
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     ret!(rv, result);
 }
 
 /// is_callable($value) — check if value is callable
-fn fn_is_callable(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_callable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let val = arg!(ed, 0);
     let callable = resolve_callback_at_callsite(val, eg, ed).is_some();
     ret!(rv, Value::bool(callable));
@@ -3086,10 +4098,16 @@ fn fn_is_callable(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals
 
 /// microtime(bool $as_float = false): string|float
 /// Returns current Unix timestamp with microsecond precision.
-fn fn_microtime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_microtime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     use std::time::{SystemTime, UNIX_EPOCH};
     let as_float = arg_opt!(ed, 0).map(|v| v.is_truthy()).unwrap_or(false);
-    let dur = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let dur = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
     if as_float {
         let secs = dur.as_secs() as f64 + dur.subsec_nanos() as f64 / 1_000_000_000.0;
         ret!(rv, Value::double(secs));
@@ -3104,7 +4122,11 @@ fn fn_microtime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
 /// Returns high-resolution monotonic time.
 /// hrtime(true) → int nanoseconds
 /// hrtime(false) → [seconds, nanoseconds]
-fn fn_hrtime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_hrtime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     use std::time::Instant;
     // Use a lazy-initialized epoch for monotonic timing
     use std::sync::OnceLock;
@@ -3124,9 +4146,16 @@ fn fn_hrtime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) ->
 }
 
 /// time(): int — current Unix timestamp
-fn fn_time(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_time(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     use std::time::{SystemTime, UNIX_EPOCH};
-    let secs = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+    let secs = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
     ret!(rv, Value::long(secs as i64));
 }
 
@@ -3136,11 +4165,17 @@ fn fn_time(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
 
 /// exit($status = 0) / die($status = 0)
 /// If $status is int → exit with that code.  If string → print it, exit 0.
-fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_exit(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let status = arg_opt!(ed, 0);
     match status {
         None => Err(VmError::Exit(0)),
-        Some(v) if v.value_type() == ValueType::Long => Err(VmError::Exit(v.as_long().unwrap_or(0) as i32)),
+        Some(v) if v.value_type() == ValueType::Long => {
+            Err(VmError::Exit(v.as_long().unwrap_or(0) as i32))
+        }
         Some(v) => {
             // String argument: print it, exit 0
             print!("{}", v.echo_to_string());
@@ -3156,7 +4191,11 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
 /// file_get_contents($filename): string|false
 /// PHP strings are byte strings. We use Latin-1 (byte→char 1:1) to preserve raw bytes
 /// losslessly inside Rust String, pending a proper byte-string Value backend.
-fn fn_file_get_contents(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_file_get_contents(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     match std::fs::read(path.as_ref()) {
         Ok(bytes) => ret!(rv, Value::string(bytes_to_php_string(&bytes))),
@@ -3178,7 +4217,11 @@ fn php_string_to_bytes(s: &str) -> Vec<u8> {
 
 /// file_put_contents($filename, $data): int|false
 /// Writes using Latin-1 byte mapping to preserve binary data round-trip.
-fn fn_file_put_contents(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_file_put_contents(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let data = arg_str!(ed, 1);
     let raw_bytes = php_string_to_bytes(data.as_ref());
@@ -3189,39 +4232,76 @@ fn fn_file_put_contents(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Executor
 }
 
 /// file_exists($filename): bool
-fn fn_file_exists(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_file_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    ret!(rv, Value::bool(std::path::Path::new(path.as_ref()).exists()));
+    ret!(
+        rv,
+        Value::bool(std::path::Path::new(path.as_ref()).exists())
+    );
 }
 
 /// is_file($filename): bool
-fn fn_is_file(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_file(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    ret!(rv, Value::bool(std::path::Path::new(path.as_ref()).is_file()));
+    ret!(
+        rv,
+        Value::bool(std::path::Path::new(path.as_ref()).is_file())
+    );
 }
 
 /// is_dir($filename): bool
-fn fn_is_dir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_dir(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    ret!(rv, Value::bool(std::path::Path::new(path.as_ref()).is_dir()));
+    ret!(
+        rv,
+        Value::bool(std::path::Path::new(path.as_ref()).is_dir())
+    );
 }
 
 /// dirname($path): string
-fn fn_dirname(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_dirname(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let p = std::path::Path::new(path.as_ref());
-    let dir = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|| ".".to_string());
+    let dir = p
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string());
     // PHP returns "." for paths without directory component, empty parent → "."
     let dir = if dir.is_empty() { ".".to_string() } else { dir };
     ret!(rv, Value::string(dir));
 }
 
 /// basename($path, $suffix = ""): string
-fn fn_basename(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_basename(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    let suffix = arg_opt!(ed, 1).map(|v| v.echo_to_string()).unwrap_or_default();
+    let suffix = arg_opt!(ed, 1)
+        .map(|v| v.echo_to_string())
+        .unwrap_or_default();
     let p = std::path::Path::new(path.as_ref());
-    let name = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let result = if !suffix.is_empty() && name.ends_with(&suffix) {
         name[..name.len() - suffix.len()].to_string()
     } else {
@@ -3231,7 +4311,11 @@ fn fn_basename(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) 
 }
 
 /// realpath($path): string|false
-fn fn_realpath(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_realpath(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     match std::fs::canonicalize(path.as_ref()) {
         Ok(p) => ret!(rv, Value::string(p.to_string_lossy().into_owned())),
@@ -3240,7 +4324,11 @@ fn fn_realpath(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) 
 }
 
 /// getcwd(): string|false
-fn fn_getcwd(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_getcwd(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     match std::env::current_dir() {
         Ok(p) => ret!(rv, Value::string(p.to_string_lossy().into_owned())),
         Err(_) => ret!(rv, Value::bool(false)),
@@ -3275,7 +4363,11 @@ fn fn_file(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 }
 
 /// mkdir($pathname, $mode = 0777, $recursive = false): bool
-fn fn_mkdir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_mkdir(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let recursive = arg_opt!(ed, 2).map(|v| v.is_truthy()).unwrap_or(false);
     let result = if recursive {
@@ -3287,33 +4379,55 @@ fn fn_mkdir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
 }
 
 /// rmdir($dirname): bool
-fn fn_rmdir(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rmdir(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     ret!(rv, Value::bool(std::fs::remove_dir(path.as_ref()).is_ok()));
 }
 
 /// unlink($filename): bool
-fn fn_unlink(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_unlink(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     ret!(rv, Value::bool(std::fs::remove_file(path.as_ref()).is_ok()));
 }
 
 /// rename($old, $new): bool
-fn fn_rename(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rename(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let old = arg_str!(ed, 0);
     let new = arg_str!(ed, 1);
-    ret!(rv, Value::bool(std::fs::rename(old.as_ref(), new.as_ref()).is_ok()));
+    ret!(
+        rv,
+        Value::bool(std::fs::rename(old.as_ref(), new.as_ref()).is_ok())
+    );
 }
 
 /// copy($source, $dest): bool
 fn fn_copy(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let src = arg_str!(ed, 0);
     let dst = arg_str!(ed, 1);
-    ret!(rv, Value::bool(std::fs::copy(src.as_ref(), dst.as_ref()).is_ok()));
+    ret!(
+        rv,
+        Value::bool(std::fs::copy(src.as_ref(), dst.as_ref()).is_ok())
+    );
 }
 
 /// tempnam($dir, $prefix): string|false
-fn fn_tempnam(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_tempnam(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     use std::sync::atomic::{AtomicU64, Ordering};
     static COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -3334,19 +4448,46 @@ fn fn_tempnam(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 }
 
 /// sys_get_temp_dir(): string
-fn fn_sys_get_temp_dir(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::string(std::env::temp_dir().to_string_lossy().into_owned()));
+fn fn_sys_get_temp_dir(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::string(std::env::temp_dir().to_string_lossy().into_owned())
+    );
 }
 
 /// pathinfo($path, $flags = PATHINFO_ALL): array|string
-fn fn_pathinfo(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_pathinfo(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let p = std::path::Path::new(path.as_ref());
-    let dirname = p.parent().map(|d| d.to_string_lossy().into_owned()).unwrap_or_else(|| ".".to_string());
-    let dirname = if dirname.is_empty() { ".".to_string() } else { dirname };
-    let basename_str = p.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-    let extension = p.extension().map(|e| e.to_string_lossy().into_owned()).unwrap_or_default();
-    let filename = p.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let dirname = p
+        .parent()
+        .map(|d| d.to_string_lossy().into_owned())
+        .unwrap_or_else(|| ".".to_string());
+    let dirname = if dirname.is_empty() {
+        ".".to_string()
+    } else {
+        dirname
+    };
+    let basename_str = p
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let extension = p
+        .extension()
+        .map(|e| e.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let filename = p
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
 
     let mut arr = PhpArray::new();
     arr.set_str("dirname", Value::string(dirname));
@@ -3357,7 +4498,11 @@ fn fn_pathinfo(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) 
 }
 
 /// is_readable($filename): bool
-fn fn_is_readable(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_readable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let p = std::path::Path::new(path.as_ref());
     // Simple check: file exists and we can open it for reading
@@ -3365,14 +4510,21 @@ fn fn_is_readable(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 }
 
 /// is_writable($filename): bool / is_writeable()
-fn fn_is_writable(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_writable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     let p = std::path::Path::new(path.as_ref());
     let writable = if p.is_dir() {
         // For directories: try creating a temp file inside
         let probe = p.join(format!(".rphp_writable_probe_{}", std::process::id()));
         match std::fs::File::create(&probe) {
-            Ok(_) => { let _ = std::fs::remove_file(&probe); true }
+            Ok(_) => {
+                let _ = std::fs::remove_file(&probe);
+                true
+            }
             Err(_) => false,
         }
     } else {
@@ -3424,13 +4576,19 @@ fn glob_match(pattern: &str, text: &str) -> bool {
 }
 
 fn glob_match_inner(pat: &[char], pi: usize, txt: &[char], ti: usize) -> bool {
-    if pi == pat.len() && ti == txt.len() { return true; }
-    if pi == pat.len() { return false; }
+    if pi == pat.len() && ti == txt.len() {
+        return true;
+    }
+    if pi == pat.len() {
+        return false;
+    }
     match pat[pi] {
         '*' => {
             // Match zero or more characters
             for skip in 0..=(txt.len() - ti) {
-                if glob_match_inner(pat, pi + 1, txt, ti + skip) { return true; }
+                if glob_match_inner(pat, pi + 1, txt, ti + skip) {
+                    return true;
+                }
             }
             false
         }
@@ -3456,7 +4614,11 @@ fn glob_match_inner(pat: &[char], pi: usize, txt: &[char], ti: usize) -> bool {
 // ============================================================================
 
 /// htmlspecialchars($string, $flags = ENT_QUOTES|ENT_SUBSTITUTE): string
-fn fn_htmlspecialchars(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_htmlspecialchars(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -3474,7 +4636,11 @@ fn fn_htmlspecialchars(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorG
 
 /// htmlspecialchars_decode($string): string
 /// Decodes only one layer — `&amp;lt;` becomes `&lt;`, not `<`.
-fn fn_htmlspecialchars_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_htmlspecialchars_decode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     // Single-pass decode to avoid chaining issues (e.g. &amp;lt; → &lt; not <)
     let src = s.as_ref();
@@ -3484,36 +4650,53 @@ fn fn_htmlspecialchars_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut Ex
     while i < bytes.len() {
         if bytes[i] == b'&' {
             if src[i..].starts_with("&amp;") {
-                out.push('&'); i += 5;
+                out.push('&');
+                i += 5;
             } else if src[i..].starts_with("&quot;") {
-                out.push('"'); i += 6;
+                out.push('"');
+                i += 6;
             } else if src[i..].starts_with("&#039;") {
-                out.push('\''); i += 6;
+                out.push('\'');
+                i += 6;
             } else if src[i..].starts_with("&lt;") {
-                out.push('<'); i += 4;
+                out.push('<');
+                i += 4;
             } else if src[i..].starts_with("&gt;") {
-                out.push('>'); i += 4;
+                out.push('>');
+                i += 4;
             } else {
-                out.push('&'); i += 1;
+                out.push('&');
+                i += 1;
             }
         } else {
-            out.push(bytes[i] as char); i += 1;
+            out.push(bytes[i] as char);
+            i += 1;
         }
     }
     ret!(rv, Value::string(out));
 }
 
 /// htmlentities($string): string — same as htmlspecialchars for basic usage
-fn fn_htmlentities(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_htmlentities(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     fn_htmlspecialchars(ed, rv, eg)
 }
 
 /// urlencode($string): string
-fn fn_urlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_urlencode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let extra_bytes = s
         .bytes()
-        .filter(|b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b' '))
+        .filter(
+            |b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b' '),
+        )
         .count()
         * 2;
     let mut out = String::with_capacity(s.len() + extra_bytes);
@@ -3528,23 +4711,35 @@ fn fn_urlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
 }
 
 /// urldecode($string): string
-fn fn_urldecode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_urldecode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(percent_decode_bytes(&s, true)));
 }
 
 /// rawurlencode($string): string — like urlencode but space → %20
-fn fn_rawurlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rawurlencode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let extra_bytes = s
         .bytes()
-        .filter(|b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~'))
+        .filter(
+            |b| !matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~'),
+        )
         .count()
         * 2;
     let mut out = String::with_capacity(s.len() + extra_bytes);
     for b in s.as_bytes() {
         match *b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*b as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
             _ => push_percent_escape(&mut out, *b),
         }
     }
@@ -3552,14 +4747,22 @@ fn fn_rawurlencode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
 }
 
 /// rawurldecode($string): string
-fn fn_rawurldecode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rawurldecode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     ret!(rv, Value::string(percent_decode_bytes(&s, false)));
 }
 
 /// base64_encode($data): string
 /// Uses Latin-1 byte mapping to handle binary PHP strings correctly.
-fn fn_base64_encode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_base64_encode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     use crate::base64;
     let raw = php_string_to_bytes(s.as_ref());
@@ -3567,7 +4770,11 @@ fn fn_base64_encode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
 }
 
 /// base64_decode($data): string|false
-fn fn_base64_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_base64_decode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     use crate::base64;
     match base64::decode(s.as_ref()) {
@@ -3581,7 +4788,11 @@ fn fn_base64_decode(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlob
 // ============================================================================
 
 /// stripos($haystack, $needle): int|false
-fn fn_stripos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_stripos(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let hay = arg_str!(ed, 0);
     let needle = arg_str!(ed, 1);
     let hay_lower = hay.to_lowercase();
@@ -3597,7 +4808,11 @@ fn fn_stripos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -
 }
 
 /// strripos($haystack, $needle): int|false
-fn fn_strripos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_strripos(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let hay = arg_str!(ed, 0);
     let needle = arg_str!(ed, 1);
     let hay_lower = hay.to_lowercase();
@@ -3609,7 +4824,11 @@ fn fn_strripos(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) 
 }
 
 /// str_ireplace($search, $replace, $subject): string
-fn fn_str_ireplace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_ireplace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let search = arg_str!(ed, 0);
     let replace = arg_str!(ed, 1);
     let subject = arg_str!(ed, 2);
@@ -3631,16 +4850,28 @@ fn fn_str_ireplace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGloba
 }
 
 /// substr_replace($string, $replacement, $start, $length = null): string
-fn fn_substr_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_substr_replace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     let replacement = arg_str!(ed, 1);
     let start_raw = arg_long!(ed, 2);
     let len = s.len() as i64;
-    let start = if start_raw < 0 { (len + start_raw).max(0) as usize } else { start_raw.min(len) as usize };
+    let start = if start_raw < 0 {
+        (len + start_raw).max(0) as usize
+    } else {
+        start_raw.min(len) as usize
+    };
     let length = match arg_opt!(ed, 3) {
         Some(v) if !v.is_undef() => {
             let l = v.to_long_val();
-            if l < 0 { ((len as i64 - start as i64) + l).max(0) as usize } else { l as usize }
+            if l < 0 {
+                ((len as i64 - start as i64) + l).max(0) as usize
+            } else {
+                l as usize
+            }
         }
         _ => s.len() - start,
     };
@@ -3653,10 +4884,18 @@ fn fn_substr_replace(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlo
 }
 
 /// str_getcsv($string, $separator = ",", $enclosure = "\"", $escape = "\\"): array
-fn fn_str_getcsv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_str_getcsv(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    let sep = arg_opt!(ed, 1).map(|v| v.echo_to_string().chars().next().unwrap_or(',')).unwrap_or(',');
-    let enc = arg_opt!(ed, 2).map(|v| v.echo_to_string().chars().next().unwrap_or('"')).unwrap_or('"');
+    let sep = arg_opt!(ed, 1)
+        .map(|v| v.echo_to_string().chars().next().unwrap_or(','))
+        .unwrap_or(',');
+    let enc = arg_opt!(ed, 2)
+        .map(|v| v.echo_to_string().chars().next().unwrap_or('"'))
+        .unwrap_or('"');
 
     let mut arr = PhpArray::new();
     let mut field = String::new();
@@ -3688,10 +4927,16 @@ fn fn_str_getcsv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
 /// chunk_split($string, $chunklen = 76, $end = "\r\n"): string
 fn direct_chunk_split(args: &[Value]) -> Result<Value, VmError> {
     let s = direct_arg_str(args, 0);
-    let chunklen = direct_arg_opt(args, 1).map(|v| v.to_long_val() as usize).unwrap_or(76);
-    let end = direct_arg_opt(args, 2).map(|v| v.echo_to_string()).unwrap_or_else(|| "\r\n".to_string());
+    let chunklen = direct_arg_opt(args, 1)
+        .map(|v| v.to_long_val() as usize)
+        .unwrap_or(76);
+    let end = direct_arg_opt(args, 2)
+        .map(|v| v.echo_to_string())
+        .unwrap_or_else(|| "\r\n".to_string());
     if chunklen == 0 {
-        return Err(VmError::Fatal("chunk_split(): Argument #2 ($chunklen) must be greater than 0".into()));
+        return Err(VmError::Fatal(
+            "chunk_split(): Argument #2 ($chunklen) must be greater than 0".into(),
+        ));
     }
     let mut result = String::new();
     for chunk in s.as_bytes().chunks(chunklen) {
@@ -3701,7 +4946,11 @@ fn direct_chunk_split(args: &[Value]) -> Result<Value, VmError> {
     Ok(Value::string(result))
 }
 
-fn fn_chunk_split(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_chunk_split(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let args = unsafe { std::slice::from_raw_parts((*ed).cv(0), 3) };
     let result = direct_chunk_split(args)?;
     ret!(rv, result);
@@ -3720,13 +4969,18 @@ fn resolve_callback_or_fatal(
     resolve_callback_at_callsite(cb_val, eg, ed).ok_or_else(|| {
         let desc = cb_val.echo_to_string();
         VmError::Fatal(format!(
-            "Callback must be a valid callable, function \"{}\" not found", desc
+            "Callback must be a valid callable, function \"{}\" not found",
+            desc
         ))
     })
 }
 
 /// array_reduce($array, $callback, $initial = null): mixed
-fn fn_array_reduce(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_reduce(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_val = arg!(ed, 0);
     let callback = arg!(ed, 1).clone();
     let initial = arg_opt!(ed, 2).cloned().unwrap_or(Value::null());
@@ -3743,12 +4997,17 @@ fn fn_array_reduce(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobal
                 eg,
                 resolved.func_ptr,
                 num_args,
-                resolved.prepend_args.iter().cloned()
+                resolved
+                    .prepend_args
+                    .iter()
+                    .cloned()
                     .chain(std::iter::once(carry))
                     .chain(std::iter::once(item))
                     .chain(resolved.use_vars.iter().cloned()),
             )?;
-            if eg.exception.is_some() { return Ok(()); }
+            if eg.exception.is_some() {
+                return Ok(());
+            }
         }
         ret!(rv, carry);
     }
@@ -3767,14 +5026,18 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         let arr = unsafe { &*arr_ptr };
         match arr.as_array() {
             Some(a) => a.values().cloned().collect::<Vec<Value>>(),
-            None => { ret!(rv, Value::bool(false)); }
+            None => {
+                ret!(rv, Value::bool(false));
+            }
         }
     };
     let resolved = match resolve_callback_at_callsite(&callback, eg, ed) {
         Some(r) => r,
         None => {
-            eg.exception = Some(crate::value::make_error_value("TypeError",
-                "usort(): Argument #2 ($callback) must be a valid callback"));
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "usort(): Argument #2 ($callback) must be a valid callback",
+            ));
             return Ok(());
         }
     };
@@ -3792,26 +5055,39 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 eg,
                 func_ptr,
                 num_args,
-                prepend.iter()
+                prepend
+                    .iter()
                     .chain(std::iter::once(&items[j - 1]))
                     .chain(std::iter::once(&items[j]))
                     .chain(use_vars.iter()),
             )?;
-            if eg.exception.is_some() { return Ok(()); }
-            if result.to_long_val() <= 0 { break; }
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+            if result.to_long_val() <= 0 {
+                break;
+            }
             items.swap(j - 1, j);
             j -= 1;
         }
     }
     let mut new_arr = PhpArray::new();
-    for v in items { new_arr.push(v); }
+    for v in items {
+        new_arr.push(v);
+    }
     // Write back using saved raw pointer (stable across call_function calls).
-    unsafe { *arr_ptr = Value::array(new_arr); }
+    unsafe {
+        *arr_ptr = Value::array(new_arr);
+    }
     ret!(rv, Value::bool(true));
 }
 
 /// array_diff($array1, $array2): array
-fn fn_array_diff(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_diff(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr1 = arg!(ed, 0);
     let arr2 = arg!(ed, 1);
 
@@ -3833,7 +5109,11 @@ fn fn_array_diff(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals
 }
 
 /// array_intersect($array1, $array2): array
-fn fn_array_intersect(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_intersect(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr1 = arg!(ed, 0);
     let arr2 = arg!(ed, 1);
 
@@ -3856,21 +5136,32 @@ fn fn_array_intersect(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGl
 
 /// array_walk(&$array, $callback): bool
 /// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
-fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_walk(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let callback = arg!(ed, 1).clone();
     let arr_ptr: *mut Value = arg_mut!(ed, 0);
 
     let arr = unsafe { &*arr_ptr };
     let pairs = match arr.as_array() {
-        Some(a) => a.iter().map(|(k, v)| (k.clone(), v.clone())).collect::<Vec<_>>(),
-        None => { ret!(rv, Value::bool(false)); }
+        Some(a) => a
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect::<Vec<_>>(),
+        None => {
+            ret!(rv, Value::bool(false));
+        }
     };
 
     let resolved = match resolve_callback_at_callsite(&callback, eg, ed) {
         Some(r) => r,
         None => {
-            eg.exception = Some(crate::value::make_error_value("TypeError",
-                "array_walk(): Argument #2 ($callback) must be a valid callback"));
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "array_walk(): Argument #2 ($callback) must be a valid callback",
+            ));
             return Ok(());
         }
     };
@@ -3891,12 +5182,16 @@ fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
                 eg,
                 resolved.func_ptr,
                 num_args,
-                resolved.prepend_args.iter()
+                resolved
+                    .prepend_args
+                    .iter()
                     .chain(std::iter::once(&v))
                     .chain(std::iter::once(&key_val))
                     .chain(resolved.use_vars.iter()),
             )?;
-            if eg.exception.is_some() { return Ok(()); }
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             mutations.push((k, modified_val));
         }
         let mut new_arr = PhpArray::new();
@@ -3906,7 +5201,9 @@ fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
                 ArrayKey::String(s) => new_arr.set_str(&s, v),
             }
         }
-        unsafe { *arr_ptr = Value::array(new_arr); }
+        unsafe {
+            *arr_ptr = Value::array(new_arr);
+        }
     } else {
         // By-value callback: call without readback, array stays unchanged.
         for (k, v) in pairs {
@@ -3919,22 +5216,33 @@ fn fn_array_walk(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
                 eg,
                 resolved.func_ptr,
                 num_args,
-                resolved.prepend_args.iter()
+                resolved
+                    .prepend_args
+                    .iter()
                     .chain(std::iter::once(&v))
                     .chain(std::iter::once(&key_val))
                     .chain(resolved.use_vars.iter()),
             )?;
-            if eg.exception.is_some() { return Ok(()); }
+            if eg.exception.is_some() {
+                return Ok(());
+            }
         }
     }
     ret!(rv, Value::bool(true));
 }
 
 /// asort(&$array): bool — sort by value, preserve keys
-fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_asort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
-        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         pairs.sort_by(|(_, a), (_, b)| cmp_val(compare_values(a, b)));
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
@@ -3950,10 +5258,17 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
 }
 
 /// arsort(&$array): bool — reverse sort by value, preserve keys
-fn fn_arsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_arsort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
-        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
         pairs.sort_by(|(_, a), (_, b)| cmp_val(compare_values(b, a)));
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
@@ -3969,17 +5284,22 @@ fn fn_arsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) ->
 }
 
 /// ksort(&$array): bool — sort by key
-fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ksort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
-        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        pairs.sort_by(|(a, _), (b, _)| {
-            match (a, b) {
-                (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
-                (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
-                (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
-                (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
-            }
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        pairs.sort_by(|(a, _), (b, _)| match (a, b) {
+            (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
+            (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
+            (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
+            (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
         });
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
@@ -3995,17 +5315,22 @@ fn fn_ksort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
 }
 
 /// krsort(&$array): bool — reverse sort by key
-fn fn_krsort(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_krsort(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr = unsafe { &mut *arg_mut!(ed, 0) };
     if let Some(php_arr) = arr.as_array() {
-        let mut pairs: Vec<(ArrayKey, Value)> = php_arr.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
-        pairs.sort_by(|(a, _), (b, _)| {
-            match (b, a) {
-                (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
-                (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
-                (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
-                (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
-            }
+        let mut pairs: Vec<(ArrayKey, Value)> = php_arr
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        pairs.sort_by(|(a, _), (b, _)| match (b, a) {
+            (ArrayKey::Int(x), ArrayKey::Int(y)) => x.cmp(y),
+            (ArrayKey::String(x), ArrayKey::String(y)) => x.cmp(y),
+            (ArrayKey::Int(_), ArrayKey::String(_)) => std::cmp::Ordering::Less,
+            (ArrayKey::String(_), ArrayKey::Int(_)) => std::cmp::Ordering::Greater,
         });
         let mut new_arr = PhpArray::new();
         for (k, v) in pairs {
@@ -4068,8 +5393,15 @@ fn fn_atan(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     let result = direct_atan(std::slice::from_ref(arg!(ed, 0)))?;
     ret!(rv, result);
 }
-fn fn_atan2(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).atan2(arg_float!(ed, 1))));
+fn fn_atan2(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::double(arg_float!(ed, 0).atan2(arg_float!(ed, 1)))
+    );
 }
 #[inline(always)]
 fn direct_exp(args: &[Value]) -> Result<Value, VmError> {
@@ -4088,14 +5420,29 @@ fn fn_cosh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
 fn fn_tanh(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).tanh()));
 }
-fn fn_deg2rad(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_deg2rad(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).to_radians()));
 }
-fn fn_rad2deg(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_rad2deg(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::double(arg_float!(ed, 0).to_degrees()));
 }
-fn fn_hypot(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    ret!(rv, Value::double(arg_float!(ed, 0).hypot(arg_float!(ed, 1))));
+fn fn_hypot(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        Value::double(arg_float!(ed, 0).hypot(arg_float!(ed, 1)))
+    );
 }
 
 // ============================================================================
@@ -4108,7 +5455,10 @@ fn fn_date(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
     let fmt = arg_str!(ed, 0);
     let ts = match arg_opt!(ed, 1) {
         Some(v) if !v.is_undef() => v.to_long_val(),
-        _ => SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64,
+        _ => SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
     };
     ret!(rv, Value::string(format_php_date(&fmt, ts)));
 }
@@ -4126,7 +5476,9 @@ fn format_php_date(fmt: &str, ts: i64) -> String {
             continue;
         }
         match c {
-            '\\' => { escape = true; }
+            '\\' => {
+                escape = true;
+            }
             'Y' => out.push_str(&format!("{:04}", year)),
             'y' => out.push_str(&format!("{:02}", year % 100)),
             'm' => out.push_str(&format!("{:02}", month)),
@@ -4137,18 +5489,67 @@ fn format_php_date(fmt: &str, ts: i64) -> String {
             'G' => out.push_str(&format!("{}", hour)),
             'i' => out.push_str(&format!("{:02}", min)),
             's' => out.push_str(&format!("{:02}", sec)),
-            'g' => { let h = if hour == 0 { 12 } else if hour > 12 { hour - 12 } else { hour }; out.push_str(&format!("{}", h)); }
-            'h' => { let h = if hour == 0 { 12 } else if hour > 12 { hour - 12 } else { hour }; out.push_str(&format!("{:02}", h)); }
+            'g' => {
+                let h = if hour == 0 {
+                    12
+                } else if hour > 12 {
+                    hour - 12
+                } else {
+                    hour
+                };
+                out.push_str(&format!("{}", h));
+            }
+            'h' => {
+                let h = if hour == 0 {
+                    12
+                } else if hour > 12 {
+                    hour - 12
+                } else {
+                    hour
+                };
+                out.push_str(&format!("{:02}", h));
+            }
             'A' => out.push_str(if hour < 12 { "AM" } else { "PM" }),
             'a' => out.push_str(if hour < 12 { "am" } else { "pm" }),
             'N' => out.push_str(&format!("{}", if wday == 0 { 7 } else { wday })),
             'w' => out.push_str(&format!("{}", wday)),
             'z' => out.push_str(&format!("{}", yday)),
             'U' => out.push_str(&format!("{}", ts)),
-            'D' => out.push_str(["Sun","Mon","Tue","Wed","Thu","Fri","Sat"][wday as usize]),
-            'l' => out.push_str(["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"][wday as usize]),
-            'F' => out.push_str(["","January","February","March","April","May","June","July","August","September","October","November","December"][month as usize]),
-            'M' => out.push_str(["","Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][month as usize]),
+            'D' => out.push_str(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wday as usize]),
+            'l' => out.push_str(
+                [
+                    "Sunday",
+                    "Monday",
+                    "Tuesday",
+                    "Wednesday",
+                    "Thursday",
+                    "Friday",
+                    "Saturday",
+                ][wday as usize],
+            ),
+            'F' => out.push_str(
+                [
+                    "",
+                    "January",
+                    "February",
+                    "March",
+                    "April",
+                    "May",
+                    "June",
+                    "July",
+                    "August",
+                    "September",
+                    "October",
+                    "November",
+                    "December",
+                ][month as usize],
+            ),
+            'M' => out.push_str(
+                [
+                    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+                    "Nov", "Dec",
+                ][month as usize],
+            ),
             't' => {
                 let days = days_in_month(year, month);
                 out.push_str(&format!("{}", days));
@@ -4168,7 +5569,13 @@ fn days_in_month(year: i64, month: i64) -> i64 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => if is_leap_year(year) { 29 } else { 28 },
+        2 => {
+            if is_leap_year(year) {
+                29
+            } else {
+                28
+            }
+        }
         _ => 30,
     }
 }
@@ -4178,9 +5585,17 @@ fn unix_to_parts(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
     let sec = ((ts % 60) + 60) % 60;
     let total_min = if ts < 0 { (ts - 59) / 60 } else { ts / 60 };
     let min = ((total_min % 60) + 60) % 60;
-    let total_hours = if total_min < 0 { (total_min - 59) / 60 } else { total_min / 60 };
+    let total_hours = if total_min < 0 {
+        (total_min - 59) / 60
+    } else {
+        total_min / 60
+    };
     let hour = ((total_hours % 24) + 24) % 24;
-    let mut days = if total_hours < 0 { (total_hours - 23) / 24 } else { total_hours / 24 };
+    let mut days = if total_hours < 0 {
+        (total_hours - 23) / 24
+    } else {
+        total_hours / 24
+    };
 
     // weekday: 1970-01-01 was Thursday (4)
     let wday = ((days % 7 + 4) % 7 + 7) % 7;
@@ -4190,18 +5605,31 @@ fn unix_to_parts(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
     days += 719468; // shift to 0000-03-01
     let era = if days >= 0 { days } else { days - 146096 } / 146097;
     let doe = days - era * 146097; // day of era [0, 146096]
-    let yoe = (doe - doe/1460 + doe/36524 - doe/146096) / 365;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
     let y = yoe + era * 400;
-    let doy = doe - (365*yoe + yoe/4 - yoe/100);
-    let mp = (5*doy + 2) / 153;
-    let d = doy - (153*mp + 2)/5 + 1;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = if m <= 2 { y + 1 } else { y };
 
     // Day of year
-    let month_days: [i64; 12] = [31,if is_leap_year(year){29}else{28},31,30,31,30,31,31,30,31,30,31];
+    let month_days: [i64; 12] = [
+        31,
+        if is_leap_year(year) { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
     let mut yday = d - 1;
-    for i in 0..(m-1) as usize {
+    for i in 0..(m - 1) as usize {
         yday += month_days[i];
     }
 
@@ -4209,7 +5637,11 @@ fn unix_to_parts(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
 }
 
 /// mktime($hour, $minute, $second, $month, $day, $year): int|false
-fn fn_mktime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_mktime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let hour = arg_long!(ed, 0);
     let min = arg_opt!(ed, 1).map(|v| v.to_long_val()).unwrap_or(0);
     let sec = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(0);
@@ -4217,14 +5649,17 @@ fn fn_mktime(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) ->
     let day = arg_opt!(ed, 4).map(|v| v.to_long_val()).unwrap_or(1);
     let year = arg_opt!(ed, 5).map(|v| v.to_long_val()).unwrap_or(1970);
 
-    ret!(rv, Value::long(parts_to_unix(year, month, day, hour, min, sec)));
+    ret!(
+        rv,
+        Value::long(parts_to_unix(year, month, day, hour, min, sec))
+    );
 }
 
 fn parts_to_unix(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) -> i64 {
     // Days from 1970-01-01 to the given date
     let m = if month > 2 { month } else { month + 12 };
     let y = if month > 2 { year } else { year - 1 };
-    let days = 365 * y + y/4 - y/100 + y/400 + (153*(m-3)+2)/5 + day - 719469;
+    let days = 365 * y + y / 4 - y / 100 + y / 400 + (153 * (m - 3) + 2) / 5 + day - 719469;
     days * 86400 + hour * 3600 + min * 60 + sec
 }
 
@@ -4233,7 +5668,11 @@ fn parts_to_unix(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64)
 // ============================================================================
 
 /// getenv($name): string|false
-fn fn_getenv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_getenv(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     match std::env::var(name.as_ref()) {
         Ok(val) => ret!(rv, Value::string(val)),
@@ -4242,41 +5681,70 @@ fn fn_getenv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) ->
 }
 
 /// putenv($assignment): bool
-fn fn_putenv(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_putenv(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
     if let Some(pos) = s.find('=') {
         let (key, val) = s.split_at(pos);
-        unsafe { std::env::set_var(key, &val[1..]); }
+        unsafe {
+            std::env::set_var(key, &val[1..]);
+        }
         ret!(rv, Value::bool(true));
     }
     ret!(rv, Value::bool(false));
 }
 
 /// php_uname($mode = "a"): string
-fn fn_php_uname(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let mode = arg_opt!(ed, 0).map(|v| v.echo_to_string().chars().next().unwrap_or('a')).unwrap_or('a');
+fn fn_php_uname(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mode = arg_opt!(ed, 0)
+        .map(|v| v.echo_to_string().chars().next().unwrap_or('a'))
+        .unwrap_or('a');
     let result = match mode {
         's' => std::env::consts::OS.to_string(),
         'r' => "rphp".to_string(),
         'm' => std::env::consts::ARCH.to_string(),
-        _ => format!("{} {} {}", std::env::consts::OS, "rphp", std::env::consts::ARCH),
+        _ => format!(
+            "{} {} {}",
+            std::env::consts::OS,
+            "rphp",
+            std::env::consts::ARCH
+        ),
     };
     ret!(rv, Value::string(result));
 }
 
 /// php_sapi_name(): string
-fn fn_php_sapi_name(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_php_sapi_name(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::string("cli".to_string()));
 }
 
 /// phpversion(): string
-fn fn_phpversion(_ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_phpversion(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     ret!(rv, Value::string("8.4.0".to_string()));
 }
 
 /// PHP_INT_SIZE, PHP_INT_MAX etc. are handled as constants.
 /// sleep($seconds): int
-fn fn_sleep(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_sleep(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let secs = arg_long!(ed, 0);
     if secs > 0 {
         std::thread::sleep(std::time::Duration::from_secs(secs as u64));
@@ -4285,7 +5753,11 @@ fn fn_sleep(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> 
 }
 
 /// usleep($microseconds): void
-fn fn_usleep(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_usleep(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let us = arg_long!(ed, 0);
     if us > 0 {
         std::thread::sleep(std::time::Duration::from_micros(us as u64));
@@ -4294,7 +5766,11 @@ fn fn_usleep(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -
 }
 
 /// array_key_first($array): int|string|null
-fn fn_array_key_first(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_key_first(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_val = arg!(ed, 0);
     if let Some(arr) = arr_val.as_array() {
         if let Some((k, _)) = arr.iter().next() {
@@ -4308,7 +5784,11 @@ fn fn_array_key_first(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGl
 }
 
 /// array_key_last($array): int|string|null
-fn fn_array_key_last(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_array_key_last(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let arr_val = arg!(ed, 0);
     if let Some(arr) = arr_val.as_array() {
         if let Some((k, _)) = arr.iter().last() {
@@ -4325,39 +5805,81 @@ fn fn_array_key_last(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlo
 /// (Noted in registration as intentionally limited)
 
 /// ctype_alpha($text): bool
-fn fn_ctype_alpha(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ctype_alpha(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic())));
+    ret!(
+        rv,
+        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphabetic()))
+    );
 }
 
 /// ctype_digit($text): bool
-fn fn_ctype_digit(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ctype_digit(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit())));
+    ret!(
+        rv,
+        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_digit()))
+    );
 }
 
 /// ctype_alnum($text): bool
-fn fn_ctype_alnum(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ctype_alnum(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric())));
+    ret!(
+        rv,
+        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric()))
+    );
 }
 
 /// ctype_space($text): bool
-fn fn_ctype_space(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ctype_space(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_whitespace())));
+    ret!(
+        rv,
+        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_whitespace()))
+    );
 }
 
 /// ctype_upper($text): bool
-fn fn_ctype_upper(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ctype_upper(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_uppercase())));
+    ret!(
+        rv,
+        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_uppercase()))
+    );
 }
 
 /// ctype_lower($text): bool
-fn fn_ctype_lower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_ctype_lower(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    ret!(rv, Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase())));
+    ret!(
+        rv,
+        Value::bool(!s.is_empty() && s.chars().all(|c| c.is_ascii_lowercase()))
+    );
 }
 
 // ============================================================================
@@ -4365,7 +5887,11 @@ fn fn_ctype_lower(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobal
 // ============================================================================
 
 /// call_user_func_array($callback, $args): mixed
-fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_call_user_func_array(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let callback = arg!(ed, 0);
     let args_val = arg!(ed, 1);
     let caller_class = get_calling_scope_class(ed, eg).map(str::to_owned);
@@ -4376,28 +5902,47 @@ fn fn_call_user_func_array(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execut
         caller_class.as_deref(),
         callback_cache_slot(ed),
     )?;
-    if eg.exception.is_some() { return Ok(()); }
+    if eg.exception.is_some() {
+        return Ok(());
+    }
     ret!(rv, result);
 }
 
 /// function_exists($name): bool
-fn fn_function_exists(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_function_exists(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let name = arg_str!(ed, 0);
     let exists = eg.find_function(&name).is_some();
     ret!(rv, Value::bool(exists));
 }
 
 /// is_scalar($value): bool — true for int, float, string, bool
-fn fn_is_scalar(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_is_scalar(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let val = arg!(ed, 0);
-    let scalar = matches!(val.value_type(),
-        ValueType::Long | ValueType::Double | ValueType::String | ValueType::True | ValueType::False
+    let scalar = matches!(
+        val.value_type(),
+        ValueType::Long
+            | ValueType::Double
+            | ValueType::String
+            | ValueType::True
+            | ValueType::False
     );
     ret!(rv, Value::bool(scalar));
 }
 
 /// parse_url($url, $component = -1): mixed
-fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_parse_url(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let url = arg_str!(ed, 0);
     let component = arg_opt!(ed, 1).map(|v| v.to_long_val()).unwrap_or(-1);
 
@@ -4414,7 +5959,9 @@ fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         let candidate = &rest[..colon];
         let valid_scheme = !candidate.is_empty()
             && candidate.as_bytes()[0].is_ascii_alphabetic()
-            && candidate.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.' || b == b'-');
+            && candidate
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'+' || b == b'.' || b == b'-');
         if valid_scheme {
             let after_colon = &rest[colon + 1..];
             if after_colon.starts_with("//") {
@@ -4499,7 +6046,11 @@ fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
                 port = None;
             }
         } else {
-            host = if hostport.is_empty() { None } else { Some(hostport.to_string()) };
+            host = if hostport.is_empty() {
+                None
+            } else {
+                Some(hostport.to_string())
+            };
             port = None;
         }
     } else {
@@ -4508,7 +6059,11 @@ fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         pass = None;
         host = None;
         port = None;
-        path = if rest.is_empty() { None } else { Some(rest.to_string()) };
+        path = if rest.is_empty() {
+            None
+        } else {
+            Some(rest.to_string())
+        };
     }
 
     // PHP_URL_* constants
@@ -4538,14 +6093,30 @@ fn fn_parse_url(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
 
     // Return associative array
     let mut arr = PhpArray::new();
-    if let Some(v) = scheme { arr.set_str("scheme", Value::string(v)); }
-    if let Some(v) = host { arr.set_str("host", Value::string(v)); }
-    if let Some(v) = port { arr.set_str("port", Value::long(v)); }
-    if let Some(v) = user { arr.set_str("user", Value::string(v)); }
-    if let Some(v) = pass { arr.set_str("pass", Value::string(v)); }
-    if let Some(v) = path { arr.set_str("path", Value::string(v)); }
-    if let Some(v) = query { arr.set_str("query", Value::string(v)); }
-    if let Some(v) = fragment { arr.set_str("fragment", Value::string(v)); }
+    if let Some(v) = scheme {
+        arr.set_str("scheme", Value::string(v));
+    }
+    if let Some(v) = host {
+        arr.set_str("host", Value::string(v));
+    }
+    if let Some(v) = port {
+        arr.set_str("port", Value::long(v));
+    }
+    if let Some(v) = user {
+        arr.set_str("user", Value::string(v));
+    }
+    if let Some(v) = pass {
+        arr.set_str("pass", Value::string(v));
+    }
+    if let Some(v) = path {
+        arr.set_str("path", Value::string(v));
+    }
+    if let Some(v) = query {
+        arr.set_str("query", Value::string(v));
+    }
+    if let Some(v) = fragment {
+        arr.set_str("fragment", Value::string(v));
+    }
     ret!(rv, Value::array(arr));
 }
 
@@ -4602,7 +6173,9 @@ fn percent_decode(s: &str) -> String {
 
 /// PHP normalizes dots and spaces in top-level query variable names to underscores.
 fn parse_str_normalize_key(key: &str) -> String {
-    key.chars().map(|c| if c == '.' || c == ' ' { '_' } else { c }).collect()
+    key.chars()
+        .map(|c| if c == '.' || c == ' ' { '_' } else { c })
+        .collect()
 }
 
 /// Parse bracket segments from a key like `a[b][c][]`.
@@ -4651,8 +6224,12 @@ fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Va
     if remaining.is_empty() {
         // Leaf: set or push
         match seg {
-            None => { arr.push(val); }
-            Some(k) => { arr.set_str(k, val); }
+            None => {
+                arr.push(val);
+            }
+            Some(k) => {
+                arr.set_str(k, val);
+            }
         }
     } else {
         // Intermediate: get-or-create sub-array, then recurse
@@ -4679,16 +6256,25 @@ fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<String>], val: Va
 /// parse_str($string, &$result): void
 /// Parses a URL-encoded query string into variables.
 /// Supports recursive nesting (a[b][c]=1) and PHP key normalization (dots/spaces → _).
-fn fn_parse_str(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_parse_str(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let input = arg_str!(ed, 0);
     let out_ptr = arg_mut!(ed, 1);
 
     let mut arr = PhpArray::new();
     if !input.is_empty() {
         for pair in input.as_ref().split('&') {
-            if pair.is_empty() { continue; }
+            if pair.is_empty() {
+                continue;
+            }
             let (raw_key, val) = if let Some(idx) = pair.find('=') {
-                (percent_decode(&pair[..idx]), percent_decode(&pair[idx + 1..]))
+                (
+                    percent_decode(&pair[..idx]),
+                    percent_decode(&pair[idx + 1..]),
+                )
             } else {
                 (percent_decode(pair), String::new())
             };
@@ -4710,7 +6296,10 @@ fn fn_parse_str(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals)
         }
     }
 
-    unsafe { std::ptr::drop_in_place(out_ptr); out_ptr.write(Value::array(arr)); }
+    unsafe {
+        std::ptr::drop_in_place(out_ptr);
+        out_ptr.write(Value::array(arr));
+    }
     ret!(rv, Value::null());
 }
 
@@ -4735,10 +6324,18 @@ fn percent_encode_query(s: &str) -> String {
 }
 
 /// http_build_query($data, $numeric_prefix = "", $arg_separator = "&"): string
-fn fn_http_build_query(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_http_build_query(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let data = arg!(ed, 0);
-    let prefix = arg_opt!(ed, 1).map(|v| v.echo_to_string()).unwrap_or_default();
-    let sep = arg_opt!(ed, 2).map(|v| v.echo_to_string()).unwrap_or_else(|| "&".to_string());
+    let prefix = arg_opt!(ed, 1)
+        .map(|v| v.echo_to_string())
+        .unwrap_or_default();
+    let sep = arg_opt!(ed, 2)
+        .map(|v| v.echo_to_string())
+        .unwrap_or_else(|| "&".to_string());
 
     fn build_pairs(arr: &PhpArray, parent_key: &str, prefix: &str, pairs: &mut Vec<String>) {
         for (key, val) in arr.iter() {
@@ -4771,7 +6368,11 @@ fn fn_http_build_query(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorG
                     ValueType::False => "0".to_string(),
                     _ => val.echo_to_string(),
                 };
-                pairs.push(format!("{}={}", percent_encode_query(&key_str), percent_encode_query(&v)));
+                pairs.push(format!(
+                    "{}={}",
+                    percent_encode_query(&key_str),
+                    percent_encode_query(&v)
+                ));
             }
         }
     }
@@ -4786,7 +6387,11 @@ fn fn_http_build_query(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorG
 }
 
 /// preg_match_all($pattern, $subject, &$matches = null): int
-fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_match_all(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
 
@@ -4797,7 +6402,9 @@ fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
 
     let re = match eg.regex_cache.get_or_compile(&pattern_str) {
         Ok(regex) => regex,
-        Err(_) => { ret!(rv, Value::long(0)); }
+        Err(_) => {
+            ret!(rv, Value::long(0));
+        }
     };
 
     let all_caps = re.captures_iter(&subject);
@@ -4806,7 +6413,11 @@ fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
     if has_matches {
         let matches_ptr = arg_mut!(ed, 2);
         // PHP default: PREG_PATTERN_ORDER — matches[0] = all full matches, matches[1] = all group 1, etc.
-        let num_groups = if all_caps.is_empty() { 1 } else { all_caps[0].len() };
+        let num_groups = if all_caps.is_empty() {
+            1
+        } else {
+            all_caps[0].len()
+        };
         let mut result_arrays: Vec<PhpArray> = (0..num_groups).map(|_| PhpArray::new()).collect();
         for caps in &all_caps {
             for i in 0..num_groups {
@@ -4833,21 +6444,30 @@ fn fn_preg_match_all(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlob
                 out.set_str(name, Value::array(named_arr));
             }
         }
-        unsafe { std::ptr::drop_in_place(matches_ptr); matches_ptr.write(Value::array(out)); }
+        unsafe {
+            std::ptr::drop_in_place(matches_ptr);
+            matches_ptr.write(Value::array(out));
+        }
     }
 
     ret!(rv, Value::long(count));
 }
 
 /// preg_split($pattern, $subject, $limit = -1): array|false
-fn fn_preg_split(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_split(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
     let limit = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(-1);
 
     let re = match eg.regex_cache.get_or_compile(&pattern_str) {
         Ok(regex) => regex,
-        Err(_) => { ret!(rv, Value::bool(false)); }
+        Err(_) => {
+            ret!(rv, Value::bool(false));
+        }
     };
 
     let parts = re.split(&subject, limit);
@@ -4859,14 +6479,20 @@ fn fn_preg_split(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals)
 }
 
 /// preg_replace_callback($pattern, $callback, $subject): string|null
-fn fn_preg_replace_callback(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+fn fn_preg_replace_callback(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let callback = arg!(ed, 1).clone();
     let subject = arg_str!(ed, 2).into_owned();
 
     let re = match eg.regex_cache.get_or_compile(&pattern_str) {
         Ok(regex) => regex,
-        Err(_) => { ret!(rv, Value::null()); }
+        Err(_) => {
+            ret!(rv, Value::null());
+        }
     };
 
     // Collect all matches first, then replace (because callback needs &mut eg)
@@ -4899,11 +6525,16 @@ fn fn_preg_replace_callback(ed: *mut ExecuteData, rv: *mut Value, eg: &mut Execu
             eg,
             resolved.func_ptr,
             num_args,
-            resolved.prepend_args.iter().cloned()
+            resolved
+                .prepend_args
+                .iter()
+                .cloned()
                 .chain(std::iter::once(Value::array(matches_arr)))
                 .chain(resolved.use_vars.iter().cloned()),
         )?;
-        if eg.exception.is_some() { return Ok(()); }
+        if eg.exception.is_some() {
+            return Ok(());
+        }
         replacements.push((full_match.start, full_match.end, cb_result.echo_to_string()));
     }
 

@@ -26,19 +26,38 @@ pub const DEFAULT_REGEX_CACHE_CAPACITY: usize = 1024;
 #[derive(Debug, Clone)]
 enum Node {
     Literal(char),
-    AnyChar,                          // .
+    AnyChar, // .
     Anchor(Anchor),
-    CharClass { negated: bool, items: Vec<ClassItem> },
+    CharClass {
+        negated: bool,
+        items: Vec<ClassItem>,
+    },
     Shorthand(Shorthand),
-    Group { index: Option<usize>, #[allow(dead_code)] name: Option<String>, inner: Box<Node> },
+    Group {
+        index: Option<usize>,
+        #[allow(dead_code)]
+        name: Option<String>,
+        inner: Box<Node>,
+    },
     Alternation(Vec<Node>),
     Sequence(Vec<Node>),
-    Quantifier { inner: Box<Node>, min: usize, max: Option<usize>, greedy: bool },
+    Quantifier {
+        inner: Box<Node>,
+        min: usize,
+        max: Option<usize>,
+        greedy: bool,
+    },
     Backreference(usize),
     NamedBackreference(String),
-    Lookahead { positive: bool, inner: Box<Node> },
-    Lookbehind { positive: bool, inner: Box<Node> },
-    WordBoundary(bool),               // true = \b, false = \B
+    Lookahead {
+        positive: bool,
+        inner: Box<Node>,
+    },
+    Lookbehind {
+        positive: bool,
+        inner: Box<Node>,
+    },
+    WordBoundary(bool), // true = \b, false = \B
 }
 
 #[derive(Debug, Clone)]
@@ -77,7 +96,13 @@ pub struct RegexFlags {
 
 impl Default for RegexFlags {
     fn default() -> Self {
-        Self { case_insensitive: false, multiline: false, dotall: false, extended: false, ungreedy: false }
+        Self {
+            case_insensitive: false,
+            multiline: false,
+            dotall: false,
+            extended: false,
+            ungreedy: false,
+        }
     }
 }
 
@@ -292,7 +317,10 @@ impl Regex {
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = char_offset(subject, &chars, pos);
                 let match_end = char_offset(subject, &chars, end);
-                ctx.groups[0] = Some(Match { start: match_start, end: match_end });
+                ctx.groups[0] = Some(Match {
+                    start: match_start,
+                    end: match_end,
+                });
 
                 // Append text before match
                 result.push_str(&subject[char_offset(subject, &chars, pos)..match_start]);
@@ -336,7 +364,10 @@ impl Regex {
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = char_offset(subject, &chars, pos);
                 let match_end = char_offset(subject, &chars, end);
-                ctx.groups[0] = Some(Match { start: match_start, end: match_end });
+                ctx.groups[0] = Some(Match {
+                    start: match_start,
+                    end: match_end,
+                });
                 results.push(Captures {
                     groups: groups.clone(),
                     named_groups: self.named_groups.clone(),
@@ -424,7 +455,10 @@ impl Regex {
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = char_offset(subject, &chars, pos);
                 let match_end = char_offset(subject, &chars, end);
-                ctx.groups[0] = Some(Match { start: match_start, end: match_end });
+                ctx.groups[0] = Some(Match {
+                    start: match_start,
+                    end: match_end,
+                });
 
                 result.push_str(&subject[char_offset(subject, &chars, pos)..match_start]);
                 let caps = Captures {
@@ -585,16 +619,24 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             match_seq_from(&nodes[0], &combined, pos, ctx)
         }
         Node::Literal(ch) => {
-            if pos >= ctx.chars.len() { return None; }
+            if pos >= ctx.chars.len() {
+                return None;
+            }
             let matches = if ctx.flags.case_insensitive {
                 ctx.chars[pos].to_lowercase().eq(ch.to_lowercase())
             } else {
                 ctx.chars[pos] == *ch
             };
-            if matches { match_rest(rest, pos + 1, ctx) } else { None }
+            if matches {
+                match_rest(rest, pos + 1, ctx)
+            } else {
+                None
+            }
         }
         Node::AnyChar => {
-            if pos >= ctx.chars.len() { return None; }
+            if pos >= ctx.chars.len() {
+                return None;
+            }
             if ctx.flags.dotall || ctx.chars[pos] != '\n' {
                 match_rest(rest, pos + 1, ctx)
             } else {
@@ -619,17 +661,35 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
         }
         Node::WordBoundary(positive) => {
             let at_boundary = is_word_boundary(ctx.chars, pos);
-            if at_boundary == *positive { match_rest(rest, pos, ctx) } else { None }
+            if at_boundary == *positive {
+                match_rest(rest, pos, ctx)
+            } else {
+                None
+            }
         }
         Node::CharClass { negated, items } => {
-            if pos >= ctx.chars.len() { return None; }
+            if pos >= ctx.chars.len() {
+                return None;
+            }
             let c = ctx.chars[pos];
-            let in_class = items.iter().any(|item| match_class_item(item, c, ctx.flags.case_insensitive));
-            if in_class != *negated { match_rest(rest, pos + 1, ctx) } else { None }
+            let in_class = items
+                .iter()
+                .any(|item| match_class_item(item, c, ctx.flags.case_insensitive));
+            if in_class != *negated {
+                match_rest(rest, pos + 1, ctx)
+            } else {
+                None
+            }
         }
         Node::Shorthand(sh) => {
-            if pos >= ctx.chars.len() { return None; }
-            if match_shorthand(*sh, ctx.chars[pos]) { match_rest(rest, pos + 1, ctx) } else { None }
+            if pos >= ctx.chars.len() {
+                return None;
+            }
+            if match_shorthand(*sh, ctx.chars[pos]) {
+                match_rest(rest, pos + 1, ctx)
+            } else {
+                None
+            }
         }
         Node::Alternation(branches) => {
             for branch in branches {
@@ -641,7 +701,11 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             }
             None
         }
-        Node::Group { index, name: _, inner } => {
+        Node::Group {
+            index,
+            name: _,
+            inner,
+        } => {
             let start_offset = char_offset(ctx.input, ctx.chars, pos);
             let saved_group = index.map(|idx| ctx.groups[idx].clone());
             let result = match_seq_from_with_group(inner, rest, pos, ctx, *index, start_offset);
@@ -653,12 +717,13 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             }
             result
         }
-        Node::Quantifier { inner, min, max, greedy } => {
-            match_quantifier(inner, *min, *max, *greedy, rest, pos, ctx)
-        }
-        Node::Backreference(n) => {
-            match_backref_by_index(*n, rest, pos, ctx)
-        }
+        Node::Quantifier {
+            inner,
+            min,
+            max,
+            greedy,
+        } => match_quantifier(inner, *min, *max, *greedy, rest, pos, ctx),
+        Node::Backreference(n) => match_backref_by_index(*n, rest, pos, ctx),
         Node::NamedBackreference(name) => {
             if let Some(&idx) = ctx.named_groups.get(name.as_str()) {
                 match_backref_by_index(idx, rest, pos, ctx)
@@ -700,7 +765,11 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
                     false
                 }
             });
-            if found == *positive { match_rest(rest, pos, ctx) } else { None }
+            if found == *positive {
+                match_rest(rest, pos, ctx)
+            } else {
+                None
+            }
         }
     }
 }
@@ -708,8 +777,12 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
 /// Helper: match a group node, setting the group capture after the inner match succeeds
 /// and before matching the rest.
 fn match_seq_from_with_group(
-    inner: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx,
-    group_idx: Option<usize>, start_offset: usize,
+    inner: &Node,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx,
+    group_idx: Option<usize>,
+    start_offset: usize,
 ) -> Option<usize> {
     // We need to match inner, then set group, then match rest.
     // Create a temporary "after group" rest that we handle specially.
@@ -743,7 +816,10 @@ fn match_seq_from_with_group(
     for end_pos in ends {
         if let Some(idx) = group_idx {
             let end_offset = char_offset(ctx.input, ctx.chars, end_pos);
-            ctx.groups[idx] = Some(Match { start: start_offset, end: end_offset });
+            ctx.groups[idx] = Some(Match {
+                start: start_offset,
+                end: end_offset,
+            });
         }
         if let Some(final_pos) = match_rest(rest, end_pos, ctx) {
             return Some(final_pos);
@@ -759,7 +835,12 @@ fn collect_match_positions(node: &Node, pos: usize, ctx: &mut MatchCtx) -> Vec<u
     positions
 }
 
-fn collect_match_positions_inner(node: &Node, pos: usize, ctx: &mut MatchCtx, out: &mut Vec<usize>) {
+fn collect_match_positions_inner(
+    node: &Node,
+    pos: usize,
+    ctx: &mut MatchCtx,
+    out: &mut Vec<usize>,
+) {
     match node {
         Node::Sequence(nodes) => {
             if nodes.is_empty() {
@@ -782,21 +863,35 @@ fn collect_match_positions_inner(node: &Node, pos: usize, ctx: &mut MatchCtx, ou
                 collect_match_positions_inner(branch, pos, ctx, out);
             }
         }
-        Node::Quantifier { inner, min, max, greedy } => {
+        Node::Quantifier {
+            inner,
+            min,
+            max,
+            greedy,
+        } => {
             let mut reps_positions: Vec<(usize, usize)> = Vec::new(); // (reps, pos)
             // Collect all possible repetition counts
             fn collect_reps(
-                inner: &Node, min: usize, max: Option<usize>, pos: usize,
-                current_reps: usize, ctx: &mut MatchCtx, reps_positions: &mut Vec<(usize, usize)>,
+                inner: &Node,
+                min: usize,
+                max: Option<usize>,
+                pos: usize,
+                current_reps: usize,
+                ctx: &mut MatchCtx,
+                reps_positions: &mut Vec<(usize, usize)>,
             ) {
                 if current_reps >= min {
                     reps_positions.push((current_reps, pos));
                 }
                 let limit = max.unwrap_or(usize::MAX);
-                if current_reps >= limit { return; }
+                if current_reps >= limit {
+                    return;
+                }
                 let next_positions = collect_match_positions(inner, pos, ctx);
                 for np in next_positions {
-                    if np == pos { continue; } // avoid infinite loop on zero-width
+                    if np == pos {
+                        continue;
+                    } // avoid infinite loop on zero-width
                     collect_reps(inner, min, max, np, current_reps + 1, ctx, reps_positions);
                 }
             }
@@ -813,13 +908,20 @@ fn collect_match_positions_inner(node: &Node, pos: usize, ctx: &mut MatchCtx, ou
                 }
             }
         }
-        Node::Group { index, name: _, inner } => {
+        Node::Group {
+            index,
+            name: _,
+            inner,
+        } => {
             let start_offset = char_offset(ctx.input, ctx.chars, pos);
             let inner_positions = collect_match_positions(inner, pos, ctx);
             for end_pos in inner_positions {
                 if let Some(idx) = index {
                     let end_offset = char_offset(ctx.input, ctx.chars, end_pos);
-                    ctx.groups[*idx] = Some(Match { start: start_offset, end: end_offset });
+                    ctx.groups[*idx] = Some(Match {
+                        start: start_offset,
+                        end: end_offset,
+                    });
                 }
                 out.push(end_pos);
             }
@@ -844,18 +946,27 @@ fn match_rest(rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
     match_seq_from(&rest[0], &rest[1..], pos, ctx)
 }
 
-fn match_backref_by_index(n: usize, rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
+fn match_backref_by_index(
+    n: usize,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx,
+) -> Option<usize> {
     if let Some(Some(m)) = ctx.groups.get(n).cloned() {
         let captured = &ctx.input[m.start..m.end];
         let cap_chars: Vec<char> = captured.chars().collect();
-        if pos + cap_chars.len() > ctx.chars.len() { return None; }
+        if pos + cap_chars.len() > ctx.chars.len() {
+            return None;
+        }
         for (i, &cc) in cap_chars.iter().enumerate() {
             let matches = if ctx.flags.case_insensitive {
                 ctx.chars[pos + i].to_lowercase().eq(cc.to_lowercase())
             } else {
                 ctx.chars[pos + i] == cc
             };
-            if !matches { return None; }
+            if !matches {
+                return None;
+            }
         }
         match_rest(rest, pos + cap_chars.len(), ctx)
     } else {
@@ -873,8 +984,13 @@ fn chars_equal(left: char, right: char, case_insensitive: bool) -> bool {
 }
 
 fn match_quantifier(
-    inner: &Node, min: usize, max: Option<usize>, greedy: bool,
-    rest: &[Node], pos: usize, ctx: &mut MatchCtx,
+    inner: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx,
 ) -> Option<usize> {
     let limit = max.unwrap_or(usize::MAX);
 
@@ -925,15 +1041,22 @@ fn match_quantifier(
     let mut states: Vec<(usize, usize, Option<Vec<Option<Match>>>)> = Vec::new();
 
     fn collect_states(
-        inner: &Node, min: usize, limit: usize, pos: usize,
-        current_reps: usize, tracks_captures: bool, ctx: &mut MatchCtx,
+        inner: &Node,
+        min: usize,
+        limit: usize,
+        pos: usize,
+        current_reps: usize,
+        tracks_captures: bool,
+        ctx: &mut MatchCtx,
         states: &mut Vec<(usize, usize, Option<Vec<Option<Match>>>)>,
     ) {
         if current_reps >= min {
             let groups = tracks_captures.then(|| ctx.groups.clone());
             states.push((current_reps, pos, groups));
         }
-        if current_reps >= limit { return; }
+        if current_reps >= limit {
+            return;
+        }
         let saved = tracks_captures.then(|| ctx.groups.clone());
         // Try one more repetition
         if let Some(np) = match_seq_from(inner, &[], pos, ctx) {
@@ -987,8 +1110,16 @@ fn match_quantifier(
 }
 
 fn is_word_boundary(chars: &[char], pos: usize) -> bool {
-    let before = if pos > 0 { is_word_char(chars[pos - 1]) } else { false };
-    let after = if pos < chars.len() { is_word_char(chars[pos]) } else { false };
+    let before = if pos > 0 {
+        is_word_char(chars[pos - 1])
+    } else {
+        false
+    };
+    let after = if pos < chars.len() {
+        is_word_char(chars[pos])
+    } else {
+        false
+    };
     before != after
 }
 
@@ -1057,14 +1188,19 @@ impl Parser {
 
     fn advance(&mut self) -> Option<char> {
         let c = self.chars.get(self.pos).copied();
-        if c.is_some() { self.pos += 1; }
+        if c.is_some() {
+            self.pos += 1;
+        }
         c
     }
 
     fn parse(&mut self) -> Result<Node, String> {
         let node = self.parse_alternation()?;
         if self.pos < self.chars.len() {
-            Err(format!("Unexpected character '{}' at position {}", self.chars[self.pos], self.pos))
+            Err(format!(
+                "Unexpected character '{}' at position {}",
+                self.chars[self.pos], self.pos
+            ))
         } else {
             Ok(node)
         }
@@ -1086,7 +1222,9 @@ impl Parser {
     fn parse_sequence(&mut self) -> Result<Node, String> {
         let mut nodes = Vec::new();
         while let Some(c) = self.peek() {
-            if c == '|' || c == ')' { break; }
+            if c == '|' || c == ')' {
+                break;
+            }
             // In extended mode, skip whitespace and #-comments
             if self.flags.extended {
                 if c.is_ascii_whitespace() {
@@ -1096,7 +1234,9 @@ impl Parser {
                 if c == '#' {
                     while let Some(cc) = self.peek() {
                         self.advance();
-                        if cc == '\n' { break; }
+                        if cc == '\n' {
+                            break;
+                        }
                     }
                     continue;
                 }
@@ -1114,9 +1254,18 @@ impl Parser {
 
     fn parse_atom(&mut self) -> Result<Node, String> {
         match self.peek() {
-            Some('.') => { self.advance(); Ok(Node::AnyChar) }
-            Some('^') => { self.advance(); Ok(Node::Anchor(Anchor::Start)) }
-            Some('$') => { self.advance(); Ok(Node::Anchor(Anchor::End)) }
+            Some('.') => {
+                self.advance();
+                Ok(Node::AnyChar)
+            }
+            Some('^') => {
+                self.advance();
+                Ok(Node::Anchor(Anchor::Start))
+            }
+            Some('$') => {
+                self.advance();
+                Ok(Node::Anchor(Anchor::End))
+            }
             Some('[') => self.parse_char_class(),
             Some('(') => self.parse_group(),
             Some('\\') => self.parse_escape(),
@@ -1124,7 +1273,10 @@ impl Parser {
                 self.advance();
                 Ok(Node::Literal(c))
             }
-            Some(c) => Err(format!("Unexpected quantifier '{}' without preceding element", c)),
+            Some(c) => Err(format!(
+                "Unexpected quantifier '{}' without preceding element",
+                c
+            )),
             None => Err("Unexpected end of pattern".into()),
         }
     }
@@ -1151,7 +1303,10 @@ impl Parser {
                     let close = if delim == Some('<') { '>' } else { '\'' };
                     let mut name = String::new();
                     while let Some(c) = self.peek() {
-                        if c == close { self.advance(); break; }
+                        if c == close {
+                            self.advance();
+                            break;
+                        }
                         self.advance();
                         name.push(c);
                     }
@@ -1197,7 +1352,10 @@ impl Parser {
         }
 
         while let Some(c) = self.peek() {
-            if c == ']' { self.advance(); return Ok(Node::CharClass { negated, items }); }
+            if c == ']' {
+                self.advance();
+                return Ok(Node::CharClass { negated, items });
+            }
             if c == '\\' {
                 self.advance();
                 match self.advance() {
@@ -1218,7 +1376,9 @@ impl Parser {
                 // Check for range: a-z
                 if self.peek() == Some('-') && self.chars.get(self.pos + 1).copied() != Some(']') {
                     self.advance(); // consume '-'
-                    let hi = self.advance().ok_or("Unexpected end in character class range")?;
+                    let hi = self
+                        .advance()
+                        .ok_or("Unexpected end in character class range")?;
                     items.push(ClassItem::Range(c, hi));
                 } else {
                     items.push(ClassItem::Literal(c));
@@ -1251,7 +1411,10 @@ impl Parser {
                     if self.advance() != Some(')') {
                         return Err("Unterminated lookahead".into());
                     }
-                    Ok(Node::Lookahead { positive: true, inner: Box::new(inner) })
+                    Ok(Node::Lookahead {
+                        positive: true,
+                        inner: Box::new(inner),
+                    })
                 }
                 Some('!') => {
                     // Negative lookahead (?!...)
@@ -1260,7 +1423,10 @@ impl Parser {
                     if self.advance() != Some(')') {
                         return Err("Unterminated lookahead".into());
                     }
-                    Ok(Node::Lookahead { positive: false, inner: Box::new(inner) })
+                    Ok(Node::Lookahead {
+                        positive: false,
+                        inner: Box::new(inner),
+                    })
                 }
                 Some('<') => {
                     self.advance(); // consume '<'
@@ -1272,7 +1438,10 @@ impl Parser {
                             if self.advance() != Some(')') {
                                 return Err("Unterminated lookbehind".into());
                             }
-                            Ok(Node::Lookbehind { positive: true, inner: Box::new(inner) })
+                            Ok(Node::Lookbehind {
+                                positive: true,
+                                inner: Box::new(inner),
+                            })
                         }
                         Some('!') => {
                             // Negative lookbehind (?<!...)
@@ -1281,13 +1450,19 @@ impl Parser {
                             if self.advance() != Some(')') {
                                 return Err("Unterminated lookbehind".into());
                             }
-                            Ok(Node::Lookbehind { positive: false, inner: Box::new(inner) })
+                            Ok(Node::Lookbehind {
+                                positive: false,
+                                inner: Box::new(inner),
+                            })
                         }
                         _ => {
                             // Named group (?<name>...)
                             let mut name = String::new();
                             while let Some(c) = self.peek() {
-                                if c == '>' { self.advance(); break; }
+                                if c == '>' {
+                                    self.advance();
+                                    break;
+                                }
                                 self.advance();
                                 name.push(c);
                             }
@@ -1298,7 +1473,11 @@ impl Parser {
                             if self.advance() != Some(')') {
                                 return Err("Unterminated named group".into());
                             }
-                            Ok(Node::Group { index: Some(idx), name: Some(name), inner: Box::new(inner) })
+                            Ok(Node::Group {
+                                index: Some(idx),
+                                name: Some(name),
+                                inner: Box::new(inner),
+                            })
                         }
                     }
                 }
@@ -1309,7 +1488,9 @@ impl Parser {
                         self.advance(); // consume '='
                         let mut name = String::new();
                         while let Some(c) = self.peek() {
-                            if c == ')' { break; }
+                            if c == ')' {
+                                break;
+                            }
                             self.advance();
                             name.push(c);
                         }
@@ -1324,7 +1505,10 @@ impl Parser {
                     }
                     let mut name = String::new();
                     while let Some(c) = self.peek() {
-                        if c == '>' { self.advance(); break; }
+                        if c == '>' {
+                            self.advance();
+                            break;
+                        }
                         self.advance();
                         name.push(c);
                     }
@@ -1335,9 +1519,16 @@ impl Parser {
                     if self.advance() != Some(')') {
                         return Err("Unterminated named group".into());
                     }
-                    Ok(Node::Group { index: Some(idx), name: Some(name), inner: Box::new(inner) })
+                    Ok(Node::Group {
+                        index: Some(idx),
+                        name: Some(name),
+                        inner: Box::new(inner),
+                    })
                 }
-                _ => Err(format!("Unknown group modifier '?{}'", self.peek().unwrap_or(' '))),
+                _ => Err(format!(
+                    "Unknown group modifier '?{}'",
+                    self.peek().unwrap_or(' ')
+                )),
             }
         } else {
             // Capturing group
@@ -1347,14 +1538,21 @@ impl Parser {
             if self.advance() != Some(')') {
                 return Err("Unterminated capturing group".into());
             }
-            Ok(Node::Group { index: Some(idx), name: None, inner: Box::new(inner) })
+            Ok(Node::Group {
+                index: Some(idx),
+                name: None,
+                inner: Box::new(inner),
+            })
         }
     }
 
     fn parse_quantifier(&mut self, atom: Node) -> Result<Node, String> {
         // Anchors and assertions can't be quantified
         match &atom {
-            Node::Anchor(_) | Node::WordBoundary(_) | Node::Lookahead { .. } | Node::Lookbehind { .. } => {
+            Node::Anchor(_)
+            | Node::WordBoundary(_)
+            | Node::Lookahead { .. }
+            | Node::Lookbehind { .. } => {
                 return Ok(atom);
             }
             _ => {}
@@ -1366,17 +1564,32 @@ impl Parser {
             Some('*') => {
                 self.advance();
                 let greedy = self.check_lazy(default_greedy);
-                Ok(Node::Quantifier { inner: Box::new(atom), min: 0, max: None, greedy })
+                Ok(Node::Quantifier {
+                    inner: Box::new(atom),
+                    min: 0,
+                    max: None,
+                    greedy,
+                })
             }
             Some('+') => {
                 self.advance();
                 let greedy = self.check_lazy(default_greedy);
-                Ok(Node::Quantifier { inner: Box::new(atom), min: 1, max: None, greedy })
+                Ok(Node::Quantifier {
+                    inner: Box::new(atom),
+                    min: 1,
+                    max: None,
+                    greedy,
+                })
             }
             Some('?') => {
                 self.advance();
                 let greedy = self.check_lazy(default_greedy);
-                Ok(Node::Quantifier { inner: Box::new(atom), min: 0, max: Some(1), greedy })
+                Ok(Node::Quantifier {
+                    inner: Box::new(atom),
+                    min: 0,
+                    max: Some(1),
+                    greedy,
+                })
             }
             Some('{') => {
                 let saved = self.pos;
@@ -1384,7 +1597,12 @@ impl Parser {
                 match self.parse_counted_quantifier() {
                     Ok((min, max)) => {
                         let greedy = self.check_lazy(default_greedy);
-                        Ok(Node::Quantifier { inner: Box::new(atom), min, max, greedy })
+                        Ok(Node::Quantifier {
+                            inner: Box::new(atom),
+                            min,
+                            max,
+                            greedy,
+                        })
                     }
                     Err(_) => {
                         // Not a valid quantifier, treat '{' as literal — restore position
@@ -1409,8 +1627,12 @@ impl Parser {
     fn parse_counted_quantifier(&mut self) -> Result<(usize, Option<usize>), String> {
         let mut num_str = String::new();
         while let Some(c) = self.peek() {
-            if c.is_ascii_digit() { self.advance(); num_str.push(c); }
-            else { break; }
+            if c.is_ascii_digit() {
+                self.advance();
+                num_str.push(c);
+            } else {
+                break;
+            }
         }
         let min: usize = num_str.parse().map_err(|_| "Invalid quantifier")?;
 
@@ -1423,8 +1645,12 @@ impl Parser {
                 self.advance();
                 let mut max_str = String::new();
                 while let Some(c) = self.peek() {
-                    if c.is_ascii_digit() { self.advance(); max_str.push(c); }
-                    else { break; }
+                    if c.is_ascii_digit() {
+                        self.advance();
+                        max_str.push(c);
+                    } else {
+                        break;
+                    }
                 }
                 if self.advance() != Some('}') {
                     return Err("Expected '}' in quantifier".into());
@@ -1529,8 +1755,19 @@ mod tests {
         let lazy = Regex::new("a+?", RegexFlags::default()).unwrap();
         let minimum = Regex::new("a{2}", RegexFlags::default()).unwrap();
 
-        assert_eq!(greedy.captures("aaa").unwrap().get(0).unwrap().as_str("aaa"), "aaa");
-        assert_eq!(lazy.captures("aaa").unwrap().get(0).unwrap().as_str("aaa"), "a");
+        assert_eq!(
+            greedy
+                .captures("aaa")
+                .unwrap()
+                .get(0)
+                .unwrap()
+                .as_str("aaa"),
+            "aaa"
+        );
+        assert_eq!(
+            lazy.captures("aaa").unwrap().get(0).unwrap().as_str("aaa"),
+            "a"
+        );
         assert!(minimum.captures("a").is_none());
         assert!(minimum.captures("aa").is_some());
     }
@@ -1569,7 +1806,10 @@ mod tests {
 
     #[test]
     fn test_case_insensitive() {
-        let flags = RegexFlags { case_insensitive: true, ..Default::default() };
+        let flags = RegexFlags {
+            case_insensitive: true,
+            ..Default::default()
+        };
         let re = Regex::new("hello", flags).unwrap();
         assert!(re.captures("HELLO").is_some());
     }
@@ -1755,20 +1995,14 @@ mod tests {
     #[test]
     fn test_multi_digit_backref_in_replacement() {
         // 10 capture groups, $10 refers to the 10th
-        let re = Regex::new(
-            "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)",
-            RegexFlags::default(),
-        ).unwrap();
+        let re = Regex::new("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)", RegexFlags::default()).unwrap();
         assert_eq!(re.replace_all("abcdefghij", "$10"), "j");
     }
 
     #[test]
     fn test_multi_digit_backref_in_pattern() {
         // \10 refers to group 10
-        let re = Regex::new(
-            "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10",
-            RegexFlags::default(),
-        ).unwrap();
+        let re = Regex::new("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10", RegexFlags::default()).unwrap();
         assert!(re.captures("abcdefghijj").is_some());
     }
 

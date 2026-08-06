@@ -5,7 +5,8 @@ use common::run_php;
 
 #[test]
 fn trait_basic_method() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Greet {
     public function hello() {
         echo "Hello from trait\n";
@@ -16,13 +17,15 @@ class MyClass {
 }
 $obj = new MyClass();
 $obj->hello();
-"#);
+"#,
+    );
     assert_eq!(out, "Hello from trait\n");
 }
 
 #[test]
 fn trait_method_with_params() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait MathTrait {
     public function add($a, $b) {
         return $a + $b;
@@ -33,13 +36,15 @@ class Calc {
 }
 $c = new Calc();
 echo $c->add(3, 7);
-"#);
+"#,
+    );
     assert_eq!(out, "10");
 }
 
 #[test]
 fn trait_multiple_methods() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Logger {
     public function log($msg) {
         echo "LOG: " . $msg . "\n";
@@ -54,7 +59,8 @@ class App {
 $app = new App();
 $app->log("started");
 $app->warn("low memory");
-"#);
+"#,
+    );
     assert_eq!(out, "LOG: started\nWARN: low memory\n");
 }
 
@@ -62,7 +68,8 @@ $app->warn("low memory");
 
 #[test]
 fn trait_use_multiple() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait A {
     public function fromA() { echo "A"; }
 }
@@ -75,7 +82,8 @@ class C {
 $c = new C();
 $c->fromA();
 $c->fromB();
-"#);
+"#,
+    );
     assert_eq!(out, "AB");
 }
 
@@ -83,7 +91,8 @@ $c->fromB();
 
 #[test]
 fn trait_with_property() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait HasName {
     public $name = "default";
 }
@@ -94,7 +103,8 @@ $u = new User();
 echo $u->name . "\n";
 $u->name = "Alice";
 echo $u->name;
-"#);
+"#,
+    );
     assert_eq!(out, "default\nAlice");
 }
 
@@ -102,7 +112,8 @@ echo $u->name;
 
 #[test]
 fn trait_class_overrides_method() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Greet {
     public function hello() {
         echo "trait";
@@ -116,7 +127,8 @@ class MyClass {
 }
 $obj = new MyClass();
 $obj->hello();
-"#);
+"#,
+    );
     assert_eq!(out, "class");
 }
 
@@ -124,7 +136,8 @@ $obj->hello();
 
 #[test]
 fn trait_with_inheritance() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Greet {
     public function hello() {
         echo "trait hello\n";
@@ -141,13 +154,15 @@ class Child extends Base {
 $c = new Child();
 $c->base_method();
 $c->hello();
-"#);
+"#,
+    );
     assert_eq!(out, "base\ntrait hello\n");
 }
 
 #[test]
 fn trait_overrides_parent_method() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Greet {
     public function hello() {
         echo "from trait";
@@ -163,7 +178,8 @@ class Child extends Base {
 }
 $c = new Child();
 $c->hello();
-"#);
+"#,
+    );
     assert_eq!(out, "from trait");
 }
 
@@ -171,7 +187,8 @@ $c->hello();
 
 #[test]
 fn trait_satisfies_interface() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 interface Loggable {
     public function log($msg);
 }
@@ -185,7 +202,8 @@ class App implements Loggable {
 }
 $app = new App();
 $app->log("works!");
-"#);
+"#,
+    );
     assert_eq!(out, "works!");
 }
 
@@ -193,7 +211,8 @@ $app->log("works!");
 
 #[test]
 fn trait_method_accesses_this() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Greet {
     public function greet() {
         echo "Hello, " . $this->name;
@@ -208,7 +227,8 @@ class Person {
 }
 $p = new Person("Alice");
 $p->greet();
-"#);
+"#,
+    );
     assert_eq!(out, "Hello, Alice");
 }
 
@@ -216,7 +236,8 @@ $p->greet();
 
 #[test]
 fn trait_static_method() {
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait Counter {
     public static function count_to($n) {
         $i = 1;
@@ -230,7 +251,8 @@ class App {
     use Counter;
 }
 App::count_to(3);
-"#);
+"#,
+    );
     assert_eq!(out, "123");
 }
 
@@ -239,7 +261,8 @@ App::count_to(3);
 #[test]
 fn trait_property_same_default_ok() {
     // Two traits with same property, same visibility, same default → ok
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait T1 { public $x = 1; }
 trait T2 { public $x = 1; }
 class C {
@@ -247,7 +270,8 @@ class C {
 }
 $c = new C();
 echo $c->x;
-"#);
+"#,
+    );
     assert_eq!(out, "1");
 }
 
@@ -255,36 +279,47 @@ echo $c->x;
 fn trait_property_different_default_rejected() {
     // Two traits with same property, same visibility, different default → error
     let result = std::panic::catch_unwind(|| {
-        run_php(r#"<?php
+        run_php(
+            r#"<?php
 trait T1 { public $x = 1; }
 trait T2 { public $x = 2; }
 class C {
     use T1, T2;
 }
-"#)
+"#,
+        )
     });
-    assert!(result.is_err(), "Expected panic from incompatible trait property defaults");
+    assert!(
+        result.is_err(),
+        "Expected panic from incompatible trait property defaults"
+    );
 }
 
 #[test]
 fn trait_property_different_visibility_rejected() {
     // Two traits with same property but different visibility → error
     let result = std::panic::catch_unwind(|| {
-        run_php(r#"<?php
+        run_php(
+            r#"<?php
 trait T1 { public $x = 1; }
 trait T2 { protected $x = 1; }
 class C {
     use T1, T2;
 }
-"#)
+"#,
+        )
     });
-    assert!(result.is_err(), "Expected panic from incompatible trait property visibility");
+    assert!(
+        result.is_err(),
+        "Expected panic from incompatible trait property visibility"
+    );
 }
 
 #[test]
 fn trait_property_class_overrides_trait() {
     // Class's own property always takes precedence over trait's
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait T1 { public $x = 10; }
 class C {
     use T1;
@@ -292,14 +327,16 @@ class C {
 }
 $c = new C();
 echo $c->x;
-"#);
+"#,
+    );
     assert_eq!(out, "99");
 }
 
 #[test]
 fn trait_property_string_default_same_ok() {
     // String defaults that are equal → ok
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait T1 { public $name = "hello"; }
 trait T2 { public $name = "hello"; }
 class C {
@@ -307,7 +344,8 @@ class C {
 }
 $c = new C();
 echo $c->name;
-"#);
+"#,
+    );
     assert_eq!(out, "hello");
 }
 
@@ -315,36 +353,47 @@ echo $c->name;
 fn trait_property_string_default_different_rejected() {
     // String defaults that differ → error
     let result = std::panic::catch_unwind(|| {
-        run_php(r#"<?php
+        run_php(
+            r#"<?php
 trait T1 { public $name = "hello"; }
 trait T2 { public $name = "world"; }
 class C {
     use T1, T2;
 }
-"#)
+"#,
+        )
     });
-    assert!(result.is_err(), "Expected panic from incompatible string defaults");
+    assert!(
+        result.is_err(),
+        "Expected panic from incompatible string defaults"
+    );
 }
 
 #[test]
 fn trait_property_null_vs_value_rejected() {
     // One trait has null default, other has int default → error
     let result = std::panic::catch_unwind(|| {
-        run_php(r#"<?php
+        run_php(
+            r#"<?php
 trait T1 { public $x = null; }
 trait T2 { public $x = 0; }
 class C {
     use T1, T2;
 }
-"#)
+"#,
+        )
     });
-    assert!(result.is_err(), "Expected panic from null vs value default mismatch");
+    assert!(
+        result.is_err(),
+        "Expected panic from null vs value default mismatch"
+    );
 }
 
 #[test]
 fn trait_property_array_default_same_ok() {
     // Two traits with same array default → compatible
-    let out = run_php(r#"<?php
+    let out = run_php(
+        r#"<?php
 trait T1 { public $items = [1, 2, 3]; }
 trait T2 { public $items = [1, 2, 3]; }
 class C {
@@ -352,7 +401,8 @@ class C {
 }
 $c = new C();
 echo count($c->items);
-"#);
+"#,
+    );
     assert_eq!(out, "3");
 }
 
@@ -360,27 +410,37 @@ echo count($c->items);
 fn trait_property_array_default_different_rejected() {
     // Two traits with different array defaults → error
     let result = std::panic::catch_unwind(|| {
-        run_php(r#"<?php
+        run_php(
+            r#"<?php
 trait T1 { public $items = [1, 2]; }
 trait T2 { public $items = [1, 3]; }
 class C {
     use T1, T2;
 }
-"#)
+"#,
+        )
     });
-    assert!(result.is_err(), "Expected panic from incompatible array defaults");
+    assert!(
+        result.is_err(),
+        "Expected panic from incompatible array defaults"
+    );
 }
 
 #[test]
 fn trait_property_array_different_length_rejected() {
     let result = std::panic::catch_unwind(|| {
-        run_php(r#"<?php
+        run_php(
+            r#"<?php
 trait T1 { public $x = [1]; }
 trait T2 { public $x = [1, 2]; }
 class C {
     use T1, T2;
 }
-"#)
+"#,
+        )
     });
-    assert!(result.is_err(), "Expected panic from different length array defaults");
+    assert!(
+        result.is_err(),
+        "Expected panic from different length array defaults"
+    );
 }

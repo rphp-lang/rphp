@@ -25,8 +25,8 @@ pub enum OpCode {
     DoFcall = 60,
     SendVal = 63,
     SendRef = 64,
-    SendVarEx = 65,  // Runtime check: send by-ref if callee expects it, else by-val
-    SendNamed = 66,  // Named argument: op1=value, op2=CONST name string; resolved to CV slot at runtime
+    SendVarEx = 65, // Runtime check: send by-ref if callee expects it, else by-val
+    SendNamed = 66, // Named argument: op1=value, op2=CONST name string; resolved to CV slot at runtime
     /// Compiler-lowered call_user_func_array(): op1=callback, op2=args array.
     /// Resolves and invokes the callback without entering the stdlib wrapper.
     CallUserFuncArray = 67,
@@ -65,54 +65,54 @@ pub enum OpCode {
     Return = 62,
 
     // Arrays
-    InitArray = 70,      // Create empty array in result TMP
+    InitArray = 70,       // Create empty array in result TMP
     AddArrayElement = 71, // Add element to array: op1=array CV/TMP, op2=value, result=key (or Unused)
-    FetchDimR = 72,      // Read: result = op1[op2]
-    AssignDim = 73,      // Write: op1[op2] = result (value source in extended_value)
-    ArrayPushOp = 74,    // Append: op1[] = op2
-    UnsetDim = 75,       // Remove key op2 from array op1
+    FetchDimR = 72,       // Read: result = op1[op2]
+    AssignDim = 73,       // Write: op1[op2] = result (value source in extended_value)
+    ArrayPushOp = 74,     // Append: op1[] = op2
+    UnsetDim = 75,        // Remove key op2 from array op1
 
     // Foreach
-    ForeachInit = 80,    // Copy array op1 to result TMP, set position to 0; jump op2 if empty
-    ForeachNext = 81,    // Fetch next from array op1 at position op2; result=value TMP; jump extended_value if done
+    ForeachInit = 80, // Copy array op1 to result TMP, set position to 0; jump op2 if empty
+    ForeachNext = 81, // Fetch next from array op1 at position op2; result=value TMP; jump extended_value if done
 
     // Exceptions
-    Throw = 90,          // Throw exception: op1 = value to throw
+    Throw = 90, // Throw exception: op1 = value to throw
 
     // Objects
-    NewObj = 100,        // Create new object: op1=class_name_const, result=TMP(object)
-    FetchObjR = 101,     // Read property: result = op1->op2 (op2=CONST prop name)
-    AssignObjProp = 102, // Write property: op1->op2 = result
-    InitMethodCall = 103, // Like InitFcall but for method: op1=object, op2=method name
+    NewObj = 100,          // Create new object: op1=class_name_const, result=TMP(object)
+    FetchObjR = 101,       // Read property: result = op1->op2 (op2=CONST prop name)
+    AssignObjProp = 102,   // Write property: op1->op2 = result
+    InitMethodCall = 103,  // Like InitFcall but for method: op1=object, op2=method name
     FetchStaticProp = 104, // Read static property: result = ClassName::$prop
-    InitStaticCall = 105, // Init static method call: op1=class_const, op2=method_const
+    InitStaticCall = 105,  // Init static method call: op1=class_const, op2=method_const
     InitDynamicCall = 106, // Dynamic call: op1=CV holding function name, op2=num_args
     Instanceof = 107,      // result = op1 instanceof op2 (op2=class_name_const)
     FetchConst = 108,      // result = constant by name (op1=CONST name string)
     BindDefaultParam = 109, // If CV op1 is NOT undef (arg was passed), jump to op2 (skip default init)
 
     // Generator
-    Yield = 110,        // Yield value: op1=value, op2=key (Unused if no key), result=received value from send()
-    YieldFrom = 111,    // Yield from: op1=sub-generator/iterable, result=return value of sub-generator
+    Yield = 110, // Yield value: op1=value, op2=key (Unused if no key), result=received value from send()
+    YieldFrom = 111, // Yield from: op1=sub-generator/iterable, result=return value of sub-generator
     GeneratorReturn = 112, // Return from generator: op1=return value (like Return but for generators)
 
     // New operators
-    Spaceship = 113,       // <=>: compare two values, result is -1, 0, or 1
-    Pow = 114,             // **: numeric power
-    BitwiseAnd = 115,      // &: integer bitwise AND
-    BitwiseOr = 116,       // |: integer bitwise OR
-    BitwiseXor = 117,      // ^: integer bitwise XOR
-    ShiftLeft = 118,       // <<: integer left shift
-    ShiftRight = 119,      // >>: integer right shift
-    BitwiseNot = 120,      // ~: unary integer bitwise NOT
+    Spaceship = 113,  // <=>: compare two values, result is -1, 0, or 1
+    Pow = 114,        // **: numeric power
+    BitwiseAnd = 115, // &: integer bitwise AND
+    BitwiseOr = 116,  // |: integer bitwise OR
+    BitwiseXor = 117, // ^: integer bitwise XOR
+    ShiftLeft = 118,  // <<: integer left shift
+    ShiftRight = 119, // >>: integer right shift
+    BitwiseNot = 120, // ~: unary integer bitwise NOT
 
     // Global/static variable binding
-    BindGlobal = 121,      // Bind CV op1 to global variable named op2 (CONST string)
-    BindStatic = 123,      // Bind CV op1 to static variable named op2 (CONST string), func name in extended_value (CONST)
-    AssignObjDim = 124,    // $obj->prop[$key] = val; op1=obj, op2=key, result=val, extended_value=prop literal idx
-    Include = 125,         // Include/require file: op1=path (CONST/TMP/CV), extended_value flags: bit0=require, bit1=once
-    NullSafeCheck = 126,   // If op1 is null, store null in result and jump to op2; otherwise no-op
-    CloneObj = 127,        // Clone object: op1=source object, result=new cloned object
+    BindGlobal = 121,    // Bind CV op1 to global variable named op2 (CONST string)
+    BindStatic = 123, // Bind CV op1 to static variable named op2 (CONST string), func name in extended_value (CONST)
+    AssignObjDim = 124, // $obj->prop[$key] = val; op1=obj, op2=key, result=val, extended_value=prop literal idx
+    Include = 125, // Include/require file: op1=path (CONST/TMP/CV), extended_value flags: bit0=require, bit1=once
+    NullSafeCheck = 126, // If op1 is null, store null in result and jump to op2; otherwise no-op
+    CloneObj = 127, // Clone object: op1=source object, result=new cloned object
     /// Create closure value: op1=CONST function name, result=TMP(closure).
     /// Resolves function pointer via inline cache. Captures added by ClosureUseVar.
     CreateClosure = 128,
@@ -131,7 +131,6 @@ pub enum OpCode {
     // Compiler emits these for common operand-type patterns.
     // Each inlines operand fetch — no runtime OpType match needed.
     // Falls back to general handler on type mismatch (overflow, float, etc).
-
     /// Add Tmp + Tmp → Tmp (Long fast path)
     Add_TmpTmp = 200,
     /// Sub CV - Const → Tmp (Long fast path)
@@ -152,7 +151,6 @@ pub enum OpCode {
     // Eliminates TMP write/read and one dispatch cycle.
     // result field stores jump target IP (replaces JmpZ/JmpNZ.op2).
     // On fall-through, opline advances by 2 (skipping the dead JmpZ/JmpNZ).
-
     /// Fused: IsSmallerOrEqual CV <= Const; JmpZ → target
     /// If !(CV <= Const), jump to result. Else fall through (+2).
     JmpZ_Le_CvConst = 206,
@@ -192,5 +190,4 @@ pub enum OpCode {
     Echo_String = 221,
     Echo_Long = 222,
     BitwiseXor_LongLong = 223,
-
 }

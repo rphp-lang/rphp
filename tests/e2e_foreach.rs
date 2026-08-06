@@ -1,5 +1,4 @@
 /// E2E tests: foreach loops — value only, key-value, nested, break/continue, edge cases.
-
 mod common;
 use common::run_php;
 
@@ -26,7 +25,9 @@ fn test_e2e_foreach_string_values() {
 #[test]
 fn test_e2e_foreach_key_value() {
     assert_eq!(
-        run_php("<?php $a = ['a' => 1, 'b' => 2, 'c' => 3]; foreach ($a as $k => $v) { echo $k . $v; }"),
+        run_php(
+            "<?php $a = ['a' => 1, 'b' => 2, 'c' => 3]; foreach ($a as $k => $v) { echo $k . $v; }"
+        ),
         "a1b2c3"
     );
 }
@@ -54,7 +55,9 @@ fn test_e2e_foreach_empty_array() {
 #[test]
 fn test_e2e_foreach_break() {
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { break; } echo $v; }"),
+        run_php(
+            "<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { break; } echo $v; }"
+        ),
         "12"
     );
 }
@@ -64,7 +67,9 @@ fn test_e2e_foreach_break() {
 #[test]
 fn test_e2e_foreach_continue() {
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { continue; } echo $v; }"),
+        run_php(
+            "<?php $a = [1, 2, 3, 4, 5]; foreach ($a as $v) { if ($v == 3) { continue; } echo $v; }"
+        ),
         "1245"
     );
 }
@@ -74,7 +79,9 @@ fn test_e2e_foreach_continue() {
 #[test]
 fn test_e2e_foreach_order_preserved() {
     assert_eq!(
-        run_php("<?php $a = ['z' => 1, 'a' => 2, 'm' => 3]; $r = ''; foreach ($a as $k => $v) { $r .= $k; } echo $r;"),
+        run_php(
+            "<?php $a = ['z' => 1, 'a' => 2, 'm' => 3]; $r = ''; foreach ($a as $k => $v) { $r .= $k; } echo $r;"
+        ),
         "zam"
     );
 }
@@ -84,7 +91,9 @@ fn test_e2e_foreach_order_preserved() {
 #[test]
 fn test_e2e_foreach_mixed_keys() {
     assert_eq!(
-        run_php("<?php $a = [0 => 'x', 'name' => 'y', 1 => 'z']; foreach ($a as $k => $v) { echo $k . $v; }"),
+        run_php(
+            "<?php $a = [0 => 'x', 'name' => 'y', 1 => 'z']; foreach ($a as $k => $v) { echo $k . $v; }"
+        ),
         "0xnamey1z"
     );
 }
@@ -94,7 +103,9 @@ fn test_e2e_foreach_mixed_keys() {
 #[test]
 fn test_e2e_foreach_sum() {
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3, 4, 5]; $sum = 0; foreach ($a as $v) { $sum += $v; } echo $sum;"),
+        run_php(
+            "<?php $a = [1, 2, 3, 4, 5]; $sum = 0; foreach ($a as $v) { $sum += $v; } echo $sum;"
+        ),
         "15"
     );
 }
@@ -114,7 +125,9 @@ fn test_e2e_foreach_array_syntax() {
 #[test]
 fn test_e2e_foreach_nested() {
     assert_eq!(
-        run_php("<?php $a = [[1, 2], [3, 4]]; foreach ($a as $row) { foreach ($row as $v) { echo $v; } }"),
+        run_php(
+            "<?php $a = [[1, 2], [3, 4]]; foreach ($a as $row) { foreach ($row as $v) { echo $v; } }"
+        ),
         "1234"
     );
 }
@@ -124,7 +137,9 @@ fn test_e2e_foreach_nested() {
 #[test]
 fn test_e2e_foreach_function_result() {
     assert_eq!(
-        run_php("<?php function nums() { return [10, 20, 30]; } foreach (nums() as $v) { echo $v; }"),
+        run_php(
+            "<?php function nums() { return [10, 20, 30]; } foreach (nums() as $v) { echo $v; }"
+        ),
         "102030"
     );
 }
@@ -135,7 +150,9 @@ fn test_e2e_foreach_function_result() {
 fn test_e2e_foreach_copy_semantics() {
     // PHP foreach iterates over a copy of the array
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3]; foreach ($a as $v) { $a[] = $v * 10; } echo $a[0]; echo $a[3]; echo $a[4]; echo $a[5];"),
+        run_php(
+            "<?php $a = [1, 2, 3]; foreach ($a as $v) { $a[] = $v * 10; } echo $a[0]; echo $a[3]; echo $a[4]; echo $a[5];"
+        ),
         "1102030"
     );
 }
@@ -145,7 +162,9 @@ fn test_e2e_foreach_copy_semantics() {
 #[test]
 fn test_e2e_foreach_sparse() {
     assert_eq!(
-        run_php("<?php $a = []; $a[0] = 'a'; $a[5] = 'b'; $a[100] = 'c'; foreach ($a as $k => $v) { echo $k . ':' . $v . ' '; }"),
+        run_php(
+            "<?php $a = []; $a[0] = 'a'; $a[5] = 'b'; $a[100] = 'c'; foreach ($a as $k => $v) { echo $k . ':' . $v . ' '; }"
+        ),
         "0:a 5:b 100:c "
     );
 }
@@ -165,7 +184,9 @@ fn test_e2e_foreach_single_element() {
 #[test]
 fn test_e2e_foreach_break_2_nested() {
     assert_eq!(
-        run_php("<?php $a = [[1, 2], [3, 4], [5, 6]]; foreach ($a as $row) { foreach ($row as $v) { if ($v == 3) { break 2; } echo $v; } }"),
+        run_php(
+            "<?php $a = [[1, 2], [3, 4], [5, 6]]; foreach ($a as $row) { foreach ($row as $v) { if ($v == 3) { break 2; } echo $v; } }"
+        ),
         "12"
     );
 }
@@ -175,7 +196,9 @@ fn test_e2e_foreach_break_2_nested() {
 #[test]
 fn test_e2e_foreach_continue_nested() {
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3]; $b = ['a', 'b']; foreach ($a as $n) { foreach ($b as $l) { if ($n == 2 && $l == 'a') { continue; } echo $n . $l; } }"),
+        run_php(
+            "<?php $a = [1, 2, 3]; $b = ['a', 'b']; foreach ($a as $n) { foreach ($b as $l) { if ($n == 2 && $l == 'a') { continue; } echo $n . $l; } }"
+        ),
         "1a1b2b3a3b"
     );
 }
@@ -185,7 +208,9 @@ fn test_e2e_foreach_continue_nested() {
 #[test]
 fn test_e2e_foreach_build_array() {
     assert_eq!(
-        run_php("<?php $a = [1, 2, 3]; $b = []; foreach ($a as $v) { $b[] = $v * $v; } echo $b[0]; echo $b[1]; echo $b[2];"),
+        run_php(
+            "<?php $a = [1, 2, 3]; $b = []; foreach ($a as $v) { $b[] = $v * $v; } echo $b[0]; echo $b[1]; echo $b[2];"
+        ),
         "149"
     );
 }
@@ -195,7 +220,9 @@ fn test_e2e_foreach_build_array() {
 #[test]
 fn test_e2e_foreach_int_key_value_sum() {
     assert_eq!(
-        run_php("<?php $a = [10, 20, 30]; $sum = 0; foreach ($a as $k => $v) { $sum += $k + $v; } echo $sum;"),
+        run_php(
+            "<?php $a = [10, 20, 30]; $sum = 0; foreach ($a as $k => $v) { $sum += $k + $v; } echo $sum;"
+        ),
         "63"
     );
 }
@@ -237,7 +264,8 @@ fn test_e2e_foreach_bool_warns() {
 #[test]
 fn test_e2e_quick_foreach_declared_object_property_accumulation() {
     assert_eq!(
-        run_php("<?php
+        run_php(
+            "<?php
 class QuickForeachRow {
     public $value;
     public $name;
@@ -255,7 +283,8 @@ foreach ($rows as $row) {
     $sum += $row->value + strlen($row->name);
 }
 echo $sum . '|' . $row->value . '|' . $row->name;
-"),
+"
+        ),
         "480|4|alpha"
     );
 }
@@ -263,7 +292,8 @@ echo $sum . '|' . $row->value . '|' . $row->name;
 #[test]
 fn test_e2e_quick_foreach_dynamic_object_property_accumulation_on_hash_array() {
     assert_eq!(
-        run_php("<?php
+        run_php(
+            "<?php
 $rows = [];
 for ($i = 0; $i < 64; $i++) {
     $rows[$i * 3] = json_decode('{\"value\":11,\"name\":\"alpha\"}');
@@ -273,7 +303,8 @@ foreach ($rows as $row) {
     $sum += $row->value + strlen($row->name);
 }
 echo $sum . '|' . $row->value . '|' . $row->name;
-"),
+"
+        ),
         "1024|11|alpha"
     );
 }
@@ -418,7 +449,8 @@ echo $sum . '|' . $row->value . '|' . $row->name;
 #[test]
 fn test_e2e_quick_foreach_object_class_guard_side_exit() {
     assert_eq!(
-        run_php("<?php
+        run_php(
+            "<?php
 class QuickForeachLeft { public $value = 2; public $name = 'x'; }
 class QuickForeachRight { public $value = 4; public $name = 'x'; }
 $rows = [];
@@ -434,7 +466,8 @@ foreach ($rows as $row) {
     $sum += $row->value + strlen($row->name);
 }
 echo $sum . '|' . $row->value;
-"),
+"
+        ),
         "280|4"
     );
 }
@@ -442,7 +475,8 @@ echo $sum . '|' . $row->value;
 #[test]
 fn test_e2e_quick_foreach_single_long_property_projection() {
     assert_eq!(
-        run_php("<?php
+        run_php(
+            "<?php
 class QuickForeachLongRow {
     public $value;
     public function __construct($value) { $this->value = $value; }
@@ -456,7 +490,8 @@ foreach ($rows as $row) {
     $sum += $row->value;
 }
 echo $sum . '|' . $row->value;
-"),
+"
+        ),
         "160|4"
     );
 }
@@ -464,7 +499,8 @@ echo $sum . '|' . $row->value;
 #[test]
 fn test_e2e_quick_foreach_property_type_side_exit() {
     assert_eq!(
-        run_php("<?php
+        run_php(
+            "<?php
 class QuickForeachMixedValueRow {
     public $value;
     public function __construct($value) { $this->value = $value; }
@@ -482,7 +518,8 @@ foreach ($rows as $row) {
     $sum += $row->value;
 }
 echo $sum;
-"),
+"
+        ),
         "64.5"
     );
 }

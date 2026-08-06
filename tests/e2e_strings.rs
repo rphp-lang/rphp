@@ -1,5 +1,4 @@
 /// E2E tests: strings, concatenation, escapes, UTF-8, truthiness.
-
 mod common;
 use common::run_php;
 
@@ -17,7 +16,10 @@ fn test_e2e_echo_single_quoted() {
 
 #[test]
 fn test_e2e_concat_strings() {
-    assert_eq!(run_php("<?php echo \"hello\" . \" \" . \"world\";"), "hello world");
+    assert_eq!(
+        run_php("<?php echo \"hello\" . \" \" . \"world\";"),
+        "hello world"
+    );
 }
 
 #[test]
@@ -55,7 +57,9 @@ fn test_e2e_concat_mul_precedence() {
 #[test]
 fn test_e2e_concat_in_loop() {
     assert_eq!(
-        run_php("<?php $s = \"\"; $i = 0; while ($i < 3) { $s = $s . \"x\"; $i = $i + 1; } echo $s;"),
+        run_php(
+            "<?php $s = \"\"; $i = 0; while ($i < 3) { $s = $s . \"x\"; $i = $i + 1; } echo $s;"
+        ),
         "xxx"
     );
 }
@@ -79,10 +83,7 @@ fn test_e2e_utf8_string() {
 
 #[test]
 fn test_e2e_utf8_concat() {
-    assert_eq!(
-        run_php("<?php echo \"Č\" . \"esky\";"),
-        "Česky"
-    );
+    assert_eq!(run_php("<?php echo \"Č\" . \"esky\";"), "Česky");
 }
 
 // === String truthiness ===
@@ -148,17 +149,26 @@ fn test_e2e_single_quote_escaped_quote() {
 
 #[test]
 fn test_string_interpolation_basic() {
-    assert_eq!(run_php("<?php $name = 'World'; echo \"Hello $name\";"), "Hello World");
+    assert_eq!(
+        run_php("<?php $name = 'World'; echo \"Hello $name\";"),
+        "Hello World"
+    );
 }
 
 #[test]
 fn test_string_interpolation_multiple_vars() {
-    assert_eq!(run_php("<?php $a = 'foo'; $b = 'bar'; echo \"$a and $b\";"), "foo and bar");
+    assert_eq!(
+        run_php("<?php $a = 'foo'; $b = 'bar'; echo \"$a and $b\";"),
+        "foo and bar"
+    );
 }
 
 #[test]
 fn test_string_interpolation_with_number() {
-    assert_eq!(run_php("<?php $n = 42; echo \"The answer is $n\";"), "The answer is 42");
+    assert_eq!(
+        run_php("<?php $n = 42; echo \"The answer is $n\";"),
+        "The answer is 42"
+    );
 }
 
 #[test]
@@ -168,7 +178,10 @@ fn test_string_interpolation_escaped_dollar() {
 
 #[test]
 fn test_string_interpolation_curly_brace() {
-    assert_eq!(run_php("<?php $fruit = 'banana'; echo \"I like {$fruit}s\";"), "I like bananas");
+    assert_eq!(
+        run_php("<?php $fruit = 'banana'; echo \"I like {$fruit}s\";"),
+        "I like bananas"
+    );
 }
 
 #[test]
@@ -193,22 +206,33 @@ fn test_single_quote_no_interpolation() {
 
 #[test]
 fn test_interpolation_array_int_index() {
-    assert_eq!(run_php("<?php $a = ['hello', 'world']; echo \"val: {$a[0]}\";"), "val: hello");
+    assert_eq!(
+        run_php("<?php $a = ['hello', 'world']; echo \"val: {$a[0]}\";"),
+        "val: hello"
+    );
 }
 
 #[test]
 fn test_interpolation_array_string_key() {
-    assert_eq!(run_php("<?php $m = ['name' => 'PHP']; echo \"lang: {$m['name']}\";"), "lang: PHP");
+    assert_eq!(
+        run_php("<?php $m = ['name' => 'PHP']; echo \"lang: {$m['name']}\";"),
+        "lang: PHP"
+    );
 }
 
 #[test]
 fn test_practical_string_interpolation_in_loop() {
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $names = ['Alice', 'Bob'];
 foreach ($names as $name) {
     echo \"Hello $name! \";
 }
-"), "Hello Alice! Hello Bob! ");
+"
+        ),
+        "Hello Alice! Hello Bob! "
+    );
 }
 
 // ── COW string aliasing regression tests ──────────────────────────
@@ -216,29 +240,41 @@ foreach ($names as $name) {
 #[test]
 fn test_string_cow_assign_then_mutate() {
     // $b = $a shares Rc. $b .= must COW-detach, not mutate $a.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $a = 'hello';
 $b = $a;
 $b .= ' world';
 echo $a . '|' . $b;
-"), "hello|hello world");
+"
+        ),
+        "hello|hello world"
+    );
 }
 
 #[test]
 fn test_string_cow_function_arg() {
     // Function arg is a clone (Rc bump). .= inside must not affect caller.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function modify($s) { $s .= '!'; return $s; }
 $x = 'test';
 $y = modify($x);
 echo $x . '|' . $y;
-"), "test|test!");
+"
+        ),
+        "test|test!"
+    );
 }
 
 #[test]
 fn test_string_cow_multiple_clones() {
     // Multiple clones from same source — each .= independent.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $s = 'base';
 $c1 = $s;
 $c2 = $s;
@@ -246,74 +282,107 @@ $c3 = $s;
 $c1 .= '1';
 $c2 .= '2';
 echo $s . '|' . $c1 . '|' . $c2 . '|' . $c3;
-"), "base|base1|base2|base");
+"
+        ),
+        "base|base1|base2|base"
+    );
 }
 
 #[test]
 fn test_string_cow_sole_owner_inplace() {
     // Sole owner .= should mutate in place (no COW detach needed).
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $z = 'only';
 $z .= ' me';
 echo $z;
-"), "only me");
+"
+        ),
+        "only me"
+    );
 }
 
 #[test]
 fn test_string_cow_in_array() {
     // String stored in array, copied out, mutated — original in array unchanged.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $arr = ['key' => 'value'];
 $copy = $arr['key'];
 $copy .= '_modified';
 echo $arr['key'] . '|' . $copy;
-"), "value|value_modified");
+"
+        ),
+        "value|value_modified"
+    );
 }
 
 #[test]
 fn test_string_cow_closure_capture() {
     // Closure captures string. .= inside closure must not affect outer.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $s = 'captured';
 $fn = function() use ($s) { $s .= '!'; return $s; };
 $r = $fn();
 echo $s . '|' . $r;
-"), "captured|captured!");
+"
+        ),
+        "captured|captured!"
+    );
 }
 
 #[test]
 fn test_string_cow_loop_append() {
     // Repeated .= on sole-owner string in a loop.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 $s = '';
 for ($i = 0; $i < 5; $i = $i + 1) {
     $s .= 'x';
 }
 echo $s;
-"), "xxxxx");
+"
+        ),
+        "xxxxx"
+    );
 }
 
 #[test]
 fn test_string_cow_return_and_second_consumer() {
     // Function returns a string, two callers get it — independent copies.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function make() { return 'base'; }
 $a = make();
 $b = make();
 $a .= '1';
 $b .= '2';
 echo $a . '|' . $b;
-"), "base1|base2");
+"
+        ),
+        "base1|base2"
+    );
 }
 
 #[test]
 fn test_string_cow_nested_function_passthrough() {
     // String passed through two function calls, mutated at the end.
-    assert_eq!(run_php("<?php
+    assert_eq!(
+        run_php(
+            "<?php
 function inner($s) { $s .= '!'; return $s; }
 function outer($s) { return inner($s); }
 $x = 'deep';
 $y = outer($x);
 echo $x . '|' . $y;
-"), "deep|deep!");
+"
+        ),
+        "deep|deep!"
+    );
 }

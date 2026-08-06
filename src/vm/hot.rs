@@ -89,18 +89,17 @@
 //! all deeper frames are guaranteed `Scalar`-only.
 //! For method frames: CV[0] ($this) is always `MaybeHeap` (Object).
 
-use crate::value::{Value, ValueType};
-use crate::runtime::ExecutorGlobals;
 use super::execute::VmError;
-use super::frame::{ExecuteData, CALL_FRAME_SLOTS};
-use super::function::{CallStrategy, FunctionType, UserFunction, HotStatus, FUNC_HOT_THRESHOLD};
+use super::frame::{CALL_FRAME_SLOTS, ExecuteData};
+use super::function::{CallStrategy, FUNC_HOT_THRESHOLD, FunctionType, HotStatus, UserFunction};
 use super::instruction::{
-    Instruction, OpType, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS, Instruction, OpType,
 };
 use super::opcode::OpCode;
 use super::stack;
 use super::stats;
+use crate::runtime::ExecutorGlobals;
+use crate::value::{Value, ValueType};
 
 // ── Public types ──────────────────────────────────────────────────────
 
@@ -262,16 +261,28 @@ pub fn dump_bail_stats() {
     let counts = bail_stats::snapshot();
     let total_bails: u64 = counts.iter().sum();
     if entries > 0 || total_bails > 0 {
-        eprintln!("[hot] coverage: entries={} completed={} bails={} (completion_rate={:.1}%)",
-            entries, completed, total_bails,
-            if entries > 0 { completed as f64 / entries as f64 * 100.0 } else { 0.0 });
+        eprintln!(
+            "[hot] coverage: entries={} completed={} bails={} (completion_rate={:.1}%)",
+            entries,
+            completed,
+            total_bails,
+            if entries > 0 {
+                completed as f64 / entries as f64 * 100.0
+            } else {
+                0.0
+            }
+        );
         if total_bails > 0 {
             eprintln!("[hot] bail reasons:");
             for (reason, name) in &ALL {
                 let count = counts[*reason as usize];
                 if count > 0 {
-                    eprintln!("  {}: {} ({:.1}%)", name, count,
-                        count as f64 / total_bails as f64 * 100.0);
+                    eprintln!(
+                        "  {}: {} ({:.1}%)",
+                        name,
+                        count,
+                        count as f64 / total_bails as f64 * 100.0
+                    );
                 }
             }
         }
@@ -319,7 +330,8 @@ pub fn execute_hot_frame(
     // Hoisted: does this frame's function have globals that need syncing before calls?
     // Constant for the entire invocation (op_array doesn't change within one frame).
     // For fib: always false → Fast DoFcall globals check is a single bool read.
-    let caller_has_globals = !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty();
+    let caller_has_globals =
+        !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty();
 
     loop {
         let opline = unsafe { &*opline_ptr };
@@ -328,12 +340,18 @@ pub fn execute_hot_frame(
             // ── Fused comparison + conditional jump ──
             OpCode::JmpZ_Le_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if !(l1 <= l2) {
-                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            opline_ptr = unsafe {
+                                op_array.instructions().as_ptr().add(opline.result as usize)
+                            };
                             continue;
                         }
                         opline_ptr = unsafe { opline_ptr.add(2) };
@@ -345,12 +363,18 @@ pub fn execute_hot_frame(
 
             OpCode::JmpNZ_Le_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if l1 <= l2 {
-                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            opline_ptr = unsafe {
+                                op_array.instructions().as_ptr().add(opline.result as usize)
+                            };
                             continue;
                         }
                         opline_ptr = unsafe { opline_ptr.add(2) };
@@ -362,12 +386,18 @@ pub fn execute_hot_frame(
 
             OpCode::JmpZ_Lt_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if !(l1 < l2) {
-                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            opline_ptr = unsafe {
+                                op_array.instructions().as_ptr().add(opline.result as usize)
+                            };
                             continue;
                         }
                         opline_ptr = unsafe { opline_ptr.add(2) };
@@ -379,12 +409,18 @@ pub fn execute_hot_frame(
 
             OpCode::JmpNZ_Lt_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if l1 < l2 {
-                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            opline_ptr = unsafe {
+                                op_array.instructions().as_ptr().add(opline.result as usize)
+                            };
                             continue;
                         }
                         opline_ptr = unsafe { opline_ptr.add(2) };
@@ -397,12 +433,18 @@ pub fn execute_hot_frame(
             // ── Fused equality + conditional jump ──
             OpCode::JmpZ_Eq_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if !(l1 == l2) {
-                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            opline_ptr = unsafe {
+                                op_array.instructions().as_ptr().add(opline.result as usize)
+                            };
                             continue;
                         }
                         opline_ptr = unsafe { opline_ptr.add(2) };
@@ -414,12 +456,18 @@ pub fn execute_hot_frame(
 
             OpCode::JmpNZ_Eq_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 match (op1.as_long(), op2.as_long()) {
                     (Some(l1), Some(l2)) => {
                         if l1 == l2 {
-                            opline_ptr = unsafe { op_array.instructions().as_ptr().add(opline.result as usize) };
+                            opline_ptr = unsafe {
+                                op_array.instructions().as_ptr().add(opline.result as usize)
+                            };
                             continue;
                         }
                         opline_ptr = unsafe { opline_ptr.add(2) };
@@ -431,7 +479,8 @@ pub fn execute_hot_frame(
 
             // ── InitFcall with inline Sub_CvConst+SendVal peek-ahead ──
             OpCode::InitFcall => {
-                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ip =
+                    unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let cached = op_array.cache[ip].func;
                 if cached.is_null() {
                     return bailout(frame, opline_ptr, HotBailReason::FuncCacheMiss);
@@ -448,29 +497,28 @@ pub fn execute_hot_frame(
                         || user.scalar_double_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
-                        let evaluated = if plan.select.is_none()
-                            && plan.program.operations.len() == 1
-                        {
-                            unsafe {
-                                super::execute::try_execute_direct_single_scalar_long_op(
-                                    frame,
-                                    op_array,
-                                    opline_ptr.add(1),
-                                    func_common,
-                                    plan,
-                                )
-                            }
-                        } else {
-                            unsafe {
-                                super::execute::try_execute_direct_scalar_long_call(
-                                    frame,
-                                    op_array,
-                                    opline_ptr.add(1),
-                                    func_common,
-                                    plan,
-                                )
-                            }
-                        };
+                        let evaluated =
+                            if plan.select.is_none() && plan.program.operations.len() == 1 {
+                                unsafe {
+                                    super::execute::try_execute_direct_single_scalar_long_op(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        func_common,
+                                        plan,
+                                    )
+                                }
+                            } else {
+                                unsafe {
+                                    super::execute::try_execute_direct_scalar_long_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        func_common,
+                                        plan,
+                                    )
+                                }
+                            };
                         if let Some((result, do_fcall_ptr)) = evaluated {
                             stats::inc_do_fcall_fast();
                             stats::inc_return_fast();
@@ -490,11 +538,7 @@ pub fn execute_hot_frame(
                         }
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_composed_scalar_long_call(
-                                frame,
-                                op_array,
-                                opline_ptr,
-                                func_ptr,
-                                plan,
+                                frame, op_array, opline_ptr, func_ptr, plan,
                             )
                         } {
                             unsafe {
@@ -540,13 +584,7 @@ pub fn execute_hot_frame(
                         scalar_plan_eligible = true;
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_direct_composed_scalar_body_call(
-                                eg,
-                                frame,
-                                op_array,
-                                opline_ptr,
-                                func_ptr,
-                                user,
-                                plan,
+                                eg, frame, op_array, opline_ptr, func_ptr, user, plan,
                             )
                         } {
                             unsafe {
@@ -563,10 +601,8 @@ pub fn execute_hot_frame(
                 }
 
                 let pending_call = unsafe { (*frame).call };
-                let deferred = super::execute::should_defer_scalar_call(
-                    opline,
-                    scalar_plan_eligible,
-                );
+                let deferred =
+                    super::execute::should_defer_scalar_call(opline, scalar_plan_eligible);
                 let call = if deferred {
                     eg.pending_call_stack.push_deferred_scalar_call(
                         func_ptr,
@@ -576,13 +612,8 @@ pub fn execute_hot_frame(
                         pending_call,
                     )
                 } else {
-                    eg.vm_stack.push_call_frame(
-                        func_ptr,
-                        num_args,
-                        num_args,
-                        frame,
-                        pending_call,
-                    )
+                    eg.vm_stack
+                        .push_call_frame(func_ptr, num_args, num_args, frame, pending_call)
                 };
                 unsafe {
                     (*frame).call = call;
@@ -597,7 +628,11 @@ pub fn execute_hot_frame(
                         && next2.op1 == next.result
                     {
                         let op1_cv = unsafe { (*frame).cv(next.op1 as u32) };
-                        let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                        let op1 = if op1_cv.is_reference() {
+                            unsafe { &*op1_cv.as_ref_ptr() }
+                        } else {
+                            op1_cv
+                        };
                         let op2 = &op_array.literals()[next.op2 as usize];
                         if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                             let dst = unsafe {
@@ -613,9 +648,7 @@ pub fn execute_hot_frame(
                     }
                 }
                 if next.opcode == OpCode::SendVal
-                    && unsafe {
-                        super::execute::try_send_scalar_arg(frame, call, op_array, next)
-                    }
+                    && unsafe { super::execute::try_send_scalar_arg(frame, call, op_array, next) }
                 {
                     // InitFcall + scalar SendVal fusion.
                     opline_ptr = unsafe { opline_ptr.add(2) };
@@ -629,9 +662,8 @@ pub fn execute_hot_frame(
             // ── SendVal (when not fused into InitFcall) ──
             OpCode::SendVal => {
                 let call = unsafe { (*frame).call };
-                let dst = unsafe {
-                    (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
-                };
+                let dst =
+                    unsafe { (call as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize) };
                 if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
                     let src = unsafe {
                         (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
@@ -644,7 +676,11 @@ pub fn execute_hot_frame(
                     }
                 } else if opline.op1_type == OpType::Cv {
                     let cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                    let val = if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv };
+                    let val = if cv.is_reference() {
+                        unsafe { &*cv.as_ref_ptr() }
+                    } else {
+                        cv
+                    };
                     if !val.needs_cleanup() {
                         unsafe { Value::raw_copy(val as *const Value, dst) };
                     } else {
@@ -667,7 +703,11 @@ pub fn execute_hot_frame(
             // ── Sub_CvConst (when not fused into InitFcall peek-ahead) ──
             OpCode::Sub_CvConst => {
                 let op1_cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                let op1 = if op1_cv.is_reference() { unsafe { &*op1_cv.as_ref_ptr() } } else { op1_cv };
+                let op1 = if op1_cv.is_reference() {
+                    unsafe { &*op1_cv.as_ref_ptr() }
+                } else {
+                    op1_cv
+                };
                 let op2 = &op_array.literals()[opline.op2 as usize];
                 if let (Some(l1), Some(l2)) = (op1.as_long(), op2.as_long()) {
                     let result_ptr = unsafe {
@@ -820,7 +860,11 @@ pub fn execute_hot_frame(
                 let op1_val = match opline.op1_type {
                     OpType::Cv => {
                         let cv = unsafe { (*frame).cv(opline.op1 as u32) };
-                        if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                        if cv.is_reference() {
+                            unsafe { &*cv.as_ref_ptr() }
+                        } else {
+                            cv
+                        }
                     }
                     OpType::Tmp | OpType::Var => unsafe {
                         &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
@@ -831,7 +875,11 @@ pub fn execute_hot_frame(
                 let op2_val = match opline.op2_type {
                     OpType::Cv => {
                         let cv = unsafe { (*frame).cv(opline.op2 as u32) };
-                        if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                        if cv.is_reference() {
+                            unsafe { &*cv.as_ref_ptr() }
+                        } else {
+                            cv
+                        }
                     }
                     OpType::Tmp | OpType::Var => unsafe {
                         &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
@@ -846,15 +894,21 @@ pub fn execute_hot_frame(
                     match opline.opcode {
                         OpCode::Add | OpCode::Add_CvTmp => match l1.checked_add(l2) {
                             Some(r) => unsafe { Value::write_long(result_ptr, r) },
-                            None => unsafe { result_ptr.write(Value::double(l1 as f64 + l2 as f64)) },
+                            None => unsafe {
+                                result_ptr.write(Value::double(l1 as f64 + l2 as f64))
+                            },
                         },
                         OpCode::Sub_TmpTmp => match l1.checked_sub(l2) {
                             Some(r) => unsafe { Value::write_long(result_ptr, r) },
-                            None => unsafe { result_ptr.write(Value::double(l1 as f64 - l2 as f64)) },
+                            None => unsafe {
+                                result_ptr.write(Value::double(l1 as f64 - l2 as f64))
+                            },
                         },
                         OpCode::Mul => match l1.checked_mul(l2) {
                             Some(r) => unsafe { Value::write_long(result_ptr, r) },
-                            None => unsafe { result_ptr.write(Value::double(l1 as f64 * l2 as f64)) },
+                            None => unsafe {
+                                result_ptr.write(Value::double(l1 as f64 * l2 as f64))
+                            },
                         },
                         OpCode::Div => {
                             if l2 == 0 {
@@ -864,19 +918,21 @@ pub fn execute_hot_frame(
                                 if l1.checked_rem(l2) == Some(0) {
                                     unsafe { Value::write_long(result_ptr, quotient) };
                                 } else {
-                                    unsafe { result_ptr.write(Value::double(l1 as f64 / l2 as f64)) };
+                                    unsafe {
+                                        result_ptr.write(Value::double(l1 as f64 / l2 as f64))
+                                    };
                                 }
                             } else {
                                 unsafe { result_ptr.write(Value::double(l1 as f64 / l2 as f64)) };
                             }
-                        },
+                        }
                         OpCode::Mod => {
                             if l2 == 0 {
                                 return Err(VmError::Fatal("Division by zero".into()));
                             }
                             let remainder = l1.checked_rem(l2).unwrap_or(0);
                             unsafe { Value::write_long(result_ptr, remainder) };
-                        },
+                        }
                         _ => unreachable!(),
                     }
                 } else {
@@ -894,11 +950,7 @@ pub fn execute_hot_frame(
                 if unsafe { (*call).deferred_scalar_call } {
                     call = unsafe {
                         super::execute::resolve_deferred_scalar_call(
-                            eg,
-                            frame,
-                            call,
-                            opline,
-                            opline_ptr,
+                            eg, frame, call, opline, opline_ptr,
                         )
                     };
                     if call.is_null() {
@@ -946,7 +998,9 @@ pub fn execute_hot_frame(
 
                 // Hotness tracking — promotion uses can_promote_to_hot() as single source of truth.
                 let cc = func_common.call_count.get();
-                if cc < u32::MAX { func_common.call_count.set(cc + 1); }
+                if cc < u32::MAX {
+                    func_common.call_count.set(cc + 1);
+                }
                 if cc == FUNC_HOT_THRESHOLD && func_common.hot_status.get() == HotStatus::Cold {
                     if func_common.can_promote_to_hot() {
                         func_common.hot_status.set(HotStatus::Hot);
@@ -1020,12 +1074,11 @@ pub fn execute_hot_frame(
                     // discards its value. Side-exit at the untouched Return so
                     // baseline constructs the canonical TypeError.
                     let common = unsafe { &*(*frame).func };
-                    let return_type_proven =
-                        super::execute::known_scalar_satisfies_type_hint(
-                            opline.known_result_type(),
-                            &common.sig.return_type_hint,
-                            op_array.strict_types,
-                        );
+                    let return_type_proven = super::execute::known_scalar_satisfies_type_hint(
+                        opline.known_result_type(),
+                        &common.sig.return_type_hint,
+                        op_array.strict_types,
+                    );
                     if !return_type_proven
                         && super::execute::check_fast_scalar_type_hint(
                             unsafe { &*retval_ptr },
@@ -1069,7 +1122,11 @@ pub fn execute_hot_frame(
                     unsafe { &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize) }
                 } else if opline.op2_type == OpType::Cv {
                     let cv = unsafe { (*frame).cv(opline.op2 as u32) };
-                    if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                    if cv.is_reference() {
+                        unsafe { &*cv.as_ref_ptr() }
+                    } else {
+                        cv
+                    }
                 } else {
                     return bailout(frame, opline_ptr, HotBailReason::UnsupportedAssignType);
                 };
@@ -1098,28 +1155,32 @@ pub fn execute_hot_frame(
             OpCode::FetchObjR => {
                 // op1 = CV (object), op2 = Const (property name)
                 let obj_val = unsafe { (*frame).cv(opline.op1 as u32) };
-                let obj_val = if obj_val.is_reference() { unsafe { &*obj_val.as_ref_ptr() } } else { obj_val };
+                let obj_val = if obj_val.is_reference() {
+                    unsafe { &*obj_val.as_ref_ptr() }
+                } else {
+                    obj_val
+                };
                 if obj_val.value_type() != ValueType::Object {
                     return bailout(frame, opline_ptr, HotBailReason::ObjNotObject);
                 }
                 let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
-                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ip =
+                    unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let ic = &op_array.cache[ip];
                 // Inline cache check: public property (bit 0) + same class
-                if ic.property_flags() & 1 == 0 || ic.class_id != obj_class_id || obj_class_id == 0 {
+                if ic.property_flags() & 1 == 0 || ic.class_id != obj_class_id || obj_class_id == 0
+                {
                     return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
                 }
-                let prop_ptr = unsafe {
-                    obj_val.object_property_slot_unchecked(ic.property_slot())
-                };
+                let prop_ptr =
+                    unsafe { obj_val.object_property_slot_unchecked(ic.property_slot()) };
                 let prop_val = unsafe { &*prop_ptr };
                 // Scalar-only: bail if property value is heap type
                 if prop_val.needs_cleanup() || prop_val.is_reference() {
                     return bailout(frame, opline_ptr, HotBailReason::ObjHeapProperty);
                 }
-                let result_ptr = unsafe {
-                    (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
-                };
+                let result_ptr =
+                    unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                 unsafe { Value::raw_copy(prop_ptr, result_ptr) };
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
@@ -1131,12 +1192,17 @@ pub fn execute_hot_frame(
             OpCode::AssignObjProp => {
                 // op1 = CV (object), op2 = Const (property name), result = source value
                 let obj_val = unsafe { (*frame).cv(opline.op1 as u32) };
-                let obj_val = if obj_val.is_reference() { unsafe { &*obj_val.as_ref_ptr() } } else { obj_val };
+                let obj_val = if obj_val.is_reference() {
+                    unsafe { &*obj_val.as_ref_ptr() }
+                } else {
+                    obj_val
+                };
                 if obj_val.value_type() != ValueType::Object {
                     return bailout(frame, opline_ptr, HotBailReason::ObjNotObject);
                 }
                 let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
-                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ip =
+                    unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let ic = &op_array.cache[ip];
                 // Need both read-safe (bit 0) and write-safe (bit 1)
                 if ic.property_flags() != 3 || ic.class_id != obj_class_id || obj_class_id == 0 {
@@ -1146,7 +1212,11 @@ pub fn execute_hot_frame(
                 let src_val = match opline.result_type {
                     OpType::Cv => {
                         let cv = unsafe { (*frame).cv(opline.result as u32) };
-                        if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+                        if cv.is_reference() {
+                            unsafe { &*cv.as_ref_ptr() }
+                        } else {
+                            cv
+                        }
                     }
                     OpType::Tmp | OpType::Var => unsafe {
                         &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.result as usize)
@@ -1160,9 +1230,7 @@ pub fn execute_hot_frame(
                 // Write scalar value directly to the cached declared-property slot.
                 let mut new_val = Value::undef();
                 unsafe { Value::raw_copy(src_val as *const Value, &mut new_val as *mut Value) };
-                unsafe {
-                    obj_val.object_set_property_slot_unchecked(ic.property_slot(), new_val)
-                };
+                unsafe { obj_val.object_set_property_slot_unchecked(ic.property_slot(), new_val) };
                 opline_ptr = unsafe { opline_ptr.add(1) };
                 continue;
             }
@@ -1174,22 +1242,24 @@ pub fn execute_hot_frame(
             OpCode::InitMethodCall => {
                 // op1 = CV (object), op2 = Const (method name), extended_value = num_args
                 let obj_val = unsafe { (*frame).cv(opline.op1 as u32) };
-                let obj_val = if obj_val.is_reference() { unsafe { &*obj_val.as_ref_ptr() } } else { obj_val };
+                let obj_val = if obj_val.is_reference() {
+                    unsafe { &*obj_val.as_ref_ptr() }
+                } else {
+                    obj_val
+                };
                 if obj_val.value_type() != ValueType::Object {
                     return bailout(frame, opline_ptr, HotBailReason::ObjNotObject);
                 }
                 let obj_class_id = unsafe { obj_val.object_class_id_unchecked() };
-                let ip = unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
+                let ip =
+                    unsafe { opline_ptr.offset_from(op_array.instructions().as_ptr()) as usize };
                 let ic = &op_array.cache[ip];
                 if ic.func.is_null() || ic.class_id != obj_class_id || obj_class_id == 0 {
                     return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
                 }
                 let func_ptr = ic.func;
                 let func_common = unsafe { &*func_ptr };
-                if !super::execute::method_return_dispatch_contract_matches(
-                    opline,
-                    func_common,
-                ) {
+                if !super::execute::method_return_dispatch_contract_matches(opline, func_common) {
                     return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
                 }
                 let num_args = opline.extended_value;
@@ -1205,12 +1275,7 @@ pub fn execute_hot_frame(
                             if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
                                 && unsafe {
                                     super::execute::try_execute_composed_long_property_call(
-                                        frame,
-                                        op_array,
-                                        opline_ptr,
-                                        obj_val,
-                                        user,
-                                        plan,
+                                        frame, op_array, opline_ptr, obj_val, user, plan,
                                     )
                                 }
                             {
@@ -1225,12 +1290,7 @@ pub fn execute_hot_frame(
                                 && do_fcall.result_type == OpType::Unused
                                 && unsafe {
                                     super::execute::try_execute_hot_long_property_method(
-                                        frame,
-                                        op_array,
-                                        obj_val,
-                                        sends,
-                                        plan,
-                                        user,
+                                        frame, op_array, obj_val, sends, plan, user,
                                     )
                                 }
                             {
@@ -1265,18 +1325,11 @@ pub fn execute_hot_frame(
                     }
 
                     if let Some(plan) = user.object_array_plan.as_deref() {
-                        if opline._pad
-                            & crate::vm::instruction::CALL_FLAG_OBJECT_ARRAY_CONSUMERS
+                        if opline._pad & crate::vm::instruction::CALL_FLAG_OBJECT_ARRAY_CONSUMERS
                             != 0
                             && let Some(next_ptr) = unsafe {
                                 super::execute::try_execute_direct_object_array_consumers(
-                                    eg,
-                                    frame,
-                                    op_array,
-                                    opline_ptr,
-                                    obj_val,
-                                    user,
-                                    plan,
+                                    eg, frame, op_array, opline_ptr, obj_val, user, plan,
                                 )
                             }
                         {
@@ -1340,29 +1393,28 @@ pub fn execute_hot_frame(
                         || user.scalar_double_plan.is_some();
                     if let Some(plan) = user.scalar_long_plan.as_deref() {
                         scalar_plan_eligible = true;
-                        let evaluated = if plan.select.is_none()
-                            && plan.program.operations.len() == 1
-                        {
-                            unsafe {
-                                super::execute::try_execute_direct_single_scalar_long_op(
-                                    frame,
-                                    op_array,
-                                    opline_ptr.add(1),
-                                    func_common,
-                                    plan,
-                                )
-                            }
-                        } else {
-                            unsafe {
-                                super::execute::try_execute_direct_scalar_long_call(
-                                    frame,
-                                    op_array,
-                                    opline_ptr.add(1),
-                                    func_common,
-                                    plan,
-                                )
-                            }
-                        };
+                        let evaluated =
+                            if plan.select.is_none() && plan.program.operations.len() == 1 {
+                                unsafe {
+                                    super::execute::try_execute_direct_single_scalar_long_op(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        func_common,
+                                        plan,
+                                    )
+                                }
+                            } else {
+                                unsafe {
+                                    super::execute::try_execute_direct_scalar_long_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        func_common,
+                                        plan,
+                                    )
+                                }
+                            };
                         if let Some((result, do_fcall_ptr)) = evaluated {
                             stats::inc_do_fcall_fast();
                             stats::inc_return_fast();
@@ -1382,11 +1434,7 @@ pub fn execute_hot_frame(
                         }
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_composed_scalar_long_call(
-                                frame,
-                                op_array,
-                                opline_ptr,
-                                func_ptr,
-                                plan,
+                                frame, op_array, opline_ptr, func_ptr, plan,
                             )
                         } {
                             unsafe {
@@ -1432,13 +1480,7 @@ pub fn execute_hot_frame(
                         scalar_plan_eligible = true;
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_direct_composed_scalar_body_call(
-                                eg,
-                                frame,
-                                op_array,
-                                opline_ptr,
-                                func_ptr,
-                                user,
-                                plan,
+                                eg, frame, op_array, opline_ptr, func_ptr, user, plan,
                             )
                         } {
                             unsafe {
@@ -1455,10 +1497,8 @@ pub fn execute_hot_frame(
                 }
 
                 let pending_call = unsafe { (*frame).call };
-                let deferred = super::execute::should_defer_scalar_call(
-                    opline,
-                    scalar_plan_eligible,
-                );
+                let deferred =
+                    super::execute::should_defer_scalar_call(opline, scalar_plan_eligible);
                 let call = if deferred {
                     eg.pending_call_stack.push_deferred_scalar_call(
                         func_ptr,
@@ -1501,12 +1541,7 @@ pub fn execute_hot_frame(
                     let send = unsafe { &*next };
                     if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
                         || !unsafe {
-                            super::execute::try_send_scalar_method_arg(
-                                frame,
-                                call,
-                                op_array,
-                                send,
-                            )
+                            super::execute::try_send_scalar_method_arg(frame, call, op_array, send)
                         }
                     {
                         break;
@@ -1541,7 +1576,11 @@ fn execute_hot_long_comparison(
     let op1 = match opline.op1_type {
         OpType::Cv => {
             let cv = unsafe { (*frame).cv(opline.op1 as u32) };
-            if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+            if cv.is_reference() {
+                unsafe { &*cv.as_ref_ptr() }
+            } else {
+                cv
+            }
         }
         OpType::Tmp | OpType::Var => unsafe {
             &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
@@ -1552,7 +1591,11 @@ fn execute_hot_long_comparison(
     let op2 = match opline.op2_type {
         OpType::Cv => {
             let cv = unsafe { (*frame).cv(opline.op2 as u32) };
-            if cv.is_reference() { unsafe { &*cv.as_ref_ptr() } } else { cv }
+            if cv.is_reference() {
+                unsafe { &*cv.as_ref_ptr() }
+            } else {
+                cv
+            }
         }
         OpType::Tmp | OpType::Var => unsafe {
             &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize)
@@ -1586,9 +1629,8 @@ fn execute_hot_long_comparison(
     if !matches!(opline.result_type, OpType::Tmp | OpType::Var) {
         return None;
     }
-    let result_ptr = unsafe {
-        (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize)
-    };
+    let result_ptr =
+        unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
     unsafe { Value::write_bool(result_ptr, result) };
     Some(unsafe { opline_ptr.add(1) })
 }
@@ -1614,10 +1656,7 @@ pub fn resume_after_long_comparison(
         let opline_ptr = unsafe { (*root_frame).opline };
         if !matches!(
             unsafe { (*opline_ptr).opcode },
-            OpCode::IsEqual
-                | OpCode::IsNotEqual
-                | OpCode::IsSmaller
-                | OpCode::IsSmallerOrEqual
+            OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual
         ) {
             return Ok(HotResult::Bailout);
         }

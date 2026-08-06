@@ -3,7 +3,9 @@ use common::run_php;
 
 #[test]
 fn test_tostring_echo() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Money {
     private int $cents;
     public function __construct(int $cents) {
@@ -15,12 +17,17 @@ class Money {
 }
 $m = new Money(1550);
 echo $m;
-"#), "USD:1550");
+"#
+        ),
+        "USD:1550"
+    );
 }
 
 #[test]
 fn test_tostring_concat() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Tag {
     private string $name;
     public function __construct(string $name) { $this->name = $name; }
@@ -28,12 +35,17 @@ class Tag {
 }
 $t = new Tag("div");
 echo "HTML: " . $t;
-"#), "HTML: <div>");
+"#
+        ),
+        "HTML: <div>"
+    );
 }
 
 #[test]
 fn test_get_set() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Bag {
     private $data;
     public function __construct() {
@@ -49,12 +61,17 @@ class Bag {
 $b = new Bag();
 $b->color = "red";
 echo $b->color;
-"#), "red");
+"#
+        ),
+        "red"
+    );
 }
 
 #[test]
 fn test_get_undefined_property() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Flex {
     public function __get($name) {
         return "default_" . $name;
@@ -62,12 +79,17 @@ class Flex {
 }
 $f = new Flex();
 echo $f->whatever;
-"#), "default_whatever");
+"#
+        ),
+        "default_whatever"
+    );
 }
 
 #[test]
 fn test_invoke() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Multiplier {
     private int $factor;
     public function __construct(int $factor) { $this->factor = $factor; }
@@ -75,12 +97,17 @@ class Multiplier {
 }
 $double = new Multiplier(2);
 echo $double(21);
-"#), "42");
+"#
+        ),
+        "42"
+    );
 }
 
 #[test]
 fn test_invoke_with_closure_like_usage() {
-    assert_eq!(run_php(r#"<?php
+    assert_eq!(
+        run_php(
+            r#"<?php
 class Greeter {
     private string $greeting;
     public function __construct(string $greeting) { $this->greeting = $greeting; }
@@ -88,5 +115,8 @@ class Greeter {
 }
 $hi = new Greeter("Hello");
 echo $hi("World");
-"#), "Hello World");
+"#
+        ),
+        "Hello World"
+    );
 }
