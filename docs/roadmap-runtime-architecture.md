@@ -191,6 +191,28 @@ speedup claims. An additional 228 focused callable, closure, constant,
 `instanceof`, interface and global/static tests pass alongside every standard
 feature matrix.
 
+Tenth checkpoint (2026-08-06): the quick-IR/planning track is physically split
+without changing its module or private interfaces. Stable IR/data definitions
+remain in the 1,136-line `quick.rs`; array planning (542 lines), Double-call
+planning (434), scalar/induction planning (270), accumulate planning (813),
+long-region helpers (375), long-region construction (1,712) and tests (2,022)
+are separate `include!` units. All moved non-boundary source lines reconstruct
+byte-for-byte; only six blank separators became include boundaries before the
+six corrected test feature guards.
+Those guards now keep quick-plan selection assertions and integration markers out of
+`--no-default-features`, where the compiler intentionally cannot select that
+tier. The native-CPU `max-perf` `__text` section remains exactly 1,780,708
+bytes; only diagnostic source-path strings change. In 101 order-alternated A/B
+pairs, the four corpus workloads and routing holdout retain identical output
+and range from -0.13 to +0.61 percent. This is normal measurement noise, so
+the structural split is accepted with no runtime optimization claim. Clean
+native-CPU x86-64 builds likewise retain identical `.text` sizes in both
+configurations (2,127,818 bytes without JIT and 2,340,314 with JIT); 101
+CPU-pinned pairs range from -0.23 to +0.09 percent without JIT and from -0.08
+to +0.09 percent in the JIT build. The complete x86 matrix passes 232 library,
+113 quick-loop and 32 JIT tests plus every end-to-end suite, and the
+no-default-feature all-target check remains green.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility

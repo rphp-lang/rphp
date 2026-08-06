@@ -4,16 +4,20 @@ use common::{run_php, run_php_expect_error};
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
+#[cfg(feature = "quick-loops")]
+use rphp::vm::function::ScalarLongOpKind;
 use rphp::vm::function::{
     CallStrategy, ComposedScalarLongOp, ComposedTypedLongOp, ReturnStrategy, ScalarLongCallGuard,
-    ScalarLongOpKind, ScalarStringSource,
+    ScalarStringSource,
 };
 use rphp::vm::instruction::{
     CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS, KnownScalarType,
     NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
 };
 use rphp::vm::opcode::OpCode;
+#[cfg(feature = "quick-loops")]
 use rphp::vm::planner::BlockPlan;
+#[cfg(feature = "quick-loops")]
 use rphp::vm::quick::{QuickLongOp, QuickTypedMethodCall};
 
 fn compile_types(source: &str) -> rphp::compiler::compile::CompileResult {
@@ -1560,6 +1564,7 @@ class Selector {
     );
 }
 
+#[cfg(feature = "quick-loops")]
 #[test]
 fn test_intdiv_conditional_method_composes_into_quick_scalar_loop() {
     let source = include_str!("../benches/corpus_typed_ledger_pipeline.php");
@@ -2179,6 +2184,7 @@ echo gettype($result['value']);
     );
 }
 
+#[cfg(feature = "quick-loops")]
 #[test]
 fn test_dead_object_array_result_and_request_get_scalar_pipeline_markers() {
     let source = r#"<?php
