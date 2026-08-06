@@ -62,6 +62,15 @@ use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 #[cfg(feature = "quick-loops")]
 use crate::value::ExactOrderedIntLayout;
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+use crate::value::NativeIndexedLongLookupContext;
 use crate::value::{
     ArrayKey, PhpArray, PhpClosure, PhpObject, Value, ValueType, canonical_decimal_array_key,
     make_error_value,

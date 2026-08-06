@@ -165,7 +165,25 @@ unsafe fn run_native_quick_long_mixed_kernel(
 
     let mut entry_pointers =
         [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
+    let mut indexed_contexts = [
+        std::mem::MaybeUninit::<NativeIndexedLongLookupContext>::uninit();
+        NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
+    ];
     for index in 0..kernel.context_count as usize {
+        if kernel.context_indexed[index] {
+            let Some(array) =
+                (*slot_base.add(kernel.context_array_slots[index] as usize)).as_array()
+            else {
+                return Ok(None);
+            };
+            let Some(context) = array.native_indexed_long_lookup_context() else {
+                return Ok(None);
+            };
+            entry_pointers[index] = indexed_contexts[index].write(context)
+                as *mut NativeIndexedLongLookupContext
+                as *mut i64;
+            continue;
+        }
         let array = mutable_arrays[kernel.context_array_slots[index] as usize];
         if array.is_null() {
             return Ok(None);
@@ -207,7 +225,9 @@ unsafe fn run_native_quick_long_mixed_kernel(
         }
         let mut before_entries = [0i64; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
         for index in 0..kernel.context_count as usize {
-            before_entries[index] = *entry_pointers[index];
+            if !kernel.context_indexed[index] {
+                before_entries[index] = *entry_pointers[index];
+            }
         }
 
         let native_result = cache.dispatch_prepared_straight_chunk_with_context(
@@ -229,7 +249,9 @@ unsafe fn run_native_quick_long_mixed_kernel(
                     slots[kernel.mutable_slots[index] as usize] = before_values[index];
                 }
                 for index in 0..kernel.context_count as usize {
-                    *entry_pointers[index] = before_entries[index];
+                    if !kernel.context_indexed[index] {
+                        *entry_pointers[index] = before_entries[index];
+                    }
                 }
                 commit_native_mixed_properties(kernel, &property_values, slots);
                 return Err(VmError::Fatal(format!(

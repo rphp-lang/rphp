@@ -103,6 +103,7 @@ unsafe fn native_quick_long_mixed_kernel(
         string_token_count,
         context_array_slots: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         context_tokens: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+        context_indexed: [false; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         context_count: 0,
         property_binding_op_indices: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
         property_binding_property_indices: [0; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
@@ -125,6 +126,7 @@ unsafe fn native_quick_long_mixed_kernel(
     let mut trace_guard_expected = [false; NATIVE_STRAIGHT_LONG_MAX_OPERATIONS];
     let mut trace_guard_count = 0usize;
     let mut has_hash_update = false;
+    let mut has_indexed_load = false;
     let mut has_virtual_pipeline = false;
     let mut has_property_method = false;
     let mut has_property_read = false;
@@ -511,6 +513,34 @@ unsafe fn native_quick_long_mixed_kernel(
                 has_hash_update = true;
                 plan_index += 2;
             }
+            QuickLongOp::FetchArrayLong {
+                array,
+                index: QuickArrayIndex::Long(key),
+                result,
+                destination,
+                next_target,
+                resume_ip,
+            } => {
+                if next_target.op_index() != Some(plan_index + 1)
+                    || builder.context_count == NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
+                {
+                    return None;
+                }
+                let context = builder.context_count as u8;
+                builder.context_array_slots[builder.context_count] = array;
+                builder.context_indexed[builder.context_count] = true;
+                builder.context_count += 1;
+                builder.append(
+                    NativeStraightLongOperation::IndexedLongLoad {
+                        key,
+                        context,
+                        result,
+                        destination,
+                    },
+                    resume_ip,
+                )?;
+                has_indexed_load = true;
+            }
             QuickLongOp::Binary {
                 kind,
                 lhs,
@@ -698,10 +728,11 @@ unsafe fn native_quick_long_mixed_kernel(
         return None;
     }
     if (!has_hash_update
+        && !has_indexed_load
         && !has_virtual_pipeline
         && !has_property_method
         && !has_property_read)
-        || (!has_typed_method && !has_property_read)
+        || (!has_typed_method && !has_property_read && !has_indexed_load)
         || builder.operation_count == 0
     {
         return None;
@@ -751,6 +782,7 @@ unsafe fn native_quick_long_mixed_kernel(
         string_token_count: builder.string_token_count as u8,
         context_array_slots: builder.context_array_slots,
         context_tokens: builder.context_tokens,
+        context_indexed: builder.context_indexed,
         context_count: builder.context_count as u8,
         property_binding_op_indices: builder.property_binding_op_indices,
         property_binding_property_indices: builder.property_binding_property_indices,

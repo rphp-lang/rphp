@@ -1087,6 +1087,57 @@ impl IntIndexValue {
 
 type IntIndex = HashMap<i64, IntIndexValue, BuildHasherDefault<IntKeyHasher>>;
 
+/// Stable read-only view used by native guarded regions for typed integer
+/// lookups. The owning `PhpArray` remains alive and immutable for the whole
+/// region, so neither allocation can move while generated code calls the
+/// lookup helper.
+#[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct NativeIndexedLongLookupContext {
+    int_index: *const IntIndex,
+    entries: *const (ArrayEntryKey, Value),
+    entries_len: usize,
+}
+
+/// Exact native-call boundary for an indexed Long read. A zero return asks
+/// the caller to side-exit without modifying the destination slot.
+#[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+#[inline(never)]
+pub(crate) unsafe extern "C" fn native_indexed_long_lookup(
+    context: *const NativeIndexedLongLookupContext,
+    key: i64,
+    output: *mut i64,
+) -> u32 {
+    let Some(context) = context.as_ref() else {
+        return 0;
+    };
+    let Some(int_index) = context.int_index.as_ref() else {
+        return 0;
+    };
+    let Some(indexed) = int_index.get(&key).copied() else {
+        return 0;
+    };
+    let value = match indexed.cached_long() {
+        Some(value) => value,
+        None => {
+            if indexed.position() >= context.entries_len || context.entries.is_null() {
+                return 0;
+            }
+            let entry = &*context.entries.add(indexed.position());
+            let Some(value) = entry.1.as_long() else {
+                return 0;
+            };
+            value
+        }
+    };
+    let Some(output) = output.as_mut() else {
+        return 0;
+    };
+    *output = value;
+    1
+}
+
 #[inline]
 fn int_index_with_capacity(capacity: usize) -> IntIndex {
     IntIndex::with_capacity_and_hasher(capacity, BuildHasherDefault::default())
@@ -2429,6 +2480,30 @@ impl PhpArray {
         }
     }
 
+    /// Build a stable native lookup context only for a materialized canonical
+    /// integer index. Progression-only hashes intentionally keep using their
+    /// arithmetic quick path instead.
+    #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+    #[inline]
+    pub(crate) fn native_indexed_long_lookup_context(
+        &self,
+    ) -> Option<NativeIndexedLongLookupContext> {
+        let ArrayStorage::Hash {
+            entries,
+            int_index,
+            verified_int_prefix: 0,
+            ..
+        } = &self.storage
+        else {
+            return None;
+        };
+        (!int_index.is_empty()).then_some(NativeIndexedLongLookupContext {
+            int_index,
+            entries: entries.as_ptr(),
+            entries_len: entries.len(),
+        })
+    }
+
     /// Get by string key — O(1), zero allocation.
     /// Uses `HashMap<String, usize>::get(&str)` via `Borrow<str>` trait.
     #[inline]
@@ -3066,7 +3141,10 @@ impl std::fmt::Debug for PhpArray {
 mod php_array_tests {
     use std::rc::Rc;
 
-    use super::{ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, PhpArray, Value};
+    use super::{
+        ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, PhpArray, Value,
+        native_indexed_long_lookup,
+    };
 
     #[test]
     fn hash_entry_layout_stays_compact() {
@@ -3136,6 +3214,53 @@ mod php_array_tests {
                 cloned.get_int(key).and_then(Value::as_long)
             );
         }
+    }
+
+    #[test]
+    fn native_integer_lookup_context_is_exact_and_preserves_failed_output() {
+        let keys = [107, -4, 91, 33, 205, 17, 409, 73, 301];
+        let mut array = PhpArray::new();
+        for (position, key) in keys.into_iter().enumerate() {
+            array.set_int(key, Value::long(position as i64 - 4));
+        }
+        array.set_int(33, Value::long(i64::MAX));
+        array.set_int(205, Value::string("not a long"));
+
+        let context = array.native_indexed_long_lookup_context().unwrap();
+        let mut output = -999;
+        assert_eq!(
+            unsafe { native_indexed_long_lookup(&context, 91, &mut output) },
+            1
+        );
+        assert_eq!(output, -2);
+
+        assert_eq!(
+            unsafe { native_indexed_long_lookup(&context, 33, &mut output) },
+            1
+        );
+        assert_eq!(output, i64::MAX);
+
+        output = 777;
+        assert_eq!(
+            unsafe { native_indexed_long_lookup(&context, 999, &mut output) },
+            0
+        );
+        assert_eq!(output, 777);
+        assert_eq!(
+            unsafe { native_indexed_long_lookup(&context, 205, &mut output) },
+            0
+        );
+        assert_eq!(output, 777);
+    }
+
+    #[test]
+    fn native_integer_lookup_context_rejects_progression_only_hashes() {
+        let mut array = PhpArray::with_hash_capacity(9);
+        for key in 0..9 {
+            array.set_int(key, Value::long(key));
+        }
+
+        assert!(array.native_indexed_long_lookup_context().is_none());
     }
 
     #[test]

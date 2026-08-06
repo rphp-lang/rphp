@@ -13,6 +13,7 @@ use super::straight::{
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
+use crate::value::native_indexed_long_lookup;
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
     ScalarLongOpKind, ScalarLongSource,
@@ -617,6 +618,16 @@ impl X86_64Assembler {
         self.bytes.push(0x58 + register.low_bits());
     }
 
+    /// Encode `CALL r64`. Native helpers are materialized at runtime so the
+    /// generated block remains independent of linker relocation range.
+    fn call_register(&mut self, register: X86_64Register) {
+        if register.extension() != 0 {
+            self.bytes.push(0x41);
+        }
+        self.bytes.push(0xff);
+        self.bytes.push(0xd0 | register.low_bits());
+    }
+
     fn add_immediate8(&mut self, destination: X86_64Register, immediate: i8) {
         self.bytes.push(0x48 | destination.extension());
         self.bytes.push(0x83);
@@ -947,6 +958,9 @@ fn required_straight_context_mask(config: &NativeStraightLongLoopConfig) -> u16 
                     token_count,
                     ..
                 } => (entry_base, token_count),
+                NativeStraightLongOperation::IndexedLongLoad { context, .. } => {
+                    return mask | (1u16 << context);
+                }
                 _ => return mask,
             };
             let entries = ((1u32 << token_count) - 1) << entry_base;
@@ -1548,6 +1562,83 @@ fn emit_context_entry_select(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn emit_indexed_long_load(
+    assembler: &mut X86_64Assembler,
+    key: QuickLongOperand,
+    context_index: u8,
+    result: u16,
+    destination: Option<u16>,
+    slots: X86_64Register,
+    context: X86_64Register,
+    induction_slot: u16,
+    induction: X86_64Register,
+    resident_values: &[(u64, X86_64Register)],
+    operation_index: u8,
+    operation_side_exit_jumps: &mut Vec<(usize, u8)>,
+) {
+    // SysV enters with RSP%16 == 8. The context prologue already pushed R12;
+    // six additional saved registers therefore retain 16-byte call alignment.
+    for register in [
+        X86_64Register::RDI,
+        X86_64Register::RSI,
+        X86_64Register::RCX,
+        X86_64Register::R10,
+        X86_64Register::R11,
+        X86_64Register::RDX,
+    ] {
+        assembler.push_register(register);
+    }
+
+    assembler.move_register(X86_64Register::RDX, slots);
+    let output_offset = i64::from(result) * 8;
+    let encoded = assembler.add_immediate(X86_64Register::RDX, output_offset);
+    debug_assert!(encoded);
+    emit_linear_operand(
+        assembler,
+        key,
+        X86_64Register::RSI,
+        induction_slot,
+        induction,
+        resident_values,
+    );
+    // R12's low encoding selects a mandatory SIB byte. Rebase through RDI,
+    // matching the existing contextual hash lowering and keeping the compact
+    // disp32 helper honest about the addressing forms it supports.
+    assembler.move_register(X86_64Register::RDI, context);
+    assembler.move_from_base_disp32(
+        X86_64Register::RDI,
+        X86_64Register::RDI,
+        i32::from(context_index) * std::mem::size_of::<*mut i64>() as i32,
+    );
+    assembler.move_immediate64(
+        X86_64Register::RAX,
+        native_indexed_long_lookup as *const () as usize as i64,
+    );
+    assembler.call_register(X86_64Register::RAX);
+    assembler.move_register(X86_64Register::R9, X86_64Register::RAX);
+
+    for register in [
+        X86_64Register::RDX,
+        X86_64Register::R11,
+        X86_64Register::R10,
+        X86_64Register::RCX,
+        X86_64Register::RSI,
+        X86_64Register::RDI,
+    ] {
+        assembler.pop_register(register);
+    }
+    assembler.compare_immediate8(X86_64Register::R9, 0);
+    operation_side_exit_jumps.push((assembler.jump_equal_rel32(), operation_index));
+
+    if let Some(destination) = destination
+        && destination != result
+    {
+        assembler.move_from_base_disp32(X86_64Register::R8, slots, i32::from(result) * 8);
+        assembler.move_to_base_disp32(slots, X86_64Register::R8, i32::from(destination) * 8);
+    }
+}
+
 fn emit_scalar_straight_loop(
     config: &NativeStraightLongLoopConfig,
     checked: bool,
@@ -2029,6 +2120,28 @@ fn emit_scalar_straight_loop(
                     &resident_values,
                 );
                 assembler.move_to_base_disp32(auxiliary, rhs, 0);
+                continue;
+            }
+            NativeStraightLongOperation::IndexedLongLoad {
+                key,
+                context: context_index,
+                result,
+                destination,
+            } => {
+                emit_indexed_long_load(
+                    &mut assembler,
+                    key,
+                    context_index,
+                    result,
+                    destination,
+                    slots,
+                    context,
+                    config.induction_slot,
+                    induction,
+                    &active_resident_values,
+                    operation_index as u8,
+                    &mut operation_side_exit_jumps,
+                );
                 continue;
             }
             NativeStraightLongOperation::Modulo {
@@ -2534,6 +2647,25 @@ fn validate_scalar_straight_config(
                     ));
                 }
             }
+            NativeStraightLongOperation::IndexedLongLoad {
+                key,
+                context,
+                result,
+                destination,
+            } => {
+                validate_operand(key)?;
+                if context as usize >= super::NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES {
+                    return Err(X86StraightLongLoopError::UnsupportedConfig(
+                        "x86 indexed lookup context is outside the shared entry table",
+                    ));
+                }
+                validate_output(result)?;
+                written_mask |= 1u64 << result;
+                if let Some(destination) = destination {
+                    validate_output(destination)?;
+                    written_mask |= 1u64 << destination;
+                }
+            }
             NativeStraightLongOperation::Binary {
                 kind: _,
                 lhs,
@@ -2821,7 +2953,7 @@ impl CompiledX86StraightLongLoop {
     ) -> Result<NativeStraightLongLoopResult, X86StraightLongLoopError> {
         if self.required_context_mask != 0 {
             return Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 straight-loop hash operation requires runtime context",
+                "x86 straight-loop contextual operation requires runtime context",
             ));
         }
         if slots[self.config.induction_slot as usize] >= self.bound_value(slots) {
@@ -2854,7 +2986,7 @@ impl CompiledX86StraightLongLoop {
         }
         if self.required_context_mask != 0 {
             return Err(X86StraightLongLoopError::UnsupportedConfig(
-                "x86 straight-loop hash operation requires runtime context",
+                "x86 straight-loop contextual operation requires runtime context",
             ));
         }
         if slots[self.config.induction_slot as usize] >= self.bound_value(slots) {
@@ -2886,7 +3018,7 @@ impl CompiledX86StraightLongLoop {
             required &= required - 1;
             if entry_pointers[index].is_null() {
                 return Err(X86StraightLongLoopError::UnsupportedConfig(
-                    "x86 straight-loop hash context contains a null entry pointer",
+                    "x86 straight-loop runtime context contains a null pointer",
                 ));
             }
         }

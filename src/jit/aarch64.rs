@@ -11,6 +11,7 @@ use super::straight::{
     straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
+use crate::value::native_indexed_long_lookup;
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
     ScalarLongOpKind, ScalarLongSource,
@@ -493,6 +494,25 @@ impl Arm64Assembler {
         debug_assert!(scaled_offset < 4096);
         let instruction = 0xf900_0000 | (scaled_offset << 10) | (base.bits() << 5) | source.bits();
         self.words.push(instruction);
+    }
+
+    /// Encode `STP first, second, [SP, #-16]!` for a native helper call spill.
+    fn push_pair(&mut self, first: Arm64Register, second: Arm64Register) {
+        const SP: u32 = 31;
+        self.words
+            .push(0xa9bf_0000 | (second.bits() << 10) | (SP << 5) | first.bits());
+    }
+
+    /// Encode `LDP first, second, [SP], #16` in reverse spill order.
+    fn pop_pair(&mut self, first: Arm64Register, second: Arm64Register) {
+        const SP: u32 = 31;
+        self.words
+            .push(0xa8c1_0000 | (second.bits() << 10) | (SP << 5) | first.bits());
+    }
+
+    /// Encode `BLR target`; unlike a direct BL this has no relocation range.
+    fn branch_link_register(&mut self, target: Arm64Register) {
+        self.words.push(0xd63f_0000 | (target.bits() << 5));
     }
 
     /// Encode `STR Dt, [Xn, #offset]` using the scaled unsigned-immediate form.
@@ -2465,6 +2485,9 @@ impl CompiledQuickLongStraightLoop {
                         token_count,
                         ..
                     } => (entry_base, token_count),
+                    NativeStraightLongOperation::IndexedLongLoad { context, .. } => {
+                        return mask | (1u16 << context);
+                    }
                     _ => return mask,
                 };
                 let entries = ((1u32 << token_count) - 1) << entry_base;
@@ -3160,6 +3183,28 @@ impl CompiledQuickLongStraightLoop {
                         );
                         assembler.store_u64(result, auxiliary, 0);
                     }
+                    NativeStraightLongOperation::IndexedLongLoad {
+                        key,
+                        context: context_index,
+                        result: result_slot,
+                        destination,
+                    } => {
+                        emit_straight_indexed_long_load(
+                            &mut assembler,
+                            key,
+                            context_index,
+                            result_slot,
+                            destination,
+                            control,
+                            induction,
+                            bound,
+                            one,
+                            auxiliary,
+                            config.induction_slot,
+                            index as u8,
+                            &mut operation_side_exit_branches,
+                        )?;
+                    }
                     NativeStraightLongOperation::Binary {
                         kind,
                         lhs: original_lhs_operand,
@@ -3591,7 +3636,7 @@ impl CompiledQuickLongStraightLoop {
         }
         if self.required_context_mask != 0 {
             return Err(QuickLongAccumulateJitError::InvalidProgram(
-                "straight-loop hash operation requires runtime context",
+                "straight-loop contextual operation requires runtime context",
             ));
         }
         let mut control = std::mem::MaybeUninit::<NativeStraightLongLoopControl>::uninit();
@@ -3616,7 +3661,7 @@ impl CompiledQuickLongStraightLoop {
             required &= required - 1;
             if entry_pointers[index].is_null() {
                 return Err(QuickLongAccumulateJitError::InvalidProgram(
-                    "straight-loop hash context contains a null entry pointer",
+                    "straight-loop runtime context contains a null pointer",
                 ));
             }
         }
@@ -3813,6 +3858,25 @@ fn validate_straight_long_loop_config(
             } => {
                 validate_straight_context_input(key, entry_base, token_count)?;
                 validate_straight_long_operand(source)?;
+            }
+            NativeStraightLongOperation::IndexedLongLoad {
+                key,
+                context,
+                result,
+                destination,
+            } => {
+                validate_straight_long_operand(key)?;
+                if context as usize >= NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES {
+                    return Err(QuickLongAccumulateJitError::InvalidProgram(
+                        "straight-loop indexed context exceeds the native ABI",
+                    ));
+                }
+                validate_straight_long_output(result, config.induction_slot)?;
+                output_mask |= 1u64 << result;
+                if let Some(destination) = destination {
+                    validate_straight_long_output(destination, config.induction_slot)?;
+                    output_mask |= 1u64 << destination;
+                }
             }
             NativeStraightLongOperation::Binary {
                 kind,
@@ -4309,6 +4373,68 @@ fn emit_straight_context_entry_select(
         if !assembler.patch_branch(branch, selected_word) {
             return Err(QuickLongAccumulateJitError::BranchOutOfRange);
         }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_straight_indexed_long_load(
+    assembler: &mut Arm64Assembler,
+    key: QuickLongOperand,
+    context_index: u8,
+    result_slot: u16,
+    destination: Option<u16>,
+    control: Arm64Register,
+    induction: Arm64Register,
+    bound: Arm64Register,
+    one: Arm64Register,
+    helper: Arm64Register,
+    induction_slot: u16,
+    operation_index: u8,
+    operation_side_exit_branches: &mut Vec<(usize, u8)>,
+) -> Result<(), QuickLongAccumulateJitError> {
+    let saved_link = Arm64Register::from_code(30);
+    // The straight-loop entry is otherwise a leaf. Save all state that remains
+    // live across the C ABI boundary, including X30 and the iteration budget.
+    assembler.push_pair(Arm64Register::X0, Arm64Register::X1);
+    assembler.push_pair(induction, bound);
+    assembler.push_pair(one, control);
+    assembler.push_pair(saved_link, Arm64Register::X2);
+
+    assembler.add_immediate(Arm64Register::X2, Arm64Register::X0, result_slot * 8);
+    emit_straight_long_operand(assembler, key, Arm64Register::X1, induction_slot, induction);
+    let context_offset = u16::try_from(
+        std::mem::offset_of!(NativeStraightLongLoopControl, entry_pointers)
+            + usize::from(context_index) * std::mem::size_of::<*mut i64>(),
+    )
+    .map_err(|_| {
+        QuickLongAccumulateJitError::InvalidProgram(
+            "straight-loop indexed context offset exceeds the native ABI",
+        )
+    })?;
+    assembler.load_u64(Arm64Register::X0, control, context_offset);
+    assembler.move_immediate(
+        helper,
+        native_indexed_long_lookup as *const () as usize as i64,
+    );
+    assembler.branch_link_register(helper);
+    assembler.move_register(helper, Arm64Register::X0);
+
+    assembler.pop_pair(saved_link, Arm64Register::X2);
+    assembler.pop_pair(one, control);
+    assembler.pop_pair(induction, bound);
+    assembler.pop_pair(Arm64Register::X0, Arm64Register::X1);
+    assembler.compare_with_zero(helper);
+    operation_side_exit_branches.push((
+        assembler.conditional_branch_placeholder(Arm64Condition::Equal),
+        operation_index,
+    ));
+
+    if let Some(destination) = destination
+        && destination != result_slot
+    {
+        assembler.load_u64(helper, Arm64Register::X0, long_slot_offset(result_slot));
+        assembler.store_u64(helper, Arm64Register::X0, long_slot_offset(destination));
     }
     Ok(())
 }

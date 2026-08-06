@@ -187,6 +187,42 @@ unsafe fn run_quick_long_ops_loop(
         arrays[slot] = quick_array;
     }
 
+    // Integer-indexed array loops have a dedicated native read ABI but still
+    // share the mixed straight-loop compiler. Try it before the Rust array
+    // kernels consume the same closed region. Rich String/object regions are
+    // resolved by the general mixed path below.
+    #[cfg(all(
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
+    if indexed_int_array_mask != 0
+        && plan.string_input_mask == 0
+        && plan.object_input_mask == 0
+    {
+        let mut string_state = QuickStringSlotState::new(slot_base, 0);
+        if let Some(kernel) = native_quick_long_mixed_kernel(op_array, plan, &[])
+            && let Some(outcome) = run_native_quick_long_mixed_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                &mut slots,
+                &mutable_arrays,
+                &mut string_state,
+                &[],
+                &kernel,
+            )?
+        {
+            #[cfg(feature = "vm-stats")]
+            record_native_quick_outcome(stats::JitRegionKind::TypedOpsLoop, &outcome);
+            return Ok(outcome);
+        }
+    }
+
     if let Some((kernel, body, prefix)) = array_kernel {
         if !prefix.is_empty() {
             return dispatch_quick_long_composed_array_loop_kernel(

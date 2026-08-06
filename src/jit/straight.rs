@@ -51,8 +51,9 @@ pub(crate) use range::{StraightLongRangeProof, straight_long_remaining_range_pro
 /// namespace or compile-time validation dynamic.
 pub const NATIVE_STRAIGHT_LONG_MAX_OPERATIONS: usize = 48;
 
-/// Runtime entry pointers address the payload word of already validated Long
-/// hash values. They are activation state and are never embedded in code.
+/// Runtime context pointers address either an already validated Long hash
+/// payload or a guarded read-only lookup context. They are activation state
+/// and are never embedded in code.
 pub const NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES: usize = 16;
 
 /// Maximum number of guarded scalar callees composed into one native region.
@@ -111,6 +112,15 @@ pub enum NativeStraightLongOperation {
         token_count: u8,
         source: QuickLongOperand,
     },
+    /// Call the canonical integer index through one guarded read-only array
+    /// context. The helper writes the result only on an exact Long hit;
+    /// failure takes the operation's precise side exit.
+    IndexedLongLoad {
+        key: QuickLongOperand,
+        context: u8,
+        result: u16,
+        destination: Option<u16>,
+    },
     Binary {
         kind: ScalarLongOpKind,
         lhs: QuickLongOperand,
@@ -157,6 +167,11 @@ impl NativeStraightLongOperation {
                 ..
             } => (1u64 << result) | destination.map_or(0, |slot| 1u64 << slot),
             Self::HashStore { .. } => 0,
+            Self::IndexedLongLoad {
+                result,
+                destination,
+                ..
+            } => (1u64 << result) | destination.map_or(0, |slot| 1u64 << slot),
             Self::Binary { result, .. } => 1u64 << result,
             Self::BinaryAssign {
                 result,
@@ -215,6 +230,7 @@ pub(crate) fn straight_long_operation_input_mask(operation: NativeStraightLongOp
         NativeStraightLongOperation::HashStore { key, source, .. } => {
             (1u64 << key) | operand_mask(source)
         }
+        NativeStraightLongOperation::IndexedLongLoad { key, .. } => operand_mask(key),
         NativeStraightLongOperation::Binary { lhs, rhs, .. }
         | NativeStraightLongOperation::BinaryAssign { lhs, rhs, .. } => {
             operand_mask(lhs) | operand_mask(rhs)

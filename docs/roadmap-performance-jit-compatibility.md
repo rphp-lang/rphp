@@ -5339,6 +5339,57 @@ x86-64 JIT prototype tests, and every end-to-end suite. The two new exact-deopt
 tests also pass with quick loops disabled; ten explicit performance tests
 remain ignored by design.
 
+### Native guarded integer-index lookup checkpoint
+
+The unordered-read JIT boundary is implemented (2026-08-06). A guarded
+read-only `PhpArray` can expose a compact native context containing pointers to
+its existing canonical integer index and ordered entries. It is available only
+when the general hash index is materialized; arithmetic-prefix arrays continue
+through their established position-based path. The context does not allocate,
+copy keys, or introduce a second map, and the source `Value` plus the region's
+read-only/COW proof keep both allocations stable for the activation.
+
+One non-inlined C-ABI helper probes the canonical index, consumes the compact
+Long payload when present, and falls back to the authoritative ordered entry
+for wide Longs. It writes the destination only after an exact Long hit and
+returns zero for a missing key, wrong value type or invalid context. The new
+target-neutral `IndexedLongLoad` operation maps that zero to the existing
+per-operation resume IP, so the baseline `FetchDimR` replays without observing
+a partial native result. Unit tests cover cached and wide Long hits, missing
+and non-Long failures, unchanged failed outputs, and rejection of
+progression-only hashes. Shared ARM64/x86-64 integration tests prove both a
+completed region and one exact type-miss side exit.
+
+Both handwritten backends call the same helper. ARM64 uses `BLR`, preserves
+the formerly leaf link register and all live loop/budget state with aligned
+`STP`/`LDP` pairs, and passes the shadow result address directly. x86-64 uses
+the SysV argument ABI, preserves induction, bound, safepoint budget and input
+pointers around an aligned indirect call, and retains its contextual table in
+callee-saved `R12`. The first isolated x86 run exposed that the compact disp32
+encoder cannot address `R12` without a SIB byte; lowering now rebases through
+`RDI`, as the older String-hash context path already did. The permanent shared
+integration test failed on the bad encoding and passes on the corrected one.
+
+A manual ARM64 probe over 16.384 million lookups measured 50.02 ms through the
+ordinary matched `PhpArray` method and 34.47 ms through the stable helper ABI,
+showing that the call boundary itself remained profitable before backend work
+was accepted. In nine order-alternated release runs of the eight-pass
+permuted-read-dominant holdout, the exact preceding `398591a` ARM64 binary had
+a 279.44 ms median and the native-indexed binary 135.50 ms, a 51.5% reduction.
+On x86-64, the native binary measured 144.49 ms versus 276.08 ms for the same
+source and storage implementation without JIT, a 47.7% reduction. Every mode
+returned `4398042316800`; VM statistics recorded eight native typed-region
+entries and zero side exits on each architecture.
+
+The final matrix passes formatting and all-target checks, 209 ARM64 and 234
+x86-64 all-feature library tests, 115 quick-loop tests, 100 ARM64 and 32 x86-64
+backend-specific JIT tests, the two shared native indexed-array tests, and every
+end-to-end suite. Both architectures also pass the complete no-default-feature
+matrix. With arbitrary-key reads now executing in native scalar regions, the
+next array-storage experiment should target fully irregular structural writes
+and construction cost. Another read-only key-pattern specialization requires a
+new independent profile and code-size budget.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

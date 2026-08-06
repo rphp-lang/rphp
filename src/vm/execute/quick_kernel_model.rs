@@ -101,6 +101,7 @@ struct NativeQuickLongMixedKernel {
     string_token_count: u8,
     context_array_slots: [u16; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_tokens: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
+    context_indexed: [bool; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     context_count: u8,
     property_binding_op_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],
     property_binding_property_indices: [u8; NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES],

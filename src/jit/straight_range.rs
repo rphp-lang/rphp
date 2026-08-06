@@ -271,7 +271,8 @@ pub(crate) fn straight_long_remaining_range_proof(
             | NativeStraightLongOperation::StringToken { .. }
             | NativeStraightLongOperation::StringLength { .. }
             | NativeStraightLongOperation::HashLoad { .. }
-            | NativeStraightLongOperation::HashStore { .. } => return None,
+            | NativeStraightLongOperation::HashStore { .. }
+            | NativeStraightLongOperation::IndexedLongLoad { .. } => return None,
         }
         merge_range_state(&mut states[operation_index + 1], state);
     }
@@ -514,6 +515,7 @@ fn recurrence_expression_operand_range(
         | NativeStraightLongOperation::StringLength { .. }
         | NativeStraightLongOperation::HashLoad { .. }
         | NativeStraightLongOperation::HashStore { .. }
+        | NativeStraightLongOperation::IndexedLongLoad { .. }
         | NativeStraightLongOperation::Guard { .. }
         | NativeStraightLongOperation::BranchUnless { .. }
         | NativeStraightLongOperation::Jump { .. } => None,
