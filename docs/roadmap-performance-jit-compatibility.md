@@ -4848,6 +4848,76 @@ name-to-slot index that shares each key allocation. Warm property caches can
 then keep numeric slots at every width, while cold names and structural writes
 retain bounded indexed behavior.
 
+### Indexed wide dynamic-property checkpoint
+
+The wide-object design above is implemented (2026-08-06). The important
+architectural observation was that `PhpArray` already had the required general
+shape: ordered compact entries plus a separate key-to-position index, with one
+`Rc<String>` allocation shared by the entry and index. Dynamic properties now
+converge on the same principle without coupling their simpler string-only API
+to PHP array integer-key and COW semantics.
+
+`DynamicPropertyMap` therefore has `Small`, `Linear` and `Indexed` tiers. The
+indexed tier stores `(SharedStringKey, Value)` entries in insertion order and a
+randomized `HashMap<SharedStringKey, usize>`. Promotion moves every existing
+String and Value, wraps the owned String without copying its bytes, builds the
+index once, and appends the ninth entry. New keys share one allocation between
+the ordered entry and index. Replacements, mutable reads and cloning retain
+positions and order. This also corrects the old streamed wide-object iteration
+behavior, which inherited randomized `HashMap` order.
+
+All dynamic-property tiers now return guarded positions to ordinary property
+inline caches. A warm wide-object read validates its numeric slot and avoids
+hashing. The two-projection foreach kernel validates both positions in one
+storage dispatch; a receiver with a different insertion order calls a separate
+non-inlined secure-index fallback. Tests cover allocation sharing, direct and
+streamed construction, both promotions, replacement, mutable access, cloning,
+ordered iteration, invalid positions, mixed insertion orders, and a live cache
+crossing `Linear -> Indexed`. No architecture-specific implementation or
+whole-loop storage-shape assumption was added.
+
+Thirty-one order-alternated native-CPU pairs on ARM64 produced:
+
+| ARM64 workload, 5.12M receivers | Previous no JIT | Indexed no JIT | Paired delta | Previous JIT build | Indexed JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows | 12.455 ms | 12.431 ms | -0.37% | 12.688 ms | 12.462 ms | -1.76% |
+| Two-property inline `stdClass` | 34.411 ms | 34.019 ms | -0.60% | 34.504 ms | 33.922 ms | -1.40% |
+| Four-property linear `stdClass` | 35.636 ms | 35.641 ms | +0.08% | 35.984 ms | 35.457 ms | -2.55% |
+| Eight-property linear `stdClass` | 35.888 ms | 35.684 ms | -0.96% | 36.062 ms | 35.056 ms | -2.70% |
+| Nine-property indexed `stdClass` | 110.924 ms | 39.644 ms | -64.49% | 109.599 ms | 39.042 ms | -64.47% |
+
+Against the unchanged PHP 8.5.9 reference medians of 93.367 ms without JIT and
+67.799 ms with tracing JIT, the new nine-property path is 2.36x and 1.74x
+faster. The four compact controls remain stable or improve.
+
+Fifty-one order-alternated pairs pinned to Ryzen CPU 2 used a clean `git
+archive` of `f781cc2` as the baseline and produced:
+
+| x86-64 workload, 5.12M receivers | Previous no JIT | Indexed no JIT | Paired delta | Previous JIT build | Indexed JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Declared rows | 14.495 ms | 14.530 ms | +0.14% | 14.552 ms | 15.195 ms | +4.28% |
+| Two-property inline `stdClass` | 35.534 ms | 36.049 ms | +1.48% | 35.193 ms | 35.845 ms | +1.79% |
+| Four-property linear `stdClass` | 47.583 ms | 43.209 ms | -9.14% | 48.233 ms | 43.172 ms | -10.55% |
+| Eight-property linear `stdClass` | 47.886 ms | 43.668 ms | -8.86% | 48.454 ms | 43.490 ms | -10.25% |
+| Nine-property indexed `stdClass` | 127.589 ms | 47.468 ms | -62.80% | 127.121 ms | 46.583 ms | -63.37% |
+
+The new nine-property path beats the existing PHP 8.4.24 no-JIT/JIT references
+by 1.79x and 1.27x. The declared JIT control was extended to 201 pairs because
+its movement was unrelated to dynamic storage: normalized disassembly confirms
+an identical instruction stream and symbol size, while global LTO placement
+shifted the function and consistently changed its timing by 4.25%. This is
+recorded as build-layout sensitivity rather than hidden as a storage-path
+regression. The original remote JIT binary was excluded after its SHA-256 and
+kernel sizes proved it was not the exact `f781cc2` source; the no-JIT binary was
+byte-identical to the clean baseline.
+
+This checkpoint also sharpens the remaining array work. Ordered indexed hash
+arrays, guarded string positions, packed/hash foreach and bounded 4-8 entry
+storage are already implemented. Their next general gaps are structural
+mutation and COW costs, wide irregular accesses, and callback/JSON pipeline
+fusion in the quick/JIT tiers—not the basic key-to-slot representation solved
+here.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

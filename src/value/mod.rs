@@ -194,16 +194,118 @@ impl LinearDynamicProperties {
 }
 
 #[derive(Clone)]
+struct IndexedDynamicProperties {
+    entries: Vec<(SharedStringKey, Value)>,
+    index: HashMap<SharedStringKey, usize>,
+}
+
+impl IndexedDynamicProperties {
+    #[inline]
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            entries: Vec::with_capacity(capacity),
+            index: HashMap::with_capacity(capacity),
+        }
+    }
+
+    fn from_hash_map(properties: HashMap<String, Value>) -> Self {
+        let mut result = Self::with_capacity(properties.len());
+        for (position, (key, value)) in properties.into_iter().enumerate() {
+            let key = SharedStringKey::from_owned(key);
+            result.entries.push((key.clone(), value));
+            result.index.insert(key, position);
+        }
+        result
+    }
+
+    fn from_linear_with_entry(
+        linear: LinearDynamicProperties,
+        new_key: String,
+        new_value: Value,
+    ) -> Self {
+        let mut result = Self::with_capacity(linear.entries.len() + 1);
+        for (position, (key, value)) in linear.entries.into_iter().enumerate() {
+            let key = SharedStringKey::from_owned(key);
+            result.entries.push((key.clone(), value));
+            result.index.insert(key, position);
+        }
+        result.insert_owned(new_key, new_value);
+        result
+    }
+
+    #[inline]
+    fn find(&self, key: &str) -> Option<usize> {
+        self.index.get(key).copied()
+    }
+
+    #[inline(always)]
+    fn get_pair_at_positions(
+        &self,
+        keys: [&str; 2],
+        positions: [Option<usize>; 2],
+    ) -> [*const Value; 2] {
+        let mut result = [std::ptr::null(); 2];
+        for index in 0..2 {
+            if let Some(position) = positions[index] {
+                if let Some((stored_key, value)) = self.entries.get(position) {
+                    if stored_key.as_ref() == keys[index] {
+                        result[index] = value as *const Value;
+                    }
+                }
+            }
+        }
+        if result[0].is_null() || result[1].is_null() {
+            self.fill_pair_by_name(keys, result)
+        } else {
+            result
+        }
+    }
+
+    /// Keep secure name hashing on cache misses outside the positional foreach
+    /// kernel. Mixed insertion orders remain correct without enlarging its hot
+    /// instruction path.
+    #[inline(never)]
+    fn fill_pair_by_name(
+        &self,
+        keys: [&str; 2],
+        mut result: [*const Value; 2],
+    ) -> [*const Value; 2] {
+        for index in 0..2 {
+            if result[index].is_null() {
+                result[index] = self
+                    .find(keys[index])
+                    .and_then(|position| self.entries.get(position))
+                    .map_or(std::ptr::null(), |entry| &entry.1 as *const Value);
+            }
+        }
+        result
+    }
+
+    #[inline]
+    fn insert_owned(&mut self, key: String, value: Value) {
+        if let Some(position) = self.find(&key) {
+            self.entries[position].1 = value;
+            return;
+        }
+        let key = SharedStringKey::from_owned(key);
+        let position = self.entries.len();
+        self.entries.push((key.clone(), value));
+        self.index.insert(key, position);
+    }
+}
+
+#[derive(Clone)]
 enum DynamicPropertyStorage {
     Small(SmallDynamicProperties),
     Linear(LinearDynamicProperties),
-    Hash(HashMap<String, Value>),
+    Indexed(IndexedDynamicProperties),
 }
 
-/// Dynamic-object properties with one owning String per key. Up to three
-/// properties stay inline, four to eight use bounded linear storage, and
-/// wider objects promote to the standard secure HashMap. Both compact tiers
-/// preserve insertion order and expose guarded positions to inline caches.
+/// Dynamic-object properties with one owning string allocation per key. Up to
+/// three properties stay inline, four to eight use bounded linear storage, and
+/// wider objects use ordered slots plus a secure name-to-position index. Every
+/// tier preserves insertion order and exposes guarded positions to inline
+/// caches; indexed entries and their index share one string allocation.
 #[derive(Clone)]
 pub struct DynamicPropertyMap {
     storage: DynamicPropertyStorage,
@@ -216,7 +318,7 @@ impl DynamicPropertyMap {
         } else if capacity <= LINEAR_DYNAMIC_PROPERTY_CAPACITY {
             DynamicPropertyStorage::Linear(LinearDynamicProperties::with_capacity(capacity))
         } else {
-            DynamicPropertyStorage::Hash(HashMap::with_capacity(capacity))
+            DynamicPropertyStorage::Indexed(IndexedDynamicProperties::with_capacity(capacity))
         };
         Self { storage }
     }
@@ -224,7 +326,9 @@ impl DynamicPropertyMap {
     fn from_hash_map(properties: HashMap<String, Value>) -> Self {
         if properties.len() > LINEAR_DYNAMIC_PROPERTY_CAPACITY {
             return Self {
-                storage: DynamicPropertyStorage::Hash(properties),
+                storage: DynamicPropertyStorage::Indexed(
+                    IndexedDynamicProperties::from_hash_map(properties),
+                ),
             };
         }
         let mut result = Self::with_capacity(properties.len());
@@ -243,7 +347,10 @@ impl DynamicPropertyMap {
             DynamicPropertyStorage::Linear(linear) => linear
                 .find(key)
                 .map(|position| &linear.entries[position].1),
-            DynamicPropertyStorage::Hash(properties) => properties.get(key),
+            DynamicPropertyStorage::Indexed(indexed) => indexed
+                .find(key)
+                .and_then(|position| indexed.entries.get(position))
+                .map(|entry| &entry.1),
         }
     }
 
@@ -259,8 +366,9 @@ impl DynamicPropertyMap {
                 let position = linear.find(key)?;
                 Some((&linear.entries[position].1, Some(position)))
             }
-            DynamicPropertyStorage::Hash(properties) => {
-                properties.get(key).map(|value| (value, None))
+            DynamicPropertyStorage::Indexed(indexed) => {
+                let position = indexed.find(key)?;
+                Some((&indexed.entries.get(position)?.1, Some(position)))
             }
         }
     }
@@ -276,7 +384,10 @@ impl DynamicPropertyMap {
                 let (stored_key, value) = linear.entries.get(position)?;
                 (stored_key == key).then_some(value)
             }
-            DynamicPropertyStorage::Hash(_) => None,
+            DynamicPropertyStorage::Indexed(indexed) => {
+                let (stored_key, value) = indexed.entries.get(position)?;
+                (stored_key.as_ref() == key).then_some(value)
+            }
         }
     }
 
@@ -311,13 +422,8 @@ impl DynamicPropertyMap {
             DynamicPropertyStorage::Linear(linear) => {
                 return linear.get_pair_at_positions(keys, positions);
             }
-            DynamicPropertyStorage::Hash(properties) => {
-                result[0] = properties
-                    .get(keys[0])
-                    .map_or(std::ptr::null(), |value| value as *const Value);
-                result[1] = properties
-                    .get(keys[1])
-                    .map_or(std::ptr::null(), |value| value as *const Value);
+            DynamicPropertyStorage::Indexed(indexed) => {
+                return indexed.get_pair_at_positions(keys, positions);
             }
         }
         result
@@ -334,13 +440,16 @@ impl DynamicPropertyMap {
                 let position = linear.find(key)?;
                 Some(&mut linear.entries[position].1)
             }
-            DynamicPropertyStorage::Hash(properties) => properties.get_mut(key),
+            DynamicPropertyStorage::Indexed(indexed) => {
+                let position = indexed.find(key)?;
+                indexed.entries.get_mut(position).map(|entry| &mut entry.1)
+            }
         }
     }
 
     pub(crate) fn insert_owned(&mut self, key: String, value: Value) {
-        if let DynamicPropertyStorage::Hash(properties) = &mut self.storage {
-            properties.insert(key, value);
+        if let DynamicPropertyStorage::Indexed(indexed) = &mut self.storage {
+            indexed.insert_owned(key, value);
             return;
         }
         if let DynamicPropertyStorage::Linear(linear) = &mut self.storage {
@@ -359,10 +468,9 @@ impl DynamicPropertyMap {
             ) else {
                 unreachable!();
             };
-            let mut properties = HashMap::with_capacity(linear.entries.len() + 1);
-            properties.extend(linear.entries);
-            properties.insert(key, value);
-            self.storage = DynamicPropertyStorage::Hash(properties);
+            self.storage = DynamicPropertyStorage::Indexed(
+                IndexedDynamicProperties::from_linear_with_entry(linear, key, value),
+            );
             return;
         }
         if let DynamicPropertyStorage::Small(small) = &mut self.storage {
@@ -406,7 +514,7 @@ impl DynamicPropertyMap {
         match &self.storage {
             DynamicPropertyStorage::Small(small) => small.len(),
             DynamicPropertyStorage::Linear(linear) => linear.entries.len(),
-            DynamicPropertyStorage::Hash(properties) => properties.len(),
+            DynamicPropertyStorage::Indexed(indexed) => indexed.entries.len(),
         }
     }
 
@@ -427,9 +535,9 @@ impl DynamicPropertyMap {
                     visitor(key, value);
                 }
             }
-            DynamicPropertyStorage::Hash(properties) => {
-                for (key, value) in properties {
-                    visitor(key, value);
+            DynamicPropertyStorage::Indexed(indexed) => {
+                for (key, value) in &indexed.entries {
+                    visitor(key.as_ref(), value);
                 }
             }
         }
@@ -678,7 +786,7 @@ mod object_tests {
     }
 
     #[test]
-    fn dynamic_property_map_promotes_small_to_linear_then_hash() {
+    fn dynamic_property_map_promotes_small_to_linear_then_indexed() {
         assert!(std::mem::size_of::<DynamicPropertyMap>() <= 176);
         assert_eq!(
             std::mem::size_of::<Option<Box<DynamicPropertyMap>>>(),
@@ -727,9 +835,48 @@ mod object_tests {
         assert_eq!(cloned.get("h").and_then(Value::as_long), Some(8));
 
         properties.insert_owned("i".to_string(), Value::long(9));
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Hash(_)));
+        assert!(matches!(properties.storage, DynamicPropertyStorage::Indexed(_)));
         assert_eq!(properties.get("b").and_then(Value::as_long), Some(20));
         assert_eq!(properties.get("i").and_then(Value::as_long), Some(9));
+        assert_eq!(
+            properties
+                .get_with_position("i")
+                .map(|(value, position)| (value.as_long(), position)),
+            Some((Some(9), Some(8)))
+        );
+
+        let DynamicPropertyStorage::Indexed(indexed) = &properties.storage else {
+            unreachable!();
+        };
+        let entry_key = &indexed.entries[8].0;
+        let index_key = indexed
+            .index
+            .keys()
+            .find(|key| key.as_ref() == "i")
+            .unwrap();
+        assert!(Rc::ptr_eq(&entry_key.0, &index_key.0));
+
+        let mut keys = Vec::new();
+        properties.for_each(|key, _| keys.push(key.to_string()));
+        assert_eq!(
+            keys,
+            ["a", "b", "c", "d", "e", "f", "g", "h", "i"]
+        );
+
+        properties.insert_owned("b".to_string(), Value::long(200));
+        *properties.get_mut("b").unwrap() = Value::long(201);
+        assert_eq!(
+            properties
+                .get_with_position("b")
+                .map(|(value, position)| (value.as_long(), position)),
+            Some((Some(201), Some(1)))
+        );
+        let cloned = properties.clone();
+        assert!(matches!(cloned.storage, DynamicPropertyStorage::Indexed(_)));
+        assert_eq!(cloned.get("b").and_then(Value::as_long), Some(201));
+        let mut cloned_keys = Vec::new();
+        cloned.for_each(|key, _| cloned_keys.push(key.to_string()));
+        assert_eq!(cloned_keys, keys);
 
         assert!(matches!(
             DynamicPropertyMap::with_capacity(4).storage,
@@ -737,12 +884,26 @@ mod object_tests {
         ));
         assert!(matches!(
             DynamicPropertyMap::with_capacity(9).storage,
-            DynamicPropertyStorage::Hash(_)
+            DynamicPropertyStorage::Indexed(_)
         ));
+
+        let direct = DynamicPropertyMap::from_hash_map(
+            (0..9)
+                .map(|index| (format!("key{index}"), Value::long(index)))
+                .collect(),
+        );
+        assert!(matches!(direct.storage, DynamicPropertyStorage::Indexed(_)));
+        assert_eq!(direct.len(), 9);
+        assert_eq!(
+            direct
+                .get_with_position("key8")
+                .map(|(value, position)| (value.as_long(), position.is_some())),
+            Some((Some(8), true))
+        );
     }
 
     #[test]
-    fn dynamic_property_pair_validates_positions_and_supports_hash_storage() {
+    fn dynamic_property_pair_validates_positions_across_all_storage_tiers() {
         let mut properties = DynamicPropertyMap::with_capacity(0);
         properties.insert_owned("name".to_string(), Value::long(5));
         properties.insert_owned("value".to_string(), Value::long(11));
@@ -790,10 +951,10 @@ mod object_tests {
         assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
 
         properties.insert_owned("ninth".to_string(), Value::long(43));
-        assert!(matches!(properties.storage, DynamicPropertyStorage::Hash(_)));
+        assert!(matches!(properties.storage, DynamicPropertyStorage::Indexed(_)));
         let pair = properties.get_pair_at_positions(
             ["value", "name"],
-            [Some(1), Some(0)],
+            [Some(8), Some(7)],
         );
         assert_eq!(unsafe { (*pair[0]).as_long() }, Some(11));
         assert_eq!(unsafe { (*pair[1]).as_long() }, Some(5));
@@ -3106,8 +3267,7 @@ impl Value {
     }
 
     /// Validate and read a cached inline dynamic-property position. A null
-    /// result means the current receiver has a different insertion order or
-    /// has already promoted to general hash storage.
+    /// result means the current receiver has a different insertion order.
     /// SAFETY: The receiver must pass the canonical stdClass shape guard.
     #[inline(always)]
     pub unsafe fn object_dynamic_property_at_unchecked(
