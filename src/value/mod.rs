@@ -1138,6 +1138,29 @@ pub(crate) unsafe extern "C" fn native_indexed_long_lookup(
     1
 }
 
+/// Mutable state retained by one native structural integer-write context.
+/// Reservation is attempted lazily so already-hot code can receive a fresh
+/// small array on a later invocation without losing its capacity hint.
+#[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub(crate) struct NativeLongArraySetContext {
+    array: *mut PhpArray,
+    reserve_remaining: usize,
+    reserve_checks: u8,
+}
+
+#[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+impl NativeLongArraySetContext {
+    pub(crate) fn new(array: *mut PhpArray, reserve_remaining: usize) -> Self {
+        Self {
+            array,
+            reserve_remaining,
+            reserve_checks: u8::from(reserve_remaining != 0) * 8,
+        }
+    }
+}
+
 /// Exact native-call boundary for a structural integer-key Long write. The
 /// mutable array is resolved through the normal unique-COW guard before the
 /// native region starts; the helper deliberately keeps `set_int` as the one
@@ -1153,6 +1176,43 @@ pub(crate) unsafe extern "C" fn native_long_array_set(
         return 0;
     };
     array.set_int(key, Value::long(value));
+    1
+}
+
+/// Deferred structural write used only when an already-compiled loop receives
+/// a fresh array that has not reached general Hash storage yet.
+#[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+#[inline(never)]
+pub(crate) unsafe extern "C" fn native_long_array_set_deferred(
+    context: *mut NativeLongArraySetContext,
+    key: i64,
+    value: i64,
+) -> u32 {
+    let Some(context) = context.as_mut() else {
+        return 0;
+    };
+    let Some(array) = context.array.as_mut() else {
+        return 0;
+    };
+    if context.reserve_remaining != 0
+        && (array.indexed_int_write_reservation_is_unneeded(key)
+            || array.reserve_indexed_int_writes(context.reserve_remaining))
+    {
+        context.reserve_remaining = 0;
+    }
+    array.set_int(key, Value::long(value));
+    if context.reserve_remaining != 0 {
+        if array.indexed_int_write_reservation_is_unneeded(key)
+            || array.reserve_indexed_int_writes(context.reserve_remaining)
+        {
+            context.reserve_remaining = 0;
+        } else {
+            context.reserve_checks = context.reserve_checks.saturating_sub(1);
+            if context.reserve_checks == 0 {
+                context.reserve_remaining = 0;
+            }
+        }
+    }
     1
 }
 
@@ -1850,6 +1910,47 @@ impl PhpArray {
                 );
             }
         }
+    }
+
+    /// Reserve canonical indexed-hash storage for a bounded native write
+    /// estimate without changing the current storage tier.
+    #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+    pub(crate) fn reserve_indexed_int_writes(&mut self, additional: usize) -> bool {
+        if additional == 0 {
+            return true;
+        }
+        let ArrayStorage::Hash {
+            entries,
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &mut self.storage
+        else {
+            return false;
+        };
+
+        entries.reserve(additional);
+        // Progression-only integer hashes intentionally keep their arithmetic
+        // prefix and empty canonical index. Reserve buckets only after the
+        // index has already materialized; a future irregular key remains the
+        // authority for deciding whether that representation is necessary.
+        if *verified_int_prefix == 0 && !int_index.is_empty() {
+            int_index.reserve(additional);
+        }
+        true
+    }
+
+    #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+    pub(crate) fn can_reserve_indexed_int_writes(&self) -> bool {
+        matches!(self.storage, ArrayStorage::Hash { .. })
+    }
+
+    #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+    fn indexed_int_write_reservation_is_unneeded(&self, key: i64) -> bool {
+        let ArrayStorage::Packed(values) = &self.storage else {
+            return false;
+        };
+        key == self.next_int_key || (key >= 0 && (key as usize) < values.len())
     }
 
     /// Set by integer key
@@ -3160,8 +3261,8 @@ mod php_array_tests {
     use std::rc::Rc;
 
     use super::{
-        ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, PhpArray, Value,
-        native_indexed_long_lookup, native_long_array_set,
+        ArrayEntryKey, ArrayKey, ArrayStorage, IntIndexValue, NativeLongArraySetContext, PhpArray,
+        Value, native_indexed_long_lookup, native_long_array_set, native_long_array_set_deferred,
     };
 
     #[test]
@@ -3307,6 +3408,73 @@ mod php_array_tests {
             unsafe { native_long_array_set(std::ptr::null_mut(), 1, 2) },
             0
         );
+    }
+
+    #[test]
+    fn native_integer_store_applies_reservation_after_small_hash_promotion() {
+        let mut array = PhpArray::new();
+        array.set_int(107, Value::long(0));
+        let mut context = NativeLongArraySetContext::new(&mut array, 1_000);
+        for (position, key) in [-4, 91, 33].into_iter().enumerate() {
+            assert_eq!(
+                unsafe { native_long_array_set_deferred(&mut context, key, position as i64 + 1) },
+                1
+            );
+        }
+        assert_eq!(context.reserve_remaining, 0);
+        let ArrayStorage::Hash {
+            entries, int_index, ..
+        } = &array.storage
+        else {
+            panic!("four irregular keys should promote to indexed hash storage");
+        };
+        assert!(entries.capacity() >= entries.len() + 1_000);
+        assert!(int_index.capacity() >= int_index.len() + 1_000);
+    }
+
+    #[test]
+    fn indexed_integer_write_reservation_is_bounded_to_existing_hash_tiers() {
+        let mut packed = PhpArray::new();
+        assert!(!packed.reserve_indexed_int_writes(1_000));
+        assert!(matches!(packed.storage, ArrayStorage::Packed(_)));
+
+        let keys = [107, -4, 91, 33, 205, 17, 409, 73, 301];
+        let mut irregular = PhpArray::new();
+        for (position, key) in keys.into_iter().enumerate() {
+            irregular.set_int(key, Value::long(position as i64));
+        }
+        assert!(irregular.reserve_indexed_int_writes(1_000));
+        let ArrayStorage::Hash {
+            entries,
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &irregular.storage
+        else {
+            panic!("irregular integer keys should materialize hash storage");
+        };
+        assert_eq!(*verified_int_prefix, 0);
+        assert!(entries.capacity() >= entries.len() + 1_000);
+        assert!(int_index.capacity() >= int_index.len() + 1_000);
+
+        let mut progression = PhpArray::new();
+        for position in 0..9 {
+            progression.set_int(1_000_000 + position * 7, Value::long(position));
+        }
+        assert!(progression.reserve_indexed_int_writes(1_000));
+        let ArrayStorage::Hash {
+            entries,
+            int_index,
+            verified_int_prefix,
+            ..
+        } = &progression.storage
+        else {
+            panic!("wide progression should use hash storage");
+        };
+        assert_eq!(*verified_int_prefix, entries.len());
+        assert!(entries.capacity() >= entries.len() + 1_000);
+        assert!(int_index.is_empty());
+        assert_eq!(int_index.capacity(), 0);
     }
 
     #[test]

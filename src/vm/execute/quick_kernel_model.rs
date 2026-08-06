@@ -81,6 +81,30 @@ const NATIVE_FINITE_STRING_LIMIT: usize = 4;
 ))]
 const NATIVE_QUICK_LONG_SLOT_CAPACITY: usize = 64;
 
+/// Upper bound for speculative structural-write reservation per native region
+/// activation. Multiple destination arrays share this budget.
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+const NATIVE_ARRAY_RESERVE_ENTRY_BUDGET: usize = 1 << 20;
+
+/// Smaller regions do not amortize one large allocation reliably; let their
+/// canonical geometric growth handle capacity instead.
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
+const NATIVE_ARRAY_RESERVE_MIN_ITERATIONS: u64 = 1 << 19;
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg(all(
     feature = "quick-loops",
@@ -95,7 +119,8 @@ enum NativeMixedContextKind {
     Entry,
     /// Pointer to an immutable `NativeIndexedLongLookupContext`.
     IndexedRead,
-    /// Stable pointer to the unique-COW `PhpArray` object itself.
+    /// Pointer to either a unique-COW mutable `PhpArray` or the alternate
+    /// `NativeLongArraySetContext` used while a fresh array reaches Hash storage.
     MutableArray,
 }
 

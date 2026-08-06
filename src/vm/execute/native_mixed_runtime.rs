@@ -76,6 +76,42 @@ fn record_native_mixed_calls(
     }
 }
 
+fn native_mixed_array_reserve_hint(remaining_iterations: u64, array_count: u32) -> usize {
+    if remaining_iterations < NATIVE_ARRAY_RESERVE_MIN_ITERATIONS {
+        return 0;
+    }
+    let Ok(array_count) = usize::try_from(array_count) else {
+        return 0;
+    };
+    if array_count == 0 {
+        return 0;
+    }
+    usize::try_from(remaining_iterations)
+        .unwrap_or(usize::MAX)
+        .min(NATIVE_ARRAY_RESERVE_ENTRY_BUDGET / array_count)
+}
+
+fn native_mixed_array_write_config(
+    kernel: &NativeQuickLongMixedKernel,
+    deferred_reserve: bool,
+) -> NativeStraightLongLoopConfig {
+    let mut config = kernel.config;
+    for operation in config
+        .operations
+        .iter_mut()
+        .take(config.operation_count as usize)
+    {
+        if let NativeStraightLongOperation::ArrayLongSet {
+            deferred_reserve: operation_deferred_reserve,
+            ..
+        } = operation
+        {
+            *operation_deferred_reserve = deferred_reserve;
+        }
+    }
+    config
+}
+
 unsafe fn prepare_native_mixed_properties(
     kernel: &NativeQuickLongMixedKernel,
     resolved_object_ops: &[QuickResolvedObjectOp],
@@ -163,10 +199,45 @@ unsafe fn run_native_quick_long_mixed_kernel(
         return Ok(None);
     };
 
+    let bound = quick_long_operand(slots, kernel.config.bound);
+    let induction = slots[kernel.config.induction_slot as usize];
+    let remaining_iterations = (induction < bound)
+        .then(|| (bound as u64).wrapping_sub(induction as u64))
+        .unwrap_or(0);
+    let mut mutable_array_mask = 0u64;
+    for index in 0..kernel.context_count as usize {
+        if kernel.context_kinds[index] == NativeMixedContextKind::MutableArray {
+            mutable_array_mask |= 1u64 << kernel.context_array_slots[index];
+        }
+    }
+    let reserve_hint = native_mixed_array_reserve_hint(
+        remaining_iterations,
+        mutable_array_mask.count_ones(),
+    );
+    let mut deferred_array_writes = false;
+    for index in 0..kernel.context_count as usize {
+        if kernel.context_kinds[index] != NativeMixedContextKind::MutableArray {
+            continue;
+        }
+        let array = mutable_arrays[kernel.context_array_slots[index] as usize];
+        if array.is_null() {
+            return Ok(None);
+        }
+        deferred_array_writes |= reserve_hint != 0 && !(*array).can_reserve_indexed_int_writes();
+    }
+    // Keep exactly two cache identities: the common direct helper and one
+    // alternate where every structural write uses a deferred context. This
+    // avoids compiling a combinatorial set for loops with multiple arrays.
+    let config = native_mixed_array_write_config(kernel, deferred_array_writes);
+
     let mut context_pointers =
         [std::ptr::null_mut(); NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES];
     let mut indexed_contexts = [
         std::mem::MaybeUninit::<NativeIndexedLongLookupContext>::uninit();
+        NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
+    ];
+    let mut array_set_contexts = [
+        std::mem::MaybeUninit::<NativeLongArraySetContext>::uninit();
         NATIVE_STRAIGHT_LONG_MAX_CONTEXT_ENTRIES
     ];
     for index in 0..kernel.context_count as usize {
@@ -189,7 +260,25 @@ unsafe fn run_native_quick_long_mixed_kernel(
                 if array.is_null() {
                     return Ok(None);
                 }
-                context_pointers[index] = array as *mut i64;
+                if deferred_array_writes {
+                    let array_slot = kernel.context_array_slots[index];
+                    let first_context_for_array = (0..index).all(|earlier| {
+                        kernel.context_kinds[earlier] != NativeMixedContextKind::MutableArray
+                            || kernel.context_array_slots[earlier] != array_slot
+                    });
+                    let context = array_set_contexts[index].write(NativeLongArraySetContext::new(
+                        array,
+                        if first_context_for_array {
+                            reserve_hint
+                        } else {
+                            0
+                        },
+                    ));
+                    context_pointers[index] =
+                        (context as *mut NativeLongArraySetContext).cast::<i64>();
+                } else {
+                    context_pointers[index] = array.cast::<i64>();
+                }
             }
             NativeMixedContextKind::Entry => {
                 let array = mutable_arrays[kernel.context_array_slots[index] as usize];
@@ -216,10 +305,25 @@ unsafe fn run_native_quick_long_mixed_kernel(
     }
 
     let cache = plan.native_jit();
-    let Some(program) = cache.prepare_straight_program(&kernel.config) else {
+    let program = if deferred_array_writes {
+        cache.prepare_alternate_straight_program(&config)
+    } else {
+        cache.prepare_straight_program(&config)
+    };
+    let Some(program) = program else {
         return Ok(None);
     };
-    let bound = quick_long_operand(slots, kernel.config.bound);
+    if !deferred_array_writes && reserve_hint != 0 {
+        let mut arrays_to_reserve = mutable_array_mask;
+        while arrays_to_reserve != 0 {
+            let array_slot = arrays_to_reserve.trailing_zeros() as usize;
+            arrays_to_reserve &= arrays_to_reserve - 1;
+            let array = mutable_arrays[array_slot];
+            debug_assert!(!array.is_null());
+            let reserved = (*array).reserve_indexed_int_writes(reserve_hint);
+            debug_assert!(reserved);
+        }
+    }
     let visible_body_output_mask = kernel.config.body_output_mask() & kernel.long_output_mask;
     let post_result_mask = kernel.config.post_result.map_or(0, |slot| 1u64 << slot);
     let mut iterations = 0u64;
@@ -429,5 +533,35 @@ unsafe fn run_native_quick_long_mixed_kernel(
                 return Ok(Some(QuickLoopOutcome::Deoptimized));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod native_mixed_array_reserve_tests {
+    use super::{
+        NATIVE_ARRAY_RESERVE_ENTRY_BUDGET, NATIVE_ARRAY_RESERVE_MIN_ITERATIONS,
+        native_mixed_array_reserve_hint,
+    };
+
+    #[test]
+    fn capacity_hint_shares_one_bounded_budget() {
+        assert_eq!(native_mixed_array_reserve_hint(100, 0), 0);
+        assert_eq!(native_mixed_array_reserve_hint(100, 1), 0);
+        assert_eq!(
+            native_mixed_array_reserve_hint(NATIVE_ARRAY_RESERVE_MIN_ITERATIONS, 1),
+            NATIVE_ARRAY_RESERVE_MIN_ITERATIONS as usize
+        );
+        assert_eq!(
+            native_mixed_array_reserve_hint(u64::MAX, 1),
+            NATIVE_ARRAY_RESERVE_ENTRY_BUDGET
+        );
+        assert_eq!(
+            native_mixed_array_reserve_hint(u64::MAX, 4),
+            NATIVE_ARRAY_RESERVE_ENTRY_BUDGET / 4
+        );
+        assert_eq!(
+            native_mixed_array_reserve_hint(u64::MAX, 16),
+            NATIVE_ARRAY_RESERVE_ENTRY_BUDGET / 16
+        );
     }
 }

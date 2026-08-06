@@ -128,6 +128,7 @@ pub enum NativeStraightLongOperation {
         key: QuickLongOperand,
         value: QuickLongOperand,
         context: u8,
+        deferred_reserve: bool,
     },
     Binary {
         kind: ScalarLongOpKind,

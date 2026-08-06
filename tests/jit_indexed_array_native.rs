@@ -129,3 +129,51 @@ echo $alias[1000000] . '|' . $values[1000000] . '|' . $values[$lastKey] . '|' . 
     assert_eq!(plans[0].native_jit().native_entries(), 1);
     assert_eq!(plans[0].native_jit().side_exits(), 0);
 }
+
+#[test]
+fn native_structural_write_commits_before_later_overflow_exit() {
+    let source = "<?php
+$n = 4096;
+$values = [];
+$sum = 9223372036854775000;
+for ($i = 0; $i < $n; $i++) {
+    $key = (($i * 1103515245) & 2147483647) + 1000000;
+    $values[$key] = $i;
+    $sum += $i;
+}
+$exitKey = ((40 * 1103515245) & 2147483647) + 1000000;
+$lastKey = ((4095 * 1103515245) & 2147483647) + 1000000;
+echo $values[$exitKey] . '|' . $values[$lastKey] . '|' . $i;
+";
+    let (main, output) = execute_source(source);
+
+    assert_eq!(output, "40|4095|4096");
+    let plans = native_array_plans(&main).collect::<Vec<_>>();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].native_jit().native_entries(), 1);
+    assert_eq!(plans[0].native_jit().side_exits(), 1);
+}
+
+#[test]
+fn native_structural_write_cache_handles_later_fresh_array() {
+    let source = "<?php
+$n = 524321;
+$checksum = 0;
+for ($round = 0; $round < 2; $round++) {
+    $values = [];
+    for ($i = 0; $i < $n; $i++) {
+        $key = (($i * 1103515245) & 2147483647) + 1000000;
+        $values[$key] = $i;
+    }
+    $checksum += $n + $values[$key];
+}
+echo $checksum . '|' . $i;
+";
+    let (main, output) = execute_source(source);
+
+    assert_eq!(output, "2097282|524321");
+    let plans = native_array_plans(&main).collect::<Vec<_>>();
+    assert_eq!(plans.len(), 1);
+    assert_eq!(plans[0].native_jit().native_entries(), 2);
+    assert_eq!(plans[0].native_jit().side_exits(), 0);
+}

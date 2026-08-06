@@ -62,6 +62,10 @@ use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 #[cfg(feature = "quick-loops")]
 use crate::value::ExactOrderedIntLayout;
+use crate::value::{
+    ArrayKey, PhpArray, PhpClosure, PhpObject, Value, ValueType, canonical_decimal_array_key,
+    make_error_value,
+};
 #[cfg(all(
     feature = "quick-loops",
     feature = "jit-prototype",
@@ -70,11 +74,7 @@ use crate::value::ExactOrderedIntLayout;
         all(target_arch = "x86_64", target_os = "linux")
     )
 ))]
-use crate::value::NativeIndexedLongLookupContext;
-use crate::value::{
-    ArrayKey, PhpArray, PhpClosure, PhpObject, Value, ValueType, canonical_decimal_array_key,
-    make_error_value,
-};
+use crate::value::{NativeIndexedLongLookupContext, NativeLongArraySetContext};
 use crate::vm::stats;
 // Planner module is kept as scaffolding for future hot-executor architecture.
 // Not used in baseline dispatch loop — will be integrated via function-entry dispatch.

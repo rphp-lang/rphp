@@ -13,7 +13,9 @@ use super::straight::{
     straight_long_structured_block_starts, straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
-use crate::value::{native_indexed_long_lookup, native_long_array_set};
+use crate::value::{
+    native_indexed_long_lookup, native_long_array_set, native_long_array_set_deferred,
+};
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
     ScalarLongOpKind, ScalarLongSource,
@@ -1646,6 +1648,7 @@ fn emit_array_long_set(
     key: QuickLongOperand,
     value: QuickLongOperand,
     context_index: u8,
+    deferred_reserve: bool,
     context: X86_64Register,
     induction_slot: u16,
     induction: X86_64Register,
@@ -1686,10 +1689,12 @@ fn emit_array_long_set(
         X86_64Register::RDI,
         i32::from(context_index) * std::mem::size_of::<*mut i64>() as i32,
     );
-    assembler.move_immediate64(
-        X86_64Register::RAX,
-        native_long_array_set as *const () as usize as i64,
-    );
+    let helper_address = if deferred_reserve {
+        native_long_array_set_deferred as *const () as usize as i64
+    } else {
+        native_long_array_set as *const () as usize as i64
+    };
+    assembler.move_immediate64(X86_64Register::RAX, helper_address);
     assembler.call_register(X86_64Register::RAX);
     assembler.move_register(X86_64Register::R9, X86_64Register::RAX);
 
@@ -2216,12 +2221,14 @@ fn emit_scalar_straight_loop(
                 key,
                 value,
                 context: context_index,
+                deferred_reserve,
             } => {
                 emit_array_long_set(
                     &mut assembler,
                     key,
                     value,
                     context_index,
+                    deferred_reserve,
                     context,
                     config.induction_slot,
                     induction,
@@ -2757,6 +2764,7 @@ fn validate_scalar_straight_config(
                 key,
                 value,
                 context,
+                ..
             } => {
                 validate_operand(key)?;
                 validate_operand(value)?;
@@ -3234,6 +3242,7 @@ impl CompiledX86StraightLongLoop {
 /// caller continues through the canonical typed executor.
 pub struct X86QuickLongOpsJitCache {
     straight_compiled: OnceCell<Option<CompiledX86StraightLongLoop>>,
+    straight_alternate_compiled: OnceCell<Option<CompiledX86StraightLongLoop>>,
     straight_range_proven_polling_compiled: OnceCell<Option<CompiledX86StraightLongLoop>>,
     native_entries: Cell<u64>,
     native_calls: Cell<u64>,
@@ -3247,6 +3256,7 @@ impl X86QuickLongOpsJitCache {
     pub const fn new() -> Self {
         Self {
             straight_compiled: OnceCell::new(),
+            straight_alternate_compiled: OnceCell::new(),
             straight_range_proven_polling_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
             native_calls: Cell::new(0),
@@ -3273,6 +3283,17 @@ impl X86QuickLongOpsJitCache {
     ) -> Option<&CompiledX86StraightLongLoop> {
         let program = self
             .straight_compiled
+            .get_or_init(|| CompiledX86StraightLongLoop::compile(*config).ok())
+            .as_ref()?;
+        (program.config() == *config).then_some(program)
+    }
+
+    pub fn prepare_alternate_straight_program(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+    ) -> Option<&CompiledX86StraightLongLoop> {
+        let program = self
+            .straight_alternate_compiled
             .get_or_init(|| CompiledX86StraightLongLoop::compile(*config).ok())
             .as_ref()?;
         (program.config() == *config).then_some(program)
@@ -3414,6 +3435,7 @@ impl X86QuickLongOpsJitCache {
 
     pub fn is_straight_compiled(&self) -> bool {
         matches!(self.straight_compiled.get(), Some(Some(_)))
+            || matches!(self.straight_alternate_compiled.get(), Some(Some(_)))
             || matches!(
                 self.straight_range_proven_polling_compiled.get(),
                 Some(Some(_))

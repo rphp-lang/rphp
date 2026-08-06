@@ -5516,11 +5516,65 @@ every end-to-end suite. Both architectures also pass the complete
 no-default-feature matrix; the recursive Ackermann test uses the established
 16 MiB test-thread stack on both hosts.
 
-The next structural experiment remains a one-time capacity hint derived from a
-proven remaining trip count. It must be measured independently, cap speculative
-memory growth for early exits and continue using the canonical hash table. A
-fresh native-write profile should first confirm that rehashing still owns
-enough of the reduced runtime to justify that memory tradeoff.
+### Bounded native structural-write capacity checkpoint
+
+The capacity follow-up is implemented (2026-08-07). A fresh 256-round profile
+of the newly native irregular build first confirmed the remaining target:
+`hashbrown::reserve_rehash` owned 1,139 of 3,756 steady ARM64 samples (30.3%)
+and 11.61% of the corresponding isolated x86-64 profile. The runtime now
+derives one reservation hint from the guarded induction and bound, but only
+when at least 2^19 writes remain. All unique destination arrays share a 2^20
+entry ceiling, so neither an extreme bound nor multiple outputs can multiply
+speculative memory without limit.
+
+Reservation never changes an array's storage tier. An existing general Hash
+reserves its ordered entries; its integer index reserves buckets only when an
+irregular index has already materialized. Packed, SmallHash and LinearHash
+remain authoritative until canonical `set_int` promotion. This also preserves
+the progression-only Hash representation: it may reserve ordered entries, but
+does not eagerly create the integer index that its verified arithmetic prefix
+does not need. Direct allocation happens only after every activation guard and
+native-program preparation succeeds.
+
+One compiled plan retains two bounded straight-program identities. The common
+variant passes the `PhpArray` directly to the original write helper and pays no
+state check per iteration. A second variant is selected only when a hot plan is
+reused with a fresh array below Hash storage. Its stack context retries the
+reservation for at most eight canonical writes, long enough to observe normal
+SmallHash-to-Hash promotion, and then becomes inert. Multiple operations for
+the same destination share one hint. This avoids both repeated growth on fresh
+function/loop activations and a tag branch in the primary million-write path.
+
+The repeated-fresh-array profile now observes one `reserve_rehash` sample out
+of 1,526 (<0.1%) with a 66.4 MiB ARM64 peak footprint. Permanent tests cover
+the shared cap and minimum threshold, preservation of Packed/progression
+tiers, lazy reservation after SmallHash promotion, direct then deferred cache
+reuse across fresh arrays, COW, exact growth, and a structural mutation that
+must remain committed before a later arithmetic-overflow side exit.
+
+Alternating same-host A/B runs compare separately built exact commit `9560d04`
+and the final source under the same release flags. The primary target uses 103
+measured pairs after five warmups; controls use 51 pairs. Times are medians of
+the PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 capacity | Delta | x86-64 before | x86-64 capacity | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular integer build 1M | 27.093 ms | 14.422 ms | -46.77% | 65.266 ms | 55.407 ms | -15.11% |
+| Regular sparse build 1M | 6.382 ms | 6.263 ms | -1.87% | 17.476 ms | 17.371 ms | -0.60% |
+| High-bit irregular build 500K | 19.209 ms | 20.021 ms | +4.23% | 37.056 ms | 36.914 ms | -0.38% |
+| Packed build plus read 500K | 4.349 ms | 4.416 ms | +1.54% | 7.170 ms | 7.190 ms | +0.28% |
+
+The 500K controls are below the reservation threshold. The small ARM64
+high-bit movement is therefore not attributed to the optimization and remains
+a code-layout holdout; x86-64 and the packed controls are neutral. The primary
+workload retains one native entry, 999,967 native iterations, exact output and
+zero deoptimizations on both hosts.
+
+The final matrix passes formatting and no-default/all-feature checks, 216
+ARM64 and 241 x86-64 all-feature library tests, 118 quick-loop tests, 100 ARM64
+and 32 x86-64 backend-specific JIT tests, all five shared native indexed-array
+tests and every end-to-end suite. The recursive Ackermann test again uses the
+established 16 MiB test-thread stack on both hosts.
 
 ### Nice to have: persistent compiled artifacts
 

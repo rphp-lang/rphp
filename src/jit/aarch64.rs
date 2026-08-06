@@ -11,7 +11,9 @@ use super::straight::{
     straight_long_structured_definitely_written,
     straight_long_structured_local_resident_output_masks,
 };
-use crate::value::{native_indexed_long_lookup, native_long_array_set};
+use crate::value::{
+    native_indexed_long_lookup, native_long_array_set, native_long_array_set_deferred,
+};
 use crate::vm::function::{
     ScalarLongConditionKind, ScalarLongConditionOperand, ScalarLongFunctionPlan, ScalarLongOp,
     ScalarLongOpKind, ScalarLongSource,
@@ -3210,12 +3212,14 @@ impl CompiledQuickLongStraightLoop {
                         key,
                         value,
                         context: context_index,
+                        deferred_reserve,
                     } => {
                         emit_straight_array_long_set(
                             &mut assembler,
                             key,
                             value,
                             context_index,
+                            deferred_reserve,
                             control,
                             induction,
                             bound,
@@ -3903,6 +3907,7 @@ fn validate_straight_long_loop_config(
                 key,
                 value,
                 context,
+                ..
             } => {
                 validate_straight_long_operand(key)?;
                 validate_straight_long_operand(value)?;
@@ -4479,6 +4484,7 @@ fn emit_straight_array_long_set(
     key: QuickLongOperand,
     value: QuickLongOperand,
     context_index: u8,
+    deferred_reserve: bool,
     control: Arm64Register,
     induction: Arm64Register,
     bound: Arm64Register,
@@ -4512,7 +4518,12 @@ fn emit_straight_array_long_set(
         )
     })?;
     assembler.load_u64(Arm64Register::X0, control, context_offset);
-    assembler.move_immediate(helper, native_long_array_set as *const () as usize as i64);
+    let helper_address = if deferred_reserve {
+        native_long_array_set_deferred as *const () as usize as i64
+    } else {
+        native_long_array_set as *const () as usize as i64
+    };
+    assembler.move_immediate(helper, helper_address);
     assembler.branch_link_register(helper);
     assembler.move_register(helper, Arm64Register::X0);
 
@@ -4613,6 +4624,7 @@ pub struct QuickLongOpsJitCache {
     conditional_range_proven_polling_compiled:
         OnceCell<Option<CompiledQuickLongConditionalAccumulateLoop>>,
     straight_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
+    straight_alternate_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
     straight_range_proven_polling_compiled: OnceCell<Option<CompiledQuickLongStraightLoop>>,
     native_entries: Cell<u64>,
     native_calls: Cell<u64>,
@@ -4628,6 +4640,7 @@ impl QuickLongOpsJitCache {
             conditional_compiled: OnceCell::new(),
             conditional_range_proven_polling_compiled: OnceCell::new(),
             straight_compiled: OnceCell::new(),
+            straight_alternate_compiled: OnceCell::new(),
             straight_range_proven_polling_compiled: OnceCell::new(),
             native_entries: Cell::new(0),
             native_calls: Cell::new(0),
@@ -4744,6 +4757,17 @@ impl QuickLongOpsJitCache {
         else {
             return None;
         };
+        (program.config() == *config).then_some(program)
+    }
+
+    pub fn prepare_alternate_straight_program(
+        &self,
+        config: &NativeStraightLongLoopConfig,
+    ) -> Option<&CompiledQuickLongStraightLoop> {
+        let program = self
+            .straight_alternate_compiled
+            .get_or_init(|| CompiledQuickLongStraightLoop::compile(*config).ok())
+            .as_ref()?;
         (program.config() == *config).then_some(program)
     }
 
@@ -4896,6 +4920,7 @@ impl QuickLongOpsJitCache {
 
     pub fn is_straight_compiled(&self) -> bool {
         matches!(self.straight_compiled.get(), Some(Some(_)))
+            || matches!(self.straight_alternate_compiled.get(), Some(Some(_)))
             || matches!(
                 self.straight_range_proven_polling_compiled.get(),
                 Some(Some(_))

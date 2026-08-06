@@ -564,6 +564,7 @@ unsafe fn native_quick_long_mixed_kernel(
                         key: index,
                         value: QuickLongOperand::Slot(value),
                         context,
+                        deferred_reserve: false,
                     },
                     resume_ip,
                 )?;
