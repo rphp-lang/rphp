@@ -172,6 +172,15 @@ unsafe fn run_quick_long_ops_loop(
             return Ok(QuickLoopOutcome::GuardFailed);
         };
         let quick_array = QuickLongArray::from_array(array);
+        if plan.structural_array_output_mask & (1u64 << slot) != 0
+            && matches!(quick_array, QuickLongArray::Packed { .. })
+        {
+            // Appending may reallocate packed storage and invalidate this
+            // borrowed element pointer. Hash views resolve through the stable
+            // PhpArray object and remain valid across internal growth.
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
         if matches!(quick_array, QuickLongArray::Hash { .. }) {
             if exact_array_slot == Some(slot)
                 && let Some(layout) = array.exact_ordered_int_layout()
@@ -622,6 +631,21 @@ unsafe fn run_quick_long_ops_loop(
                 }
                 next_target
             }
+            QuickLongOp::SetArrayLong {
+                array,
+                index,
+                value,
+                next_target,
+                ..
+            } => {
+                let array = mutable_arrays[array as usize];
+                debug_assert!(!array.is_null());
+                (*array).set_int(
+                    quick_long_operand(&slots, index),
+                    Value::long(slots[value as usize]),
+                );
+                next_target
+            }
             QuickLongOp::ArrayPushLong {
                 array,
                 value,
@@ -712,6 +736,24 @@ unsafe fn run_quick_long_ops_loop(
                     return Ok(QuickLoopOutcome::Deoptimized);
                 }
             },
+            QuickLongOp::Shift {
+                left,
+                lhs,
+                rhs,
+                result,
+                next_target,
+                ..
+            } => {
+                let lhs = quick_long_operand(&slots, lhs);
+                let rhs = quick_long_operand(&slots, rhs) as u32;
+                slots[result as usize] = if left {
+                    lhs.wrapping_shl(rhs)
+                } else {
+                    lhs.wrapping_shr(rhs)
+                };
+                dirty_long_mask |= 1u64 << result;
+                next_target
+            }
             QuickLongOp::BinaryAssign {
                 kind,
                 lhs,

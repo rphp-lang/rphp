@@ -5390,6 +5390,77 @@ next array-storage experiment should target fully irregular structural writes
 and construction cost. Another read-only key-pattern specialization requires a
 new independent profile and code-size budget.
 
+### Guarded structural integer-write checkpoint
+
+The first fully irregular construction checkpoint is implemented (2026-08-06).
+Fresh repeated-build profiles on both hosts showed that the canonical integer
+index itself was not the only remaining cost. Before this change, ARM64 assigned
+about 43% of samples to baseline `execute_ex`, 30% to `PhpArray::set_int` and
+19% to `hashbrown` rehashing. x86-64 assigned 44.5% to `execute_ex`, 19.9% to
+`set_int` and 9.4% to rehashing. Replacing the standard group-probed table was
+therefore still the wrong boundary; the profitable general step was to remove
+per-iteration opcode dispatch, key conversion, value cloning and repeated COW
+resolution around the existing canonical mutation.
+
+The target-neutral typed loop now has `SetArrayLong`. It admits a Long key and
+Long value only when the destination is a unique COW array and the same array
+has no borrowed read view in the region. Runtime resolves the mutable
+`PhpArray` once at entry, then every iteration calls the authoritative
+`set_int`, preserving insertion order, replacement, `next_int_key`, compact
+cached-Long index payloads and all storage-tier transitions. String keys,
+references, shared arrays and mixed read/structural-write regions keep their
+canonical fallback. The older proven-existing `StoreArrayLong` remains a
+separate non-structural operation and retains its native read/update fusions.
+
+High-bit construction exposed one independent typed-IR gap: PHP `<<` and `>>`
+were still forcing the entire loop back to baseline. A target-neutral `Shift`
+operation now uses the same wrapping-count behavior as the canonical bytecode.
+It accepts guarded Long operands and handles both directions; no overflow side
+exit is introduced. The high-bit workload consequently executes 499,967 typed
+iterations after warmup with one entry, one completion and zero deoptimizations.
+
+The structural audit also found a stale-pointer risk in an older packed
+read-plus-append shape. A new structural-output mask rejects that activation
+when its borrowed view is a movable packed element buffer. Hash views remain
+eligible because they resolve through the stable `PhpArray` object, while
+general keyed sets are rejected at planning time if the same array is read.
+Permanent tests cover planner admission, read/set exclusion, replacement and
+insertion order, COW isolation, high-bit and wrapping-shift semantics, and the
+packed read/append fallback.
+
+Fresh absolute medians compare the preceding native-indexed checkpoint with
+the final source:
+
+| Workload | ARM64 before | ARM64 final | Delta | x86-64 before | x86-64 final | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Irregular integer build 1M | 48.727 ms | 39.122 ms | -19.72% | 100.009 ms | 78.076 ms | -21.93% |
+| High-bit irregular build 500K | 26.064 ms | 19.872 ms | -23.76% | 49.596 ms | 38.796 ms | -21.78% |
+| Regular sparse build 1M | 24.719 ms | 10.037 ms | -59.40% | 39.694 ms | 24.931 ms | -37.19% |
+
+All workloads retain their exact output. A same-binary temporary A/B switch,
+removed from the final source, isolated `SetArrayLong` from fat-LTO placement:
+the primary irregular build measured 37.382 versus 55.365 ms on ARM64
+(-32.48%) and 82.211 versus 107.468 ms on x86-64 (-23.50%). The regular sparse
+control measured -67.24% and -43.98% respectively. This also confirmed that
+the unrelated pre-shift high-bit fallback executed identical opcode counts in
+both A/B modes; its retained gain comes from typed shift admission rather than
+global layout.
+
+After the change, ARM64 sampling assigns about 40.5% to canonical `set_int`,
+34.1% to the general quick dispatcher and 23.6% to table rehashing. x86-64
+assigns 44.7% to the quick dispatcher, 13.0% to rehashing and 12.1% directly to
+`set_int`. The next experiment should therefore lower `SetArrayLong` through a
+stable mutable `PhpArray` helper in a native mixed region, preserving the same
+COW and safepoint contract. A separate one-time capacity hint derived from a
+proven remaining trip count is worth measuring against the rehash share, but
+must retain bounded memory behavior for early exits and must not reintroduce a
+custom integer table.
+
+The final source passes formatting, 212 ARM64 and 237 x86-64 all-feature
+library tests, 118 quick-loop tests, 100 ARM64 and 32 x86-64 backend-specific
+JIT tests, the two shared native indexed-array tests and every end-to-end suite.
+Both architectures also pass the complete no-default-feature matrix.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -1,3 +1,40 @@
+fn is_existing_array_long_replacement(
+    ops: &[QuickLongOp],
+    array: u16,
+    index: QuickArrayIndex,
+    value: u16,
+) -> bool {
+    let [.., fetch, arithmetic] = ops else {
+        return false;
+    };
+    let QuickLongOp::FetchArrayLong {
+        array: fetch_array,
+        index: fetch_index,
+        result: fetch_result,
+        ..
+    } = *fetch
+    else {
+        return false;
+    };
+    let (arithmetic_result, consumes_fetch) = match *arithmetic {
+        QuickLongOp::Add {
+            lhs, rhs, result, ..
+        } => (result, lhs == fetch_result || rhs == fetch_result),
+        QuickLongOp::Binary {
+            lhs, rhs, result, ..
+        } => (
+            result,
+            lhs == QuickLongOperand::Slot(fetch_result)
+                || rhs == QuickLongOperand::Slot(fetch_result),
+        ),
+        _ => return false,
+    };
+    fetch_array == array
+        && fetch_index == index
+        && arithmetic_result == value
+        && consumes_fetch
+}
+
 fn detect_array_update_fusions(ops: &[QuickLongOp]) -> Vec<Option<QuickArrayUpdateFusion>> {
     let mut fusions = vec![None; ops.len()];
     for index in 0..ops.len().saturating_sub(2) {
@@ -14,6 +51,7 @@ fn detect_array_update_fusions(ops: &[QuickLongOp]) -> Vec<Option<QuickArrayUpda
         if fetch_next.op_index() != Some(index + 1)
             || ops.iter().any(|operation| {
                 matches!(operation, QuickLongOp::ArrayPushLong { array: pushed, .. } if *pushed == array)
+                    || matches!(operation, QuickLongOp::SetArrayLong { array: set, .. } if *set == array)
             })
         {
             continue;

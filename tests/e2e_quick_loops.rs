@@ -1896,6 +1896,24 @@ echo $values[999];
 }
 
 #[test]
+fn packed_array_read_and_structural_push_uses_stable_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [3];
+$sum = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $sum += $values[0];
+    $values[] = $i;
+}
+echo $sum . '|' . count($values) . '|' . $values[1000];
+"
+        ),
+        "3000|1001|999"
+    );
+}
+
+#[test]
 fn quick_long_array_push_reference_uses_canonical_fallback() {
     assert_eq!(
         run_php(
@@ -1913,6 +1931,57 @@ echo $values[99];
 "
         ),
         "100|7"
+    );
+}
+
+#[test]
+fn quick_structural_integer_array_set_preserves_updates_order_and_cow() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [1000 => -1];
+$copy = $values;
+for ($i = 0; $i < 1000; $i++) {
+    $key = (($i * 17) & 255) + 1000;
+    $values[$key] = $i;
+}
+$first = '';
+$seen = 0;
+foreach ($values as $key => $value) {
+    if ($seen < 4) {
+        $first .= $key . ':' . $value . ',';
+    }
+    $seen++;
+}
+echo count($values) . '|' . $values[1000] . '|' . $values[1017] . '|';
+echo count($copy) . '|' . $copy[1000] . '|' . $first;
+"
+        ),
+        "256|768|769|1|-1|1000:768,1017:769,1034:770,1051:771,"
+    );
+}
+
+#[test]
+fn quick_structural_integer_array_set_preserves_shift_keys() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = [];
+for ($i = 0; $i < 1000; $i++) {
+    $key = ($i << 32) | (($i * $i) & 1048575);
+    $values[$key] = $i;
+}
+$left = 1;
+$right = -256;
+for ($j = 0; $j < 100; $j++) {
+    $left = $left << 65;
+    $right = $right >> 65;
+}
+echo count($values) . '|' . $values[$key] . '|' . $key . '|';
+echo $left . '|' . $right;
+"
+        ),
+        "1000|999|4290673326705|0|-1"
     );
 }
 

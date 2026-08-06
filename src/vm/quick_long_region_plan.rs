@@ -59,6 +59,8 @@ fn detect_long_ops_region_inner(
     let mut bool_output_mask = 0u64;
     let mut array_input_mask = 0u64;
     let mut array_output_mask = 0u64;
+    let mut structural_array_output_mask = 0u64;
+    let mut set_array_output_mask = 0u64;
     let mut string_input_mask = 0u64;
     let mut string_output_mask = 0u64;
     let mut string_append_mask = 0u64;
@@ -537,54 +539,44 @@ fn detect_long_ops_region_inner(
                     _ => return None,
                 };
 
-                // Updating through a retained raw array view is safe only when
-                // a preceding fetch proved that this exact key already exists;
-                // replacement then cannot resize or reorder the array.
-                let [.., fetch, arithmetic] = ops.as_slice() else {
-                    return None;
-                };
-                let (fetch_array, fetch_index, fetch_result) = match *fetch {
-                    QuickLongOp::FetchArrayLong {
-                        array,
-                        index,
-                        result,
-                        ..
-                    } => (array, index, result),
-                    _ => return None,
-                };
-                let (arithmetic_result, consumes_fetch) = match *arithmetic {
-                    QuickLongOp::Add {
-                        lhs, rhs, result, ..
-                    } => (result, lhs == fetch_result || rhs == fetch_result),
-                    QuickLongOp::Binary {
-                        lhs, rhs, result, ..
-                    } => (
-                        result,
-                        lhs == QuickLongOperand::Slot(fetch_result)
-                            || rhs == QuickLongOperand::Slot(fetch_result),
-                    ),
-                    _ => return None,
-                };
-                if fetch_array != array
-                    || fetch_index != index
-                    || arithmetic_result != instruction.result
-                    || !consumes_fetch
-                {
-                    return None;
-                }
-
-                add_mask_slot(&mut array_input_mask, array, total_slots)?;
                 add_mask_slot(&mut array_output_mask, array, total_slots)?;
                 add_mask_slot(&mut long_input_mask, instruction.result, total_slots)?;
                 has_assign = true;
                 let resume_ip = ip;
                 ip += 1;
-                QuickLongOp::StoreArrayLong {
+
+                // A preceding guarded read plus arithmetic proves replacement
+                // of an existing entry, so its borrowed array view remains
+                // stable. All other typed integer assignments use canonical
+                // `set_int`; they may resize and are kept disjoint from reads
+                // of the same array after the full region has been inspected.
+                if is_existing_array_long_replacement(
+                    &ops,
                     array,
                     index,
-                    value: instruction.result,
-                    next_target: QuickLongTarget::unresolved(ip)?,
-                    resume_ip,
+                    instruction.result,
+                ) {
+                    add_mask_slot(&mut array_input_mask, array, total_slots)?;
+                    QuickLongOp::StoreArrayLong {
+                        array,
+                        index,
+                        value: instruction.result,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
+                    let QuickArrayIndex::Long(index) = index else {
+                        return None;
+                    };
+                    add_mask_slot(&mut structural_array_output_mask, array, total_slots)?;
+                    add_mask_slot(&mut set_array_output_mask, array, total_slots)?;
+                    QuickLongOp::SetArrayLong {
+                        array,
+                        index,
+                        value: instruction.result,
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
                 }
             }
             OpCode::ArrayPushOp => {
@@ -609,6 +601,11 @@ fn detect_long_ops_region_inner(
                     OpType::Unused => return None,
                 };
                 add_mask_slot(&mut array_output_mask, instruction.op1, total_slots)?;
+                add_mask_slot(
+                    &mut structural_array_output_mask,
+                    instruction.op1,
+                    total_slots,
+                )?;
                 has_array_push = true;
                 let resume_ip = ip;
                 ip += 1;
@@ -918,6 +915,29 @@ fn detect_long_ops_region_inner(
                         next_target: QuickLongTarget::unresolved(ip)?,
                         resume_ip,
                     }
+                }
+            }
+            OpCode::ShiftLeft | OpCode::ShiftRight => {
+                if instruction.result_type != OpType::Tmp {
+                    return None;
+                }
+                let lhs = quick_long_operand(op_array, instruction.op1_type, instruction.op1)?;
+                let rhs = quick_long_operand(op_array, instruction.op2_type, instruction.op2)?;
+                for operand in [lhs, rhs] {
+                    if let QuickLongOperand::Slot(slot) = operand {
+                        add_mask_slot(&mut long_input_mask, slot, total_slots)?;
+                    }
+                }
+                add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
+                let resume_ip = ip;
+                ip += 1;
+                QuickLongOp::Shift {
+                    left: instruction.opcode == OpCode::ShiftLeft,
+                    lhs,
+                    rhs,
+                    result: instruction.result,
+                    next_target: QuickLongTarget::unresolved(ip)?,
+                    resume_ip,
                 }
             }
             OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp => {
@@ -1457,10 +1477,12 @@ fn detect_long_ops_region_inner(
             | QuickLongOp::ObjectPropertyLong { resume_ip, .. }
             | QuickLongOp::ObjectPropertyStringLength { resume_ip, .. }
             | QuickLongOp::StoreArrayLong { resume_ip, .. }
+            | QuickLongOp::SetArrayLong { resume_ip, .. }
             | QuickLongOp::ArrayPushLong { resume_ip, .. }
             | QuickLongOp::StringAppend { resume_ip, .. }
             | QuickLongOp::Add { resume_ip, .. }
             | QuickLongOp::Binary { resume_ip, .. }
+            | QuickLongOp::Shift { resume_ip, .. }
             | QuickLongOp::BinaryAssign { resume_ip, .. }
             | QuickLongOp::ComposedPropertyCall { resume_ip, .. }
             | QuickLongOp::VirtualObjectArrayPipeline { resume_ip, .. }
@@ -1639,6 +1661,7 @@ fn detect_long_ops_region_inner(
 
     let long_mask = long_input_mask | long_output_mask;
     if long_mask & bool_output_mask != 0
+        || set_array_output_mask & array_input_mask != 0
         || array_input_mask & (long_mask | bool_output_mask) != 0
         || array_output_mask & (long_mask | bool_output_mask) != 0
         || string_input_mask
@@ -1690,6 +1713,7 @@ fn detect_long_ops_region_inner(
         bool_output_mask,
         array_input_mask,
         array_output_mask,
+        structural_array_output_mask,
         string_input_mask,
         string_output_mask,
         string_append_mask,

@@ -840,6 +840,17 @@ pub enum QuickLongOp {
         next_target: QuickLongTarget,
         resume_ip: usize,
     },
+    /// Insert or replace a Long at a normalized integer key in a unique COW
+    /// array. Unlike `StoreArrayLong`, this operation may grow or reorder the
+    /// backing storage, so planning excludes any borrowed read view of the
+    /// same array from the region.
+    SetArrayLong {
+        array: u16,
+        index: QuickLongOperand,
+        value: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
     /// Append a retained Long value to a unique COW array. Runtime resolves
     /// the mutable packed/hash storage once at region entry.
     ArrayPushLong {
@@ -866,6 +877,15 @@ pub enum QuickLongOp {
     /// older Add variants retain their denser accumulator fusions.
     Binary {
         kind: ScalarLongOpKind,
+        lhs: QuickLongOperand,
+        rhs: QuickLongOperand,
+        result: u16,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    },
+    /// PHP integer shift with canonical wrapping-count semantics.
+    Shift {
+        left: bool,
         lhs: QuickLongOperand,
         rhs: QuickLongOperand,
         result: u16,
@@ -1040,10 +1060,12 @@ impl QuickLongOp {
             | Self::ObjectPropertyLong { next_target, .. }
             | Self::ObjectPropertyStringLength { next_target, .. }
             | Self::StoreArrayLong { next_target, .. }
+            | Self::SetArrayLong { next_target, .. }
             | Self::ArrayPushLong { next_target, .. }
             | Self::StringAppend { next_target, .. }
             | Self::Add { next_target, .. }
             | Self::Binary { next_target, .. }
+            | Self::Shift { next_target, .. }
             | Self::BinaryAssign { next_target, .. }
             | Self::AddAssign { next_target, .. }
             | Self::ConditionalAddAssign { next_target, .. }
@@ -1087,6 +1109,7 @@ pub struct QuickLongOpsLoop {
     pub bool_output_mask: u64,
     pub array_input_mask: u64,
     pub array_output_mask: u64,
+    pub structural_array_output_mask: u64,
     pub string_input_mask: u64,
     pub string_output_mask: u64,
     pub string_append_mask: u64,

@@ -2,10 +2,11 @@
 
 /// Borrowed view of an immutable PHP array for one guarded region.
 ///
-/// The planner rejects writes and calls in the region, the array slot cannot
-/// overlap a scalar output, and PHP array aliases detach through copy-on-write.
-/// The source `Value` therefore keeps this allocation alive and stable until
-/// the region completes or takes a side exit.
+/// General keyed structural writes never share this view for the same array;
+/// admitted replacements cannot resize it, and packed append/read regions are
+/// rejected before entry because a grow could move their element buffer. Hash
+/// views resolve through the stable `PhpArray` object. PHP aliases detach
+/// through copy-on-write in every case.
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
 enum QuickLongArray {

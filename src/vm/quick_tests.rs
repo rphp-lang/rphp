@@ -1397,6 +1397,7 @@ for ($i = 0; $i < 100; $i++) {
             ]
         ));
         assert_ne!(plan.array_output_mask, 0);
+        assert_eq!(plan.structural_array_output_mask, plan.array_output_mask);
         assert_eq!(
             plan.array_output_mask
                 & (plan.long_input_mask
@@ -1405,6 +1406,81 @@ for ($i = 0; $i < 100; $i++) {
                     | plan.array_input_mask),
             0
         );
+    }
+
+    #[test]
+    fn detects_structural_integer_array_set_as_typed_op() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [];
+for ($i = 0; $i < 100; $i++) {
+    $key = (($i * 17) & 255) + 1000;
+    $values[$key] = $i;
+}
+",
+        );
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::SetArrayLong {
+                index: QuickLongOperand::Slot(_),
+                ..
+            }
+        )));
+        assert_ne!(plan.array_output_mask, 0);
+        assert_eq!(plan.array_output_mask & plan.array_input_mask, 0);
+    }
+
+    #[test]
+    fn detects_wrapping_shift_before_structural_integer_array_set() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [];
+for ($i = 0; $i < 100; $i++) {
+    $key = ($i << 32) | (($i * $i) & 1048575);
+    $values[$key] = $i;
+}
+",
+        );
+        assert!(plan.ops.iter().any(|operation| matches!(
+            operation,
+            QuickLongOp::Shift {
+                left: true,
+                rhs: QuickLongOperand::Const(32),
+                ..
+            }
+        )));
+        assert!(plan
+            .ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::SetArrayLong { .. })));
+    }
+
+    #[test]
+    fn rejects_structural_array_set_with_borrowed_read_view() {
+        let main = compile_main(
+            "<?php
+$values = [0 => 1];
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $sum = $sum + $values[0];
+    $key = $i + 1000;
+    $values[$key] = $i;
+}
+",
+        );
+        let plan = main
+            .op_array
+            .instructions
+            .iter()
+            .enumerate()
+            .filter(|(ip, instruction)| {
+                matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                    && (instruction.op1 as usize) < *ip
+            })
+            .find_map(|(backedge, instruction)| {
+                detect_long_ops_loop(&main.op_array, instruction.op1 as usize, backedge)
+            });
+        assert!(plan.is_none());
     }
 
     #[test]
