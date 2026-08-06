@@ -1535,6 +1535,30 @@ echo $i;
 }
 
 #[test]
+fn quick_exact_contiguous_hash_prefix_materializes_integer_reads() {
+    assert_eq!(
+        run_php(
+            "<?php
+$values = range(1, 1000);
+$values['sentinel'] = 0;
+$sum = 0;
+$value = 0;
+for ($i = 0; $i < 1000; $i++) {
+    $value = $values[$i];
+    $sum += $value;
+}
+echo $sum;
+echo '|';
+echo $value;
+echo '|';
+echo $i;
+"
+        ),
+        "500500|1000|1000"
+    );
+}
+
+#[test]
 fn quick_hash_array_reads_string_literal_key() {
     assert_eq!(
         run_php(

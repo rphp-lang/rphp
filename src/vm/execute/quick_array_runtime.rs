@@ -574,6 +574,125 @@ where
 
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
+unsafe fn run_quick_long_exact_int_array_one_add_kernel(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+    slot_base: *mut Value,
+    mut slots: [i64; 64],
+    exact_layout: QuickLongExactIntLayout,
+    array: *const PhpArray,
+    index: QuickLongOperand,
+    kernel: QuickLongArrayLoopKernel,
+    add: QuickLongAddAssignKernel,
+) -> Result<QuickLoopOutcome, VmError> {
+    let mut dirty_long_mask = 0u64;
+    let mut dirty_bool_mask = 0u64;
+    let mut iterations = 0u64;
+
+    let mut continue_loop =
+        slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+    if let Some(slot) = kernel.header_condition_tmp {
+        slots[slot as usize] = i64::from(continue_loop);
+        dirty_bool_mask |= 1u64 << slot;
+    }
+
+    while continue_loop {
+        let key = quick_long_operand(&slots, index);
+        let Some(fetched) = exact_layout.long_at(array, key) else {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                kernel.fetch_resume_ip,
+                iterations,
+            ));
+        };
+        slots[kernel.fetch_result as usize] = fetched;
+        dirty_long_mask |= 1u64 << kernel.fetch_result;
+        if let Some(destination) = kernel.fetch_destination {
+            slots[destination as usize] = fetched;
+            dirty_long_mask |= 1u64 << destination;
+        }
+
+        if let Err(resume_ip) =
+            execute_quick_long_add_assign(&mut slots, &mut dirty_long_mask, add)
+        {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                resume_ip,
+                iterations,
+            ));
+        }
+
+        let Some(incremented) = slots[kernel.post_value as usize].checked_add(1) else {
+            return Ok(deopt_quick_long_kernel(
+                frame,
+                op_array,
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+                kernel.post_resume_ip,
+                iterations,
+            ));
+        };
+        if let Some(result) = kernel.post_result {
+            slots[result as usize] = slots[kernel.post_value as usize];
+            dirty_long_mask |= 1u64 << result;
+        }
+        slots[kernel.post_value as usize] = incremented;
+        dirty_long_mask |= 1u64 << kernel.post_value;
+
+        continue_loop =
+            slots[kernel.header_lhs as usize] < quick_long_operand(&slots, kernel.header_rhs);
+        if let Some(slot) = kernel.header_condition_tmp {
+            slots[slot as usize] = i64::from(continue_loop);
+            dirty_bool_mask |= 1u64 << slot;
+        }
+        iterations += 1;
+
+        if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+            commit_quick_long_ops_slots(
+                slot_base,
+                &slots,
+                dirty_long_mask,
+                dirty_bool_mask,
+            );
+            let next_target = if continue_loop {
+                kernel.body_target
+            } else {
+                kernel.exit_target
+            };
+            let next_ip = plan.target_ip(next_target).unwrap_unchecked();
+            (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+            handle_interrupt(eg)?;
+        }
+    }
+
+    commit_quick_long_ops_slots(
+        slot_base,
+        &slots,
+        dirty_long_mask,
+        dirty_bool_mask,
+    );
+    let next_ip = kernel.exit_target.exit_ip().unwrap_unchecked();
+    (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+    stats::inc_quick_loop_completed(iterations);
+    Ok(QuickLoopOutcome::Completed)
+}
+
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
 unsafe fn dispatch_quick_long_array_loop_kernel(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -750,4 +869,3 @@ unsafe fn dispatch_quick_long_array_loop_kernel(
         move |slots| array.long_at(kernel.index, slots, op_array),
     )
 }
-

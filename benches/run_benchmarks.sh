@@ -89,6 +89,7 @@ BENCHMARKS=(
     "bench_hash_int_array_materialized_loop.php:Hash materialized reads 1M"
     "bench_hash_constant_int_array_materialized_loop.php:Hash constant-int materialized 10M"
     "bench_hash_sparse_int_array_loop.php:Sparse hash integer reads 1M"
+    "bench_hash_sparse_int_array_build.php:Sparse hash integer build 1M"
     "bench_hash_sparse_int_array_transform.php:Sparse hash transform 1M"
     "bench_hash_sparse_int_array_filter.php:Sparse hash filter 1M"
     "bench_hash_irregular_prefix_int_array_transform.php:Irregular-prefix hash transform 1M"

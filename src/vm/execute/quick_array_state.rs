@@ -26,6 +26,24 @@ struct QuickLongIntPositionHint {
     stride: i64,
 }
 
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+struct QuickLongExactIntLayout {
+    layout: ExactOrderedIntLayout,
+}
+
+#[cfg(feature = "quick-loops")]
+impl QuickLongExactIntLayout {
+    #[inline(always)]
+    unsafe fn long_at(self, array: *const PhpArray, key: i64) -> Option<i64> {
+        let value = match self.layout.positioned_value(key) {
+            Some(value) => &*value,
+            None => (*array).get_indexed_int(key)?,
+        };
+        (value.value_type() == ValueType::Long).then(|| value.raw_long())
+    }
+}
+
 #[cfg(feature = "quick-loops")]
 impl QuickLongArray {
     const EMPTY: Self = Self::Empty;

@@ -153,7 +153,13 @@ unsafe fn run_quick_long_ops_loop(
         mutable_arrays[slot] = array;
     }
 
+    let array_kernel = quick_long_array_loop_kernel(plan);
+    let exact_array_slot = array_kernel.and_then(|(kernel, body)| {
+        matches!(body, QuickLongArrayBodyKernel::OneAdd { .. })
+            .then_some(kernel.array as usize)
+    });
     let mut arrays = [QuickLongArray::EMPTY; 64];
+    let mut exact_int_layout = None;
     let mut int_position_hints = [None; 64];
     let mut indexed_int_array_mask = 0u64;
     let mut array_mask = plan.array_input_mask;
@@ -167,7 +173,11 @@ unsafe fn run_quick_long_ops_loop(
         };
         let quick_array = QuickLongArray::from_array(array);
         if matches!(quick_array, QuickLongArray::Hash { .. }) {
-            if let Some((first_key, stride)) = array.integer_position_hint() {
+            if exact_array_slot == Some(slot)
+                && let Some(layout) = array.exact_ordered_int_layout()
+            {
+                exact_int_layout = Some(QuickLongExactIntLayout { layout });
+            } else if let Some((first_key, stride)) = array.integer_position_hint() {
                 int_position_hints[slot] =
                     Some(QuickLongIntPositionHint { first_key, stride });
             } else {
@@ -177,7 +187,32 @@ unsafe fn run_quick_long_ops_loop(
         arrays[slot] = quick_array;
     }
 
-    if let Some((kernel, body)) = quick_long_array_loop_kernel(plan) {
+    if let Some((kernel, body)) = array_kernel {
+        if let (
+            Some(exact_layout),
+            QuickLongArray::Hash { array },
+            QuickArrayIndex::Long(index),
+            QuickLongArrayBodyKernel::OneAdd { add },
+        ) = (
+            exact_int_layout,
+            arrays[kernel.array as usize],
+            kernel.index,
+            body,
+        ) {
+            return run_quick_long_exact_int_array_one_add_kernel(
+                eg,
+                frame,
+                op_array,
+                plan,
+                slot_base,
+                slots,
+                exact_layout,
+                array,
+                index,
+                kernel,
+                add,
+            );
+        }
         return dispatch_quick_long_array_loop_kernel(
             eg,
             frame,

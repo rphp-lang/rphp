@@ -4918,6 +4918,72 @@ mutation and COW costs, wide irregular accesses, and callback/JSON pipeline
 fusion in the quick/JIT tiers—not the basic key-to-slot representation solved
 here.
 
+### Exact contiguous hash-prefix read checkpoint
+
+The first array follow-up is implemented (2026-08-06). Profiles on both ARM64
+and x86-64 showed that a materialized integer read from an array that had
+changed from packed to hash storage still spent most of its time repeating the
+generic key-to-position validation. This is a common real-code shape: build a
+list, add one associative metadata field, and continue scanning the original
+integer prefix.
+
+The hash storage now retains one word describing a *proven* contiguous integer
+prefix. It is established by the existing packed-to-hash transition, preserved
+by value replacement, String append and cloning, invalidated by structural
+integer removal/pop, and recomputed by `shift`, which already performs linear
+reindexing. Ordinary sparse insertion deliberately does not extend or maintain
+the proof. It therefore pays no new branch per append. The proof is
+conservative: losing it only returns execution to the canonical indexed lookup.
+
+At quick-region activation, an exact read-only layout can be derived from that
+proof. COW keeps the backing allocation stable for the region. A target-neutral
+one-add kernel then executes fetch, optional materialization and checked
+accumulation together; access beyond the proven prefix uses the normal indexed
+lookup. Overflow, type changes, interrupts, frame publication and every resume
+IP retain their previous transactional behavior. The implementation is shared
+by ARM64 and x86-64 and is active in both no-JIT and JIT-feature builds.
+
+Thirty-one order-alternated pairs on ARM64 produced:
+
+| ARM64 workload | Previous no JIT | Exact no JIT | Paired delta | Previous JIT build | Exact JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Direct integer-prefix read | 5.091 ms | 5.011 ms | -3.40% | 4.970 ms | 4.940 ms | -0.77% |
+| Materialized integer-prefix read | 5.662 ms | 4.230 ms | -25.20% | 5.265 ms | 3.959 ms | -24.08% |
+| Sparse integer transform | 6.141 ms | 6.107 ms | -1.84% | 6.036 ms | 5.894 ms | -2.23% |
+| String-key materialized control | 19.347 ms | 19.347 ms | -0.01% | 20.291 ms | 20.226 ms | +0.06% |
+
+On x86-64, thirty-one no-JIT pairs and fifty-one JIT-build pairs produced:
+
+| x86-64 workload | Previous no JIT | Exact no JIT | Paired delta | Previous JIT build | Exact JIT build | Paired delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Direct integer-prefix read | 3.584 ms | 3.367 ms | -6.86% | 3.169 ms | 3.402 ms | +7.30% |
+| Materialized integer-prefix read | 4.676 ms | 3.081 ms | -34.20% | 4.701 ms | 2.986 ms | -36.75% |
+| Sparse integer build | 103.092 ms | 104.597 ms | +1.26% | 102.898 ms | 103.005 ms | +0.36% |
+| Sparse integer transform | 6.554 ms | 6.583 ms | +0.65% | 6.568 ms | 6.598 ms | +0.58% |
+| String-key materialized control | 14.084 ms | 14.105 ms | -0.08% | 13.529 ms | 14.356 ms | +5.74% |
+
+The x86-64 JIT-build controls expose the already documented fat-LTO placement
+sensitivity rather than extra work in those paths: normalized original-kernel
+instruction streams are unchanged, and `perf stat` measured essentially equal
+instructions for the String control (376,481,876 versus 376,344,287) while
+cycles moved from 73,755,601 to 78,715,993. The clean no-JIT controls and the
+sparse-build control are stable. The materialized target improves strongly in
+all four architecture/build combinations.
+
+RPHP no JIT now completes that materialized workload in 4.230 ms versus PHP
+8.5.9 no JIT at 5.144 ms on ARM64, and in 3.081 ms versus PHP 8.4.24 no JIT at
+7.520 ms on x86-64. PHP tracing JIT remains ahead at 2.639 ms and 2.660 ms;
+the RPHP JIT-feature results are 3.959 ms and 2.986 ms respectively.
+
+The permanent sparse-construction benchmark added by this checkpoint reveals
+the next, larger general bottleneck. Building one million stride-seven integer
+entries takes about 53.4 ms in RPHP versus 14.6 ms in PHP without JIT on ARM64,
+and 104.6 ms versus 38.6 ms on x86-64. Each RPHP insertion currently grows and
+updates both ordered entries and the integer index, including hashing/probing,
+capacity growth and `Value` movement. The next array checkpoint should profile
+that construction path and design a general reserve/growth or bulk-construction
+strategy without weakening ordered PHP-array semantics.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

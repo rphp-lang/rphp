@@ -3,7 +3,12 @@ use std::sync::atomic::Ordering;
 #[cfg(feature = "vm-stats")]
 use std::sync::OnceLock;
 
-use crate::value::{canonical_decimal_array_key, Value, PhpArray, PhpClosure, PhpObject, ArrayKey, ValueType, make_error_value};
+use crate::value::{
+    canonical_decimal_array_key, make_error_value, ArrayKey, PhpArray, PhpClosure, PhpObject,
+    Value, ValueType,
+};
+#[cfg(feature = "quick-loops")]
+use crate::value::ExactOrderedIntLayout;
 use crate::runtime::ExecutorGlobals;
 use crate::parser::Visibility;
 use crate::vm::stats;

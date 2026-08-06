@@ -1054,6 +1054,7 @@ enum ArrayStorage {
         entries: Vec<(ArrayEntryKey, Value)>,
         str_index: HashMap<SharedStringKey, usize>,
         int_index: IntIndex,
+        verified_int_prefix: usize,
     },
 }
 
@@ -1113,6 +1114,48 @@ impl AsRef<str> for SharedStringKey {
 enum ArrayEntryKey {
     Int(i64),
     String(SharedStringKey),
+}
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+pub(crate) struct ExactOrderedIntLayout {
+    first_value: std::ptr::NonNull<Value>,
+    run_end: usize,
+    position_zero_key: i64,
+}
+
+fn verified_int_prefix_len(entries: &[(ArrayEntryKey, Value)]) -> usize {
+    let Some((ArrayEntryKey::Int(first), _)) = entries.first() else {
+        return 0;
+    };
+    let mut len = 1;
+    while let Some((ArrayEntryKey::Int(key), _)) = entries.get(len) {
+        let expected = first.checked_add(len as i64);
+        if expected != Some(*key) {
+            break;
+        }
+        len += 1;
+    }
+    len
+}
+
+#[cfg(feature = "quick-loops")]
+impl ExactOrderedIntLayout {
+    #[inline(always)]
+    pub(crate) unsafe fn positioned_value(self, key: i64) -> Option<*const Value> {
+        let offset = key.checked_sub(self.position_zero_key)?;
+        let position = usize::try_from(offset).ok()?;
+        if position >= self.run_end {
+            return None;
+        }
+        Some(
+            self.first_value
+                .as_ptr()
+                .cast::<u8>()
+                .add(position * std::mem::size_of::<(ArrayEntryKey, Value)>())
+                .cast(),
+        )
+    }
 }
 
 const SMALL_HASH_CAPACITY: usize = 3;
@@ -1320,6 +1363,7 @@ impl PhpArray {
                 entries: Vec::with_capacity(capacity),
                 str_index: HashMap::with_capacity(capacity),
                 int_index: int_index_with_capacity(0),
+                verified_int_prefix: 0,
             },
             next_int_key: 0,
         }
@@ -1367,6 +1411,7 @@ impl PhpArray {
                 entries,
                 str_index: HashMap::new(),
                 int_index,
+                verified_int_prefix: len,
             };
         }
     }
@@ -1416,6 +1461,7 @@ impl PhpArray {
             entries,
             str_index,
             int_index,
+            verified_int_prefix: 0,
         };
     }
 
@@ -1488,6 +1534,7 @@ impl PhpArray {
             entries,
             str_index,
             int_index,
+            verified_int_prefix: 0,
         };
     }
 
@@ -1519,7 +1566,11 @@ impl PhpArray {
                 linear.invalidate_index();
                 linear.entries.push((ArrayEntryKey::Int(key), val));
             }
-            ArrayStorage::Hash { entries, int_index, .. } => {
+            ArrayStorage::Hash {
+                entries,
+                int_index,
+                ..
+            } => {
                 let idx = entries.len();
                 entries.push((ArrayEntryKey::Int(key), val));
                 int_index.insert(key, idx);
@@ -1580,7 +1631,12 @@ impl PhpArray {
         self.promote_linear_hash(0, 1);
         // Now in indexed hash mode.
         let storage = &mut self.storage;
-        if let ArrayStorage::Hash { entries, int_index, .. } = storage {
+        if let ArrayStorage::Hash {
+            entries,
+            int_index,
+            ..
+        } = storage
+        {
             if let Some(&idx) = int_index.get(&key) {
                 entries[idx].1 = val;
             } else {
@@ -2290,7 +2346,13 @@ impl PhpArray {
             }
             return false;
         }
-        if let ArrayStorage::Hash { entries, int_index, str_index, .. } = &mut self.storage {
+        if let ArrayStorage::Hash {
+            entries,
+            int_index,
+            str_index,
+            verified_int_prefix,
+        } = &mut self.storage
+        {
             let found_idx = match key {
                 ArrayKey::Int(n) => int_index.get(n).copied(),
                 ArrayKey::String(s) => str_index.get(s.as_str()).copied(),
@@ -2303,6 +2365,7 @@ impl PhpArray {
                 }
                 // Re-index entries after removed position
                 Self::reindex_entries(entries, int_index, str_index, idx);
+                *verified_int_prefix = 0;
                 return true;
             }
         }
@@ -2337,11 +2400,17 @@ impl PhpArray {
                 }
                 Some(value)
             }
-            ArrayStorage::Hash { entries, int_index, str_index, .. } => {
+            ArrayStorage::Hash {
+                entries,
+                int_index,
+                str_index,
+                verified_int_prefix,
+            } => {
                 if let Some((key, val)) = entries.pop() {
                     match &key {
                         ArrayEntryKey::Int(n) => {
                             int_index.remove(n);
+                            *verified_int_prefix = 0;
                             // PHP: only decrement if popped key was the auto-index boundary
                             if *n == self.next_int_key - 1 {
                                 self.next_int_key -= 1;
@@ -2396,7 +2465,13 @@ impl PhpArray {
             self.next_int_key = next_int_key;
             return Some(value);
         }
-        if let ArrayStorage::Hash { entries, int_index, str_index } = &mut self.storage {
+        if let ArrayStorage::Hash {
+            entries,
+            int_index,
+            str_index,
+            verified_int_prefix,
+        } = &mut self.storage
+        {
             if entries.is_empty() { return None; }
             let (_key, val) = entries.remove(0);
 
@@ -2417,6 +2492,7 @@ impl PhpArray {
                 }
             }
             self.next_int_key = new_int_counter;
+            *verified_int_prefix = verified_int_prefix_len(entries);
             Some(val)
         } else {
             None
@@ -2484,6 +2560,44 @@ impl PhpArray {
             }),
             ArrayStorage::Packed(_) => None,
         }
+    }
+
+    /// Return a direct value layout for an exactly maintained integer run.
+    /// Structural mutations update or invalidate the run metadata, and quick
+    /// regions keep the allocation stable, so keys inside this range do not
+    /// need a redundant per-iteration validation load.
+    #[cfg(feature = "quick-loops")]
+    #[inline]
+    pub(crate) fn exact_ordered_int_layout(&self) -> Option<ExactOrderedIntLayout> {
+        let ArrayStorage::Hash {
+            entries,
+            verified_int_prefix,
+            ..
+        } = &self.storage
+        else {
+            return None;
+        };
+        if *verified_int_prefix < 8 {
+            return None;
+        }
+        let (ArrayEntryKey::Int(position_zero_key), _) = entries.first()? else {
+            return None;
+        };
+        let (ArrayEntryKey::Int(second_key), _) = entries.get(1)? else {
+            return None;
+        };
+        let key_stride = second_key
+            .checked_sub(*position_zero_key)
+            .filter(|stride| *stride != 0)?;
+        if key_stride != 1 {
+            return None;
+        }
+        let first_value = std::ptr::NonNull::from(&entries.first()?.1);
+        Some(ExactOrderedIntLayout {
+            first_value,
+            run_end: *verified_int_prefix,
+            position_zero_key: *position_zero_key,
+        })
     }
 }
 
@@ -2585,10 +2699,16 @@ impl Clone for PhpArray {
             ArrayStorage::Packed(values) => ArrayStorage::Packed(values.clone()),
             ArrayStorage::SmallHash(small) => ArrayStorage::SmallHash(small.clone()),
             ArrayStorage::LinearHash(linear) => ArrayStorage::LinearHash(linear.clone()),
-            ArrayStorage::Hash { entries, str_index, int_index } => ArrayStorage::Hash {
+            ArrayStorage::Hash {
+                entries,
+                str_index,
+                int_index,
+                verified_int_prefix,
+            } => ArrayStorage::Hash {
                 entries: entries.clone(),
                 str_index: str_index.clone(),
                 int_index: int_index.clone(),
+                verified_int_prefix: *verified_int_prefix,
             },
         };
         Self {
@@ -2643,8 +2763,8 @@ mod php_array_tests {
             std::mem::size_of::<Option<(ArrayEntryKey, Value)>>(),
             32
         );
-        assert_eq!(std::mem::size_of::<ArrayStorage>(), 104);
-        assert_eq!(std::mem::size_of::<PhpArray>(), 112);
+        assert_eq!(std::mem::size_of::<ArrayStorage>(), 112);
+        assert_eq!(std::mem::size_of::<PhpArray>(), 120);
     }
 
     #[test]
@@ -2942,6 +3062,54 @@ mod php_array_tests {
 
         array.set_int(9_999, Value::long(-1));
         assert_eq!(array.integer_position_hint(), None);
+    }
+
+    #[test]
+    #[cfg(feature = "quick-loops")]
+    fn exact_ordered_int_layout_tracks_structural_changes() {
+        let mut transitioned = PhpArray::new();
+        for value in 1..=16 {
+            transitioned.push(Value::long(value));
+        }
+        transitioned.set_str("sentinel", Value::long(0));
+        let layout = transitioned.exact_ordered_int_layout().unwrap();
+        for (key, expected) in [(0, 1), (7, 8), (15, 16)] {
+            let found = unsafe { layout.positioned_value(key) };
+            assert_eq!(
+                found.and_then(|value| unsafe { (*value).as_long() }),
+                Some(expected)
+            );
+        }
+        assert!(unsafe { layout.positioned_value(16) }.is_none());
+
+        let cloned = transitioned.clone();
+        assert!(cloned.exact_ordered_int_layout().is_some());
+        transitioned.set_int(7, Value::long(70));
+        assert!(transitioned.exact_ordered_int_layout().is_some());
+        transitioned.remove(&ArrayKey::Int(3));
+        assert!(transitioned.exact_ordered_int_layout().is_none());
+
+        let mut sparse = PhpArray::with_deferred_hash_capacity(0);
+        for offset in 0..9 {
+            sparse.set_streamed_int(30 + offset * 7, Value::long(offset));
+        }
+        assert!(sparse.exact_ordered_int_layout().is_none());
+        assert_eq!(sparse.integer_position_hint(), Some((30, 7)));
+        sparse.set_streamed_int(93, Value::long(9));
+        assert_eq!(
+            sparse.get_positioned_int(93, 30, 7).and_then(Value::as_long),
+            Some(9)
+        );
+
+        let mut irregular = PhpArray::new();
+        for key in [11, 30, 31, 70, -4, 900, 2, 88] {
+            irregular.set_int(key, Value::long(-1));
+        }
+        for key in [100, 107, 114, 121, 128, 135, 142, 149] {
+            irregular.set_int(key, Value::long(key));
+        }
+        assert!(irregular.exact_ordered_int_layout().is_none());
+        assert_eq!(irregular.integer_position_hint(), Some((44, 7)));
     }
 
     #[test]
