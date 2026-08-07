@@ -115,6 +115,66 @@ where
     Some(result)
 }
 
+/// Prepared exact user callback and pure Long plan. The pointers remain stable
+/// for the lifetime of one compiled request; callers still validate every
+/// runtime argument before plan evaluation.
+#[derive(Clone, Copy)]
+pub(crate) struct ScalarLongCallback {
+    common: *const FunctionCommon,
+    plan: *const ScalarLongFunctionPlan,
+    public_num_args: usize,
+}
+
+/// Guard the invariant callable identity, signature and scalar plan once.
+#[inline(always)]
+pub(crate) unsafe fn prepare_scalar_long_callback(
+    func_ptr: *const FunctionCommon,
+    public_num_args: usize,
+) -> Option<ScalarLongCallback> {
+    if func_ptr.is_null() {
+        return None;
+    }
+    let common = &*func_ptr;
+    if common.fn_type != FunctionType::User
+        || !common.supports_scalar_long_plan()
+        || common.sig.public_arity() as usize != public_num_args
+    {
+        return None;
+    }
+
+    let user = &*(func_ptr as *const UserFunction);
+    let plan = user.scalar_long_plan.as_deref()?;
+    if plan.public_args as usize != public_num_args || public_num_args > 8 {
+        return None;
+    }
+
+    Some(ScalarLongCallback {
+        common: func_ptr,
+        plan,
+        public_num_args,
+    })
+}
+
+impl ScalarLongCallback {
+    /// Evaluate already-unboxed Long arguments without recording a completed
+    /// PHP call. Transactional pipeline consumers record their totals only
+    /// after the complete fused span succeeds.
+    #[inline(always)]
+    pub(crate) unsafe fn evaluate_longs(&self, arguments: &[i64]) -> Option<i64> {
+        if arguments.len() != self.public_num_args {
+            return None;
+        }
+        let mut scalar_arguments = [0i64; 8];
+        scalar_arguments[..arguments.len()].copy_from_slice(arguments);
+        evaluate_scalar_long_plan(&*self.plan, &scalar_arguments)
+    }
+
+    #[inline(always)]
+    pub(crate) unsafe fn record_calls(&self, count: u64) {
+        record_scalar_calls_bulk(&*self.common, count);
+    }
+}
+
 /// Call a PHP function from borrowed arguments without first materializing an
 /// intermediate `Vec<Value>`. Each value is cloned exactly once, directly into
 /// its destination CV slot in the new call frame.

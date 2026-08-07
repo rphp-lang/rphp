@@ -22,9 +22,14 @@ for ($index = 0; $index < $count; $index++) {
 }
 
 $startedAt = microtime(true);
-$mapped = array_map("callback_pipeline_map", $values);
-$filtered = array_filter($mapped, "callback_pipeline_keep");
-$sum = array_reduce($filtered, "callback_pipeline_sum", 0);
+$sum = array_reduce(
+    array_filter(
+        array_map("callback_pipeline_map", $values),
+        "callback_pipeline_keep"
+    ),
+    "callback_pipeline_sum",
+    0
+);
 $elapsed = microtime(true) - $startedAt;
 
-echo $sum . ":" . count($filtered) . "|" . $elapsed;
+echo $sum . "|" . $elapsed;

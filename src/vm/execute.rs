@@ -19,8 +19,8 @@ use super::function::{
     ScalarStringFunctionPlan, ScalarStringSource, UserFunction,
 };
 use super::instruction::{
-    ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
-    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, Instruction, KnownScalarType,
+    ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS, Instruction, KnownScalarType,
     NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
@@ -5002,6 +5002,7 @@ fn throw_in_frame<'a>(
 }
 
 include!("execute/baseline_entry.rs");
+include!("execute/callback_array_pipeline.rs");
 include!("execute/baseline_control_ops.rs");
 include!("execute/baseline_object_calls.rs");
 include!("execute/baseline_iteration.rs");

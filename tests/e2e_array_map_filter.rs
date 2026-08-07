@@ -185,6 +185,82 @@ echo array_reduce([1, 2, 3, 4], $closure, 0);
 }
 
 #[test]
+fn test_nested_scalar_callback_pipeline_preserves_result() {
+    let out = run_php(
+        r#"<?php
+function pipelineMap($value) { return $value * 3 + 1; }
+function pipelineKeep($value) { return $value & 1; }
+function pipelineSum($carry, $value) { return $carry + $value; }
+$result = array_reduce(
+    array_filter(array_map("pipelineMap", [0, 1, 2, 3, 4, 5]), "pipelineKeep"),
+    "pipelineSum",
+    0
+);
+echo $result;
+"#,
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_nested_scalar_callback_pipeline_falls_back_for_double_input() {
+    let out = run_php(
+        r#"<?php
+function fallbackMap($value) { return $value + 1; }
+function fallbackKeep($value) { return $value; }
+function fallbackSum($carry, $value) { return $carry + $value; }
+function runPipeline($values) {
+    return array_reduce(
+        array_filter(array_map("fallbackMap", $values), "fallbackKeep"),
+        "fallbackSum",
+        0
+    );
+}
+echo runPipeline([1, 2]) . ":";
+$doubleResult = runPipeline([1.5, 2.5]);
+echo gettype($doubleResult) . ":" . $doubleResult;
+"#,
+    );
+    assert_eq!(out, "5:double:6");
+}
+
+#[test]
+fn test_nested_callback_pipeline_keeps_canonical_callback_order() {
+    let out = run_php(
+        r#"<?php
+function orderedMap($value) { echo "m" . $value; return $value + 1; }
+function orderedKeep($value) { echo "f" . $value; return $value & 1; }
+function orderedSum($carry, $value) { echo "r" . $value; return $carry + $value; }
+$result = array_reduce(
+    array_filter(array_map("orderedMap", [1, 2, 3]), "orderedKeep"),
+    "orderedSum",
+    0
+);
+echo ":" . $result;
+"#,
+    );
+    assert_eq!(out, "m1m2m3f2f3f4r3:3");
+}
+
+#[test]
+fn test_nested_scalar_callback_pipeline_replays_overflow_canonically() {
+    let out = run_php(
+        r#"<?php
+function overflowMap($value) { return $value + 1; }
+function overflowKeep($value) { return 1; }
+function overflowSum($carry, $value) { return $carry + $value; }
+$result = array_reduce(
+    array_filter(array_map("overflowMap", [9223372036854775807]), "overflowKeep"),
+    "overflowSum",
+    0
+);
+echo gettype($result);
+"#,
+    );
+    assert_eq!(out, "double");
+}
+
+#[test]
 fn test_array_filter_all_pass() {
     let out = run_php(
         r#"<?php

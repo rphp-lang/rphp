@@ -19,6 +19,11 @@ pub const CALL_FLAG_EXACT_SCALAR_ARGS: u16 = 1 << 1;
 /// directly and skip materializing the intermediate PHP array.
 pub const CALL_FLAG_OBJECT_ARRAY_CONSUMERS: u16 = 1 << 2;
 
+/// InitFcall flag: this is the outer `array_reduce` of an exact nested
+/// map/filter/reduce span whose simple operands may be evaluated by the
+/// guarded pure-scalar streaming callback ABI.
+pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 3;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that

@@ -351,6 +351,14 @@ impl OpArray {
                     crate::vm::instruction::NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE;
             }
         }
+        for init_ip in 0..self.instructions.len() {
+            if crate::vm::callback_pipeline::detect_callback_array_pipeline_span(self, init_ip)
+                .is_some()
+            {
+                self.instructions[init_ip]._pad |=
+                    crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE;
+            }
+        }
 
         let mut candidates = Vec::new();
         let mut closed_region_ip = vec![false; self.instructions.len()];

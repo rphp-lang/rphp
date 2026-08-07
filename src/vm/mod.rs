@@ -1,3 +1,4 @@
+pub(crate) mod callback_pipeline;
 pub mod execute;
 pub mod frame;
 pub mod function;

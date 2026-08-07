@@ -5626,6 +5626,61 @@ and the same five shared indexed-array tests. Both hosts also pass the
 no-default-feature build; the established 16 MiB test-thread stack is used for
 the complete ARM64 run.
 
+### Transactional scalar callback-pipeline fusion checkpoint
+
+The first multi-stage callback fusion is implemented (2026-08-07). The
+compiler recognizes the exact nested bytecode span
+`array_reduce(array_filter(array_map(callback, source), callback), callback,
+initial)` when all three callback operands are string literals, the source is
+a directly readable CV or constant and the initial carry is a Long literal.
+Materialized stages, dynamic callbacks, namespaces with fallback resolution,
+argument expressions and every other arrangement retain their original
+bytecode unchanged.
+
+Runtime resolves all three exact callback identities and requires pure
+`ScalarLongFunctionPlan` bodies with arities one, one and two. The input array,
+initial carry and every member must be non-reference Long values. Admitted
+execution maps, tests and reduces each member in one streaming pass, without
+constructing either intermediate PHP array or any callback frame. Since the
+plans cannot observe globals or produce side effects, their otherwise
+different inter-stage ordering is unobservable. Impure callbacks use the
+canonical three-stage order.
+
+The fused pass is transactional: type, arithmetic and callback-plan failures
+publish no result and resume the untouched outer `InitFcall`, allowing the
+ordinary nested calls to produce PHP's Double overflow result, error or other
+fallback. Callback call counters are committed in bulk only after complete
+success. Interrupts remain polled every 256 members. Permanent coverage proves
+the exact detector, rejects dynamic and materialized-stage shapes, checks the
+fused result, exercises a later Double input at the same call site, verifies
+canonical side-effect order for impure callbacks and replays Long overflow to
+a Double result.
+
+Alternating same-host A/B runs compare exact commit `212e416` with the final
+fusion source under identical `--release --features jit-prototype` builds. The
+pipeline uses 103 measured pairs after five warmups; isolated controls use 103
+pairs on ARM64 and 51 on x86-64. Times are medians of the PHP-internal region
+over 500,000 values:
+
+| Workload | ARM64 before | ARM64 fusion | Delta | x86-64 before | x86-64 fusion | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Nested map/filter/reduce | 13.263 ms | 5.080 ms | -61.70% | 22.460 ms | 6.009 ms | -73.24% |
+| Isolated `array_map` control | 4.402 ms | 4.438 ms | +0.82% | 8.630 ms | 8.602 ms | -0.32% |
+| Isolated `array_filter` control | 6.230 ms | 6.137 ms | -1.49% | 9.239 ms | 9.215 ms | -0.26% |
+| Isolated `array_reduce` control | 4.794 ms | 4.661 ms | -2.77% | 9.652 ms | 9.655 ms | +0.03% |
+
+All outputs remain exact. An all-feature VM-statistics run records three
+`InitFcall` and two `DoFcall` opcodes for the complete benchmark: two call
+pairs belong to `microtime`, leaving only the fused outer pipeline initializer
+and no materialized pipeline `DoFcall`. It also records 1,250,002 logical fast
+callback calls through bulk accounting and only three physical frames (main
+plus the two timers).
+
+The focused final matrix passes formatting and all-feature/no-default checks,
+218 ARM64 and 243 x86-64 library tests, 37 callback-array tests under both
+feature sets, 54 general callable tests, 118 quick-loop tests, 100 ARM64 and 32
+x86-64 backend JIT tests, and all five shared native indexed-array tests.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
