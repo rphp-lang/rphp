@@ -5977,6 +5977,52 @@ per-call scalar-plan validation and the actual tiny member evaluator; none
 should be cached or fused further without measured share and a general
 invalidation contract.
 
+### Frame-free pure Long `array_walk` checkpoint
+
+The shared scalar callback ABI now covers the last explicitly planned core
+collection primitive, `array_walk` (2026-08-07). Its mutation contract makes a
+general fusion unsafe, so the fast path is deliberately narrower: a packed
+array of non-reference Long values, implicit integer keys and one exact pure
+two-argument by-value user callback without receiver or captures.
+
+The handler resolves the callable through the ordinary `DoFcall` cache and
+prepares one `ScalarLongCallback` before iteration. It passes raw `(value,
+key)` pairs directly from the packed backing slice, discards the unobservable
+callback return and bulk-records completed calls only after the entire walk
+succeeds. The helper is kept out of line so the existing by-reference mutation
+loop retains its code layout.
+
+Any reference, non-Long member, non-packed key, arity mismatch, receiver,
+capture, impure body or checked-arithmetic failure leaves the original array
+untouched and enters the existing canonical snapshot/frame path. Because the
+speculative callbacks are proven pure and their counters are not published
+before success, replay cannot duplicate a PHP-visible effect. By-reference
+callbacks, partial mutation behavior and general callable forms are unchanged.
+
+Alternating same-host A/B runs compare exact commit `b886877` with this source
+under identical release builds. Each workload uses 103 measured pairs after
+five warmups; x86-64 processes are pinned to CPU 2. Values are medians of the
+PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 scalar walk | Delta | x86-64 before | x86-64 scalar walk | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 500,000-member pure Long `array_walk` | 16.081 ms | 2.262 ms | -85.93% | 27.924 ms | 2.194 ms | -92.14% |
+| 100,000-member by-reference mutation control | 4.490 ms | 4.501 ms | +0.25% | 8.605 ms | 8.592 ms | -0.16% |
+
+Checksums remain exact and the mutating control is neutral. A permanent test
+warms one call site with Long values, replays Double values canonically and
+checks impure callback order; the existing by-reference method test remains
+green. Both hosts pass all 55 callable tests under default and no-default
+features. The JIT-prototype and all-feature library matrices remain green at
+218/222 tests on ARM64 and 243/247 tests on x86-64; formatting and all-target
+compilation also pass.
+
+Remaining callback-taking standard functions should now be selected from
+corpus frequency and semantic headroom. `usort` is mutation- and
+comparison-order-sensitive, while regex callbacks have String/match-array
+ABIs; neither should inherit this scalar walk path without its own measured,
+exact fallback contract.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

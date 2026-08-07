@@ -516,6 +516,24 @@ echo implode(',', $values);
     assert_eq!(out, "11,12");
 }
 
+#[test]
+fn test_array_walk_scalar_callback_replays_non_long_and_impure_inputs() {
+    let out = run_php(
+        r#"<?php
+function scalarWalk($value, $key) { return $value * 3 + $key; }
+function runScalarWalk(&$values) { return array_walk($values, "scalarWalk"); }
+$longs = [1, 2, 3];
+echo (runScalarWalk($longs) ? "1" : "0") . ":" . implode(",", $longs) . "|";
+$doubles = [1.5, 2.5];
+echo (runScalarWalk($doubles) ? "1" : "0") . ":" . implode(",", $doubles) . "|";
+function orderedWalk($value, $key) { echo "v" . $value . "k" . $key; }
+$ordered = [4, 5];
+array_walk($ordered, "orderedWalk");
+"#,
+    );
+    assert_eq!(out, "1:1,2,3|1:1.5,2.5|v4k0v5k1");
+}
+
 // -- is_callable with string --
 
 #[test]

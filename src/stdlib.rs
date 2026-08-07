@@ -21,7 +21,8 @@ use crate::runtime::ExecutorGlobals;
 use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::{
     VmError, call_function, call_function_iter, call_function_owned_iter,
-    call_function_readback_arg0_iter, try_execute_scalar_long_callback,
+    call_function_readback_arg0_iter, prepare_scalar_long_callback,
+    try_execute_scalar_long_callback,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -5230,6 +5231,23 @@ fn fn_array_intersect(
 
 /// array_walk(&$array, $callback): bool
 /// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
+#[inline(never)]
+unsafe fn try_array_walk_scalar_long(arr: &PhpArray, resolved: &ResolvedCallback) -> Option<()> {
+    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() {
+        return None;
+    }
+    let callback = prepare_scalar_long_callback(resolved.func_ptr, 2)?;
+    let values = arr.packed_values()?;
+    for (key, value) in values.iter().enumerate() {
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return None;
+        }
+        callback.evaluate_longs(&[value.raw_long(), i64::try_from(key).ok()?])?;
+    }
+    callback.record_calls(values.len() as u64);
+    Some(())
+}
+
 fn fn_array_walk(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -5238,12 +5256,8 @@ fn fn_array_walk(
     let callback = arg!(ed, 1).clone();
     let arr_ptr: *mut Value = arg_mut!(ed, 0);
 
-    let arr = unsafe { &*arr_ptr };
-    let pairs = match arr.as_array() {
-        Some(a) => a
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect::<Vec<_>>(),
+    let arr = match unsafe { &*arr_ptr }.as_array() {
+        Some(arr) => arr,
         None => {
             ret!(rv, Value::bool(false));
         }
@@ -5259,6 +5273,18 @@ fn fn_array_walk(
             return Ok(());
         }
     };
+
+    // A pure by-value callback cannot observe the discarded return values or
+    // mutate the walked array. Packed Long members and integer keys can use
+    // the shared scalar callback ABI without cloning a snapshot or frames.
+    if unsafe { try_array_walk_scalar_long(arr, &resolved) }.is_some() {
+        ret!(rv, Value::bool(true));
+    }
+
+    let pairs = arr
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect::<Vec<_>>();
 
     // Check if callback's first parameter is declared by-reference.
     let cb_arg0_by_ref = unsafe { (*resolved.func_ptr).sig.is_param_by_ref(0) };
