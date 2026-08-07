@@ -261,6 +261,19 @@ fn test_preg_match_all_preserves_utf8_and_named_captures() {
 }
 
 #[test]
+fn test_preg_match_all_no_match_keeps_pattern_order_shape() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $count = preg_match_all('/z/', 'abc', $m);
+            echo $count . '|' . count($m) . '|' . count($m[0]);
+            "#,
+        ),
+        "0|1|0"
+    );
+}
+
+#[test]
 fn test_preg_replace_callback_preserves_utf8_named_captures() {
     assert_eq!(
         run_php(
@@ -318,5 +331,28 @@ fn test_preg_replace_callback_builds_empty_replacements() {
             "#,
         ),
         "122"
+    );
+}
+
+#[test]
+fn test_preg_replace_callback_exception_does_not_publish_partial_output() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function fail_on_second_match($matches) {
+                if ($matches[0] === '2') {
+                    throw new Exception('stop');
+                }
+                return '[' . $matches[0] . ']';
+            }
+            $result = 'unchanged';
+            try {
+                $result = preg_replace_callback('/\d/', 'fail_on_second_match', '123');
+            } catch (Exception $error) {
+                echo $result . '|' . $error->getMessage();
+            }
+            "#,
+        ),
+        "unchanged|stop"
     );
 }

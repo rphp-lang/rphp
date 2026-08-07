@@ -215,6 +215,29 @@ impl Captures {
     }
 }
 
+/// Borrowed capture view used by consumers that can process each match before
+/// the matcher advances. The backing capture slots are reused on the next
+/// visit, so the view cannot escape the visitor call.
+#[derive(Clone, Copy)]
+pub(crate) struct CaptureView<'a> {
+    groups: &'a [Option<Match>],
+    named_groups: &'a HashMap<String, usize>,
+}
+
+impl CaptureView<'_> {
+    pub(crate) fn get(&self, i: usize) -> Option<&Match> {
+        self.groups.get(i).and_then(|capture| capture.as_ref())
+    }
+
+    pub(crate) fn named_groups(&self) -> &HashMap<String, usize> {
+        self.named_groups
+    }
+
+    pub(crate) fn len(&self) -> usize {
+        self.groups.len()
+    }
+}
+
 impl Regex {
     /// Compile a regex pattern with given flags.
     pub fn new(pattern: &str, flags: RegexFlags) -> Result<Self, String> {
@@ -253,13 +276,15 @@ impl Regex {
             Vec::new()
         };
 
-        for start in 0..=chars.len() {
+        let mut start = 0;
+        while start <= chars.len() {
             if let Some(literal) = self.start_literal {
-                if start == chars.len()
-                    || !chars_equal(chars[start], literal, self.flags.case_insensitive)
-                {
-                    continue;
-                }
+                let Some(relative_start) = chars[start..].iter().position(|&candidate| {
+                    chars_equal(candidate, literal, self.flags.case_insensitive)
+                }) else {
+                    break;
+                };
+                start += relative_start;
             }
             groups.fill(None);
             let mut ctx = MatchCtx {
@@ -272,6 +297,7 @@ impl Regex {
             if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
                 return true;
             }
+            start += 1;
         }
         false
     }
@@ -369,18 +395,23 @@ impl Regex {
         result
     }
 
-    /// Find all non-overlapping matches, returning a vector of Captures.
-    pub fn captures_iter(&self, subject: &str) -> Vec<Captures> {
+    /// Visit non-overlapping matches in order while reusing one capture-slot
+    /// buffer. Returning `false` stops before scanning the remaining subject.
+    pub(crate) fn try_visit_captures<E, F>(&self, subject: &str, mut visitor: F) -> Result<usize, E>
+    where
+        F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
+    {
         let (chars, byte_offsets) = subject_chars(subject);
         let metadata = MatchMetadata {
             input: subject,
             byte_offsets: &byte_offsets,
         };
-        let mut results = Vec::new();
+        let mut groups = vec![None; self.num_groups + 1];
         let mut pos = 0;
+        let mut count = 0;
 
         while pos <= chars.len() {
-            let mut groups = vec![None; self.num_groups + 1];
+            groups.fill(None);
             let end = {
                 let mut ctx = MatchCtx {
                     chars: &chars,
@@ -398,10 +429,14 @@ impl Regex {
                     start: match_start,
                     end: match_end,
                 });
-                results.push(Captures {
-                    groups,
-                    named_groups: self.named_groups.clone(),
-                });
+                count += 1;
+                let keep_scanning = visitor(CaptureView {
+                    groups: &groups,
+                    named_groups: &self.named_groups,
+                })?;
+                if !keep_scanning {
+                    break;
+                }
                 if end == pos {
                     pos += 1; // avoid infinite loop on zero-length match
                 } else {
@@ -411,6 +446,21 @@ impl Regex {
                 pos += 1;
             }
         }
+        Ok(count)
+    }
+
+    /// Find all non-overlapping matches, returning a vector of Captures.
+    pub fn captures_iter(&self, subject: &str) -> Vec<Captures> {
+        let mut results = Vec::new();
+        let completed: Result<usize, std::convert::Infallible> =
+            self.try_visit_captures(subject, |captures| {
+                results.push(Captures {
+                    groups: captures.groups.to_vec(),
+                    named_groups: captures.named_groups.clone(),
+                });
+                Ok(true)
+            });
+        debug_assert!(completed.is_ok());
         results
     }
 
@@ -1896,6 +1946,22 @@ mod tests {
     }
 
     #[test]
+    fn test_is_match_scans_later_required_literal_candidates() {
+        let re = Regex::new("(needle)", RegexFlags::default()).unwrap();
+
+        assert!(re.is_match("not here, then needle"));
+    }
+
+    #[test]
+    fn test_is_match_keeps_anchor_and_end_position_semantics() {
+        let anchored = Regex::new("^hello", RegexFlags::default()).unwrap();
+        let end = Regex::new("$", RegexFlags::default()).unwrap();
+
+        assert!(!anchored.is_match("xhello"));
+        assert!(end.is_match("abc"));
+    }
+
+    #[test]
     fn test_alternation() {
         let re = Regex::new("cat|dog", RegexFlags::default()).unwrap();
         assert!(re.captures("I have a cat").is_some());
@@ -2002,6 +2068,68 @@ mod tests {
         assert_eq!(captures[1].get(0).unwrap().start, 3);
         assert_eq!(captures[0].get(0).unwrap().as_str(subject), "");
         assert_eq!(captures[1].get(0).unwrap().as_str(subject), "");
+    }
+
+    #[test]
+    fn test_capture_visitor_streams_named_utf8_matches() {
+        let subject = "🙂 ž1 x č2";
+        let re = Regex::new("(?P<letter>ž|č)(?P<digit>\\d)", RegexFlags::default()).unwrap();
+        let mut seen = Vec::new();
+
+        let visited: Result<usize, std::convert::Infallible> =
+            re.try_visit_captures(subject, |captures| {
+                seen.push((
+                    captures.get(0).unwrap().as_str(subject).to_string(),
+                    captures
+                        .get(*captures.named_groups().get("letter").unwrap())
+                        .unwrap()
+                        .as_str(subject)
+                        .to_string(),
+                ));
+                Ok(true)
+            });
+
+        assert_eq!(visited.unwrap(), 2);
+        assert_eq!(
+            seen,
+            vec![
+                ("ž1".to_string(), "ž".to_string()),
+                ("č2".to_string(), "č".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn test_capture_visitor_stops_without_scanning_later_matches() {
+        let re = Regex::new("\\d", RegexFlags::default()).unwrap();
+        let mut seen = Vec::new();
+
+        let visited: Result<usize, std::convert::Infallible> =
+            re.try_visit_captures("1 2 3", |captures| {
+                seen.push(captures.get(0).unwrap().start);
+                Ok(seen.len() < 2)
+            });
+
+        assert_eq!(visited.unwrap(), 2);
+        assert_eq!(seen, vec![0, 2]);
+    }
+
+    #[test]
+    fn test_capture_visitor_propagates_errors_without_later_visits() {
+        let re = Regex::new("\\d", RegexFlags::default()).unwrap();
+        let mut seen = Vec::new();
+
+        let visited: Result<usize, &'static str> = re.try_visit_captures("1 2 3", |captures| {
+            seen.push(captures.get(0).unwrap().start);
+            if seen.len() == 2 {
+                Err("stop")
+            } else {
+                Ok(true)
+            }
+        });
+
+        assert_eq!(visited, Err("stop"));
+        assert_eq!(seen, vec![0, 2]);
     }
 
     #[test]

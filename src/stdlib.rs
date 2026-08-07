@@ -6603,50 +6603,58 @@ fn fn_preg_match_all(
         }
     };
 
-    let all_caps = re.captures_iter(&subject);
-    let count = all_caps.len() as i64;
-
-    if has_matches {
-        let matches_ptr = arg_mut!(ed, 2);
-        // PHP default: PREG_PATTERN_ORDER — matches[0] = all full matches, matches[1] = all group 1, etc.
-        let num_groups = if all_caps.is_empty() {
-            1
-        } else {
-            all_caps[0].len()
-        };
-        let mut result_arrays: Vec<PhpArray> = (0..num_groups).map(|_| PhpArray::new()).collect();
-        for caps in &all_caps {
-            for i in 0..num_groups {
-                match caps.get(i) {
-                    Some(m) => result_arrays[i].push(Value::string(m.as_str(&subject))),
-                    None => result_arrays[i].push(Value::string("")),
-                }
-            }
-        }
-        let mut out = PhpArray::new();
-        for arr in result_arrays {
-            out.push(Value::array(arr));
-        }
-        // Also add named groups as string-keyed entries at top level
-        if let Some(first_caps) = all_caps.first() {
-            for (name, &idx) in first_caps.named_groups() {
-                let mut named_arr = PhpArray::new();
-                for caps in &all_caps {
-                    match caps.get(idx) {
-                        Some(m) => named_arr.push(Value::string(m.as_str(&subject))),
-                        None => named_arr.push(Value::string("")),
-                    }
-                }
-                out.set_str(name, Value::array(named_arr));
-            }
-        }
-        unsafe {
-            std::ptr::drop_in_place(matches_ptr);
-            matches_ptr.write(Value::array(out));
-        }
+    if !has_matches {
+        let count: Result<usize, std::convert::Infallible> =
+            re.try_visit_captures(&subject, |_| Ok(true));
+        ret!(rv, Value::long(count.unwrap() as i64));
     }
 
-    ret!(rv, Value::long(count));
+    // PHP default: PREG_PATTERN_ORDER — matches[0] contains every full
+    // match, matches[1] every group 1 match, and so on. Fill those arrays
+    // directly while the regex visitor lends each reusable capture buffer.
+    let mut result_arrays: Option<Vec<PhpArray>> = None;
+    let mut named_arrays: Vec<(String, usize, PhpArray)> = Vec::new();
+    let count: Result<usize, std::convert::Infallible> = re.try_visit_captures(&subject, |caps| {
+        if result_arrays.is_none() {
+            result_arrays = Some((0..caps.len()).map(|_| PhpArray::new()).collect());
+            named_arrays.extend(
+                caps.named_groups()
+                    .iter()
+                    .map(|(name, &index)| (name.clone(), index, PhpArray::new())),
+            );
+        }
+
+        let arrays = result_arrays.as_mut().unwrap();
+        for (index, array) in arrays.iter_mut().enumerate() {
+            match caps.get(index) {
+                Some(capture) => array.push(Value::string(capture.as_str(&subject))),
+                None => array.push(Value::string("")),
+            }
+        }
+        for (_, index, array) in &mut named_arrays {
+            match caps.get(*index) {
+                Some(capture) => array.push(Value::string(capture.as_str(&subject))),
+                None => array.push(Value::string("")),
+            }
+        }
+        Ok(true)
+    });
+    let count = count.unwrap();
+
+    let mut out = PhpArray::new();
+    for array in result_arrays.unwrap_or_else(|| vec![PhpArray::new()]) {
+        out.push(Value::array(array));
+    }
+    for (name, _, array) in named_arrays {
+        out.set_str(&name, Value::array(array));
+    }
+    let matches_ptr = arg_mut!(ed, 2);
+    unsafe {
+        std::ptr::drop_in_place(matches_ptr);
+        matches_ptr.write(Value::array(out));
+    }
+
+    ret!(rv, Value::long(count as i64));
 }
 
 /// preg_split($pattern, $subject, $limit = -1): array|false
@@ -6691,20 +6699,18 @@ fn fn_preg_replace_callback(
         }
     };
 
-    // Freeze the ordered capture set before callbacks begin mutating executor
-    // state; every callback still observes the original local subject.
-    let all_caps = re.captures_iter(&subject);
-    if all_caps.is_empty() {
-        ret!(rv, Value::string(subject));
-    }
-    let resolved = resolve_callback_or_fatal(eg, &callback, ed)?;
-
-    // Matches are ordered and non-overlapping, so assemble the output once in
-    // the forward direction. Repeated reverse replace_range calls move the
-    // already-built suffix for every match and become quadratic.
-    let mut result = String::with_capacity(subject.len());
+    // Stream ordered, non-overlapping matches through one reusable capture
+    // buffer. Callback resolution and output allocation stay lazy so a subject
+    // with no matches preserves the existing no-op behavior.
+    let mut resolved = None;
+    let mut result = String::new();
     let mut previous_end = 0;
-    for caps in &all_caps {
+    let count = re.try_visit_captures(&subject, |caps| {
+        if resolved.is_none() {
+            resolved = Some(resolve_callback_or_fatal(eg, &callback, ed)?);
+            result.reserve(subject.len());
+        }
+        let resolved = resolved.as_ref().unwrap();
         let full_match = caps.get(0).unwrap();
         let match_start = full_match.start;
         let match_end = full_match.end;
@@ -6735,11 +6741,18 @@ fn fn_preg_replace_callback(
                 .chain(resolved.use_vars.iter().cloned()),
         )?;
         if eg.exception.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         result.push_str(&subject[previous_end..match_start]);
         result.push_str(&cb_result.echo_to_string());
         previous_end = match_end;
+        Ok(true)
+    })?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    if count == 0 {
+        ret!(rv, Value::string(subject));
     }
     result.push_str(&subject[previous_end..]);
 

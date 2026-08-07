@@ -6217,6 +6217,61 @@ Both hosts pass all 33 regex E2E tests under default and no-default features,
 library matrices remain green at 227 ARM64 and 252 x86-64 tests; formatting and
 all-feature/all-target compilation also pass.
 
+### Streaming regex-capture consumer checkpoint
+
+The remaining capture and match-array profile is now addressed through one
+shared lending visitor (2026-08-07). `CaptureView` borrows the current capture
+slots and named-group map only for the duration of a visitor call;
+`try_visit_captures` then clears and reuses the same slot vector for the next
+candidate. Consumers may stop deliberately or propagate an error without
+scanning later matches. The owned `captures_iter` compatibility API is now a
+thin collector over this visitor rather than a second matching loop.
+
+`preg_replace_callback` consumes each capture immediately, resolves its
+callback and allocates its output lazily on the first match, and stops the
+visitor as soon as the callback raises an exception. The original owned subject
+and compiled regex remain fixed across callbacks, callback order is unchanged,
+and no partial output is published. This removes the complete intermediate
+`Vec<Captures>`, its per-position group allocations and per-match named-map
+clones.
+
+`preg_match_all` uses the same visitor. Its count-only form no longer stores any
+owned capture collection; `PREG_PATTERN_ORDER` output is appended directly to
+the numeric and named result arrays. The established no-match result shape is
+preserved. A required start literal is now located with slice `position`
+scans, skipping non-candidate spans without running the outer match loop at
+every character. Besides being independently useful, this removes the x86
+layout sensitivity exposed by the non-participating `preg_match` controls.
+
+Alternating same-host A/B runs compare exact commit `c151b4b` with this source.
+Targets use 103 measured pairs after five warmups; controls use 503 pairs after
+twenty warmups and x86-64 remains pinned to CPU 2:
+
+| Workload | ARM64 forward output | ARM64 streaming | Delta | x86-64 forward output | x86-64 streaming | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match `preg_replace_callback` | 1.146 ms | 0.922 ms | -19.53% | 1.031 ms | 0.759 ms | -26.35% |
+| 5,000-match `preg_match_all` with numeric/named output | 4.625 ms | 4.094 ms | -11.48% | 3.579 ms | 2.779 ms | -22.34% |
+| 5,000-match count-only `preg_match_all` | 0.500 ms | 0.265 ms | -46.97% | 0.593 ms | 0.324 ms | -45.48% |
+| 20,000 cached `preg_match` calls without groups | 9.517 ms | 7.722 ms | -18.86% | 8.115 ms | 6.718 ms | -17.21% |
+| 20,000 failed matches with an unused group | 9.258 ms | 7.412 ms | -19.94% | 7.802 ms | 6.441 ms | -17.45% |
+
+On the 20,000-match callback workload, observed ARM64 maximum RSS falls from
+8.14 MB to 5.00 MB (-38.6%); macOS peak footprint falls from 6.31 MB to 3.16 MB
+(-49.9%). A fresh combined run against the original `fbb064d` baseline measures
+110.241 to 1.174 ms on ARM64 (-98.94%) and 63.718 to 0.755 ms on x86-64
+(-98.81%). Native PHP 8.5 remains about 3.3x faster on ARM64 (1.150 ms RPHP
+versus 0.349 ms PHP), with the current profile divided primarily between the
+backtracking matcher and general PHP callback/match-array execution.
+
+Unit tests cover named UTF-8 streaming, deliberate early stop, propagated
+errors, later required-literal candidates, anchors and end-position matches.
+End-to-end coverage checks no-match `PREG_PATTERN_ORDER` output and verifies
+that a callback exception leaves the assignment target unchanged. Both hosts
+pass 159 default-feature, 152 no-default-feature and 35 regex E2E tests under
+both configurations, plus all 70 hot-tier tests. All-feature library matrices
+pass 232 tests on ARM64 and 257 on x86-64; formatting and all-feature/all-target
+compilation pass on both hosts.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
