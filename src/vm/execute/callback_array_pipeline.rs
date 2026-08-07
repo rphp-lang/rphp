@@ -46,19 +46,18 @@ unsafe fn prepare_callback_array_pipeline(
         return None;
     }
     let span = program.span;
-    let callback_name = |send: Instruction| {
-        caller_op_array
-            .literals
-            .get(send.op1 as usize)
-            .and_then(Value::as_str)
+    let prepare_callback = |send: Instruction, do_fcall_ip: usize, public_num_args: usize| {
+        let callback = caller_op_array.literals.get(send.op1 as usize)?;
+        let cache = caller_op_array.cache.as_ptr().add(do_fcall_ip)
+            as *mut crate::vm::instruction::InlineCache;
+        let func_ptr =
+            crate::stdlib::resolve_literal_string_callback_with_cache(callback, eg, cache)?;
+        prepare_scalar_long_callback(func_ptr, public_num_args)
     };
-    let map_func = callback_name(span.map_callback).and_then(|name| eg.find_function(name))?;
-    let filter_func = callback_name(span.filter_callback).and_then(|name| eg.find_function(name))?;
-    let reduce_func = callback_name(span.reduce_callback).and_then(|name| eg.find_function(name))?;
-
-    let map_callback = prepare_scalar_long_callback(map_func, 1)?;
-    let filter_callback = prepare_scalar_long_callback(filter_func, 1)?;
-    let reduce_callback = prepare_scalar_long_callback(reduce_func, 2)?;
+    let map_callback = prepare_callback(span.map_callback, span.map_do_fcall_ip, 1)?;
+    let filter_callback =
+        prepare_callback(span.filter_callback, span.filter_do_fcall_ip, 1)?;
+    let reduce_callback = prepare_callback(span.reduce_callback, span.do_fcall_ip, 2)?;
 
     let source_value = &*(*caller).get_op_ptr(
         span.source.op1 as u32,
@@ -306,33 +305,49 @@ unsafe fn prepared_json_callback_array_pipeline_program(
             .get(entry_ip + offset)
             .copied()
     };
-    let (map_callback, source, filter_callback, reduce_callback, initial) =
+    let (
+        map_callback,
+        map_do_fcall_ip,
+        source,
+        filter_callback,
+        filter_do_fcall_ip,
+        reduce_callback,
+        initial,
+    ) =
         match (staged, filter_first) {
             (false, false) => (
                 instruction(4)?,
+                entry_ip + 6,
                 instruction(5)?,
                 instruction(8)?,
+                entry_ip + 9,
                 instruction(11)?,
                 instruction(12)?,
             ),
             (false, true) => (
                 instruction(3)?,
+                entry_ip + 9,
                 instruction(5)?,
                 instruction(6)?,
+                entry_ip + 7,
                 instruction(11)?,
                 instruction(12)?,
             ),
             (true, false) => (
                 instruction(1)?,
+                entry_ip + 3,
                 instruction(2)?,
                 instruction(7)?,
+                entry_ip + 8,
                 instruction(13)?,
                 instruction(14)?,
             ),
             (true, true) => (
                 instruction(6)?,
+                entry_ip + 8,
                 instruction(1)?,
                 instruction(2)?,
+                entry_ip + 3,
                 instruction(13)?,
                 instruction(14)?,
             ),
@@ -350,8 +365,10 @@ unsafe fn prepared_json_callback_array_pipeline_program(
         CallbackArrayPipelineProgram {
             span: CallbackArrayPipelineSpan {
                 map_callback,
+                map_do_fcall_ip,
                 source,
                 filter_callback,
+                filter_do_fcall_ip,
                 reduce_callback,
                 initial,
                 do_fcall_ip: reduce_do_ip,
@@ -450,36 +467,53 @@ unsafe fn callback_array_pipeline_program_from_metadata(
             .get(entry_ip + offset)
             .copied()
     };
-    let (map_callback, source, filter_callback, reduce_callback, initial, do_fcall_ip) =
+    let (
+        map_callback,
+        map_do_fcall_ip,
+        source,
+        filter_callback,
+        filter_do_fcall_ip,
+        reduce_callback,
+        initial,
+        do_fcall_ip,
+    ) =
         match (staged, order) {
             (false, CallbackArrayPipelineOrder::MapFilter) => (
                 instruction(3)?,
+                entry_ip + 5,
                 instruction(4)?,
                 instruction(7)?,
+                entry_ip + 8,
                 instruction(10)?,
                 instruction(11)?,
                 entry_ip + 12,
             ),
             (false, CallbackArrayPipelineOrder::FilterMap) => (
                 instruction(2)?,
+                entry_ip + 8,
                 instruction(4)?,
                 instruction(5)?,
+                entry_ip + 6,
                 instruction(10)?,
                 instruction(11)?,
                 entry_ip + 12,
             ),
             (true, CallbackArrayPipelineOrder::MapFilter) => (
                 instruction(1)?,
+                entry_ip + 3,
                 instruction(2)?,
                 instruction(7)?,
+                entry_ip + 8,
                 instruction(12)?,
                 instruction(13)?,
                 entry_ip + 14,
             ),
             (true, CallbackArrayPipelineOrder::FilterMap) => (
                 instruction(6)?,
+                entry_ip + 8,
                 instruction(1)?,
                 instruction(2)?,
+                entry_ip + 3,
                 instruction(12)?,
                 instruction(13)?,
                 entry_ip + 14,
@@ -494,8 +528,10 @@ unsafe fn callback_array_pipeline_program_from_metadata(
     Some(CallbackArrayPipelineProgram {
         span: CallbackArrayPipelineSpan {
             map_callback,
+            map_do_fcall_ip,
             source,
             filter_callback,
+            filter_do_fcall_ip,
             reduce_callback,
             initial,
             do_fcall_ip,

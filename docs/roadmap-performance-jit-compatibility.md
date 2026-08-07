@@ -5926,6 +5926,57 @@ scalar-plan resolution. Any cache there must be request-stable, validate the
 actual function targets and preserve late definition or replacement behavior;
 the bytecode and runtime type guards remain the fallback contract.
 
+### Shared callback-target cache checkpoint
+
+The repeated callback identity lookup identified above is removed
+(2026-08-07). A five-second ARM64 sample of the six-member repeated pipeline
+placed roughly one third of 4,233 samples in `find_function`, SipHash and name
+comparison, while the complete scalar member evaluator accounted for about
+31%. Each fused call was hashing the same three compiler-proven callback
+literals even though the canonical collection builtins already own a
+monomorphic String-callback cache at their `DoFcall` instructions.
+
+Pipeline spans now retain the map and filter `DoFcall` positions in addition
+to the existing reduce completion position. Fused preparation resolves all
+three literal callbacks through those ordinary cache entries. The repeated
+path compares the retained String identity and reads the stable function
+pointer; first resolution and a defensive mismatched-key path stay in a
+separate non-inlined helper. Scalar-plan support, public arity and the actual
+plan pointer are still validated on every fused call.
+
+This reuses rather than duplicates ownership and fallback behavior. The cache
+retains and releases its String key through the existing `OpArray` lifecycle,
+an unresolved name is not cached, and the function table rejects replacement
+of an existing definition. If a later source/member/overflow guard fails, the
+canonical `array_map`, `array_filter` or `array_reduce` call consumes the same
+already-warmed callback cache.
+
+Alternating same-host A/B runs compare exact commit `8ffa48b` with this source
+under identical release builds. Each workload uses 103 measured pairs after
+five warmups; x86-64 processes are pinned to CPU 2. Values are medians of the
+PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 target cache | Delta | x86-64 before | x86-64 target cache | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Repeated small map/filter/reduce | 19.771 ms | 15.902 ms | -19.57% | 24.760 ms | 20.000 ms | -19.22% |
+| Nested map/filter/reduce control | 4.109 ms | 4.106 ms | -0.07% | 5.122 ms | 5.111 ms | -0.20% |
+| Dead-staged map/filter/reduce control | 4.043 ms | 4.032 ms | -0.27% | 5.177 ms | 5.149 ms | -0.53% |
+| Filter/map/reduce control | 3.217 ms | 3.225 ms | +0.25% | 3.759 ms | 3.763 ms | +0.10% |
+| Repeated JSON-sink control | 26.225 ms | 23.027 ms | -12.19% | 31.312 ms | 27.069 ms | -13.55% |
+
+Every checksum remains exact; the one-shot filter/map movements are neutral.
+Formatting and all-target compilation pass. Both hosts pass all 48
+callback-array tests under default and no-default features, including a warmed
+Long site that later replays Double input canonically. The JIT-prototype and
+all-feature library matrices remain green at 218/222 tests on ARM64 and
+243/247 tests on x86-64.
+
+The next decision should come from a fresh profile with callback hashes
+removed. Likely remaining costs are the ordinary caller loop/frame boundary,
+per-call scalar-plan validation and the actual tiny member evaluator; none
+should be cached or fused further without measured share and a general
+invalidation contract.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

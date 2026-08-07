@@ -13,8 +13,10 @@ use super::opcode::OpCode;
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct CallbackArrayPipelineSpan {
     pub(crate) map_callback: Instruction,
+    pub(crate) map_do_fcall_ip: usize,
     pub(crate) source: Instruction,
     pub(crate) filter_callback: Instruction,
+    pub(crate) filter_do_fcall_ip: usize,
     pub(crate) reduce_callback: Instruction,
     pub(crate) initial: Instruction,
     pub(crate) do_fcall_ip: usize,
@@ -127,8 +129,10 @@ pub(crate) fn detect_callback_array_pipeline_span(
 
     Some(CallbackArrayPipelineSpan {
         map_callback,
+        map_do_fcall_ip: reduce_ip + 5,
         source,
         filter_callback,
+        filter_do_fcall_ip: reduce_ip + 8,
         reduce_callback,
         initial,
         do_fcall_ip: reduce_ip + 12,
@@ -250,8 +254,10 @@ fn detect_staged_callback_array_pipeline_with_reduce_offset(
     Some(StagedCallbackArrayPipelineSpan {
         pipeline: CallbackArrayPipelineSpan {
             map_callback,
+            map_do_fcall_ip: map_ip + 3,
             source,
             filter_callback,
+            filter_do_fcall_ip: map_ip + 8,
             reduce_callback,
             initial,
             do_fcall_ip: map_ip + reduce_offset + 4,
@@ -330,8 +336,10 @@ fn detect_nested_filter_map_callback_array_pipeline_span(
     Some(FilterMapCallbackArrayPipelineSpan {
         pipeline: CallbackArrayPipelineSpan {
             map_callback,
+            map_do_fcall_ip: reduce_ip + 8,
             source,
             filter_callback,
+            filter_do_fcall_ip: reduce_ip + 6,
             reduce_callback,
             initial,
             do_fcall_ip: reduce_ip + 12,
@@ -414,8 +422,10 @@ fn detect_staged_filter_map_callback_array_pipeline_with_reduce_offset(
     Some(FilterMapCallbackArrayPipelineSpan {
         pipeline: CallbackArrayPipelineSpan {
             map_callback,
+            map_do_fcall_ip: filter_ip + 8,
             source,
             filter_callback,
+            filter_do_fcall_ip: filter_ip + 3,
             reduce_callback,
             initial,
             do_fcall_ip: filter_ip + reduce_offset + 4,

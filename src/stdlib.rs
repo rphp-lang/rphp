@@ -3796,6 +3796,54 @@ fn cache_resolved_string_callback(
     unsafe { (*cache_slot).set_callback_string(name_ptr, resolved.func_ptr) };
 }
 
+#[inline(never)]
+fn resolve_literal_string_callback_cache_miss(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    cache_slot: *mut InlineCache,
+) -> Option<*const FunctionCommon> {
+    let name = val.as_str()?;
+    let name_ptr = val.string_rc_ptr()?;
+    let cached_name_ptr = unsafe { (*cache_slot).callback_string() };
+    if !cached_name_ptr.is_null() {
+        if cached_name_ptr == name_ptr || unsafe { &*cached_name_ptr }.as_str() == name {
+            let func_ptr = unsafe { (*cache_slot).func };
+            return (!func_ptr.is_null()).then_some(func_ptr);
+        }
+
+        // Defensive parity with the general resolver. Compiler-proven literal
+        // sites are monomorphic, but a mismatched pre-existing cache must not
+        // retain an old key or be overwritten repeatedly.
+        unsafe { Value::release_cached_string(cached_name_ptr) };
+        unsafe { (*cache_slot).disable_callback_string_cache() };
+    }
+
+    let func_ptr = eg.find_function(name)?;
+    if !unsafe { (*cache_slot).callback_string_cache_disabled() } {
+        unsafe { Value::retain_cached_string(name_ptr) };
+        unsafe { (*cache_slot).set_callback_string(name_ptr, func_ptr) };
+    }
+    Some(func_ptr)
+}
+
+/// Resolve a compiler-proven immutable String callback through the same
+/// DoFcall cache as the canonical collection builtin. The literal identity is
+/// monomorphic, so the repeated path stays at one pointer comparison; only
+/// first resolution or a defensive mismatch enters the larger resolver.
+#[inline(always)]
+pub(crate) fn resolve_literal_string_callback_with_cache(
+    val: &Value,
+    eg: &ExecutorGlobals,
+    cache_slot: *mut InlineCache,
+) -> Option<*const FunctionCommon> {
+    let name_ptr = val.string_rc_ptr()?;
+    if unsafe { (*cache_slot).callback_string() } == name_ptr {
+        let func_ptr = unsafe { (*cache_slot).func };
+        return (!func_ptr.is_null()).then_some(func_ptr);
+    }
+    resolve_literal_string_callback_cache_miss(val, eg, cache_slot)
+}
+
 /// Resolve a callback using an optional monomorphic string cache owned by the
 /// PHP instruction that performs the call.
 #[inline]
