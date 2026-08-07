@@ -379,6 +379,26 @@ impl OpArray {
                     crate::vm::instruction::CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE;
             }
         }
+        for init_ip in 0..self.instructions.len() {
+            if let Some(span) =
+                crate::vm::callback_pipeline::detect_json_callback_array_pipeline_span(
+                    self, init_ip,
+                )
+            {
+                self.instructions[init_ip]._pad |=
+                    crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK;
+                if span.pipeline.order
+                    == crate::vm::callback_pipeline::CallbackArrayPipelineOrder::FilterMap
+                {
+                    self.instructions[init_ip]._pad |=
+                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST;
+                }
+                if span.pipeline.discarded_cvs.is_some() {
+                    self.instructions[init_ip]._pad |=
+                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED;
+                }
+            }
+        }
 
         let mut candidates = Vec::new();
         let mut closed_region_ip = vec![false; self.instructions.len()];

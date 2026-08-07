@@ -412,6 +412,118 @@ echo gettype($external) . ":" . count($external) . ":" . $sum;
 }
 
 #[test]
+fn test_json_callback_pipeline_preserves_all_admitted_shapes() {
+    let out = run_php(
+        r#"<?php
+function jsonPipelineMap($value) { return $value * 3 + 1; }
+function jsonPipelineKeep($value) { return $value & 1; }
+function jsonPipelineSum($carry, $value) { return $carry + $value; }
+function nestedJsonMapFilter($values) {
+    return json_encode(array_reduce(
+        array_filter(array_map("jsonPipelineMap", $values), "jsonPipelineKeep"),
+        "jsonPipelineSum",
+        0
+    ));
+}
+function stagedJsonMapFilter($values) {
+    $mapped = array_map("jsonPipelineMap", $values);
+    $filtered = array_filter($mapped, "jsonPipelineKeep");
+    return json_encode(array_reduce($filtered, "jsonPipelineSum", 0));
+}
+function nestedJsonFilterMap($values) {
+    return json_encode(array_reduce(
+        array_map("jsonPipelineMap", array_filter($values, "jsonPipelineKeep")),
+        "jsonPipelineSum",
+        0
+    ));
+}
+function stagedJsonFilterMap($values) {
+    $filtered = array_filter($values, "jsonPipelineKeep");
+    $mapped = array_map("jsonPipelineMap", $filtered);
+    return json_encode(array_reduce($mapped, "jsonPipelineSum", 0));
+}
+$values = [0, 1, 2, 3, 4, 5];
+echo nestedJsonMapFilter($values) . ":";
+echo stagedJsonMapFilter($values) . ":";
+echo nestedJsonFilterMap($values) . ":";
+echo stagedJsonFilterMap($values);
+"#,
+    );
+    assert_eq!(out, "21:21:30:30");
+}
+
+#[test]
+fn test_json_callback_pipeline_falls_back_for_double_and_impure_callbacks() {
+    let out = run_php(
+        r#"<?php
+function jsonFallbackMap($value) { return $value + 1; }
+function jsonFallbackKeep($value) { return 1; }
+function jsonFallbackSum($carry, $value) { return $carry + $value; }
+function jsonFallbackPipeline($values) {
+    return json_encode(array_reduce(
+        array_filter(array_map("jsonFallbackMap", $values), "jsonFallbackKeep"),
+        "jsonFallbackSum",
+        0
+    ));
+}
+echo jsonFallbackPipeline([1, 2]) . ":";
+echo jsonFallbackPipeline([1.5, 2.5]) . "|";
+function jsonOrderedMap($value) { echo "m" . $value; return $value + 1; }
+function jsonOrderedKeep($value) { echo "f" . $value; return $value & 1; }
+function jsonOrderedSum($carry, $value) { echo "r" . $value; return $carry + $value; }
+$result = json_encode(array_reduce(
+    array_filter(array_map("jsonOrderedMap", [1, 2, 3]), "jsonOrderedKeep"),
+    "jsonOrderedSum",
+    0
+));
+echo ":" . $result;
+"#,
+    );
+    assert_eq!(out, "5:6.0|m1m2m3f2f3f4r3:3");
+}
+
+#[test]
+fn test_json_staged_pipeline_materializes_escaping_intermediates() {
+    let out = run_php(
+        r#"<?php
+function jsonEscapingMap($value) { return $value * 3 + 1; }
+function jsonEscapingKeep($value) { return $value & 1; }
+function jsonEscapingSum($carry, $value) { return $carry + $value; }
+function jsonEscapingPipeline($values) {
+    $mapped = array_map("jsonEscapingMap", $values);
+    $filtered = array_filter($mapped, "jsonEscapingKeep");
+    $encoded = json_encode(array_reduce($filtered, "jsonEscapingSum", 0));
+    return count($mapped) . ":" . count($filtered) . ":" . $encoded;
+}
+echo jsonEscapingPipeline([0, 1, 2, 3, 4, 5]);
+"#,
+    );
+    assert_eq!(out, "6:3:21");
+}
+
+#[test]
+fn test_json_pipeline_respects_namespaced_json_encode_shadow() {
+    let out = run_php(
+        r#"<?php
+namespace PipelineJsonShadow;
+function json_encode($value) { return "custom:" . $value; }
+function shadowMap($value) { return $value * 3 + 1; }
+function shadowKeep($value) { return $value & 1; }
+function shadowSum($carry, $value) { return $carry + $value; }
+echo json_encode(array_reduce(
+    array_filter(
+        array_map("PipelineJsonShadow\\shadowMap", [0, 1, 2, 3, 4, 5]),
+        "PipelineJsonShadow\\shadowKeep"
+    ),
+    "PipelineJsonShadow\\shadowSum",
+    0
+));
+"#,
+    );
+    assert_eq!(out, "custom:21");
+}
+
+#[test]
 fn test_array_filter_all_pass() {
     let out = run_php(
         r#"<?php

@@ -173,9 +173,10 @@ fn has_only_cv_mentions(op_array: &OpArray, cv: u16, admitted_ips: [usize; 2]) -
 
 /// Recognize a staged spelling only when both assigned intermediate arrays
 /// have no syntactic use beyond feeding the immediately following stage.
-pub(crate) fn detect_staged_callback_array_pipeline_span(
+fn detect_staged_callback_array_pipeline_with_reduce_offset(
     op_array: &OpArray,
     map_ip: usize,
+    reduce_offset: usize,
 ) -> Option<StagedCallbackArrayPipelineSpan> {
     // Main-scope CVs are mirrored into globals before later calls. Their
     // apparent local deadness is therefore insufficient for non-materializing
@@ -194,11 +195,11 @@ pub(crate) fn detect_staged_callback_array_pipeline_span(
     let filter_callback = *op_array.instructions.get(map_ip + 7)?;
     let filter_do = *op_array.instructions.get(map_ip + 8)?;
     let filter_assign = *op_array.instructions.get(map_ip + 9)?;
-    let reduce = *op_array.instructions.get(map_ip + 10)?;
-    let reduce_source = *op_array.instructions.get(map_ip + 11)?;
-    let reduce_callback = *op_array.instructions.get(map_ip + 12)?;
-    let initial = *op_array.instructions.get(map_ip + 13)?;
-    let reduce_do = *op_array.instructions.get(map_ip + 14)?;
+    let reduce = *op_array.instructions.get(map_ip + reduce_offset)?;
+    let reduce_source = *op_array.instructions.get(map_ip + reduce_offset + 1)?;
+    let reduce_callback = *op_array.instructions.get(map_ip + reduce_offset + 2)?;
+    let initial = *op_array.instructions.get(map_ip + reduce_offset + 3)?;
+    let reduce_do = *op_array.instructions.get(map_ip + reduce_offset + 4)?;
 
     if !is_named_call(op_array, map, "array_map", 2)
         || !is_string_literal_send(op_array, map_callback, 0)
@@ -237,7 +238,11 @@ pub(crate) fn detect_staged_callback_array_pipeline_span(
         || filter_source.op1 != mapped_cv
         || reduce_source.op1 != filtered_cv
         || !has_only_cv_mentions(op_array, mapped_cv, [map_ip + 4, map_ip + 6])
-        || !has_only_cv_mentions(op_array, filtered_cv, [map_ip + 9, map_ip + 11])
+        || !has_only_cv_mentions(
+            op_array,
+            filtered_cv,
+            [map_ip + 9, map_ip + reduce_offset + 1],
+        )
     {
         return None;
     }
@@ -249,11 +254,18 @@ pub(crate) fn detect_staged_callback_array_pipeline_span(
             filter_callback,
             reduce_callback,
             initial,
-            do_fcall_ip: map_ip + 14,
+            do_fcall_ip: map_ip + reduce_offset + 4,
         },
         mapped_cv,
         filtered_cv,
     })
+}
+
+pub(crate) fn detect_staged_callback_array_pipeline_span(
+    op_array: &OpArray,
+    map_ip: usize,
+) -> Option<StagedCallbackArrayPipelineSpan> {
+    detect_staged_callback_array_pipeline_with_reduce_offset(op_array, map_ip, 10)
 }
 
 /// Exact `array_filter` -> `array_map` -> `array_reduce` composition. Nested
@@ -328,9 +340,10 @@ fn detect_nested_filter_map_callback_array_pipeline_span(
     })
 }
 
-fn detect_staged_filter_map_callback_array_pipeline_span(
+fn detect_staged_filter_map_callback_array_pipeline_with_reduce_offset(
     op_array: &OpArray,
     filter_ip: usize,
+    reduce_offset: usize,
 ) -> Option<FilterMapCallbackArrayPipelineSpan> {
     if op_array.name == "<main>" {
         return None;
@@ -346,11 +359,11 @@ fn detect_staged_filter_map_callback_array_pipeline_span(
     let map_source = *op_array.instructions.get(filter_ip + 7)?;
     let map_do = *op_array.instructions.get(filter_ip + 8)?;
     let map_assign = *op_array.instructions.get(filter_ip + 9)?;
-    let reduce = *op_array.instructions.get(filter_ip + 10)?;
-    let reduce_source = *op_array.instructions.get(filter_ip + 11)?;
-    let reduce_callback = *op_array.instructions.get(filter_ip + 12)?;
-    let initial = *op_array.instructions.get(filter_ip + 13)?;
-    let reduce_do = *op_array.instructions.get(filter_ip + 14)?;
+    let reduce = *op_array.instructions.get(filter_ip + reduce_offset)?;
+    let reduce_source = *op_array.instructions.get(filter_ip + reduce_offset + 1)?;
+    let reduce_callback = *op_array.instructions.get(filter_ip + reduce_offset + 2)?;
+    let initial = *op_array.instructions.get(filter_ip + reduce_offset + 3)?;
+    let reduce_do = *op_array.instructions.get(filter_ip + reduce_offset + 4)?;
 
     if !is_named_call(op_array, filter, "array_filter", 2)
         || !is_positional_send(source, 0)
@@ -389,7 +402,11 @@ fn detect_staged_filter_map_callback_array_pipeline_span(
         || map_source.op1 != filtered_cv
         || reduce_source.op1 != mapped_cv
         || !has_only_cv_mentions(op_array, filtered_cv, [filter_ip + 4, filter_ip + 7])
-        || !has_only_cv_mentions(op_array, mapped_cv, [filter_ip + 9, filter_ip + 11])
+        || !has_only_cv_mentions(
+            op_array,
+            mapped_cv,
+            [filter_ip + 9, filter_ip + reduce_offset + 1],
+        )
     {
         return None;
     }
@@ -401,10 +418,17 @@ fn detect_staged_filter_map_callback_array_pipeline_span(
             filter_callback,
             reduce_callback,
             initial,
-            do_fcall_ip: filter_ip + 14,
+            do_fcall_ip: filter_ip + reduce_offset + 4,
         },
         discarded_cvs: Some((filtered_cv, mapped_cv)),
     })
+}
+
+fn detect_staged_filter_map_callback_array_pipeline_span(
+    op_array: &OpArray,
+    filter_ip: usize,
+) -> Option<FilterMapCallbackArrayPipelineSpan> {
+    detect_staged_filter_map_callback_array_pipeline_with_reduce_offset(op_array, filter_ip, 10)
 }
 
 pub(crate) fn detect_filter_map_callback_array_pipeline_span(
@@ -415,10 +439,113 @@ pub(crate) fn detect_filter_map_callback_array_pipeline_span(
         .or_else(|| detect_staged_filter_map_callback_array_pipeline_span(op_array, entry_ip))
 }
 
+/// Normalize any currently admitted nested or dead-staged callback pipeline.
+pub(crate) fn detect_callback_array_pipeline_program(
+    op_array: &OpArray,
+    entry_ip: usize,
+) -> Option<CallbackArrayPipelineProgram> {
+    if let Some(span) = detect_callback_array_pipeline_span(op_array, entry_ip) {
+        return Some(CallbackArrayPipelineProgram {
+            span,
+            order: CallbackArrayPipelineOrder::MapFilter,
+            discarded_cvs: None,
+        });
+    }
+    if let Some(staged) = detect_staged_callback_array_pipeline_span(op_array, entry_ip) {
+        return Some(CallbackArrayPipelineProgram {
+            span: staged.pipeline,
+            order: CallbackArrayPipelineOrder::MapFilter,
+            discarded_cvs: Some((staged.mapped_cv, staged.filtered_cv)),
+        });
+    }
+    let detected = detect_filter_map_callback_array_pipeline_span(op_array, entry_ip)?;
+    Some(CallbackArrayPipelineProgram {
+        span: detected.pipeline,
+        order: CallbackArrayPipelineOrder::FilterMap,
+        discarded_cvs: detected.discarded_cvs,
+    })
+}
+
+/// Exact one-argument `json_encode(Long callback-pipeline aggregate)` wrapper.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct JsonCallbackArrayPipelineSpan {
+    pub(crate) pipeline: CallbackArrayPipelineProgram,
+}
+
+fn finish_json_callback_array_pipeline_span(
+    op_array: &OpArray,
+    json_ip: usize,
+    pipeline: CallbackArrayPipelineProgram,
+) -> Option<JsonCallbackArrayPipelineSpan> {
+    let json = *op_array.instructions.get(json_ip)?;
+    if !is_named_call(op_array, json, "json_encode", 1) {
+        return None;
+    }
+    let pipeline_do = *op_array.instructions.get(pipeline.span.do_fcall_ip)?;
+    let json_send = *op_array.instructions.get(pipeline.span.do_fcall_ip + 1)?;
+    let json_do = *op_array.instructions.get(pipeline.span.do_fcall_ip + 2)?;
+    if !matches!(pipeline_do.result_type, OpType::Tmp | OpType::Var)
+        || !is_positional_send(json_send, 0)
+        || json_send.op1_type != pipeline_do.result_type
+        || json_send.op1 != pipeline_do.result
+        || json_do.opcode != OpCode::DoFcall
+        || !matches!(
+            json_do.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
+    {
+        return None;
+    }
+    Some(JsonCallbackArrayPipelineSpan { pipeline })
+}
+
+pub(crate) fn detect_json_callback_array_pipeline_span(
+    op_array: &OpArray,
+    entry_ip: usize,
+) -> Option<JsonCallbackArrayPipelineSpan> {
+    if let Some(pipeline) = detect_callback_array_pipeline_program(op_array, entry_ip + 1)
+        && let Some(span) = finish_json_callback_array_pipeline_span(op_array, entry_ip, pipeline)
+    {
+        return Some(span);
+    }
+
+    // Staged bytecode emits the outer json initializer after the two assigned
+    // collection calls but before reduce. Admit that exact single-instruction
+    // interleave while preserving the existing dead-CV proofs.
+    if let Some(staged) =
+        detect_staged_callback_array_pipeline_with_reduce_offset(op_array, entry_ip, 11)
+    {
+        let pipeline = CallbackArrayPipelineProgram {
+            span: staged.pipeline,
+            order: CallbackArrayPipelineOrder::MapFilter,
+            discarded_cvs: Some((staged.mapped_cv, staged.filtered_cv)),
+        };
+        if let Some(span) =
+            finish_json_callback_array_pipeline_span(op_array, entry_ip + 10, pipeline)
+        {
+            return Some(span);
+        }
+    }
+
+    let staged = detect_staged_filter_map_callback_array_pipeline_with_reduce_offset(
+        op_array, entry_ip, 11,
+    )?;
+    finish_json_callback_array_pipeline_span(
+        op_array,
+        entry_ip + 10,
+        CallbackArrayPipelineProgram {
+            span: staged.pipeline,
+            order: CallbackArrayPipelineOrder::FilterMap,
+            discarded_cvs: staged.discarded_cvs,
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        detect_callback_array_pipeline_span, detect_filter_map_callback_array_pipeline_span,
+        CallbackArrayPipelineOrder, detect_callback_array_pipeline_span,
+        detect_filter_map_callback_array_pipeline_span, detect_json_callback_array_pipeline_span,
         detect_staged_callback_array_pipeline_span,
     };
     use crate::compiler::compile::Compiler;
@@ -592,5 +719,74 @@ function pipeline($values) {
                         .is_none()
                 )
         );
+    }
+
+    #[test]
+    fn detects_json_sink_over_nested_and_dead_staged_programs() {
+        let nested = compile_first_function(
+            r#"<?php
+function pipeline($values) {
+    return json_encode(array_reduce(
+        array_filter(array_map("mapValue", $values), "keepValue"),
+        "sumValue",
+        0
+    ));
+}
+"#,
+        );
+        let nested_json_ip = nested
+            .instructions
+            .iter()
+            .position(|instruction| instruction.opcode == OpCode::InitFcall)
+            .unwrap();
+        let nested_sink =
+            detect_json_callback_array_pipeline_span(&nested, nested_json_ip).unwrap();
+        assert_eq!(
+            nested_sink.pipeline.order,
+            CallbackArrayPipelineOrder::MapFilter
+        );
+        assert!(nested_sink.pipeline.discarded_cvs.is_none());
+
+        let staged = compile_first_function(
+            r#"<?php
+function pipeline($values) {
+    $mapped = array_map("mapValue", $values);
+    $filtered = array_filter($mapped, "keepValue");
+    return json_encode(array_reduce($filtered, "sumValue", 0));
+}
+"#,
+        );
+        let staged_sink = staged
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(ip, _)| detect_json_callback_array_pipeline_span(&staged, ip))
+            .unwrap();
+        assert_eq!(
+            staged_sink.pipeline.order,
+            CallbackArrayPipelineOrder::MapFilter
+        );
+        assert!(staged_sink.pipeline.discarded_cvs.is_some());
+
+        let staged_filter_map = compile_first_function(
+            r#"<?php
+function pipeline($values) {
+    $filtered = array_filter($values, "keepValue");
+    $mapped = array_map("mapValue", $filtered);
+    return json_encode(array_reduce($mapped, "sumValue", 0));
+}
+"#,
+        );
+        let staged_filter_map_sink = staged_filter_map
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(ip, _)| detect_json_callback_array_pipeline_span(&staged_filter_map, ip))
+            .unwrap();
+        assert_eq!(
+            staged_filter_map_sink.pipeline.order,
+            CallbackArrayPipelineOrder::FilterMap
+        );
+        assert!(staged_filter_map_sink.pipeline.discarded_cvs.is_some());
     }
 }

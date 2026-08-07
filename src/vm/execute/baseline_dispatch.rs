@@ -1231,6 +1231,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
                     continue 'vm;
                 }
+                if opline._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK != 0
+                    && let Some((result, do_fcall_ptr)) = unsafe {
+                        try_execute_json_callback_array_pipeline(
+                            eg,
+                            frame,
+                            op_array,
+                            opline_ptr,
+                        )
+                    }?
+                {
+                    unsafe { complete_direct_string_call(frame, do_fcall_ptr, result) };
+                    continue 'vm;
+                }
 
                 // Inline cache: if we resolved this function before, reuse the pointer
                 let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };

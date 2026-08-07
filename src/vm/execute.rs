@@ -19,10 +19,13 @@ use super::function::{
     ScalarStringFunctionPlan, ScalarStringSource, UserFunction,
 };
 use super::instruction::{
-    ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
-    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, Instruction,
-    KnownScalarType, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
+    ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
+    CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, Instruction, KnownScalarType,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
 use super::quick::{
@@ -3843,6 +3846,20 @@ pub(crate) unsafe fn complete_direct_scalar_long_call(
     if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
         let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
         frame_tmp_set_long(caller, result_ptr, result);
+    }
+    (*caller).opline = do_fcall_ptr.add(1);
+}
+
+#[inline(always)]
+pub(crate) unsafe fn complete_direct_string_call(
+    caller: *mut ExecuteData,
+    do_fcall_ptr: *const Instruction,
+    result: String,
+) {
+    let do_fcall = &*do_fcall_ptr;
+    if matches!(do_fcall.result_type, OpType::Tmp | OpType::Var) {
+        let result_ptr = (caller as *mut Value).add(CALL_FRAME_SLOTS + do_fcall.result as usize);
+        frame_tmp_set(caller, result_ptr, Value::string(result));
     }
     (*caller).opline = do_fcall_ptr.add(1);
 }

@@ -1,4 +1,6 @@
-use super::callback_pipeline::{CallbackArrayPipelineOrder, CallbackArrayPipelineProgram};
+use super::callback_pipeline::{
+    CallbackArrayPipelineOrder, CallbackArrayPipelineProgram, CallbackArrayPipelineSpan,
+};
 
 /// Fully guarded inputs for one scalar callback collection program. Raw
 /// pointers are request-stable and are consumed synchronously before the
@@ -285,4 +287,152 @@ unsafe fn try_execute_filter_map_callback_array_pipeline(
             discarded_cvs: detected.discarded_cvs,
         },
     )
+}
+
+/// Decode compiler-proven JSON sink metadata without re-validating immutable
+/// bytecode on every execution. Runtime data, callback and builtin guards stay
+/// authoritative and can still replay the untouched canonical instructions.
+#[inline(always)]
+unsafe fn prepared_json_callback_array_pipeline_program(
+    caller_op_array: &crate::compiler::OpArray,
+    entry_ip: usize,
+    entry: &Instruction,
+) -> Option<(CallbackArrayPipelineProgram, usize, usize)> {
+    let filter_first =
+        entry._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST != 0;
+    let staged = entry._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED != 0;
+    let instruction = |offset: usize| {
+        caller_op_array
+            .instructions
+            .get(entry_ip + offset)
+            .copied()
+    };
+
+    let (map_callback, source, filter_callback, reduce_callback, initial) =
+        match (staged, filter_first) {
+            (false, false) => (
+                instruction(4)?,
+                instruction(5)?,
+                instruction(8)?,
+                instruction(11)?,
+                instruction(12)?,
+            ),
+            (false, true) => (
+                instruction(3)?,
+                instruction(5)?,
+                instruction(6)?,
+                instruction(11)?,
+                instruction(12)?,
+            ),
+            (true, false) => (
+                instruction(1)?,
+                instruction(2)?,
+                instruction(7)?,
+                instruction(13)?,
+                instruction(14)?,
+            ),
+            (true, true) => (
+                instruction(6)?,
+                instruction(1)?,
+                instruction(2)?,
+                instruction(13)?,
+                instruction(14)?,
+            ),
+        };
+    let discarded_cvs = if staged {
+        Some((instruction(4)?.op1, instruction(9)?.op1))
+    } else {
+        None
+    };
+    let reduce_do_ip = entry_ip + if staged { 15 } else { 13 };
+    let json_init_ip = entry_ip + if staged { 10 } else { 0 };
+    let json_do_ip = entry_ip + if staged { 17 } else { 15 };
+    caller_op_array.instructions.get(json_do_ip)?;
+
+    Some((
+        CallbackArrayPipelineProgram {
+            span: CallbackArrayPipelineSpan {
+                map_callback,
+                source,
+                filter_callback,
+                reduce_callback,
+                initial,
+                do_fcall_ip: reduce_do_ip,
+            },
+            order: if filter_first {
+                CallbackArrayPipelineOrder::FilterMap
+            } else {
+                CallbackArrayPipelineOrder::MapFilter
+            },
+            discarded_cvs,
+        },
+        json_init_ip,
+        json_do_ip,
+    ))
+}
+
+/// Execute an exact `json_encode(Long callback-pipeline aggregate)` wrapper.
+/// Long JSON has no escaping or allocation-sensitive failure cases, so the
+/// inner temporary can be omitted and only the final String is materialized.
+#[inline(never)]
+unsafe fn try_execute_json_callback_array_pipeline(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    json_ptr: *const Instruction,
+) -> Result<Option<(String, *const Instruction)>, VmError> {
+    let json = &*json_ptr;
+    if json.opcode != OpCode::InitFcall
+        || json._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK == 0
+    {
+        return Ok(None);
+    }
+
+    let entry_ip = json_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    debug_assert!(
+        crate::vm::callback_pipeline::detect_json_callback_array_pipeline_span(
+            caller_op_array,
+            entry_ip,
+        )
+        .is_some()
+    );
+    let Some((program, json_init_ip, json_do_ip)) =
+        prepared_json_callback_array_pipeline_program(caller_op_array, entry_ip, json)
+    else {
+        return Ok(None);
+    };
+    let cache = caller_op_array.cache.as_ptr().add(json_init_ip);
+    let mut json_func = (*cache).func;
+    if json_func.is_null() {
+        let Some(resolved) = eg.find_function("json_encode") else {
+            return Ok(None);
+        };
+        json_func = resolved;
+        (*(cache as *mut crate::vm::instruction::InlineCache)).func = resolved;
+    }
+    let json_common = &*json_func;
+    if json_common.fn_type != FunctionType::Internal
+        || json_common.sig.required_num_args != 1
+        || json_common.sig.public_arity() != 1
+        || json_common.sig.ref_args != 0
+    {
+        return Ok(None);
+    }
+    let Some(prepared) = prepare_callback_array_pipeline(eg, caller, caller_op_array, program) else {
+        return Ok(None);
+    };
+    let result = match program.order {
+        CallbackArrayPipelineOrder::MapFilter => {
+            evaluate_callback_array_pipeline::<false>(eg, &prepared)?
+        }
+        CallbackArrayPipelineOrder::FilterMap => {
+            evaluate_callback_array_pipeline::<true>(eg, &prepared)?
+        }
+    };
+    Ok(result.map(|value| {
+        (
+            value.to_string(),
+            caller_op_array.instructions.as_ptr().add(json_do_ip),
+        )
+    }))
 }

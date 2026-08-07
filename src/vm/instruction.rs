@@ -32,6 +32,14 @@ pub const CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 4;
 /// pure callbacks may run in canonical filter-then-map order while streaming.
 pub const CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 5;
 
+/// InitFcall flag: exact one-argument json_encode wrapper around an admitted
+/// scalar callback pipeline whose final Long can be encoded directly.
+pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK: u16 = 1 << 6;
+/// Json callback-pipeline sink metadata: filter executes before map.
+pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST: u16 = 1 << 7;
+/// Json callback-pipeline sink metadata: two dead assigned arrays are omitted.
+pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED: u16 = 1 << 8;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that

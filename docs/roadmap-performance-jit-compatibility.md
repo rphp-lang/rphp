@@ -5832,10 +5832,52 @@ guard and loop code leaves the instruction working set. Formatting, 221 ARM64
 and 246 x86-64 all-feature library tests, and all 44 callback-array tests under
 default and no-default features pass on both hosts.
 
-This normalized representation is now the prerequisite for a guarded
-`json_encode` sink. The next implementation should first prove a Long aggregate
-sink with exact option/depth/error-state guards; wider array or object encoding
-must remain canonical until their layout and ownership contracts are explicit.
+The following checkpoint consumes this normalized representation through a
+guarded scalar sink. Wider array or object encoding remains canonical until
+its layout, ownership and error-state contracts are explicit.
+
+### Direct Long callback-pipeline JSON sink checkpoint
+
+An exact one-argument `json_encode` wrapper can now consume the final Long from
+any admitted callback collection program without materializing the inner
+reduce temporary or entering the outer internal-call frame (2026-08-07). This
+covers nested and dead-staged map/filter and filter/map forms. The staged
+detector explicitly admits the compiler's outer JSON initializer between the
+second assigned collection stage and reduce while retaining both dead-CV
+proofs.
+
+Compiler metadata records stage order and staged status at the entry
+instruction. Release execution decodes the already-proven immutable layout
+directly instead of rescanning 15--18 instructions on every call. Runtime still
+guards the cached `json_encode` target as the exact one-argument internal
+function, both discarded destinations, callback identity and purity, source
+and initial-carry representation, every member and checked scalar operation.
+Any failed guard leaves the original bytecode untouched and canonical.
+
+This slice is deliberately limited to Long encoding under RPHP's current
+one-argument `json_encode` signature. Double results, impure callbacks,
+overflow, references, escaping staged arrays, dynamic callables and namespaced
+function shadows all replay normally. Array/object encoding, options, depth and
+JSON error-state behavior are not claimed by this optimization.
+
+Alternating same-host A/B runs compare exact commit `df26cfd` with this source
+under identical `--release --features jit-prototype` builds. Each workload uses
+103 measured pairs after five warmups; x86-64 processes are pinned to CPU 2.
+Values are medians of the PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 JSON sink | Delta | x86-64 before | x86-64 JSON sink | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Repeated small callback pipeline + `json_encode` | 30.870 ms | 27.751 ms | -10.10% | 36.631 ms | 32.614 ms | -10.97% |
+| Nested map/filter/reduce control | 4.704 ms | 4.677 ms | -0.57% | 5.777 ms | 5.789 ms | +0.20% |
+| Dead-staged map/filter/reduce control | 4.749 ms | 4.715 ms | -0.72% | 5.797 ms | 5.803 ms | +0.11% |
+| Filter/map/reduce control | 4.157 ms | 4.081 ms | -1.83% | 5.001 ms | 5.000 ms | -0.03% |
+
+All checksums remain exact. Permanent tests cover all four admitted shapes,
+Double and impure fallback, canonical callback order, escaping intermediate
+materialization and namespaced `json_encode` shadowing. The focused matrix
+passes 218 ARM64 and 243 x86-64 JIT-prototype library tests, 222 and 247
+all-feature library tests respectively, plus all 48 callback-array tests under
+both default and no-default feature configurations.
 
 ### Nice to have: persistent compiled artifacts
 
