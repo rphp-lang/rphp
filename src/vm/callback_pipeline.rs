@@ -20,6 +20,24 @@ pub(crate) struct CallbackArrayPipelineSpan {
     pub(crate) do_fcall_ip: usize,
 }
 
+/// Target-neutral stage order for an admitted scalar collection pipeline.
+/// Runtime dispatches this once before entering one of two monomorphic loops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallbackArrayPipelineOrder {
+    MapFilter,
+    FilterMap,
+}
+
+/// Normalized program shared by nested and dead-staged bytecode detectors.
+/// `discarded_cvs` is present only when execution suppresses canonical
+/// intermediate assignments and therefore needs raw destination guards.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CallbackArrayPipelineProgram {
+    pub(crate) span: CallbackArrayPipelineSpan,
+    pub(crate) order: CallbackArrayPipelineOrder,
+    pub(crate) discarded_cvs: Option<(u16, u16)>,
+}
+
 #[inline]
 fn is_named_call(op_array: &OpArray, instruction: Instruction, name: &str, arity: u16) -> bool {
     instruction.opcode == OpCode::InitFcall

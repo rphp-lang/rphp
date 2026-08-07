@@ -5795,11 +5795,47 @@ tests. Focused callback and frame-reuse tests also pass without default
 features. A full no-default run reaches the pre-existing Ackermann test-thread
 stack overflow; an archived exact `1c91b95` source reproduces the same failure.
 
-The next callback step should replace the three shape-specific evaluators with
-one small target-neutral collection pipeline program while retaining separate
-detectors and the measured tight loops. That shared representation is the
-prerequisite for adding a guarded `json_encode` sink without multiplying
-handwritten combinations.
+The following checkpoint replaces the three shape-specific evaluators with one
+small target-neutral collection pipeline program while retaining separate
+detectors and the measured tight loops.
+
+### Normalized scalar callback collection program checkpoint
+
+Nested map/filter, dead-staged map/filter and nested or staged filter/map now
+lower to one `CallbackArrayPipelineProgram` (2026-08-07). The normalized
+description carries the bytecode span, one `MapFilter | FilterMap` order and an
+optional pair of discarded CVs. Bytecode detectors and compiler markers remain
+separate, so extending one syntactic proof cannot widen another admission path.
+
+Runtime shares destination guards, callback identity and scalar-plan
+resolution, source/carry validation, exact final resume construction, interrupt
+handling and transactional bulk accounting. Stage order is dispatched once
+before member iteration into one of two const-specialized evaluators; the
+compiled member loops contain no enum match or indirect stage dispatch. This
+reduces `callback_array_pipeline.rs` from 367 to 288 lines and the combined
+detector/runtime source from 945 to 884 lines.
+
+Alternating same-host A/B runs compare exact commit `7ba56dd` with the normalized
+program under identical `--release --features jit-prototype` builds. All three
+workloads use 103 measured pairs after five warmups. Values are medians of the
+same 500,000-member PHP-internal timed regions:
+
+| Workload | ARM64 before | ARM64 normalized | Delta | x86-64 before | x86-64 normalized | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Nested map/filter/reduce | 4.897 ms | 4.541 ms | -7.26% | 5.982 ms | 5.789 ms | -3.23% |
+| Dead-staged map/filter/reduce | 4.819 ms | 4.563 ms | -5.32% | 6.388 ms | 5.821 ms | -8.88% |
+| Filter/map/reduce | 4.037 ms | 3.957 ms | -1.98% | 5.023 ms | 5.046 ms | +0.47% |
+
+Every result remains exact. The small x86-64 filter/map movement is neutral;
+the two established map/filter forms improve on both targets as duplicated
+guard and loop code leaves the instruction working set. Formatting, 221 ARM64
+and 246 x86-64 all-feature library tests, and all 44 callback-array tests under
+default and no-default features pass on both hosts.
+
+This normalized representation is now the prerequisite for a guarded
+`json_encode` sink. The next implementation should first prove a Long aggregate
+sink with exact option/depth/error-state guards; wider array or object encoding
+must remain canonical until their layout and ownership contracts are explicit.
 
 ### Nice to have: persistent compiled artifacts
 
