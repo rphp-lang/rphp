@@ -399,6 +399,7 @@ impl Regex {
 
     /// Visit non-overlapping matches in order while reusing one capture-slot
     /// buffer. Returning `false` stops before scanning the remaining subject.
+    #[inline(never)]
     pub(crate) fn try_visit_captures<E, F>(&self, subject: &str, visitor: F) -> Result<usize, E>
     where
         F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
@@ -413,6 +414,7 @@ impl Regex {
         }
     }
 
+    #[inline(never)]
     fn try_visit_backtracking_captures<E, F>(
         &self,
         subject: &str,
@@ -2182,6 +2184,44 @@ mod tests {
         assert_eq!(matches.len(), 2);
         assert_eq!(matches[0].get(0).unwrap().as_str(subject), "user12");
         assert_eq!(matches[1].get(0).unwrap().as_str(subject), "user3");
+    }
+
+    #[test]
+    fn test_linear_capture_visitor_preserves_utf8_byte_offsets() {
+        let subject = "🙂 uživatel12 x uživatel3";
+        let re = Regex::new("uživatel[0-9]+", RegexFlags::default()).unwrap();
+
+        assert!(linear::is_supported(&re.ast));
+        let matches = re.captures_iter(subject);
+        let offsets = matches
+            .iter()
+            .map(|captures| {
+                let matched = captures.get(0).unwrap();
+                (matched.start, matched.end, matched.as_str(subject))
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(offsets, vec![(5, 16, "uživatel12"), (19, 29, "uživatel3")]);
+    }
+
+    #[test]
+    fn test_linear_capture_visitor_matches_prefix_beyond_ascii_plan_limit() {
+        let prefix = "a".repeat(33);
+        let pattern = format!("{prefix}[0-9]+");
+        let subject = format!("x{prefix}12 y{prefix}3");
+        let re = Regex::new(&pattern, RegexFlags::default()).unwrap();
+
+        assert!(linear::is_supported(&re.ast));
+        let matches = re.captures_iter(&subject);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(
+            matches[0].get(0).unwrap().as_str(&subject),
+            format!("{prefix}12")
+        );
+        assert_eq!(
+            matches[1].get(0).unwrap().as_str(&subject),
+            format!("{prefix}3")
+        );
     }
 
     #[test]

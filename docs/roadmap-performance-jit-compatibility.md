@@ -6352,6 +6352,53 @@ regex E2E tests under both configurations, plus all 70 hot-tier tests.
 All-feature library matrices pass 237 tests on ARM64 and 262 on x86-64;
 formatting and all-feature/all-target compilation pass on both hosts.
 
+### ASCII byte linear regex checkpoint
+
+The next profile left subject-to-`char` materialization as the avoidable cost
+inside the capture-free linear matcher. An admitted ASCII subject can now use
+its bytes directly: every character index is already the exact capture byte
+offset, group zero is one stack slot, and no `Vec<char>` or UTF-8 offset table
+is built (2026-08-08).
+
+The byte executor remains deliberately bounded. One stack-resident plan holds
+at most 32 case-sensitive ASCII prefix bytes and an optional terminal
+quantifier. A second plan handles a root terminal character-class quantifier,
+choosing that class shape once instead of interpreting the AST again for every
+candidate byte. Case-insensitive patterns, non-ASCII subjects, longer prefixes
+and all other shapes return to the unchanged character executor. Planning adds
+no field to `Regex` and allocates no heap storage.
+
+The dispatcher, byte scan, character scan and canonical backtracking scan have
+separate non-inlined boundaries. This was necessary because fat LTO otherwise
+moved the existing character loop enough to regress no-prefix controls by up
+to 27% on ARM64. The accepted layout keeps both ordinary `preg_match` controls
+inside 0.62% on ARM64 and improves them by more than 13% on x86-64. The grouped
+fallback is +1.02%/+1.33%; its x86 `fn_preg_match_all` symbol remains exactly
+the baseline size (`0xa52` bytes), so the residual difference is instruction
+placement rather than a changed matching algorithm.
+
+Alternating same-host A/B runs compare exact commit `2680bb0` with this source.
+Targets and ordinary controls use 1,003 measured pairs after fifty warmups;
+grouped fallback uses 2,003 pairs after one hundred warmups. x86-64 remains
+pinned to CPU 2:
+
+| Workload | ARM64 linear chars | ARM64 ASCII bytes | Delta | x86-64 linear chars | x86-64 ASCII bytes | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match count-only `user[0-9]+` | 0.177 ms | 0.080 ms | -54.78% | 0.260 ms | 0.059 ms | -77.43% |
+| 5,000-match count-only `[0-9]+` | 0.280 ms | 0.115 ms | -58.94% | 0.300 ms | 0.097 ms | -67.70% |
+| 5,000-match `preg_replace_callback` | 0.850 ms | 0.717 ms | -15.65% | 0.687 ms | 0.513 ms | -25.42% |
+| UTF-8 `uživatel[0-9]+` control | 0.322 ms | 0.320 ms | -0.59% | 0.553 ms | 0.520 ms | -5.95% |
+| Grouped/named `preg_match_all` fallback | 3.527 ms | 3.563 ms | +1.02% | 2.606 ms | 2.640 ms | +1.33% |
+| 20,000 cached `preg_match` calls without groups | 7.693 ms | 7.737 ms | +0.57% | 7.907 ms | 6.829 ms | -13.64% |
+| 20,000 failed matches with an unused group | 7.386 ms | 7.425 ms | +0.53% | 7.636 ms | 6.547 ms | -14.27% |
+
+Tests cover UTF-8 byte offsets, the bounded-prefix fallback and direct planner
+admission for fixed prefixes and terminal classes. Both hosts pass 167
+default-feature, 160 no-default-feature and 35 regex E2E tests under both
+configurations, plus all 70 hot-tier tests. All-feature library matrices pass
+240 tests on ARM64 and 265 on x86-64; formatting and all-feature/all-target
+compilation pass on both hosts.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

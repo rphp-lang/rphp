@@ -8,6 +8,8 @@ use super::{
     match_class_item, match_shorthand, subject_chars,
 };
 
+mod ascii;
+
 /// Prove a shape that never needs continuation backtracking or capture state.
 /// A terminal quantifier is safe because no later atom can ask it to give
 /// characters back; every preceding atom has exactly one outcome.
@@ -24,15 +26,31 @@ pub(super) fn is_supported(node: &Node) -> bool {
     }
 }
 
-/// Scan non-overlapping matches with one reusable group-zero slot. Keeping the
-/// generic visitor boundary out of `regex.rs` isolates this monomorphized loop
-/// from the canonical matcher codegen unit.
+/// Select the byte executor only for a proven fixed-prefix or terminal-class
+/// shape. Keeping this dispatch outside both scan loops leaves their
+/// machine-code layout independent.
 #[inline(never)]
 pub(super) fn try_visit_captures<E, F>(
     regex: &Regex,
     subject: &str,
     mut visitor: F,
 ) -> Result<usize, E>
+where
+    F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
+{
+    if subject.is_ascii()
+        && let Some(count) = ascii::try_visit_captures(regex, subject, &mut visitor)?
+    {
+        return Ok(count);
+    }
+    try_visit_char_captures(regex, subject, visitor)
+}
+
+/// Scan non-overlapping matches with one reusable group-zero slot. Keeping the
+/// generic visitor boundary out of `regex.rs` isolates this monomorphized loop
+/// from the canonical matcher codegen unit.
+#[inline(never)]
+fn try_visit_char_captures<E, F>(regex: &Regex, subject: &str, mut visitor: F) -> Result<usize, E>
 where
     F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
 {
