@@ -155,6 +155,38 @@ echo $a + $b;
     );
 }
 
+#[test]
+fn test_internal_return_slot_survives_reused_stack_bytes() {
+    // The first nested call leaves VM headers in stack storage subsequently
+    // reused as TMPs by the staged function. Internal handlers must treat an
+    // unmarked result TMP as uninitialized instead of dropping its stale bytes.
+    // Empty echo statements keep the callbacks on the canonical call path.
+    assert_eq!(
+        run_php(
+            "<?php
+function reuse_keep($value) { echo ''; return $value & 1; }
+function reuse_map($value) { echo ''; return $value * 3 + 1; }
+function reuse_sum($carry, $value) { echo ''; return $carry + $value; }
+function reuse_nested($values) {
+    return array_reduce(
+        array_map('reuse_map', array_filter($values, 'reuse_keep')),
+        'reuse_sum',
+        0
+    );
+}
+function reuse_staged($values) {
+    $filtered = array_filter($values, 'reuse_keep');
+    $mapped = array_map('reuse_map', $filtered);
+    return array_reduce($mapped, 'reuse_sum', 0);
+}
+echo reuse_nested([0, 1, 2, 3, 4, 5]) . ':';
+echo reuse_staged([0, 1, 2, 3, 4, 5]);
+"
+        ),
+        "30:30"
+    );
+}
+
 // === Deep recursion with mixed types ===
 
 #[test]

@@ -20,9 +20,9 @@ use super::function::{
 };
 use super::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
-    CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, Instruction, KnownScalarType,
-    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
+    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, Instruction,
+    KnownScalarType, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
 use super::quick::{
@@ -453,7 +453,9 @@ fn globals_set(globals: &mut HashMap<String, Value>, key: &str, val: Value) {
 // frame_tmp_set:         Write to frame TMP slot. Per-slot drop via bitmap. (hot path)
 // frame_tmp_set_long:    Write Long directly to TMP. No Value construction. (hot path)
 // frame_tmp_set_bool:    Write Bool directly to TMP. No Value construction. (hot path)
-// mark_caller_heap_return: Propagate heap flag to caller frame.
+// frame_return_set:      Write a callee result into its caller's tracked TMP.
+// frame_tmp_prepare_external_write / finish_external_write:
+//                        Bracket internal handlers that write through raw pointers.
 
 /// Compute absolute slot index from frame pointer and slot pointer.
 #[inline(always)]
@@ -555,6 +557,113 @@ unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) 
         bitmap_drop_scalar(frame, ptr);
     }
     Value::write_bool(ptr, v);
+}
+
+/// Write a synchronous callee result into its caller-owned return slot.
+///
+/// DoFcall results are compiler-owned TMP/VAR slots.  Routing the overwrite
+/// through the caller bitmap is important because stack reuse does not
+/// initialize small-frame TMP bytes: an unset bitmap bit means "no live heap
+/// value", even when the stale bytes are not a valid `Value`.
+#[inline(always)]
+pub(super) unsafe fn frame_return_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+    let caller = (*frame).prev_execute_data;
+    if caller.is_null() {
+        slot_set(ptr, val);
+    } else {
+        frame_tmp_set(caller, ptr, val);
+    }
+}
+
+/// Copy a proven scalar return without constructing or cloning a `Value`.
+#[inline(always)]
+pub(super) unsafe fn frame_return_copy_scalar(
+    frame: *mut ExecuteData,
+    ptr: *mut Value,
+    source: *const Value,
+) {
+    let caller = (*frame).prev_execute_data;
+    if caller.is_null() {
+        slot_set(ptr, (*source).clone());
+    } else {
+        if (*caller).has_heap_slots {
+            bitmap_drop_scalar(caller, ptr);
+        }
+        Value::raw_copy(source, ptr);
+    }
+}
+
+/// Write a proven Long return directly into the caller slot.
+#[inline(always)]
+pub(super) unsafe fn frame_return_set_long(frame: *mut ExecuteData, ptr: *mut Value, value: i64) {
+    let caller = (*frame).prev_execute_data;
+    if caller.is_null() {
+        slot_set(ptr, Value::long(value));
+    } else {
+        if (*caller).has_heap_slots {
+            bitmap_drop_scalar(caller, ptr);
+        }
+        Value::write_long(ptr, value);
+    }
+}
+
+/// Prepare a caller TMP for an internal handler that writes with `ptr.write`.
+#[inline(always)]
+unsafe fn frame_tmp_prepare_external_write(frame: *mut ExecuteData, ptr: *mut Value) {
+    if (*frame).has_heap_slots {
+        bitmap_drop_scalar(frame, ptr);
+    }
+    ptr.write(Value::undef());
+}
+
+/// Record a heap-backed value written directly by an internal handler.
+#[inline(always)]
+unsafe fn frame_tmp_finish_external_write(frame: *mut ExecuteData, ptr: *mut Value) {
+    if (*ptr).needs_cleanup() {
+        (*frame).has_heap_slots = true;
+        bitmap_mark_heap(frame, ptr);
+    }
+}
+
+/// Prepare any DoFcall result operand for a raw internal-handler write.
+#[inline(always)]
+unsafe fn frame_result_prepare_external_write(
+    frame: *mut ExecuteData,
+    ptr: *mut Value,
+    result_type: OpType,
+) {
+    if matches!(result_type, OpType::Tmp | OpType::Var) {
+        frame_tmp_prepare_external_write(frame, ptr);
+    } else {
+        slot_set(ptr, Value::undef());
+    }
+}
+
+/// Finish tracking a raw internal-handler write to a caller-owned result.
+#[inline(always)]
+unsafe fn frame_result_finish_external_write(
+    frame: *mut ExecuteData,
+    ptr: *mut Value,
+    result_type: OpType,
+) {
+    if matches!(result_type, OpType::Tmp | OpType::Var) {
+        frame_tmp_finish_external_write(frame, ptr);
+    }
+}
+
+/// Write a fully materialized DoFcall result through the appropriate owner.
+#[inline(always)]
+unsafe fn frame_result_set(
+    frame: *mut ExecuteData,
+    ptr: *mut Value,
+    result_type: OpType,
+    value: Value,
+) {
+    if matches!(result_type, OpType::Tmp | OpType::Var) {
+        frame_tmp_set(frame, ptr, value);
+    } else {
+        slot_set(ptr, value);
+    }
 }
 
 /// Overwrite a frame slot (CV or TMP). Per-slot drop via bitmap when heap present.
@@ -4704,37 +4813,6 @@ fn execute_binary_long_recursion(
     }
 }
 
-/// Propagate heap-backed return values into the caller's cleanup bookkeeping.
-///
-/// SAFETY: `return_value` must point into the caller's frame slot area.
-/// This is guaranteed today because the compiler always emits DoFcall with
-/// result_type = Tmp/Var. If the optimizer ever writes return values into
-/// a dereferenced CV reference (outside frame), the bitmap update would be
-/// unsound. The debug_assert below guards against this.
-#[inline(always)]
-unsafe fn mark_caller_heap_return(frame: *mut ExecuteData, val: &Value) {
-    if val.needs_cleanup() {
-        let prev = (*frame).prev_execute_data;
-        if !prev.is_null() {
-            (*prev).has_heap_slots = true;
-            let return_ptr = (*frame).return_value;
-            if !return_ptr.is_null() {
-                let total = (*prev).num_cvs + (*prev).num_temps;
-                if total <= 64 {
-                    let idx = slot_idx(prev, return_ptr);
-                    debug_assert!(
-                        (idx as u32) < total,
-                        "mark_caller_heap_return: return_value slot idx {} out of bounds (total={})",
-                        idx,
-                        total
-                    );
-                    (*prev).heap_bitmap |= 1u64 << idx;
-                }
-            }
-        }
-    }
-}
-
 /// Check if an exception value matches a catch clause's type list.
 /// PHP 8 semantics: only Throwable objects can be thrown.
 /// - `catch (Exception $e)` matches Exception and subclasses only
@@ -6249,7 +6327,14 @@ fn execute_full_call<'a>(
                 let mut gen_obj = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
                 gen_obj.generator = Some(gen_ref);
                 if !return_value_ptr.is_null() {
-                    unsafe { slot_set(return_value_ptr, Value::object(gen_obj)) };
+                    unsafe {
+                        frame_result_set(
+                            frame,
+                            return_value_ptr,
+                            opline.result_type,
+                            Value::object(gen_obj),
+                        )
+                    };
                 }
                 unsafe { cleanup_frame_slots(call) };
                 eg.vm_stack.pop_call_frame(call);
@@ -6278,9 +6363,16 @@ fn execute_full_call<'a>(
         FunctionType::Internal => {
             let internal = unsafe { &*((*call).func as *const super::function::InternalFunction) };
             if !return_value_ptr.is_null() {
-                unsafe { std::ptr::drop_in_place(return_value_ptr) };
+                unsafe {
+                    frame_result_prepare_external_write(frame, return_value_ptr, opline.result_type)
+                };
             }
             let handler_result = (internal.handler)(call, return_value_ptr, eg);
+            if !return_value_ptr.is_null() {
+                unsafe {
+                    frame_result_finish_external_write(frame, return_value_ptr, opline.result_type)
+                };
+            }
             unsafe { cleanup_frame_slots(call) };
             eg.vm_stack.pop_call_frame(call);
             if let Some(exc) = eg.exception.take() {

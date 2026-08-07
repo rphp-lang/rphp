@@ -238,9 +238,171 @@ pub(crate) fn detect_staged_callback_array_pipeline_span(
     })
 }
 
+/// Exact `array_filter` -> `array_map` -> `array_reduce` composition. Nested
+/// syntax has no destinations; staged syntax may discard two proven-dead CVs.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct FilterMapCallbackArrayPipelineSpan {
+    pub(crate) pipeline: CallbackArrayPipelineSpan,
+    pub(crate) discarded_cvs: Option<(u16, u16)>,
+}
+
+fn detect_nested_filter_map_callback_array_pipeline_span(
+    op_array: &OpArray,
+    reduce_ip: usize,
+) -> Option<FilterMapCallbackArrayPipelineSpan> {
+    let reduce = *op_array.instructions.get(reduce_ip)?;
+    let map = *op_array.instructions.get(reduce_ip + 1)?;
+    let map_callback = *op_array.instructions.get(reduce_ip + 2)?;
+    let filter = *op_array.instructions.get(reduce_ip + 3)?;
+    let source = *op_array.instructions.get(reduce_ip + 4)?;
+    let filter_callback = *op_array.instructions.get(reduce_ip + 5)?;
+    let filter_do = *op_array.instructions.get(reduce_ip + 6)?;
+    let filter_send = *op_array.instructions.get(reduce_ip + 7)?;
+    let map_do = *op_array.instructions.get(reduce_ip + 8)?;
+    let map_send = *op_array.instructions.get(reduce_ip + 9)?;
+    let reduce_callback = *op_array.instructions.get(reduce_ip + 10)?;
+    let initial = *op_array.instructions.get(reduce_ip + 11)?;
+    let reduce_do = *op_array.instructions.get(reduce_ip + 12)?;
+
+    if !is_named_call(op_array, reduce, "array_reduce", 3)
+        || !is_named_call(op_array, map, "array_map", 2)
+        || !is_string_literal_send(op_array, map_callback, 0)
+        || !is_named_call(op_array, filter, "array_filter", 2)
+        || !is_positional_send(source, 0)
+        || !matches!(source.op1_type, OpType::Cv | OpType::Const)
+        || !is_string_literal_send(op_array, filter_callback, 1)
+        || filter_do.opcode != OpCode::DoFcall
+        || !matches!(filter_do.result_type, OpType::Tmp | OpType::Var)
+        || !is_positional_send(filter_send, 1)
+        || filter_send.op1_type != filter_do.result_type
+        || filter_send.op1 != filter_do.result
+        || map_do.opcode != OpCode::DoFcall
+        || !matches!(map_do.result_type, OpType::Tmp | OpType::Var)
+        || !is_positional_send(map_send, 0)
+        || map_send.op1_type != map_do.result_type
+        || map_send.op1 != map_do.result
+        || !is_string_literal_send(op_array, reduce_callback, 1)
+        || !is_positional_send(initial, 2)
+        || initial.op1_type != OpType::Const
+        || op_array
+            .literals
+            .get(initial.op1 as usize)
+            .is_none_or(|value| value.value_type() != crate::value::ValueType::Long)
+        || reduce_do.opcode != OpCode::DoFcall
+        || !matches!(
+            reduce_do.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
+    {
+        return None;
+    }
+
+    Some(FilterMapCallbackArrayPipelineSpan {
+        pipeline: CallbackArrayPipelineSpan {
+            map_callback,
+            source,
+            filter_callback,
+            reduce_callback,
+            initial,
+            do_fcall_ip: reduce_ip + 12,
+        },
+        discarded_cvs: None,
+    })
+}
+
+fn detect_staged_filter_map_callback_array_pipeline_span(
+    op_array: &OpArray,
+    filter_ip: usize,
+) -> Option<FilterMapCallbackArrayPipelineSpan> {
+    if op_array.name == "<main>" {
+        return None;
+    }
+
+    let filter = *op_array.instructions.get(filter_ip)?;
+    let source = *op_array.instructions.get(filter_ip + 1)?;
+    let filter_callback = *op_array.instructions.get(filter_ip + 2)?;
+    let filter_do = *op_array.instructions.get(filter_ip + 3)?;
+    let filter_assign = *op_array.instructions.get(filter_ip + 4)?;
+    let map = *op_array.instructions.get(filter_ip + 5)?;
+    let map_callback = *op_array.instructions.get(filter_ip + 6)?;
+    let map_source = *op_array.instructions.get(filter_ip + 7)?;
+    let map_do = *op_array.instructions.get(filter_ip + 8)?;
+    let map_assign = *op_array.instructions.get(filter_ip + 9)?;
+    let reduce = *op_array.instructions.get(filter_ip + 10)?;
+    let reduce_source = *op_array.instructions.get(filter_ip + 11)?;
+    let reduce_callback = *op_array.instructions.get(filter_ip + 12)?;
+    let initial = *op_array.instructions.get(filter_ip + 13)?;
+    let reduce_do = *op_array.instructions.get(filter_ip + 14)?;
+
+    if !is_named_call(op_array, filter, "array_filter", 2)
+        || !is_positional_send(source, 0)
+        || !matches!(source.op1_type, OpType::Cv | OpType::Const)
+        || !is_string_literal_send(op_array, filter_callback, 1)
+        || filter_do.opcode != OpCode::DoFcall
+        || !matches!(filter_do.result_type, OpType::Tmp | OpType::Var)
+        || !is_named_call(op_array, map, "array_map", 2)
+        || !is_string_literal_send(op_array, map_callback, 0)
+        || !is_positional_send(map_source, 1)
+        || map_source.op1_type != OpType::Cv
+        || map_do.opcode != OpCode::DoFcall
+        || !matches!(map_do.result_type, OpType::Tmp | OpType::Var)
+        || !is_named_call(op_array, reduce, "array_reduce", 3)
+        || !is_positional_send(reduce_source, 0)
+        || reduce_source.op1_type != OpType::Cv
+        || !is_string_literal_send(op_array, reduce_callback, 1)
+        || !is_positional_send(initial, 2)
+        || initial.op1_type != OpType::Const
+        || op_array
+            .literals
+            .get(initial.op1 as usize)
+            .is_none_or(|value| value.value_type() != crate::value::ValueType::Long)
+        || reduce_do.opcode != OpCode::DoFcall
+        || !matches!(
+            reduce_do.result_type,
+            OpType::Tmp | OpType::Var | OpType::Unused
+        )
+    {
+        return None;
+    }
+
+    let filtered_cv = assignment_destination(filter_assign, filter_do)?;
+    let mapped_cv = assignment_destination(map_assign, map_do)?;
+    if filtered_cv == mapped_cv
+        || map_source.op1 != filtered_cv
+        || reduce_source.op1 != mapped_cv
+        || !has_only_cv_mentions(op_array, filtered_cv, [filter_ip + 4, filter_ip + 7])
+        || !has_only_cv_mentions(op_array, mapped_cv, [filter_ip + 9, filter_ip + 11])
+    {
+        return None;
+    }
+
+    Some(FilterMapCallbackArrayPipelineSpan {
+        pipeline: CallbackArrayPipelineSpan {
+            map_callback,
+            source,
+            filter_callback,
+            reduce_callback,
+            initial,
+            do_fcall_ip: filter_ip + 14,
+        },
+        discarded_cvs: Some((filtered_cv, mapped_cv)),
+    })
+}
+
+pub(crate) fn detect_filter_map_callback_array_pipeline_span(
+    op_array: &OpArray,
+    entry_ip: usize,
+) -> Option<FilterMapCallbackArrayPipelineSpan> {
+    detect_nested_filter_map_callback_array_pipeline_span(op_array, entry_ip)
+        .or_else(|| detect_staged_filter_map_callback_array_pipeline_span(op_array, entry_ip))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{detect_callback_array_pipeline_span, detect_staged_callback_array_pipeline_span};
+    use super::{
+        detect_callback_array_pipeline_span, detect_filter_map_callback_array_pipeline_span,
+        detect_staged_callback_array_pipeline_span,
+    };
     use crate::compiler::compile::Compiler;
     use crate::lexer::Lexer;
     use crate::parser::Parser;
@@ -344,6 +506,73 @@ function pipeline($values) {
                 .enumerate()
                 .filter(|(_, instruction)| instruction.opcode == OpCode::InitFcall)
                 .all(|(ip, _)| detect_staged_callback_array_pipeline_span(&staged, ip).is_none())
+        );
+    }
+
+    #[test]
+    fn detects_nested_and_dead_staged_filter_map_pipeline() {
+        let nested = compile(
+            r#"<?php
+$result = array_reduce(
+    array_map("mapValue", array_filter($values, "keepValue")),
+    "sumValue",
+    0
+);
+"#,
+        );
+        let nested_ip = nested
+            .instructions
+            .iter()
+            .position(|instruction| instruction.opcode == OpCode::InitFcall)
+            .unwrap();
+        let nested_span =
+            detect_filter_map_callback_array_pipeline_span(&nested, nested_ip).unwrap();
+        assert!(nested_span.discarded_cvs.is_none());
+        assert_eq!(nested_span.pipeline.do_fcall_ip, nested_ip + 12);
+
+        let staged = compile_first_function(
+            r#"<?php
+function pipeline($values) {
+    $filtered = array_filter($values, "keepValue");
+    $mapped = array_map("mapValue", $filtered);
+    return array_reduce($mapped, "sumValue", 0);
+}
+"#,
+        );
+        let staged_ip = staged
+            .instructions
+            .iter()
+            .position(|instruction| instruction.opcode == OpCode::InitFcall)
+            .unwrap();
+        let staged_span =
+            detect_filter_map_callback_array_pipeline_span(&staged, staged_ip).unwrap();
+        assert!(staged_span.discarded_cvs.is_some());
+        assert_eq!(staged_span.pipeline.do_fcall_ip, staged_ip + 14);
+    }
+
+    #[test]
+    fn rejects_escaping_filter_map_stages() {
+        let op_array = compile_first_function(
+            r#"<?php
+function pipeline($values) {
+    $filtered = array_filter($values, "keepValue");
+    $mapped = array_map("mapValue", $filtered);
+    $result = array_reduce($mapped, "sumValue", 0);
+    echo count($filtered) . count($mapped);
+    return $result;
+}
+"#,
+        );
+        assert!(
+            op_array
+                .instructions
+                .iter()
+                .enumerate()
+                .filter(|(_, instruction)| instruction.opcode == OpCode::InitFcall)
+                .all(
+                    |(ip, _)| detect_filter_map_callback_array_pipeline_span(&op_array, ip)
+                        .is_none()
+                )
         );
     }
 }

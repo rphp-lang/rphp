@@ -285,11 +285,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         {
                             let return_target = unsafe { (*frame).return_value };
                             if !return_target.is_null() {
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
-                                    unsafe { std::ptr::drop_in_place(return_target) };
-                                }
-                                unsafe { Value::write_long(return_target, sum) };
+                                unsafe { frame_return_set_long(frame, return_target, sum) };
                             }
                             stats::inc_return_fast();
                             let prev = unsafe { (*frame).prev_execute_data };
@@ -1222,6 +1218,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
                     continue 'vm;
                 }
+                if opline._pad & CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE != 0
+                    && let Some((result, do_fcall_ptr)) = unsafe {
+                        try_execute_filter_map_callback_array_pipeline(
+                            eg,
+                            frame,
+                            op_array,
+                            opline_ptr,
+                        )
+                    }?
+                {
+                    unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+                    continue 'vm;
+                }
 
                 // Inline cache: if we resolved this function before, reuse the pointer
                 let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
@@ -1758,9 +1767,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             &*((*call).func as *const super::function::InternalFunction)
                         };
                         if !return_value_ptr.is_null() {
-                            unsafe { std::ptr::drop_in_place(return_value_ptr) };
+                            unsafe {
+                                frame_result_prepare_external_write(
+                                    frame,
+                                    return_value_ptr,
+                                    opline.result_type,
+                                )
+                            };
                         }
                         let handler_result = (internal.handler)(call, return_value_ptr, eg);
+                        if !return_value_ptr.is_null() {
+                            unsafe {
+                                frame_result_finish_external_write(
+                                    frame,
+                                    return_value_ptr,
+                                    opline.result_type,
+                                )
+                            };
+                        }
                         unsafe { cleanup_frame_slots(call) };
                         eg.vm_stack.pop_call_frame(call);
 
@@ -2836,17 +2860,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 } else {
                                     retval_ptr
                                 };
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
-                                    unsafe { std::ptr::drop_in_place(return_target) };
-                                }
-                                unsafe { Value::raw_copy(src, return_target) };
+                                unsafe { frame_return_copy_scalar(frame, return_target, src) };
                             } else {
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
-                                unsafe { mark_caller_heap_return(frame, retval) };
-                                unsafe { slot_set(return_target, retval.clone()) };
+                                unsafe { frame_return_set(frame, return_target, retval.clone()) };
                             }
                         }
                     }
@@ -2937,17 +2956,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     retval_ptr
                                 };
                                 // Caller's target: drop old only if caller has heap slots.
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
-                                    unsafe { std::ptr::drop_in_place(return_target) };
-                                }
-                                unsafe { Value::raw_copy(src, return_target) };
+                                unsafe { frame_return_copy_scalar(frame, return_target, src) };
                             } else {
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
-                                unsafe { mark_caller_heap_return(frame, retval) };
-                                unsafe { slot_set(return_target, retval.clone()) };
+                                unsafe { frame_return_set(frame, return_target, retval.clone()) };
                             }
                         }
                     }
@@ -3090,8 +3104,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         let return_target = unsafe { (*frame).return_value };
                         if !return_target.is_null() {
-                            unsafe { mark_caller_heap_return(frame, retval) };
-                            unsafe { slot_set(return_target, retval.clone()) };
+                            unsafe { frame_return_set(frame, return_target, retval.clone()) };
                         }
                     }
                     // Jump to finally; after finally ends, the pending return
@@ -3145,8 +3158,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     };
                     let return_target = unsafe { (*frame).return_value };
                     if !return_target.is_null() {
-                        unsafe { mark_caller_heap_return(frame, retval) };
-                        unsafe { slot_set(return_target, retval.clone()) };
+                        unsafe { frame_return_set(frame, return_target, retval.clone()) };
                     }
                 }
 

@@ -236,3 +236,132 @@ unsafe fn try_execute_staged_callback_array_pipeline(
         caller_op_array.instructions.as_ptr().add(span.do_fcall_ip),
     )))
 }
+
+/// Execute the opposite pure stage order without changing either established
+/// map/filter entry. This is intentionally a separate specialization until a
+/// target-neutral callback pipeline IR can preserve the same tight loop.
+#[inline(never)]
+unsafe fn try_execute_filter_map_callback_array_pipeline(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    pipeline_ptr: *const Instruction,
+) -> Result<Option<(i64, *const Instruction)>, VmError> {
+    let pipeline = &*pipeline_ptr;
+    if pipeline.opcode != OpCode::InitFcall
+        || pipeline._pad & CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE == 0
+    {
+        return Ok(None);
+    }
+
+    let pipeline_ip = pipeline_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    let Some(detected) =
+        crate::vm::callback_pipeline::detect_filter_map_callback_array_pipeline_span(
+            caller_op_array,
+            pipeline_ip,
+        )
+    else {
+        return Ok(None);
+    };
+
+    if let Some((filtered_cv, mapped_cv)) = detected.discarded_cvs {
+        let filtered = (*caller).cv(filtered_cv as u32);
+        let mapped = (*caller).cv(mapped_cv as u32);
+        if filtered.value_type() != ValueType::Undef
+            || filtered.is_reference()
+            || mapped.value_type() != ValueType::Undef
+            || mapped.is_reference()
+        {
+            return Ok(None);
+        }
+    }
+    let span = detected.pipeline;
+
+    let callback_name = |send: Instruction| {
+        caller_op_array
+            .literals
+            .get(send.op1 as usize)
+            .and_then(Value::as_str)
+    };
+    let Some(filter_func) = callback_name(span.filter_callback)
+        .and_then(|name| eg.find_function(name))
+    else {
+        return Ok(None);
+    };
+    let Some(map_func) = callback_name(span.map_callback).and_then(|name| eg.find_function(name))
+    else {
+        return Ok(None);
+    };
+    let Some(reduce_func) = callback_name(span.reduce_callback)
+        .and_then(|name| eg.find_function(name))
+    else {
+        return Ok(None);
+    };
+
+    let Some(filter_callback) = prepare_scalar_long_callback(filter_func, 1) else {
+        return Ok(None);
+    };
+    let Some(map_callback) = prepare_scalar_long_callback(map_func, 1) else {
+        return Ok(None);
+    };
+    let Some(reduce_callback) = prepare_scalar_long_callback(reduce_func, 2) else {
+        return Ok(None);
+    };
+
+    let source = &*(*caller).get_op_ptr(
+        span.source.op1 as u32,
+        span.source.op1_type,
+        caller_op_array,
+    );
+    if source.is_reference() {
+        return Ok(None);
+    }
+    let Some(source) = source.as_array() else {
+        return Ok(None);
+    };
+    let initial = &*(*caller).get_op_ptr(
+        span.initial.op1 as u32,
+        span.initial.op1_type,
+        caller_op_array,
+    );
+    if initial.value_type() != ValueType::Long || initial.is_reference() {
+        return Ok(None);
+    }
+
+    let mut carry = initial.raw_long();
+    let mut map_calls = 0u64;
+    let mut reduce_calls = 0u64;
+    for (index, value) in source.values().enumerate() {
+        if index & 255 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
+            handle_interrupt(eg)?;
+        }
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return Ok(None);
+        }
+        let keep = match filter_callback.evaluate_longs(&[value.raw_long()]) {
+            Some(value) => value != 0,
+            None => return Ok(None),
+        };
+        if keep {
+            let mapped = match map_callback.evaluate_longs(&[value.raw_long()]) {
+                Some(value) => value,
+                None => return Ok(None),
+            };
+            carry = match reduce_callback.evaluate_longs(&[carry, mapped]) {
+                Some(value) => value,
+                None => return Ok(None),
+            };
+            map_calls += 1;
+            reduce_calls += 1;
+        }
+    }
+
+    let member_count = source.len() as u64;
+    filter_callback.record_calls(member_count);
+    map_callback.record_calls(map_calls);
+    reduce_callback.record_calls(reduce_calls);
+    Ok(Some((
+        carry,
+        caller_op_array.instructions.as_ptr().add(span.do_fcall_ip),
+    )))
+}

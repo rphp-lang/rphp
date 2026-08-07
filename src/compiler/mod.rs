@@ -369,6 +369,16 @@ impl OpArray {
                     crate::vm::instruction::CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE;
             }
         }
+        for init_ip in 0..self.instructions.len() {
+            if crate::vm::callback_pipeline::detect_filter_map_callback_array_pipeline_span(
+                self, init_ip,
+            )
+            .is_some()
+            {
+                self.instructions[init_ip]._pad |=
+                    crate::vm::instruction::CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE;
+            }
+        }
 
         let mut candidates = Vec::new();
         let mut closed_region_ip = vec![false; self.instructions.len()];

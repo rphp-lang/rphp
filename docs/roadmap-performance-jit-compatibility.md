@@ -5733,6 +5733,74 @@ tests, 40 callback-array tests under both feature configurations, 54 callable
 tests, 118 quick-loop tests, 100 ARM64 and 32 x86-64 backend JIT tests, and all
 five shared native indexed-array tests.
 
+### Filter-first scalar callback-pipeline fusion checkpoint
+
+The opposite canonical stage order is now covered as a separate specialization
+(2026-08-07):
+
+```php
+$filtered = array_filter($values, "keepValue");
+$mapped = array_map("mapValue", $filtered);
+$sum = array_reduce($mapped, "sumValue", 0);
+```
+
+Both this dead-staged form and the equivalent nested expression are recognized.
+The staged detector retains the previous conservative contract: it runs only
+inside a function, requires distinct intermediate CVs, proves that each CV is
+mentioned only by its defining assignment and immediate consumer, and checks
+at runtime that both raw destinations are still undefined and are not
+references. Escaping arrays, initialized parameters, by-reference aliases,
+main-scope variables and non-consecutive calls therefore materialize through
+the canonical bytecode.
+
+The streaming evaluator preserves the observable stage order. It tests every
+source Long with the filter plan, maps only retained members, and reduces those
+mapped values. Exact callback identity, purity, arity, non-reference Long
+members, checked arithmetic and initial-carry guards remain transactional. A
+Double or overflow encountered after earlier pure evaluations publishes no
+state and replays the untouched calls; impure callbacks never enter fusion and
+retain complete filter-then-map-then-reduce side-effect order. Logical callback
+counters are published only after successful completion.
+
+This work also exposed a baseline VM-stack reuse bug independent of fusion.
+Internal handlers wrote results through raw pointers, while both DoFcall paths
+first dropped the destination even when its TMP bitmap bit was clear. Reused
+stack bytes could contain a call-frame header rather than a valid `Value`.
+Return writes now use one caller-frame slot API, raw internal-handler writes are
+bracketed by bitmap-aware prepare/finish helpers, and frames larger than the
+64-slot bitmap initialize their TMP area. The same API replaces blind scalar
+return drops in baseline, hot and planned-block execution. A canonical-path
+regression test deliberately rejects fusion before reproducing the two-frame
+reuse shape.
+
+Alternating same-host A/B runs compare exact commit `1c91b95` with this source
+under identical `--release --features jit-prototype` builds. Each workload uses
+103 measured pairs after five warmups. Values below are medians of the
+PHP-internal timed region over 500,000 source values:
+
+| Workload | ARM64 before | ARM64 filter-first | Delta | x86-64 before | x86-64 filter-first | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Filter/map/reduce target | 10.882 ms | 4.107 ms | -62.26% | 19.972 ms | 5.045 ms | -74.74% |
+| Existing nested map/filter control | 4.927 ms | 5.061 ms | +2.72% | 5.977 ms | 5.957 ms | -0.34% |
+| Existing staged map/filter control | 4.951 ms | 4.992 ms | +0.83% | 6.350 ms | 6.373 ms | +0.37% |
+| Call-heavy frame control (5M iterations) | 97.331 ms | 97.632 ms | +0.31% | 112.763 ms | 113.200 ms | +0.39% |
+
+All outputs remain exact. The small ARM64 nested movement has no executed-path
+source change, is absent on x86-64 and is retained as a code-layout holdout;
+the other controls are neutral. The final matrix passes
+formatting, 221 ARM64 and 246 x86-64 all-feature library tests, 44 callback-array
+tests, 25 frame-cleanup tests, 54 callable tests, 118 quick-loop tests, 100
+ARM64 and 32 x86-64 backend JIT tests, and all five shared native indexed-array
+tests. Focused callback and frame-reuse tests also pass without default
+features. A full no-default run reaches the pre-existing Ackermann test-thread
+stack overflow; an archived exact `1c91b95` source reproduces the same failure.
+
+The next callback step should replace the three shape-specific evaluators with
+one small target-neutral collection pipeline program while retaining separate
+detectors and the measured tight loops. That shared representation is the
+prerequisite for adding a guarded `json_encode` sink without multiplying
+handwritten combinations.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

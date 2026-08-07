@@ -475,30 +475,7 @@ pub unsafe fn execute_macro(
 
                 let return_target = (*frame).return_value;
                 if !return_target.is_null() {
-                    let retval = &*retval_ptr;
-                    // For scalar values (common case), skip mark_caller_heap_return overhead
-                    if retval.needs_cleanup() {
-                        // Heap return — mark caller bitmap
-                        let prev = (*frame).prev_execute_data;
-                        if !prev.is_null() {
-                            (*prev).has_heap_slots = true;
-                            // bitmap update for caller's return target slot
-                            let prev_total = (*prev).num_cvs + (*prev).num_temps;
-                            if prev_total <= 64 {
-                                let prev_base = (prev as *mut Value).add(CALL_FRAME_SLOTS);
-                                let idx = return_target.offset_from(prev_base) as u32;
-                                if idx < prev_total {
-                                    (*prev).heap_bitmap |= 1u64 << idx;
-                                }
-                            }
-                        }
-                    }
-                    // Write return value — drop old if caller has heap slots
-                    let prev = (*frame).prev_execute_data;
-                    if !prev.is_null() && (*prev).has_heap_slots {
-                        std::ptr::drop_in_place(return_target);
-                    }
-                    return_target.write((*retval_ptr).clone());
+                    super::execute::frame_return_set(frame, return_target, (*retval_ptr).clone());
                 }
 
                 return MacroResult::Returned;

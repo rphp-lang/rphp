@@ -142,7 +142,9 @@ impl VmStack {
             });
         }
 
-        // Zero-init only CV slots beyond argument count. TMPs NOT zeroed.
+        // Zero-init CV slots beyond argument count. Small-frame TMPs are
+        // protected by the heap bitmap and may retain arbitrary stack bytes;
+        // large frames have no per-slot bitmap, so initialize their TMPs too.
         // Arg-storage slots (0..storage_num_args) are left uninitialized —
         // written by SendVal or hidden-value binding before DoFcall.
         // CVs beyond args are set to Undef (zeroed) so BindDefaultParam can check for Undef.
@@ -150,7 +152,13 @@ impl VmStack {
         let zero_end = effective_cvs;
         let zero_count = zero_end.saturating_sub(zero_start);
 
-        stats::inc_push_call_frame(zero_count, zero_count * size_of::<Value>());
+        let temp_zero_count = if effective_cvs + num_temps > 64 {
+            num_temps
+        } else {
+            0
+        };
+        let initialized_count = zero_count + temp_zero_count;
+        stats::inc_push_call_frame(initialized_count, initialized_count * size_of::<Value>());
 
         if zero_count > 0 {
             let cv_base = unsafe {
@@ -160,6 +168,13 @@ impl VmStack {
             // Zeroed CVs are NOT marked in init_bitmap. They contain Undef (safe to read)
             // but are not "passed arguments". Named arg duplicate detection uses is_init
             // to distinguish "argument was provided" from "slot has default Undef".
+        }
+
+        if temp_zero_count > 0 {
+            let tmp_base = unsafe {
+                (frame as *mut u8).add((CALL_FRAME_SLOTS + effective_cvs) * size_of::<Value>())
+            };
+            unsafe { std::ptr::write_bytes(tmp_base, 0, temp_zero_count * size_of::<Value>()) };
         }
 
         frame

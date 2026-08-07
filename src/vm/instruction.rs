@@ -28,6 +28,10 @@ pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 3;
 /// intermediate array CVs provably do not escape their immediate consumers.
 pub const CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 4;
 
+/// InitFcall flag: this begins an exact filter/map/reduce composition whose
+/// pure callbacks may run in canonical filter-then-map order while streaming.
+pub const CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 5;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that

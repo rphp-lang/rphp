@@ -320,6 +320,98 @@ echo gettype($undefined) . ":" . count($undefined) . ":" . $second;
 }
 
 #[test]
+fn test_filter_map_reduce_pipeline_preserves_nested_and_staged_results() {
+    let out = run_php(
+        r#"<?php
+function filterMapKeep($value) { return $value & 1; }
+function filterMapMap($value) { return $value * 3 + 1; }
+function filterMapSum($carry, $value) { return $carry + $value; }
+function nestedFilterMap($values) {
+    return array_reduce(
+        array_map("filterMapMap", array_filter($values, "filterMapKeep")),
+        "filterMapSum",
+        0
+    );
+}
+function stagedFilterMap($values) {
+    $filtered = array_filter($values, "filterMapKeep");
+    $mapped = array_map("filterMapMap", $filtered);
+    return array_reduce($mapped, "filterMapSum", 0);
+}
+echo nestedFilterMap([0, 1, 2, 3, 4, 5]) . ":";
+echo stagedFilterMap([0, 1, 2, 3, 4, 5]);
+"#,
+    );
+    assert_eq!(out, "30:30");
+}
+
+#[test]
+fn test_filter_map_pipeline_keeps_canonical_impure_order() {
+    let out = run_php(
+        r#"<?php
+function orderedFilterMapKeep($value) { echo "f" . $value; return $value & 1; }
+function orderedFilterMapMap($value) { echo "m" . $value; return $value * 3 + 1; }
+function orderedFilterMapSum($carry, $value) { echo "r" . $value; return $carry + $value; }
+$result = array_reduce(
+    array_map("orderedFilterMapMap", array_filter([0, 1, 2, 3, 4, 5], "orderedFilterMapKeep")),
+    "orderedFilterMapSum",
+    0
+);
+echo ":" . $result;
+"#,
+    );
+    assert_eq!(out, "f0f1f2f3f4f5m1m3m5r4r10r16:30");
+}
+
+#[test]
+fn test_filter_map_pipeline_replays_double_input_canonically() {
+    let out = run_php(
+        r#"<?php
+function doubleFilterMapKeep($value) { return 1; }
+function doubleFilterMapMap($value) { return $value + 1; }
+function doubleFilterMapSum($carry, $value) { return $carry + $value; }
+function doubleFilterMapPipeline($values) {
+    return array_reduce(
+        array_map("doubleFilterMapMap", array_filter($values, "doubleFilterMapKeep")),
+        "doubleFilterMapSum",
+        0
+    );
+}
+echo doubleFilterMapPipeline([1, 2]) . ":";
+$double = doubleFilterMapPipeline([1.5, 2.5]);
+echo gettype($double) . ":" . $double;
+"#,
+    );
+    assert_eq!(out, "5:double:6");
+}
+
+#[test]
+fn test_filter_map_staged_escape_and_reference_destination_materialize() {
+    let out = run_php(
+        r#"<?php
+function materializedFilterMapKeep($value) { return $value & 1; }
+function materializedFilterMapMap($value) { return $value * 3 + 1; }
+function materializedFilterMapSum($carry, $value) { return $carry + $value; }
+function escapingFilterMap($values) {
+    $filtered = array_filter($values, "materializedFilterMapKeep");
+    $mapped = array_map("materializedFilterMapMap", $filtered);
+    $sum = array_reduce($mapped, "materializedFilterMapSum", 0);
+    return count($filtered) . ":" . count($mapped) . ":" . $sum;
+}
+function referencedFilterMap($values, &$filtered) {
+    $filtered = array_filter($values, "materializedFilterMapKeep");
+    $mapped = array_map("materializedFilterMapMap", $filtered);
+    return array_reduce($mapped, "materializedFilterMapSum", 0);
+}
+echo escapingFilterMap([0, 1, 2, 3, 4, 5]) . "|";
+$sum = referencedFilterMap([0, 1, 2, 3, 4, 5], $external);
+echo gettype($external) . ":" . count($external) . ":" . $sum;
+"#,
+    );
+    assert_eq!(out, "3:3:30|array:3:30");
+}
+
+#[test]
 fn test_array_filter_all_pass() {
     let out = run_php(
         r#"<?php

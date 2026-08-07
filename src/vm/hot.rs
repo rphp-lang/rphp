@@ -739,11 +739,9 @@ pub fn execute_hot_frame(
                         {
                             let return_target = unsafe { (*frame).return_value };
                             if !return_target.is_null() {
-                                let prev = unsafe { (*frame).prev_execute_data };
-                                if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
-                                    unsafe { std::ptr::drop_in_place(return_target) };
-                                }
-                                unsafe { Value::write_long(return_target, sum) };
+                                unsafe {
+                                    super::execute::frame_return_set_long(frame, return_target, sum)
+                                };
                             }
                             // Cleanup heap slots (e.g. $this) before popping
                             if unsafe { (*frame).has_heap_slots } {
@@ -1096,11 +1094,13 @@ pub fn execute_hot_frame(
                             return bailout(frame, opline_ptr, HotBailReason::HeapReturnValue);
                         }
 
-                        let prev = unsafe { (*frame).prev_execute_data };
-                        if !prev.is_null() && unsafe { (*prev).has_heap_slots } {
-                            unsafe { std::ptr::drop_in_place(return_target) };
-                        }
-                        unsafe { Value::raw_copy(retval_ptr, return_target) };
+                        unsafe {
+                            super::execute::frame_return_copy_scalar(
+                                frame,
+                                return_target,
+                                retval_ptr,
+                            )
+                        };
                     }
                 }
                 // Cleanup heap slots (e.g. $this in method frames) before popping
