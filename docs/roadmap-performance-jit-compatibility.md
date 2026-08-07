@@ -6168,6 +6168,55 @@ Native PHP 8.5 remains about 9x faster on the ARM64 repeated-callback workload
 from a fresh profile of the now-linear matcher and output materialization, not
 from restoring the rejected callback-only special case.
 
+### Forward regex-callback output checkpoint
+
+The first profile after linearizing capture offsets placed 53% of sampled time
+in `String::replace_range`, not in matching or PHP callback execution
+(2026-08-07). `preg_replace_callback` collected every replacement and then
+applied them in reverse to a clone of the subject. Each call moved the
+already-built suffix again, making output construction quadratic in the number
+and position of matches.
+
+The handler still freezes the complete ordered capture set before invoking any
+callback, resolves the callback once and preserves exact callback/exception
+order. It now appends each untouched subject span and callback result to one
+forward output String, then appends the final tail. No partially assembled
+String is published if a callback raises an exception. Variable-length, empty,
+named, zero-width and UTF-8 replacements retain their canonical behavior.
+
+Shrinking the standard-library handler changed x86 code placement enough to
+produce an initial +10.46% result in a `preg_match` control even though that
+function's machine code was byte-for-byte the same size. `Regex::is_match` has
+only one production caller, so it now carries an ordinary inline hint; the
+compiler folds the wrapper into `fn_preg_match` and removes that separate
+layout dependency. The final long control is -1.17%, while the group-free
+control is +0.99%.
+
+Alternating same-host A/B runs compare exact commit `5542f51` with this source.
+The 5,000-match target uses 103 measured pairs after five warmups and the
+20,000-match scaling target uses 51 pairs. Controls use 503-2,003 pairs after
+twenty or thirty warmups; x86-64 remains pinned to CPU 2:
+
+| Workload | ARM64 linear offsets | ARM64 forward output | Delta | x86-64 linear offsets | x86-64 forward output | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match `preg_replace_callback` | 2.410 ms | 1.050 ms | -56.43% | 2.265 ms | 1.045 ms | -53.87% |
+| 20,000-match scaling target | 33.276 ms | 4.443 ms | -86.65% | 22.549 ms | 4.183 ms | -81.45% |
+| 20,000 cached `preg_match` calls without groups | 9.477 ms | 9.435 ms | -0.44% | 8.015 ms | 8.094 ms | +0.99% |
+| 20,000 failed matches with an unused group | 9.270 ms | 9.238 ms | -0.35% | 7.861 ms | 7.769 ms | -1.17% |
+
+Against the original `fbb064d` regex baseline, the combined 5,000-match result
+is 88.144 to 1.079 ms on ARM64 (-98.78%) and 63.804 to 1.038 ms on x86-64
+(-98.37%). The 20,000 result scales at almost exactly four times the final
+5,000 cost instead of exposing either former quadratic component. Native PHP
+8.5 is still about 4.0x faster on ARM64 (1.107 ms RPHP versus 0.279 ms PHP), so
+the next profile should distinguish callback/match-array allocation from the
+remaining backtracking matcher cost.
+
+Both hosts pass all 33 regex E2E tests under default and no-default features,
+154/147 corresponding library tests and all 70 hot-tier tests. The all-feature
+library matrices remain green at 227 ARM64 and 252 x86-64 tests; formatting and
+all-feature/all-target compilation also pass.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

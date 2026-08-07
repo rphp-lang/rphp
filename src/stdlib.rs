@@ -6691,17 +6691,23 @@ fn fn_preg_replace_callback(
         }
     };
 
-    // Collect all matches first, then replace (because callback needs &mut eg)
+    // Freeze the ordered capture set before callbacks begin mutating executor
+    // state; every callback still observes the original local subject.
     let all_caps = re.captures_iter(&subject);
     if all_caps.is_empty() {
         ret!(rv, Value::string(subject));
     }
     let resolved = resolve_callback_or_fatal(eg, &callback, ed)?;
 
-    // Build match ranges and replacement strings
-    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+    // Matches are ordered and non-overlapping, so assemble the output once in
+    // the forward direction. Repeated reverse replace_range calls move the
+    // already-built suffix for every match and become quadratic.
+    let mut result = String::with_capacity(subject.len());
+    let mut previous_end = 0;
     for caps in &all_caps {
         let full_match = caps.get(0).unwrap();
+        let match_start = full_match.start;
+        let match_end = full_match.end;
         // Build matches array for callback — numeric + named group keys (like PHP)
         let mut matches_arr = PhpArray::new();
         for i in 0..caps.len() {
@@ -6731,14 +6737,11 @@ fn fn_preg_replace_callback(
         if eg.exception.is_some() {
             return Ok(());
         }
-        replacements.push((full_match.start, full_match.end, cb_result.echo_to_string()));
+        result.push_str(&subject[previous_end..match_start]);
+        result.push_str(&cb_result.echo_to_string());
+        previous_end = match_end;
     }
-
-    // Apply replacements in reverse order to preserve indices
-    let mut result = subject.clone();
-    for (start, end, replacement) in replacements.into_iter().rev() {
-        result.replace_range(start..end, &replacement);
-    }
+    result.push_str(&subject[previous_end..]);
 
     ret!(rv, Value::string(result));
 }

@@ -235,6 +235,7 @@ impl Regex {
     /// Test whether the pattern matches without materializing capture output.
     /// Internal capture slots are retained only when the pattern needs their
     /// contents for backreferences.
+    #[inline]
     pub fn is_match(&self, subject: &str) -> bool {
         let chars: Vec<char> = subject.chars().collect();
         let byte_offsets = if self.uses_backreferences {

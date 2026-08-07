@@ -289,3 +289,34 @@ fn test_preg_replace_callback_advances_zero_width_utf8_matches() {
         "XaéXa"
     );
 }
+
+#[test]
+fn test_preg_replace_callback_builds_variable_length_output_in_order() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function expand_ordered_match($matches) {
+                return '<' . $matches[0] . $matches[0] . '>';
+            }
+            $result = preg_replace_callback('/[a-z]+/', 'expand_ordered_match', 'a1bb22c');
+            echo $result;
+            "#,
+        ),
+        "<aa>1<bbbb>22<cc>"
+    );
+}
+
+#[test]
+fn test_preg_replace_callback_builds_empty_replacements() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function delete_match($matches) {
+                return '';
+            }
+            echo preg_replace_callback('/[a-z]+/', 'delete_match', 'a1bb22c');
+            "#,
+        ),
+        "122"
+    );
+}
