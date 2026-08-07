@@ -261,6 +261,65 @@ echo gettype($result);
 }
 
 #[test]
+fn test_dead_staged_scalar_callback_pipeline_preserves_result() {
+    let out = run_php(
+        r#"<?php
+function stagedMap($value) { return $value * 3 + 1; }
+function stagedKeep($value) { return $value & 1; }
+function stagedSum($carry, $value) { return $carry + $value; }
+function stagedPipeline($values) {
+    $mapped = array_map("stagedMap", $values);
+    $filtered = array_filter($mapped, "stagedKeep");
+    return array_reduce($filtered, "stagedSum", 0);
+}
+echo stagedPipeline([0, 1, 2, 3, 4, 5]);
+"#,
+    );
+    assert_eq!(out, "21");
+}
+
+#[test]
+fn test_escaping_staged_callback_pipeline_materializes_results() {
+    let out = run_php(
+        r#"<?php
+function escapingMap($value) { return $value * 3 + 1; }
+function escapingKeep($value) { return $value & 1; }
+function escapingSum($carry, $value) { return $carry + $value; }
+function escapingPipeline($values) {
+    $mapped = array_map("escapingMap", $values);
+    $filtered = array_filter($mapped, "escapingKeep");
+    $sum = array_reduce($filtered, "escapingSum", 0);
+    return count($mapped) . ":" . count($filtered) . ":" . $sum;
+}
+echo escapingPipeline([0, 1, 2, 3, 4, 5]);
+"#,
+    );
+    assert_eq!(out, "6:3:21");
+}
+
+#[test]
+fn test_initialized_staged_destination_uses_canonical_assignment() {
+    let out = run_php(
+        r#"<?php
+function initializedMap($value) { return $value * 3 + 1; }
+function initializedKeep($value) { return $value & 1; }
+function initializedSum($carry, $value) { return $carry + $value; }
+function initializedPipeline($values, &$mapped) {
+    $mapped = array_map("initializedMap", $values);
+    $filtered = array_filter($mapped, "initializedKeep");
+    return array_reduce($filtered, "initializedSum", 0);
+}
+$initialized = 99;
+$first = initializedPipeline([0, 1, 2, 3, 4, 5], $initialized);
+$second = initializedPipeline([0, 1, 2, 3, 4, 5], $undefined);
+echo gettype($initialized) . ":" . count($initialized) . ":" . $first . "|";
+echo gettype($undefined) . ":" . count($undefined) . ":" . $second;
+"#,
+    );
+    assert_eq!(out, "array:6:21|array:6:21");
+}
+
+#[test]
 fn test_array_filter_all_pass() {
     let out = run_php(
         r#"<?php

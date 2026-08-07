@@ -5681,6 +5681,58 @@ The focused final matrix passes formatting and all-feature/no-default checks,
 feature sets, 54 general callable tests, 118 quick-loop tests, 100 ARM64 and 32
 x86-64 backend JIT tests, and all five shared native indexed-array tests.
 
+### Dead-staged scalar callback-pipeline fusion checkpoint
+
+The callback fusion now also covers the common staged spelling (2026-08-07):
+
+```php
+$mapped = array_map("mapValue", $values);
+$filtered = array_filter($mapped, "keepValue");
+$sum = array_reduce($filtered, "sumValue", 0);
+```
+
+The compiler admits only the exact consecutive opcode span inside a function,
+with distinct `$mapped` and `$filtered` CVs whose only syntactic mentions are
+their defining assignment and the immediately following stage's source send.
+Any earlier or later read, reassignment, alias operation, global/static bind,
+different call shape or main-scope pipeline retains the canonical bytecode.
+This conservative whole-function escape proof makes both intermediate arrays
+unobservable and allows the existing streaming evaluator to begin at the map
+initializer and publish only the final reduce temporary.
+
+A runtime guard additionally requires both discarded destinations to still be
+undefined. This covers parameters, including reference parameters, which enter
+the frame initialized without a defining opcode: their canonical assignments
+and cleanup are never skipped. Callback identity, purity, arity, source,
+initial-carry, member-type, reference, arithmetic and interrupt guards remain
+the same as for nested fusion. Every failure happens before externally visible
+state is published and replays the untouched staged calls and assignments.
+Nested and staged spans use separate compiler markers and runtime entries. The
+original nested evaluator remains unchanged; staged-only escape guards and
+future shape extensions therefore cannot enlarge or branch its tuned hot path.
+
+Permanent coverage detects the dead staged span, rejects an escaping result,
+checks exact fused output, verifies materialized array counts when either stage
+escapes and proves that an initialized by-reference destination receives its
+canonical array assignment. A separate 500,000-value staged benchmark keeps
+the dead-local source spelling stable.
+
+Alternating same-host A/B runs compare exact commit `a897b64` with this source
+under identical `--release --features jit-prototype` builds. The staged target
+and the already-fused nested control each use 103 measured pairs after five
+warmups. Times are medians of the PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 staged fusion | Delta | x86-64 before | x86-64 staged fusion | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Dead-staged map/filter/reduce | 12.295 ms | 4.934 ms | -60.14% | 22.505 ms | 6.346 ms | -71.77% |
+| Nested fusion control | 4.909 ms | 4.895 ms | -0.75% | 6.029 ms | 6.005 ms | -0.04% |
+
+All outputs remain exact. The focused final matrix passes formatting,
+all-feature and no-default checks, 219 ARM64 and 244 x86-64 all-feature library
+tests, 40 callback-array tests under both feature configurations, 54 callable
+tests, 118 quick-loop tests, 100 ARM64 and 32 x86-64 backend JIT tests, and all
+five shared native indexed-array tests.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

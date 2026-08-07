@@ -24,6 +24,10 @@ pub const CALL_FLAG_OBJECT_ARRAY_CONSUMERS: u16 = 1 << 2;
 /// guarded pure-scalar streaming callback ABI.
 pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 3;
 
+/// InitFcall flag: this begins an exact staged map/filter/reduce span whose
+/// intermediate array CVs provably do not escape their immediate consumers.
+pub const CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 4;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that
