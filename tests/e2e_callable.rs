@@ -534,6 +534,34 @@ array_walk($ordered, "orderedWalk");
     assert_eq!(out, "1:1,2,3|1:1.5,2.5|v4k0v5k1");
 }
 
+#[test]
+fn test_usort_scalar_callback_replays_non_long_overflow_and_impure_inputs() {
+    let out = run_php(
+        r#"<?php
+function compareLongs($left, $right) { return $left - $right; }
+function runScalarSort(&$values) { return usort($values, "compareLongs"); }
+$longs = [3, 1, 2];
+echo (runScalarSort($longs) ? "1" : "0") . ":" . implode(",", $longs) . "|";
+$doubles = [3.5, 1.5, 2.5];
+echo (runScalarSort($doubles) ? "1" : "0") . ":" . implode(",", $doubles) . "|";
+$max = 9223372036854775807;
+$overflow = [$max, -$max];
+echo (runScalarSort($overflow) ? "1" : "0") . ":" . implode(",", $overflow) . "|";
+function compareLongsDescending($left, $right) { return $right - $left; }
+$descending = [1, 3, 2];
+echo (usort($descending, "compareLongsDescending") ? "1" : "0") . ":" . implode(",", $descending) . "|";
+function orderedSort($left, $right) { echo $left . $right; return $left - $right; }
+$ordered = [3, 1, 2];
+usort($ordered, "orderedSort");
+echo ":" . implode(",", $ordered);
+"#,
+    );
+    assert_eq!(
+        out,
+        "1:1,2,3|1:1.5,2.5,3.5|1:-9223372036854775807,9223372036854775807|1:3,2,1|313212:1,2,3"
+    );
+}
+
 // -- is_callable with string --
 
 #[test]

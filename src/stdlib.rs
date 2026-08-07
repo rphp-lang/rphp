@@ -20,7 +20,7 @@ use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::{
-    VmError, call_function, call_function_iter, call_function_owned_iter,
+    ScalarLongSortOrder, VmError, call_function, call_function_iter, call_function_owned_iter,
     call_function_readback_arg0_iter, prepare_scalar_long_callback,
     try_execute_scalar_long_callback,
 };
@@ -5110,6 +5110,57 @@ fn fn_array_reduce(
 }
 
 /// usort(&$array, $callback): bool
+#[inline(never)]
+unsafe fn try_usort_scalar_long(
+    items: &mut [Value],
+    resolved: &ResolvedCallback,
+) -> Result<bool, ()> {
+    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() {
+        return Ok(false);
+    }
+    let Some(callback) = prepare_scalar_long_callback(resolved.func_ptr, 2) else {
+        return Ok(false);
+    };
+    if items
+        .iter()
+        .any(|value| value.value_type() != ValueType::Long || value.is_reference())
+    {
+        return Ok(false);
+    }
+
+    if let Some(order) = callback.subtraction_sort_order() {
+        let mut completed_calls = 0u64;
+        items.sort_by(|left, right| {
+            completed_calls += 1;
+            let ordering = left.raw_long().cmp(&right.raw_long());
+            match order {
+                ScalarLongSortOrder::Ascending => ordering,
+                ScalarLongSortOrder::Descending => ordering.reverse(),
+            }
+        });
+        callback.record_calls(completed_calls);
+        return Ok(true);
+    }
+
+    let mut completed_calls = 0u64;
+    for i in 1..items.len() {
+        let mut j = i;
+        while j > 0 {
+            let comparison = callback
+                .evaluate_longs(&[items[j - 1].raw_long(), items[j].raw_long()])
+                .ok_or(())?;
+            completed_calls += 1;
+            if comparison <= 0 {
+                break;
+            }
+            items.swap(j - 1, j);
+            j -= 1;
+        }
+    }
+    callback.record_calls(completed_calls);
+    Ok(true)
+}
+
 fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     // Save raw pointer to array BEFORE any call_function.
     // call_function may push/pop VM stack frames but the by-ref pointer target
@@ -5136,10 +5187,35 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             return Ok(());
         }
     };
+    let mut items = items;
+
+    match unsafe { try_usort_scalar_long(&mut items, &resolved) } {
+        Ok(true) => {
+            let mut new_arr = PhpArray::new();
+            for value in items {
+                new_arr.push(value);
+            }
+            unsafe {
+                *arr_ptr = Value::array(new_arr);
+            }
+            ret!(rv, Value::bool(true));
+        }
+        Ok(false) => {}
+        Err(()) => {
+            // The scalar callback is pure and its counters are unpublished, so
+            // an arithmetic side exit can restart from the untouched array.
+            items = unsafe { &*arr_ptr }
+                .as_array()
+                .expect("usort array changed before canonical fallback")
+                .values()
+                .cloned()
+                .collect();
+        }
+    }
+
     let func_ptr = resolved.func_ptr;
     let prepend = resolved.prepend_args;
     let use_vars = resolved.use_vars;
-    let mut items = items;
     // Insertion sort with PHP callback comparison
     let len = items.len();
     for i in 1..len {

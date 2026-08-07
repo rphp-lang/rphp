@@ -6023,6 +6023,58 @@ comparison-order-sensitive, while regex callbacks have String/match-array
 ABIs; neither should inherit this scalar walk path without its own measured,
 exact fallback contract.
 
+### Proof-bounded scalar `usort` checkpoint
+
+The next implemented callback-taking array primitive, `usort`, now reuses the
+shared pure Long callback ABI (2026-08-07). The general eligible case keeps the
+existing insertion-sort comparison order but evaluates exact two-argument
+Long callbacks without PHP frames. References, non-Long members, receivers,
+captures, unsupported signatures and impure bodies continue through the
+canonical callback loop.
+
+One narrower compiler proof also removes the algorithmic ceiling. A scalar
+plan consisting exactly of `return $left - $right` or its reversed form is a
+total ascending or descending ordering for guarded Long inputs. Its sign is
+unchanged when canonical PHP widens an overflowing subtraction to Double, so
+the handler can use Rust's stable O(n log n) slice sort without executing the
+subtraction. Arbitrary scalar expressions do not receive this substitution.
+
+The input values are cloned before resolution and the source PHP array is not
+replaced until sorting completes. The fast path first validates every member,
+then bulk-records only the comparisons completed by the accepted algorithm.
+If a non-ordering scalar callback encounters checked-arithmetic failure after
+moving clone members, the handler reloads a fresh snapshot from the untouched
+array and starts the canonical insertion path. No failed speculation can
+publish a reordered array, callback counter or duplicated PHP-visible effect.
+
+Alternating same-host A/B runs compare exact commit `8961b62` with this source
+under identical release builds. Each target workload uses 103 measured pairs
+after five warmups. The control uses 303 pairs after ten warmups; x86-64
+processes are pinned to CPU 2. Values are medians of the PHP-internal timed
+region:
+
+| Workload | ARM64 before | ARM64 scalar sort | Delta | x86-64 before | x86-64 scalar sort | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 4,096-member permuted exact Long comparator | 79.438 ms | 0.108 ms | -99.86% | 137.476 ms | 0.148 ms | -99.89% |
+| 500-member impure mutation control | 11.289 ms | 11.051 ms | -2.11% | 13.865 ms | 13.505 ms | -2.59% |
+
+The candidate also beats native PHP on the permuted workload: 1.016 ms to
+0.108 ms on ARM64 (-89.37%, 9.4x) and 1.015 ms to 0.148 ms on x86-64
+(-85.44%, 6.9x). Checksums remain exact.
+
+A permanent test covers ascending and descending exact plans, warmed Double
+fallback, overflowing Long subtraction replay and the original observable
+comparison order for an impure callback. Both hosts pass all 56 callable tests
+under default and no-default features. The JIT-prototype and all-feature
+library matrices remain green at 218/222 tests on ARM64 and 243/247 tests on
+x86-64; formatting and all-target compilation also pass.
+
+Modern comparator bodies commonly use `$left <=> $right`, which is not yet a
+`ScalarLongOpKind`. Adding a target-neutral three-way-compare operation to the
+shared scalar IR is the measured next compatibility extension; it should then
+reuse this exact stable-order proof rather than introduce a `usort`-specific
+opcode detector.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

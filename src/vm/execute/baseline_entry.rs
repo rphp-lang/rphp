@@ -125,6 +125,12 @@ pub(crate) struct ScalarLongCallback {
     public_num_args: usize,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum ScalarLongSortOrder {
+    Ascending,
+    Descending,
+}
+
 /// Guard the invariant callable identity, signature and scalar plan once.
 #[inline(always)]
 pub(crate) unsafe fn prepare_scalar_long_callback(
@@ -156,6 +162,34 @@ pub(crate) unsafe fn prepare_scalar_long_callback(
 }
 
 impl ScalarLongCallback {
+    /// Recognize the exact two-argument subtraction comparator. For raw Long
+    /// inputs its sign is identical to integer ordering even when canonical
+    /// PHP subtraction widens an overflowing result to Double.
+    #[inline(always)]
+    pub(crate) unsafe fn subtraction_sort_order(&self) -> Option<ScalarLongSortOrder> {
+        let plan = &*self.plan;
+        if plan.select.is_some()
+            || plan.program.operations.len() != 1
+            || plan.program.output_count != 1
+            || plan.program.outputs[0] != ScalarLongSource::Temporary(0)
+        {
+            return None;
+        }
+        let operation = plan.program.operations[0];
+        if operation.kind != ScalarLongOpKind::Subtract {
+            return None;
+        }
+        match (operation.lhs, operation.rhs) {
+            (ScalarLongSource::Input(0), ScalarLongSource::Input(1)) => {
+                Some(ScalarLongSortOrder::Ascending)
+            }
+            (ScalarLongSource::Input(1), ScalarLongSource::Input(0)) => {
+                Some(ScalarLongSortOrder::Descending)
+            }
+            _ => None,
+        }
+    }
+
     /// Evaluate already-unboxed Long arguments without recording a completed
     /// PHP call. Transactional pipeline consumers record their totals only
     /// after the complete fused span succeeds.
