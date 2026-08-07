@@ -118,6 +118,9 @@ pub struct Regex {
     /// Literal that every match must start with, when it can be proven from
     /// the AST. Used to skip impossible start positions before backtracking.
     start_literal: Option<char>,
+    /// Whether boolean matching must retain capture contents for a later
+    /// numeric or named backreference in the pattern.
+    uses_backreferences: bool,
 }
 
 /// Per-executor cache of parsed and compiled PHP regular expressions.
@@ -218,24 +221,35 @@ impl Regex {
         let mut parser = Parser::new(pattern, flags);
         let ast = parser.parse()?;
         let start_literal = required_start_literal(&ast);
+        let uses_backreferences = contains_backreference(&ast);
         Ok(Self {
             ast,
             flags,
             num_groups: parser.group_count,
             named_groups: parser.named_groups,
             start_literal,
+            uses_backreferences,
         })
     }
 
     /// Test whether the pattern matches without materializing capture output.
-    /// Internal capture slots are still retained when the pattern needs them
-    /// for groups or backreferences.
+    /// Internal capture slots are retained only when the pattern needs their
+    /// contents for backreferences.
     pub fn is_match(&self, subject: &str) -> bool {
         let chars: Vec<char> = subject.chars().collect();
-        let mut groups = if self.num_groups == 0 {
-            Vec::new()
+        let byte_offsets = if self.uses_backreferences {
+            ByteOffsets::for_subject(subject, &chars)
         } else {
+            ByteOffsets::Identity
+        };
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
+        let mut groups = if self.uses_backreferences {
             vec![None; self.num_groups + 1]
+        } else {
+            Vec::new()
         };
 
         for start in 0..=chars.len() {
@@ -249,7 +263,7 @@ impl Regex {
             groups.fill(None);
             let mut ctx = MatchCtx {
                 chars: &chars,
-                input: subject,
+                metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
                 named_groups: &self.named_groups,
@@ -263,7 +277,11 @@ impl Regex {
 
     /// Find first match in subject.  Returns captures (group 0 = whole match).
     pub fn captures(&self, subject: &str) -> Option<Captures> {
-        let chars: Vec<char> = subject.chars().collect();
+        let (chars, byte_offsets) = subject_chars(subject);
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
         let mut groups = vec![None; self.num_groups + 1];
         // Try matching at every position
         for start in 0..=chars.len() {
@@ -278,7 +296,7 @@ impl Regex {
             let end = {
                 let mut ctx = MatchCtx {
                     chars: &chars,
-                    input: subject,
+                    metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
                     named_groups: &self.named_groups,
@@ -287,8 +305,8 @@ impl Regex {
             };
             if let Some(end) = end {
                 groups[0] = Some(Match {
-                    start: char_offset(subject, &chars, start),
-                    end: char_offset(subject, &chars, end),
+                    start: byte_offsets.get(start),
+                    end: byte_offsets.get(end),
                 });
                 return Some(Captures {
                     groups,
@@ -301,7 +319,11 @@ impl Regex {
 
     /// Replace all occurrences.  Replacement can use `$1`, `$10`, `${2}`, `\\1` backrefs.
     pub fn replace_all(&self, subject: &str, replacement: &str) -> String {
-        let chars: Vec<char> = subject.chars().collect();
+        let (chars, byte_offsets) = subject_chars(subject);
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
         let mut result = String::new();
         let mut pos = 0;
 
@@ -309,21 +331,21 @@ impl Regex {
             let mut groups = vec![None; self.num_groups + 1];
             let mut ctx = MatchCtx {
                 chars: &chars,
-                input: subject,
+                metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
                 named_groups: &self.named_groups,
             };
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
-                let match_start = char_offset(subject, &chars, pos);
-                let match_end = char_offset(subject, &chars, end);
+                let match_start = byte_offsets.get(pos);
+                let match_end = byte_offsets.get(end);
                 ctx.groups[0] = Some(Match {
                     start: match_start,
                     end: match_end,
                 });
 
                 // Append text before match
-                result.push_str(&subject[char_offset(subject, &chars, pos)..match_start]);
+                result.push_str(&subject[byte_offsets.get(pos)..match_start]);
                 // Append replacement with backreference expansion
                 result.push_str(&expand_replacement(replacement, &groups, subject));
 
@@ -348,28 +370,35 @@ impl Regex {
 
     /// Find all non-overlapping matches, returning a vector of Captures.
     pub fn captures_iter(&self, subject: &str) -> Vec<Captures> {
-        let chars: Vec<char> = subject.chars().collect();
+        let (chars, byte_offsets) = subject_chars(subject);
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
         let mut results = Vec::new();
         let mut pos = 0;
 
         while pos <= chars.len() {
             let mut groups = vec![None; self.num_groups + 1];
-            let mut ctx = MatchCtx {
-                chars: &chars,
-                input: subject,
-                flags: self.flags,
-                groups: &mut groups,
-                named_groups: &self.named_groups,
+            let end = {
+                let mut ctx = MatchCtx {
+                    chars: &chars,
+                    metadata: &metadata,
+                    flags: self.flags,
+                    groups: &mut groups,
+                    named_groups: &self.named_groups,
+                };
+                match_seq_from(&self.ast, &[], pos, &mut ctx)
             };
-            if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
-                let match_start = char_offset(subject, &chars, pos);
-                let match_end = char_offset(subject, &chars, end);
-                ctx.groups[0] = Some(Match {
+            if let Some(end) = end {
+                let match_start = byte_offsets.get(pos);
+                let match_end = byte_offsets.get(end);
+                groups[0] = Some(Match {
                     start: match_start,
                     end: match_end,
                 });
                 results.push(Captures {
-                    groups: groups.clone(),
+                    groups,
                     named_groups: self.named_groups.clone(),
                 });
                 if end == pos {
@@ -386,7 +415,11 @@ impl Regex {
 
     /// Split subject by regex.  `limit` < 0 means no limit.
     pub fn split(&self, subject: &str, limit: i64) -> Vec<String> {
-        let chars: Vec<char> = subject.chars().collect();
+        let (chars, byte_offsets) = subject_chars(subject);
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
         let mut parts = Vec::new();
         let mut last_end = 0usize; // char index of end of last match
         let mut splits = 0i64;
@@ -403,19 +436,19 @@ impl Regex {
                 let mut groups = vec![None; self.num_groups + 1];
                 let mut ctx = MatchCtx {
                     chars: &chars,
-                    input: subject,
+                    metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
                     named_groups: &self.named_groups,
                 };
                 if let Some(end) = match_seq_from(&self.ast, &[], try_start, &mut ctx) {
-                    let match_start_byte = char_offset(subject, &chars, try_start);
+                    let match_start_byte = byte_offsets.get(try_start);
                     // Don't split on zero-length match at same position
                     if end == try_start && try_start == last_end && try_start < chars.len() {
                         continue;
                     }
                     // Push text from last_end to match_start
-                    let last_end_byte = char_offset(subject, &chars, last_end);
+                    let last_end_byte = byte_offsets.get(last_end);
                     parts.push(subject[last_end_byte..match_start_byte].to_string());
                     splits += 1;
                     last_end = end;
@@ -429,7 +462,7 @@ impl Regex {
             }
         }
         // Push remainder
-        let last_end_byte = char_offset(subject, &chars, last_end);
+        let last_end_byte = byte_offsets.get(last_end);
         parts.push(subject[last_end_byte..].to_string());
         parts
     }
@@ -439,7 +472,11 @@ impl Regex {
     where
         F: FnMut(&Captures, &str) -> String,
     {
-        let chars: Vec<char> = subject.chars().collect();
+        let (chars, byte_offsets) = subject_chars(subject);
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
         let mut result = String::new();
         let mut pos = 0;
 
@@ -447,20 +484,20 @@ impl Regex {
             let mut groups = vec![None; self.num_groups + 1];
             let mut ctx = MatchCtx {
                 chars: &chars,
-                input: subject,
+                metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
                 named_groups: &self.named_groups,
             };
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
-                let match_start = char_offset(subject, &chars, pos);
-                let match_end = char_offset(subject, &chars, end);
+                let match_start = byte_offsets.get(pos);
+                let match_end = byte_offsets.get(end);
                 ctx.groups[0] = Some(Match {
                     start: match_start,
                     end: match_end,
                 });
 
-                result.push_str(&subject[char_offset(subject, &chars, pos)..match_start]);
+                result.push_str(&subject[byte_offsets.get(pos)..match_start]);
                 let caps = Captures {
                     groups: groups.clone(),
                     named_groups: self.named_groups.clone(),
@@ -516,6 +553,20 @@ fn required_start_literal(node: &Node) -> Option<char> {
         }
         Node::Quantifier { inner, min, .. } if *min > 0 => required_start_literal(inner),
         _ => None,
+    }
+}
+
+fn contains_backreference(node: &Node) -> bool {
+    match node {
+        Node::Backreference(_) | Node::NamedBackreference(_) => true,
+        Node::Group { inner, .. }
+        | Node::Quantifier { inner, .. }
+        | Node::Lookahead { inner, .. }
+        | Node::Lookbehind { inner, .. } => contains_backreference(inner),
+        Node::Alternation(nodes) | Node::Sequence(nodes) => {
+            nodes.iter().any(contains_backreference)
+        }
+        _ => false,
     }
 }
 
@@ -577,15 +628,56 @@ fn expand_replacement(repl: &str, groups: &[Option<Match>], input: &str) -> Stri
 
 // ── Byte offset from char index ─────────────────────────────────────────────
 
-fn char_offset(_input: &str, chars: &[char], char_idx: usize) -> usize {
-    chars[..char_idx].iter().map(|c| c.len_utf8()).sum()
+/// Build the character array used by the matcher and a parallel O(1) mapping
+/// from every character boundary to its byte offset in the original UTF-8
+/// subject. Recomputing an offset from the start for every capture makes a
+/// repeated-match scan quadratic.
+fn subject_chars(input: &str) -> (Vec<char>, ByteOffsets) {
+    let chars: Vec<char> = input.chars().collect();
+    let byte_offsets = ByteOffsets::for_subject(input, &chars);
+    (chars, byte_offsets)
+}
+
+enum ByteOffsets {
+    Identity,
+    Utf8(Vec<usize>),
+}
+
+impl ByteOffsets {
+    fn for_subject(input: &str, chars: &[char]) -> Self {
+        if input.is_ascii() {
+            return Self::Identity;
+        }
+
+        let mut byte_offsets = Vec::with_capacity(chars.len() + 1);
+        let mut byte_offset = 0;
+        byte_offsets.push(byte_offset);
+        for ch in chars {
+            byte_offset += ch.len_utf8();
+            byte_offsets.push(byte_offset);
+        }
+        Self::Utf8(byte_offsets)
+    }
+
+    #[inline]
+    fn get(&self, char_index: usize) -> usize {
+        match self {
+            Self::Identity => char_index,
+            Self::Utf8(byte_offsets) => byte_offsets[char_index],
+        }
+    }
 }
 
 // ── Match context ───────────────────────────────────────────────────────────
 
+struct MatchMetadata<'a> {
+    input: &'a str,
+    byte_offsets: &'a ByteOffsets,
+}
+
 struct MatchCtx<'a> {
     chars: &'a [char],
-    input: &'a str,
+    metadata: &'a MatchMetadata<'a>,
     flags: RegexFlags,
     groups: &'a mut Vec<Option<Match>>,
     named_groups: &'a HashMap<String, usize>,
@@ -706,13 +798,15 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             name: _,
             inner,
         } => {
-            let start_offset = char_offset(ctx.input, ctx.chars, pos);
-            let saved_group = index.map(|idx| ctx.groups[idx].clone());
-            let result = match_seq_from_with_group(inner, rest, pos, ctx, *index, start_offset);
+            let tracked_index = index.filter(|idx| *idx < ctx.groups.len());
+            let start_offset = tracked_index.map_or(0, |_| ctx.metadata.byte_offsets.get(pos));
+            let saved_group = tracked_index.map(|idx| ctx.groups[idx].clone());
+            let result =
+                match_seq_from_with_group(inner, rest, pos, ctx, tracked_index, start_offset);
             if result.is_none() {
                 // Restore group on failure
-                if let Some(idx) = index {
-                    ctx.groups[*idx] = saved_group.unwrap();
+                if let Some(idx) = tracked_index {
+                    ctx.groups[idx] = saved_group.unwrap();
                 }
             }
             result
@@ -815,7 +909,7 @@ fn match_seq_from_with_group(
     let ends = collect_match_positions(inner, pos, ctx);
     for end_pos in ends {
         if let Some(idx) = group_idx {
-            let end_offset = char_offset(ctx.input, ctx.chars, end_pos);
+            let end_offset = ctx.metadata.byte_offsets.get(end_pos);
             ctx.groups[idx] = Some(Match {
                 start: start_offset,
                 end: end_offset,
@@ -913,12 +1007,13 @@ fn collect_match_positions_inner(
             name: _,
             inner,
         } => {
-            let start_offset = char_offset(ctx.input, ctx.chars, pos);
+            let tracked_index = index.filter(|idx| *idx < ctx.groups.len());
+            let start_offset = tracked_index.map_or(0, |_| ctx.metadata.byte_offsets.get(pos));
             let inner_positions = collect_match_positions(inner, pos, ctx);
             for end_pos in inner_positions {
-                if let Some(idx) = index {
-                    let end_offset = char_offset(ctx.input, ctx.chars, end_pos);
-                    ctx.groups[*idx] = Some(Match {
+                if let Some(idx) = tracked_index {
+                    let end_offset = ctx.metadata.byte_offsets.get(end_pos);
+                    ctx.groups[idx] = Some(Match {
                         start: start_offset,
                         end: end_offset,
                     });
@@ -953,7 +1048,7 @@ fn match_backref_by_index(
     ctx: &mut MatchCtx,
 ) -> Option<usize> {
     if let Some(Some(m)) = ctx.groups.get(n).cloned() {
-        let captured = &ctx.input[m.start..m.end];
+        let captured = &ctx.metadata.input[m.start..m.end];
         let cap_chars: Vec<char> = captured.chars().collect();
         if pos + cap_chars.len() > ctx.chars.len() {
             return None;
@@ -1785,8 +1880,18 @@ mod tests {
     fn test_is_match_preserves_groups_needed_by_backreferences() {
         let re = Regex::new("(a)\\1", RegexFlags::default()).unwrap();
 
+        assert!(re.uses_backreferences);
         assert!(re.is_match("aa"));
         assert!(!re.is_match("ab"));
+    }
+
+    #[test]
+    fn test_is_match_does_not_track_unused_capture_contents() {
+        let re = Regex::new("(needle)", RegexFlags::default()).unwrap();
+
+        assert!(!re.uses_backreferences);
+        assert!(re.is_match("haystack needle"));
+        assert!(!re.is_match("haystack"));
     }
 
     #[test]
@@ -1847,6 +1952,55 @@ mod tests {
     fn test_replace_all() {
         let re = Regex::new("\\d+", RegexFlags::default()).unwrap();
         assert_eq!(re.replace_all("a1b2c3", "X"), "aXbXcX");
+    }
+
+    #[test]
+    fn test_subject_chars_maps_utf8_boundaries() {
+        let (chars, offsets) = subject_chars("až🙂");
+
+        assert_eq!(chars, vec!['a', 'ž', '🙂']);
+        assert_eq!(offsets.get(0), 0);
+        assert_eq!(offsets.get(1), 1);
+        assert_eq!(offsets.get(2), 3);
+        assert_eq!(offsets.get(3), 7);
+    }
+
+    #[test]
+    fn test_subject_chars_uses_identity_offsets_for_ascii() {
+        let (chars, offsets) = subject_chars("ascii");
+
+        assert_eq!(chars, vec!['a', 's', 'c', 'i', 'i']);
+        assert!(matches!(offsets, ByteOffsets::Identity));
+        assert_eq!(offsets.get(chars.len()), chars.len());
+    }
+
+    #[test]
+    fn test_captures_iter_preserves_utf8_and_named_capture_offsets() {
+        let subject = "🙂 ž1 x č2";
+        let re = Regex::new("(?P<letter>ž|č)(?P<digit>\\d)", RegexFlags::default()).unwrap();
+        let captures = re.captures_iter(subject);
+
+        assert_eq!(captures.len(), 2);
+        assert_eq!(captures[0].get(0).unwrap().as_str(subject), "ž1");
+        assert_eq!(
+            captures[0].get_named("letter").unwrap().as_str(subject),
+            "ž"
+        );
+        assert_eq!(captures[1].get(0).unwrap().as_str(subject), "č2");
+        assert_eq!(captures[1].get_named("digit").unwrap().as_str(subject), "2");
+    }
+
+    #[test]
+    fn test_captures_iter_advances_zero_width_matches_on_utf8_subject() {
+        let subject = "aéa";
+        let re = Regex::new("(?=a)", RegexFlags::default()).unwrap();
+        let captures = re.captures_iter(subject);
+
+        assert_eq!(captures.len(), 2);
+        assert_eq!(captures[0].get(0).unwrap().start, 0);
+        assert_eq!(captures[1].get(0).unwrap().start, 3);
+        assert_eq!(captures[0].get(0).unwrap().as_str(subject), "");
+        assert_eq!(captures[1].get(0).unwrap().as_str(subject), "");
     }
 
     #[test]

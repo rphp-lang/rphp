@@ -244,3 +244,48 @@ fn test_preg_match_named_backref_p_equals() {
         "1"
     );
 }
+
+// === Repeated matches and UTF-8 offsets ===
+
+#[test]
+fn test_preg_match_all_preserves_utf8_and_named_captures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $count = preg_match_all('/(?P<letter>ž|č)(?P<digit>\d)/', '🙂 ž1 x č2', $m);
+            echo $count . '|' . implode(',', $m[0]) . '|' . implode(',', $m['letter']) . '|' . implode(',', $m[2]);
+            "#,
+        ),
+        "2|ž1,č2|ž,č|1,2"
+    );
+}
+
+#[test]
+fn test_preg_replace_callback_preserves_utf8_named_captures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function wrap_utf8_match($matches) {
+                return '[' . $matches['letter'] . $matches[2] . ']';
+            }
+            echo preg_replace_callback('/(?P<letter>ž|č)(\d)/', 'wrap_utf8_match', '🙂 ž1 x č2');
+            "#,
+        ),
+        "🙂 [ž1] x [č2]"
+    );
+}
+
+#[test]
+fn test_preg_replace_callback_advances_zero_width_utf8_matches() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function insert_marker($matches) {
+                return 'X';
+            }
+            echo preg_replace_callback('/(?=a)/', 'insert_marker', 'aéa');
+            "#,
+        ),
+        "XaéXa"
+    );
+}

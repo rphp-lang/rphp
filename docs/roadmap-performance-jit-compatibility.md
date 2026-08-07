@@ -6119,6 +6119,55 @@ multi-operation scalar functions spending material time in the Rust adapter.
 For callback standard-library coverage, the next distinct ABI is regex
 replacement: String subjects plus a match array and String callback result.
 
+### Linear repeated-regex offset checkpoint
+
+Profiling the next callback ABI showed that PHP callback frames were not the
+dominant cost. A compiler-proven constant replacement callback avoided the
+match array and frame but improved the 5,000-match workload by only about 2% on
+both hosts, so that narrow specialization was rejected. The shared regex
+iterator instead exposed an algorithmic problem: every capture converted its
+character positions to UTF-8 byte offsets by summing character widths from the
+start of the subject. Repeated matches therefore made offset calculation
+quadratic (2026-08-07).
+
+The matcher now prepares one character-boundary map for capture-producing
+operations and performs every conversion in O(1). ASCII subjects use an
+identity representation and allocate no offset table; non-ASCII subjects keep
+the exact byte boundary for every character. Match context holds one pointer
+to the immutable input metadata instead of widening every recursive matcher
+context with another slice. `captures_iter` also moves each finished capture
+vector into its result rather than cloning it.
+
+Boolean `preg_match` needs no capture contents unless the pattern contains a
+numeric or named backreference. A compile-time AST property now retains groups
+only for those patterns. Ordinary capturing parentheses with no `$matches`
+argument use an empty capture store, avoiding both the boundary map and capture
+maintenance while preserving backreference semantics.
+
+Alternating same-host A/B runs compare exact commit `fbb064d` with this source.
+The repeated callback target uses 103 measured pairs after five warmups; the
+controls use 503 pairs after twenty warmups. x86-64 processes are pinned to CPU
+2. Values are medians of the PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 linear offsets | Delta | x86-64 before | x86-64 linear offsets | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match `preg_replace_callback` | 90.128 ms | 2.515 ms | -97.21% | 63.970 ms | 2.259 ms | -96.47% |
+| 20,000 cached `preg_match` calls without groups | 9.544 ms | 9.508 ms | -0.38% | 8.060 ms | 8.058 ms | -0.02% |
+| 20,000 failed matches with an unused group | 10.034 ms | 9.496 ms | -5.36% | 8.001 ms | 7.917 ms | -1.05% |
+
+Checksums remain exact. UTF-8 unit tests cover the identity and mapped offset
+representations, named captures, repeated matches and zero-width advancement.
+End-to-end tests cover the same contracts through `preg_match_all` and
+`preg_replace_callback`, including named groups and zero-width UTF-8 matches.
+Both hosts pass 154 default-feature and 147 no-default-feature library tests,
+31 regex E2E tests under both configurations and all 70 hot-tier tests. The
+all-feature library matrices pass 227 tests on ARM64 and 252 on x86-64;
+formatting and all-feature/all-target compilation also pass on both hosts.
+Native PHP 8.5 remains about 9x faster on the ARM64 repeated-callback workload
+(2.535 ms RPHP versus 0.282 ms PHP), so the next regex decision should come
+from a fresh profile of the now-linear matcher and output materialization, not
+from restoring the rejected callback-only special case.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
