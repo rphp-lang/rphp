@@ -409,8 +409,17 @@ impl Regex {
         let mut groups = vec![None; self.num_groups + 1];
         let mut pos = 0;
         let mut count = 0;
+        let start_literal = self.start_literal;
 
         while pos <= chars.len() {
+            if let Some(literal) = start_literal {
+                let Some(relative_pos) = chars[pos..].iter().position(|&candidate| {
+                    chars_equal(candidate, literal, self.flags.case_insensitive)
+                }) else {
+                    break;
+                };
+                pos += relative_pos;
+            }
             groups.fill(None);
             let end = {
                 let mut ctx = MatchCtx {
@@ -2097,6 +2106,50 @@ mod tests {
                 ("č2".to_string(), "č".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn test_capture_visitor_scans_case_insensitive_literal_candidates() {
+        let flags = RegexFlags {
+            case_insensitive: true,
+            ..Default::default()
+        };
+        let re = Regex::new("hello", flags).unwrap();
+        let mut starts = Vec::new();
+
+        let visited: Result<usize, std::convert::Infallible> =
+            re.try_visit_captures("xHELLO yhello", |captures| {
+                starts.push(captures.get(0).unwrap().start);
+                Ok(true)
+            });
+
+        assert_eq!(visited.unwrap(), 2);
+        assert_eq!(starts, vec![1, 8]);
+    }
+
+    #[test]
+    fn test_capture_visitor_literal_scan_preserves_anchor_semantics() {
+        let anchored = Regex::new("^hello", RegexFlags::default()).unwrap();
+        let visited: Result<usize, std::convert::Infallible> =
+            anchored.try_visit_captures("xhello", |_| Ok(true));
+        assert_eq!(visited.unwrap(), 0);
+
+        let multiline = Regex::new(
+            "^hello",
+            RegexFlags {
+                multiline: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let mut starts = Vec::new();
+        let visited: Result<usize, std::convert::Infallible> =
+            multiline.try_visit_captures("x\nhello\nhello", |captures| {
+                starts.push(captures.get(0).unwrap().start);
+                Ok(true)
+            });
+        assert_eq!(visited.unwrap(), 2);
+        assert_eq!(starts, vec![2, 8]);
     }
 
     #[test]

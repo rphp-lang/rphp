@@ -6272,6 +6272,44 @@ both configurations, plus all 70 hot-tier tests. All-feature library matrices
 pass 232 tests on ARM64 and 257 on x86-64; formatting and all-feature/all-target
 compilation pass on both hosts.
 
+### Required-literal streaming scan checkpoint
+
+A fresh repeated-callback profile after capture streaming still placed 516 of
+2,170 ARM64 samples at the top of the stack in `match_seq_from`. The streaming
+visitor was invoking the full AST at every subject position even when regex
+compilation had already proved a literal that every match must consume first.
+`try_visit_captures` now caches that invariant `start_literal` before its hot
+loop and uses a case-aware slice `position` scan to advance directly to viable
+candidates. Patterns without a proven literal retain the canonical per-position
+matcher and pay only one loop-invariant `Option` branch.
+
+The proof remains the existing target-neutral AST analysis: literals after
+zero-width anchors, boundaries and lookarounds are admissible; alternatives
+must agree; optional prefixes are rejected. New tests cover later
+case-insensitive candidates and prove that anchored and multiline matching keep
+their previous semantics.
+
+Alternating runs compare the exact `182a3a7` code baseline with this source.
+Targets use 103 measured pairs after five warmups; the no-literal control uses
+503 pairs after twenty warmups, and x86-64 remains pinned to CPU 2:
+
+| Workload | ARM64 streaming | ARM64 literal scan | Delta | x86-64 streaming | x86-64 literal scan | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match `preg_replace_callback` | 0.906 ms | 0.862 ms | -4.87% | 0.751 ms | 0.734 ms | -2.29% |
+| 5,000-match `preg_match_all` with output | 3.711 ms | 3.560 ms | -4.07% | 2.771 ms | 2.632 ms | -5.02% |
+| 5,000-match count-only `preg_match_all` | 0.257 ms | 0.218 ms | -15.21% | 0.325 ms | 0.296 ms | -9.08% |
+| Count-only `[0-9]+` without a start literal | 0.359 ms | 0.361 ms | +0.53% | 0.434 ms | 0.436 ms | +0.38% |
+
+An independent attempt to store tiny callback match arrays in the existing
+inline associative tier was rejected: it improved the ARM64 callback by 12.21%
+but regressed the same x86-64 target by 1.38% and full `preg_match_all` by
+1.18%. Both source and remote binaries were restored before this checkpoint.
+
+Both hosts pass 161 default-feature, 154 no-default-feature and 35 regex E2E
+tests under both configurations, plus all 70 hot-tier tests. All-feature
+library matrices pass 234 tests on ARM64 and 259 on x86-64; formatting and
+all-feature/all-target compilation pass on both hosts.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
