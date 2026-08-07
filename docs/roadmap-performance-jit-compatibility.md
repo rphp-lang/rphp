@@ -6331,6 +6331,73 @@ substantially:
 Compatibility is expanded here, not first introduced here: every earlier
 phase already preserves the supported subset and exercises selected real code.
 
+## Phase 6: optional numerical computing and accelerator platform
+
+After production-oriented compatibility is broad enough, use the proven typed
+IR, collection fusion, CPU JIT backends and coroutine substrate as the base for
+an opt-in numerical computing layer. This phase is not a prerequisite for PHP
+compatibility and must not slow or change ordinary PHP arrays. Its purpose is
+to make typed numerical workloads expressible in PHP while allowing RPHP to
+select an efficient scalar, SIMD, parallel CPU or later GPU implementation.
+
+The first milestone is a target-neutral contiguous-buffer contract with
+explicit element types such as `Int32`, `Int64`, `Float32` and `Float64`.
+`TypedBuffer`/`NDArray` values should describe dtype, shape, strides, ownership,
+views and device placement without expanding every member into a general PHP
+`Value`. Slicing and reshape should remain zero-copy when their layout permits
+it. Aliasing, COW, references, mutation and lifetime rules must be explicit so
+that a failed proof returns to a correct generic implementation rather than
+silently changing PHP-visible behavior.
+
+Build the CPU path before a GPU backend. Element-wise operations, broadcasting,
+map/filter-style transforms and reductions should lower to one data-parallel
+program and reuse the existing typed scalar expression IR instead of creating
+one runtime call and one intermediate array per stage. Establish the scalar
+ARM64/x86 implementation first, then add measured NEON and AVX lowering,
+parallel reductions and memory-bandwidth-aware scheduling. Fusion is admitted
+only when intermediate arrays, callback effects and mutation are unobservable.
+
+Once this substrate is stable, keep higher numerical algorithms in ordinary
+typed RPHP packages wherever possible. A first statistics package should prove
+that mean, numerically stable variance, covariance, correlation, histograms,
+quantiles, moving aggregates and basic regression can be written once in PHP
+while executing through fused native loops. The runtime should provide the
+small set of reusable primitives--typed iteration, reductions, selection,
+sorting, dot products, matrix kernels, random-number state and required special
+functions--rather than embedding a SciPy-sized API in the language core.
+
+Only after the fused CPU pipeline is competitive should the same
+data-parallel IR gain an optional GPU lowering. Start with explicit
+`GpuBuffer`/kernel or annotated typed-function APIs; do not attempt to compile
+arbitrary dynamic PHP for a GPU. Evaluate a portable WGSL/SPIR-V route and
+native platform backends such as Metal separately, keeping backend choice out
+of PHP semantics. Kernel compilation and pipeline caches, device loss, buffer
+residency, synchronization and CPU fallback are runtime responsibilities.
+End-to-end measurements must include compilation, upload, download and
+synchronization costs; a GPU win that excludes transfers is not an admission
+result.
+
+The later server integration may combine this backend with Phase 4.5
+coroutines. A request awaiting a GPU result should release its logical task,
+and an opt-in scheduler may batch compatible kernels across requests while
+preserving per-request results, cancellation and error delivery. Persistent
+buffers and compiled kernels should be reused by a long-lived runtime; small
+or irregular workloads remain on the CPU.
+
+Numerical correctness is part of the gate, not a follow-up. Differential tests
+must cover NaN and infinity, signed zero, integer overflow, empty dimensions,
+strided and overlapping views, broadcasting, reduction axes, random-state
+reproducibility and reference algorithms. Parallel and GPU reductions must
+either document an explicit floating-point reproducibility contract or offer a
+deterministic mode. Performance corpora must contain both fused wins and
+holdouts where scalar CPU, canonical PHP or an established native library is
+the correct choice.
+
+Proceed to the GPU milestone only when the typed-buffer API is stable, the CPU
+pipeline removes intermediate materialization generally rather than through
+benchmark-specific detectors, and profiling shows sufficiently large
+data-parallel workloads whose gains survive all transfer and scheduling costs.
+
 ## Decision gates
 
 Proceed from no-JIT optimization to unified IR when new handwritten kernels
