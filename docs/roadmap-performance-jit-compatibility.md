@@ -6310,6 +6310,48 @@ tests under both configurations, plus all 70 hot-tier tests. All-feature
 library matrices pass 234 tests on ARM64 and 259 on x86-64; formatting and
 all-feature/all-target compilation pass on both hosts.
 
+### Capture-free linear regex matcher checkpoint
+
+The post-literal-scan count-only profile placed 1,097 of 1,293 ARM64 samples at
+the top of the stack in recursive `match_seq_from`. A bounded iterative matcher
+now handles capture-free ASTs whose sequence consists only of deterministic
+single atoms and at most one terminal quantifier (2026-08-07). A terminal
+quantifier cannot need continuation backtracking; fixed literals, dot, anchors,
+boundaries, character classes and shorthands each have exactly one outcome.
+Greedy, lazy and bounded tails retain their canonical repetition semantics.
+
+The proof rejects captures, alternation, lookarounds, backreferences, nested
+quantifiers and any quantified middle node. It runs once when a streaming
+consumer enters and chooses the iterative or canonical loop before scanning;
+no matcher bit is added to `Regex` and no dispatch branch remains inside the
+fallback loop. The planner/executor lives in `regex/linear.rs`, isolating its
+monomorphized visitor loop from canonical matcher codegen. Earlier versions
+that added a field or duplicated both loops in `regex.rs` produced unrelated
+x86 code-layout movements and were rejected before this checkpoint.
+
+Alternating runs compare exact `0bf8e90` binaries with the isolated-module
+source. Targets use 103 measured pairs after five warmups, grouped fallback
+uses 303 pairs after twenty warmups, and x86-64 remains pinned to CPU 2:
+
+| Workload | ARM64 literal scan | ARM64 linear matcher | Delta | x86-64 literal scan | x86-64 linear matcher | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match count-only `user[0-9]+` | 0.212 ms | 0.172 ms | -18.79% | 0.285 ms | 0.256 ms | -10.19% |
+| 5,000-match count-only `[0-9]+` | 0.357 ms | 0.281 ms | -21.31% | 0.437 ms | 0.297 ms | -32.02% |
+| 5,000-match `preg_replace_callback` | 0.855 ms | 0.844 ms | -1.28% | 0.725 ms | 0.684 ms | -5.63% |
+| Grouped/named `preg_match_all` fallback | 3.543 ms | 3.543 ms | 0.00% | 2.635 ms | 2.625 ms | -0.37% |
+
+The isolated follow-up profile contains no recursive `match_seq_from` sample.
+Its remaining work is the iterative atom/class executor and subject-to-`char`
+materialization. Both non-participating `preg_match` controls remain within
+0.89% of baseline on both architectures.
+
+Tests explicitly admit fixed-prefix/terminal-class shapes, verify greedy,
+lazy and bounded results, and reject mid-sequence quantifiers, captures and
+alternation. Both hosts pass 164 default-feature, 157 no-default-feature and 35
+regex E2E tests under both configurations, plus all 70 hot-tier tests.
+All-feature library matrices pass 237 tests on ARM64 and 262 on x86-64;
+formatting and all-feature/all-target compilation pass on both hosts.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

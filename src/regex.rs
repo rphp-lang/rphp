@@ -16,6 +16,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
+mod linear;
+
 /// Keep the cache bounded so scripts generating regexes dynamically cannot
 /// retain an unbounded amount of compiled AST data for the lifetime of the
 /// executor. The cache is shared by every preg_* function in that executor.
@@ -397,7 +399,25 @@ impl Regex {
 
     /// Visit non-overlapping matches in order while reusing one capture-slot
     /// buffer. Returning `false` stops before scanning the remaining subject.
-    pub(crate) fn try_visit_captures<E, F>(&self, subject: &str, mut visitor: F) -> Result<usize, E>
+    pub(crate) fn try_visit_captures<E, F>(&self, subject: &str, visitor: F) -> Result<usize, E>
+    where
+        F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
+    {
+        // Prove the small iterative matcher once per consumer call. Its hot
+        // loop lives in a separate codegen module so the canonical matcher and
+        // unrelated preg_match layout remain stable.
+        if self.num_groups == 0 && linear::is_supported(&self.ast) {
+            linear::try_visit_captures(self, subject, visitor)
+        } else {
+            self.try_visit_backtracking_captures(subject, visitor)
+        }
+    }
+
+    fn try_visit_backtracking_captures<E, F>(
+        &self,
+        subject: &str,
+        mut visitor: F,
+    ) -> Result<usize, E>
     where
         F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
     {
@@ -2150,6 +2170,51 @@ mod tests {
             });
         assert_eq!(visited.unwrap(), 2);
         assert_eq!(starts, vec![2, 8]);
+    }
+
+    #[test]
+    fn test_linear_capture_visitor_matches_fixed_prefix_and_terminal_class() {
+        let subject = "xuser12 user3";
+        let re = Regex::new("user[0-9]+", RegexFlags::default()).unwrap();
+
+        assert!(linear::is_supported(&re.ast));
+        let matches = re.captures_iter(subject);
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0].get(0).unwrap().as_str(subject), "user12");
+        assert_eq!(matches[1].get(0).unwrap().as_str(subject), "user3");
+    }
+
+    #[test]
+    fn test_linear_capture_visitor_preserves_greedy_lazy_and_bounded_tails() {
+        let greedy = Regex::new("a{2,3}", RegexFlags::default()).unwrap();
+        let lazy = Regex::new("a+?", RegexFlags::default()).unwrap();
+
+        assert!(linear::is_supported(&greedy.ast));
+        assert!(linear::is_supported(&lazy.ast));
+        let greedy_lengths = greedy
+            .captures_iter("aaaaa")
+            .into_iter()
+            .map(|captures| captures.get(0).unwrap().end - captures.get(0).unwrap().start)
+            .collect::<Vec<_>>();
+        let lazy_lengths = lazy
+            .captures_iter("aaaa")
+            .into_iter()
+            .map(|captures| captures.get(0).unwrap().end - captures.get(0).unwrap().start)
+            .collect::<Vec<_>>();
+
+        assert_eq!(greedy_lengths, vec![3, 2]);
+        assert_eq!(lazy_lengths, vec![1, 1, 1, 1]);
+    }
+
+    #[test]
+    fn test_linear_capture_visitor_rejects_continuations_and_captures() {
+        let quantified_middle = Regex::new("a+ab", RegexFlags::default()).unwrap();
+        let capture = Regex::new("(user)[0-9]+", RegexFlags::default()).unwrap();
+        let alternation = Regex::new("user|admin", RegexFlags::default()).unwrap();
+
+        assert!(!linear::is_supported(&quantified_middle.ast));
+        assert!(!linear::is_supported(&capture.ast));
+        assert!(!linear::is_supported(&alternation.ast));
     }
 
     #[test]
