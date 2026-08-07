@@ -783,6 +783,7 @@ fn binary_interval(
             lhs.minimum.checked_sub(rhs.maximum)?,
             lhs.maximum.checked_sub(rhs.minimum)?,
         ),
+        ScalarLongOpKind::Compare => LongInterval::new(-1, 1),
         ScalarLongOpKind::Multiply => {
             let products = [
                 lhs.minimum.checked_mul(rhs.minimum)?,
@@ -1668,6 +1669,7 @@ mod tests {
         let kinds = [
             ScalarLongOpKind::Add,
             ScalarLongOpKind::Subtract,
+            ScalarLongOpKind::Compare,
             ScalarLongOpKind::Multiply,
             ScalarLongOpKind::IntDivide,
             ScalarLongOpKind::Modulo,
@@ -1688,6 +1690,13 @@ mod tests {
                                 ScalarLongOpKind::Add => (left as i64).checked_add(right as i64),
                                 ScalarLongOpKind::Subtract => {
                                     (left as i64).checked_sub(right as i64)
+                                }
+                                ScalarLongOpKind::Compare => {
+                                    Some(match (left as i64).cmp(&(right as i64)) {
+                                        std::cmp::Ordering::Less => -1,
+                                        std::cmp::Ordering::Equal => 0,
+                                        std::cmp::Ordering::Greater => 1,
+                                    })
                                 }
                                 ScalarLongOpKind::Multiply => {
                                     (left as i64).checked_mul(right as i64)

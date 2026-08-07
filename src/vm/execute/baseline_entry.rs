@@ -162,11 +162,11 @@ pub(crate) unsafe fn prepare_scalar_long_callback(
 }
 
 impl ScalarLongCallback {
-    /// Recognize the exact two-argument subtraction comparator. For raw Long
-    /// inputs its sign is identical to integer ordering even when canonical
-    /// PHP subtraction widens an overflowing result to Double.
+    /// Recognize an exact two-argument total-order comparator. Direct Compare
+    /// already returns ordering; subtraction has the same sign for raw Long
+    /// inputs even when canonical PHP widens overflow to Double.
     #[inline(always)]
-    pub(crate) unsafe fn subtraction_sort_order(&self) -> Option<ScalarLongSortOrder> {
+    pub(crate) unsafe fn exact_sort_order(&self) -> Option<ScalarLongSortOrder> {
         let plan = &*self.plan;
         if plan.select.is_some()
             || plan.program.operations.len() != 1
@@ -176,16 +176,17 @@ impl ScalarLongCallback {
             return None;
         }
         let operation = plan.program.operations[0];
-        if operation.kind != ScalarLongOpKind::Subtract {
-            return None;
-        }
-        match (operation.lhs, operation.rhs) {
+        let order = match (operation.lhs, operation.rhs) {
             (ScalarLongSource::Input(0), ScalarLongSource::Input(1)) => {
-                Some(ScalarLongSortOrder::Ascending)
+                ScalarLongSortOrder::Ascending
             }
             (ScalarLongSource::Input(1), ScalarLongSource::Input(0)) => {
-                Some(ScalarLongSortOrder::Descending)
+                ScalarLongSortOrder::Descending
             }
+            _ => return None,
+        };
+        match operation.kind {
+            ScalarLongOpKind::Subtract | ScalarLongOpKind::Compare => Some(order),
             _ => None,
         }
     }

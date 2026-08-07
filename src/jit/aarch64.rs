@@ -4011,6 +4011,11 @@ fn validate_straight_long_binary(
     rhs: QuickLongOperand,
 ) -> Result<(), QuickLongAccumulateJitError> {
     match kind {
+        ScalarLongOpKind::Compare => {
+            return Err(QuickLongAccumulateJitError::InvalidProgram(
+                "three-way compare is not a straight-loop arithmetic operation",
+            ));
+        }
         ScalarLongOpKind::Add
         | ScalarLongOpKind::Subtract
         | ScalarLongOpKind::Multiply
@@ -4123,6 +4128,7 @@ fn emit_straight_binary(
         return Ok(());
     }
     match kind {
+        ScalarLongOpKind::Compare => unreachable!("validated above"),
         ScalarLongOpKind::Add => {
             if check_side_exits {
                 assembler.add_register_checked(result, lhs, rhs);
@@ -5282,6 +5288,11 @@ fn validate_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Scalar
 
     for operation in plan.program.operations.iter() {
         match operation.kind {
+            ScalarLongOpKind::Compare => {
+                return Err(ScalarLongJitError::InvalidProgram(
+                    "three-way compare remains in the shared interpreter",
+                ));
+            }
             ScalarLongOpKind::Add
             | ScalarLongOpKind::Subtract
             | ScalarLongOpKind::Multiply
@@ -5429,6 +5440,7 @@ fn emit_scalar_operation(
     let destination = scalar_temporary_register(index);
 
     match operation.kind {
+        ScalarLongOpKind::Compare => unreachable!("validated above"),
         ScalarLongOpKind::Add => {
             assembler.add_register_checked(destination, lhs, rhs);
             side_exit_branches

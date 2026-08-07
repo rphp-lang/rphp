@@ -1438,6 +1438,11 @@ fn apply_scalar_long_op(kind: ScalarLongOpKind, lhs: i64, rhs: i64) -> Option<i6
     match kind {
         ScalarLongOpKind::Add => lhs.checked_add(rhs),
         ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
+        ScalarLongOpKind::Compare => Some(match lhs.cmp(&rhs) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        }),
         ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
         ScalarLongOpKind::IntDivide => lhs.checked_div(rhs),
         ScalarLongOpKind::Modulo => lhs.checked_rem(rhs),

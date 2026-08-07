@@ -1203,6 +1203,7 @@ fn native_checked_arithmetic_matches_rust_over_many_inputs() {
             let expected = match kind {
                 ScalarLongOpKind::Add => lhs.checked_add(rhs),
                 ScalarLongOpKind::Subtract => lhs.checked_sub(rhs),
+                ScalarLongOpKind::Compare => unreachable!("not in native operation matrix"),
                 ScalarLongOpKind::Multiply => lhs.checked_mul(rhs),
                 ScalarLongOpKind::BitwiseAnd => Some(lhs & rhs),
                 ScalarLongOpKind::BitwiseOr => Some(lhs | rhs),

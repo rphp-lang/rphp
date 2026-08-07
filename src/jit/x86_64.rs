@@ -2395,6 +2395,11 @@ fn emit_scalar_straight_loop(
             right_register = Some(rhs);
         }
         match kind {
+            ScalarLongOpKind::Compare => {
+                return Err(X86StraightLongLoopError::UnsupportedConfig(
+                    "three-way compare is not a straight-loop arithmetic operation",
+                ));
+            }
             ScalarLongOpKind::Add => match embedded_immediate {
                 Some(immediate) => {
                     let encoded = assembler.add_immediate(result_register, immediate);
@@ -3823,6 +3828,7 @@ fn emit_x86_scalar_operation(
     }
 
     match operation.kind {
+        ScalarLongOpKind::Compare => unreachable!("validated before lowering"),
         ScalarLongOpKind::Add => {
             if let Some(immediate) = embedded_immediate {
                 let encoded = assembler.add_immediate(lhs, immediate);
@@ -3990,6 +3996,16 @@ fn validate_x86_scalar_long_plan(plan: &ScalarLongFunctionPlan) -> Result<(), Sc
     if plan.program.output_count != 1 {
         return Err(ScalarLongJitError::InvalidProgram(
             "the scalar leaf must expose exactly one output",
+        ));
+    }
+    if plan
+        .program
+        .operations
+        .iter()
+        .any(|operation| operation.kind == ScalarLongOpKind::Compare)
+    {
+        return Err(ScalarLongJitError::InvalidProgram(
+            "three-way compare remains in the shared interpreter",
         ));
     }
 

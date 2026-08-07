@@ -5128,7 +5128,7 @@ unsafe fn try_usort_scalar_long(
         return Ok(false);
     }
 
-    if let Some(order) = callback.subtraction_sort_order() {
+    if let Some(order) = callback.exact_sort_order() {
         let mut completed_calls = 0u64;
         items.sort_by(|left, right| {
             completed_calls += 1;

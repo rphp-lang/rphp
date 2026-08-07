@@ -1748,7 +1748,9 @@ fn scalar_long_op_kind(opcode: OpCode) -> Option<ScalarLongOpKind> {
 }
 
 fn scalar_long_instruction_kind(instruction: &Instruction) -> Option<ScalarLongOpKind> {
-    if instruction.opcode == OpCode::DirectInternalCall2
+    if instruction.opcode == OpCode::Spaceship {
+        Some(ScalarLongOpKind::Compare)
+    } else if instruction.opcode == OpCode::DirectInternalCall2
         && crate::builtin_metadata::DirectInternalKind::from_id(instruction.extended_value)
             == Some(crate::builtin_metadata::DirectInternalKind::Intdiv)
     {

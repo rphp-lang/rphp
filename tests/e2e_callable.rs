@@ -550,6 +550,9 @@ echo (runScalarSort($overflow) ? "1" : "0") . ":" . implode(",", $overflow) . "|
 function compareLongsDescending($left, $right) { return $right - $left; }
 $descending = [1, 3, 2];
 echo (usort($descending, "compareLongsDescending") ? "1" : "0") . ":" . implode(",", $descending) . "|";
+function compareSpaceship($left, $right) { return $left <=> $right; }
+$spaceship = [3, 1, 2];
+echo (usort($spaceship, "compareSpaceship") ? "1" : "0") . ":" . implode(",", $spaceship) . "|";
 function orderedSort($left, $right) { echo $left . $right; return $left - $right; }
 $ordered = [3, 1, 2];
 usort($ordered, "orderedSort");
@@ -558,7 +561,7 @@ echo ":" . implode(",", $ordered);
     );
     assert_eq!(
         out,
-        "1:1,2,3|1:1.5,2.5,3.5|1:-9223372036854775807,9223372036854775807|1:3,2,1|313212:1,2,3"
+        "1:1,2,3|1:1.5,2.5,3.5|1:-9223372036854775807,9223372036854775807|1:3,2,1|1:1,2,3|313212:1,2,3"
     );
 }
 

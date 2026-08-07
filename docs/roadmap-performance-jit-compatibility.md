@@ -6069,11 +6069,55 @@ under default and no-default features. The JIT-prototype and all-feature
 library matrices remain green at 218/222 tests on ARM64 and 243/247 tests on
 x86-64; formatting and all-target compilation also pass.
 
-Modern comparator bodies commonly use `$left <=> $right`, which is not yet a
-`ScalarLongOpKind`. Adding a target-neutral three-way-compare operation to the
-shared scalar IR is the measured next compatibility extension; it should then
-reuse this exact stable-order proof rather than introduce a `usort`-specific
-opcode detector.
+### Target-neutral Long three-way-compare checkpoint
+
+The common modern comparator body `$left <=> $right` now reaches the same
+proof-bounded sort path without a `usort`-specific opcode detector
+(2026-08-07). `ScalarLongOpKind::Compare` represents the operation in the
+shared function IR, and the scalar evaluator returns exact `-1`, `0` or `1`
+from guarded raw Long inputs. The compiler admits `Spaceship` through the
+function-plan builder; Double and other runtime types still execute the
+canonical opcode.
+
+The new variant is appended after every established arithmetic kind so their
+discriminants and hot code layout remain unchanged. An initial mid-enum
+placement produced a repeatable 2.09% ARM64 regression in the impure `usort`
+control despite identical executed source. Moving it to the end restored the
+1003-pair result to +0.48%. This layout rule is now documented at the enum.
+
+An exact one-operation Compare plan over public inputs zero and one (or the
+reverse) is exposed by the existing callback object as ascending (or
+descending) total ordering. The stable O(n log n) Long sort can therefore use
+it directly. More general scalar functions evaluate Compare in the shared Rust
+executor. Straight-loop/native plan validators on ARM64 and x86-64 reject it
+explicitly for now, and range analysis still assigns its exact `[-1, 1]`
+interval. This preserves one target-neutral semantic representation without
+claiming an unimplemented native lowering.
+
+Alternating same-host A/B runs compare exact commit `ceb45c6` with this source.
+The target and subtraction control use 103 measured pairs after five warmups;
+the impure control uses 1003 pairs after twenty warmups. x86-64 is pinned to
+CPU 2:
+
+| Workload | ARM64 before | ARM64 Compare IR | Delta | x86-64 before | x86-64 Compare IR | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 4,096-member permuted `<=>` comparator | 80.116 ms | 0.106 ms | -99.87% | 134.685 ms | 0.149 ms | -99.89% |
+| Existing subtraction-order fast path | 0.108 ms | 0.107 ms | -0.88% | 0.144 ms | 0.144 ms | -0.50% |
+| 500-member impure callback control | 11.007 ms | 11.060 ms | +0.48% | 13.584 ms | 13.532 ms | -0.38% |
+
+All checksums remain exact. Compiler tests assert that a spaceship function
+owns a one-operation Compare plan; direct execution covers `-1/0/1` and Double
+fallback; callable tests exercise the `usort` integration. Both hosts pass 56
+callable and 30 function E2E tests under default and no-default features plus
+all 70 hot-tier tests. ARM64 passes all 100 native prototype tests and the
+218/222 library matrices; x86-64 passes 32 native prototype tests and the
+243/247 matrices. Formatting and all-feature/all-target compilation pass on
+both architectures.
+
+Native Compare lowering is not the next priority unless a profile finds
+multi-operation scalar functions spending material time in the Rust adapter.
+For callback standard-library coverage, the next distinct ABI is regex
+replacement: String subjects plus a match array and String callback result.
 
 ### Nice to have: persistent compiled artifacts
 

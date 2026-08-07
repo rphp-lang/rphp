@@ -153,6 +153,16 @@ fn test_e2e_scalar_long_plan_falls_back_on_overflow() {
 }
 
 #[test]
+fn test_e2e_scalar_long_plan_three_way_compare_and_double_fallback() {
+    assert_eq!(
+        run_php(
+            "<?php function compareValues($left, $right) { return $left <=> $right; } echo compareValues(1, 2) . ':' . compareValues(2, 2) . ':' . compareValues(3, 2) . ':' . compareValues(1.5, 2.5);"
+        ),
+        "-1:0:1:-1"
+    );
+}
+
+#[test]
 fn test_e2e_deferred_scalar_call_captures_arguments_in_source_order() {
     assert_eq!(
         run_php(

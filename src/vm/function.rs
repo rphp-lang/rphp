@@ -482,6 +482,9 @@ pub enum ScalarLongOpKind {
     BitwiseAnd,
     BitwiseOr,
     BitwiseXor,
+    /// Kept after the established arithmetic variants so extending scalar
+    /// callback plans does not perturb their discriminants or code layout.
+    Compare,
 }
 
 /// One straight-line operation in a pure integer function plan. The result is

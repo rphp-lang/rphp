@@ -13,6 +13,7 @@ use common::run_php;
 use rphp::compiler::compile::Compiler;
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
+use rphp::vm::function::ScalarLongOpKind;
 use rphp::vm::function::{CallStrategy, ComposedScalarLongOp, ObjectLongOp, ScalarLongCallGuard};
 
 // ══════════════════════════════════════════════════════════════════════
@@ -271,6 +272,28 @@ fn test_straight_line_integer_function_gets_scalar_long_plan() {
     let plan = calc.scalar_long_plan.as_deref().expect("scalar long plan");
     assert_eq!(plan.public_args, 2);
     assert_eq!(plan.program.operations.len(), 3);
+}
+
+#[test]
+fn test_spaceship_function_gets_target_neutral_scalar_long_plan() {
+    let source = "<?php function compare($left, $right) { return $left <=> $right; }";
+    let tokens = Lexer::new(source).tokenize().unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let compare = result
+        .functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case("compare"))
+        .map(|(_, function)| function)
+        .unwrap();
+
+    let plan = compare
+        .scalar_long_plan
+        .as_deref()
+        .expect("spaceship scalar long plan");
+    assert_eq!(plan.public_args, 2);
+    assert_eq!(plan.program.operations.len(), 1);
+    assert_eq!(plan.program.operations[0].kind, ScalarLongOpKind::Compare);
 }
 
 #[test]
