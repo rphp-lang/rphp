@@ -66,6 +66,55 @@ pub fn call_function(
     call_function_iter(eg, func_ptr, args.len(), args.iter())
 }
 
+/// Evaluate a compiler-proven pure Long callback without allocating a VM
+/// frame. Callback consumers have already resolved the callable, so this
+/// boundary only guards the exact user function, arity and by-value Long ABI.
+/// A failed type or checked-arithmetic guard is side-effect free and leaves the
+/// caller free to replay the invocation through the canonical PHP path.
+#[inline(always)]
+pub(crate) unsafe fn try_execute_scalar_long_callback<'a, I>(
+    func_ptr: *const FunctionCommon,
+    public_num_args: usize,
+    arguments: I,
+) -> Option<i64>
+where
+    I: IntoIterator<Item = &'a Value>,
+{
+    if func_ptr.is_null() {
+        return None;
+    }
+    let common = &*func_ptr;
+    if common.fn_type != FunctionType::User
+        || !common.supports_scalar_long_plan()
+        || common.sig.public_arity() as usize != public_num_args
+    {
+        return None;
+    }
+
+    let user = &*(func_ptr as *const UserFunction);
+    let plan = user.scalar_long_plan.as_deref()?;
+    if plan.public_args as usize != public_num_args {
+        return None;
+    }
+
+    let mut scalar_arguments = [0i64; 8];
+    let mut arguments = arguments.into_iter();
+    for destination in scalar_arguments.iter_mut().take(public_num_args) {
+        let value = arguments.next()?;
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return None;
+        }
+        *destination = value.raw_long();
+    }
+    if arguments.next().is_some() {
+        return None;
+    }
+
+    let result = evaluate_scalar_long_plan(plan, &scalar_arguments)?;
+    record_scalar_call(common);
+    Some(result)
+}
+
 /// Call a PHP function from borrowed arguments without first materializing an
 /// intermediate `Vec<Value>`. Each value is cloned exactly once, directly into
 /// its destination CV slot in the new call frame.
@@ -491,4 +540,3 @@ pub fn resume_generator(
 
     result
 }
-

@@ -21,7 +21,7 @@ use crate::runtime::ExecutorGlobals;
 use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::{
     VmError, call_function, call_function_iter, call_function_owned_iter,
-    call_function_readback_arg0_iter,
+    call_function_readback_arg0_iter, try_execute_scalar_long_callback,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -1782,25 +1782,30 @@ fn fn_array_map(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let callback_name = arg_str!(ed, 0);
+    let callback = arg!(ed, 0);
     let arr_val = arg!(ed, 1);
-    let func_ptr = match eg.find_function(&callback_name) {
-        Some(ptr) => ptr,
+    let resolved = match resolve_callback_at_callsite(callback, eg, ed) {
+        Some(resolved) => resolved,
         None => {
+            let description = callback.echo_to_string();
             eg.exception = Some(crate::value::make_error_value(
                 "TypeError",
                 &format!(
                     "array_map(): Argument #1 ($callback) must be a valid callback, function \"{}\" not found",
-                    callback_name
+                    description
                 ),
             ));
             return Ok(());
         }
     };
     if let Some(arr) = arr_val.as_array() {
-        let mut result = PhpArray::new();
+        let mut result = if arr.is_packed() {
+            PhpArray::with_packed_capacity(arr.len())
+        } else {
+            PhpArray::with_deferred_hash_capacity(arr.len())
+        };
         for (key, val) in arr.iter() {
-            let mapped = call_function(eg, func_ptr, std::slice::from_ref(val))?;
+            let mapped = call_resolved_with_values(eg, &resolved, std::slice::from_ref(val))?;
             if eg.exception.is_some() {
                 return Ok(());
             }
@@ -1824,25 +1829,23 @@ fn fn_array_filter(
         let mut result = PhpArray::new();
         match callback {
             Some(cb_val) => {
-                let cb_name = match cb_val.as_str() {
-                    Some(s) => s.to_string(),
-                    None => cb_val.echo_to_string(),
-                };
-                let func_ptr = match eg.find_function(&cb_name) {
-                    Some(ptr) => ptr,
+                let resolved = match resolve_callback_at_callsite(cb_val, eg, ed) {
+                    Some(resolved) => resolved,
                     None => {
+                        let description = cb_val.echo_to_string();
                         eg.exception = Some(crate::value::make_error_value(
                             "TypeError",
                             &format!(
                                 "array_filter(): Argument #2 ($callback) must be a valid callback, function \"{}\" not found",
-                                cb_name
+                                description
                             ),
                         ));
                         return Ok(());
                     }
                 };
                 for (key, val) in arr.iter() {
-                    let ret_val = call_function(eg, func_ptr, std::slice::from_ref(val))?;
+                    let ret_val =
+                        call_resolved_with_values(eg, &resolved, std::slice::from_ref(val))?;
                     if eg.exception.is_some() {
                         return Ok(());
                     }
@@ -3864,10 +3867,8 @@ fn call_resolved_with_array(
     resolved: &ResolvedCallback,
     args: &PhpArray,
 ) -> Result<Value, VmError> {
-    if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() {
-        if let Some(values) = args.packed_values() {
-            return call_function(eg, resolved.func_ptr, values);
-        }
+    if let Some(values) = args.packed_values() {
+        return call_resolved_with_values(eg, resolved, values);
     }
 
     let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
@@ -3879,6 +3880,38 @@ fn call_resolved_with_array(
             .prepend_args
             .iter()
             .chain(args.values())
+            .chain(resolved.use_vars.iter()),
+    )
+}
+
+/// Invoke a resolved callback from a contiguous argument slice. Plain user
+/// functions can enter the guarded scalar callback ABI, while internal
+/// handlers retain their direct slice ABI and every other callable shape uses
+/// the canonical receiver/capture-aware frame path.
+#[inline]
+fn call_resolved_with_values(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    args: &[Value],
+) -> Result<Value, VmError> {
+    if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() {
+        if let Some(result) =
+            unsafe { try_execute_scalar_long_callback(resolved.func_ptr, args.len(), args.iter()) }
+        {
+            return Ok(Value::long(result));
+        }
+        return call_function(eg, resolved.func_ptr, args);
+    }
+
+    let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
+    call_function_iter(
+        eg,
+        resolved.func_ptr,
+        num_args,
+        resolved
+            .prepend_args
+            .iter()
+            .chain(args.iter())
             .chain(resolved.use_vars.iter()),
     )
 }
@@ -4990,6 +5023,19 @@ fn fn_array_reduce(
         let resolved = resolve_callback_or_fatal(eg, &callback, ed)?;
         let mut carry = initial;
         for item in items {
+            if resolved.prepend_args.is_empty()
+                && resolved.use_vars.is_empty()
+                && let Some(result) = unsafe {
+                    try_execute_scalar_long_callback(
+                        resolved.func_ptr,
+                        2,
+                        [&carry, &item].into_iter(),
+                    )
+                }
+            {
+                carry = Value::long(result);
+                continue;
+            }
             // Carry and item are already owned: move both straight into the
             // callback frame while cloning only persistent receiver/captures.
             let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();

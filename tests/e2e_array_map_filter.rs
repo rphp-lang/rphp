@@ -1,4 +1,4 @@
-/// Tests for array_map and array_filter with callback invocation.
+/// Tests for array_map, array_filter and array_reduce callback invocation.
 mod common;
 use common::{run_php, run_php_expect_error};
 
@@ -43,6 +43,31 @@ echo $result["a"] . "," . $result["b"];
 "#,
     );
     assert_eq!(out, "11,21");
+}
+
+#[test]
+fn test_array_map_supports_general_callable_forms() {
+    let out = run_php(
+        r#"<?php
+class MapCallbacks {
+    public function triple($value) { return $value * 3; }
+    public static function addTen($value) { return $value + 10; }
+    public function __invoke($value) { return $value - 1; }
+}
+$offset = 4;
+$closure = function($value) use ($offset) { return $value + $offset; };
+$callbacks = new MapCallbacks();
+$closureResult = array_map($closure, [1, 2]);
+$methodResult = array_map([$callbacks, "triple"], [2, 3]);
+$staticResult = array_map(["MapCallbacks", "addTen"], [4, 5]);
+$invokeResult = array_map($callbacks, [7, 8]);
+echo $closureResult[0] . "," . $closureResult[1] . ":";
+echo $methodResult[0] . "," . $methodResult[1] . ":";
+echo $staticResult[0] . "," . $staticResult[1] . ":";
+echo $invokeResult[0] . "," . $invokeResult[1];
+"#,
+    );
+    assert_eq!(out, "5,6:6,9:14,15:6,7");
 }
 
 #[test]
@@ -124,6 +149,39 @@ echo $keys[0] . "," . $keys[1];
 "#,
     );
     assert_eq!(out, "2,3");
+}
+
+#[test]
+fn test_array_filter_supports_closure_and_method_callbacks() {
+    let out = run_php(
+        r#"<?php
+class FilterCallbacks {
+    public function keepOdd($value) { return $value & 1; }
+}
+$minimum = 2;
+$closure = function($value) use ($minimum) { return $value > $minimum; };
+$callbacks = new FilterCallbacks();
+$closureResult = array_filter([1, 2, 3, 4], $closure);
+$methodResult = array_filter([1, 2, 3, 4], [$callbacks, "keepOdd"]);
+echo count($closureResult) . ":" . $closureResult[2] . "," . $closureResult[3] . ":";
+echo count($methodResult) . ":" . $methodResult[0] . "," . $methodResult[2];
+"#,
+    );
+    assert_eq!(out, "2:3,4:2:1,3");
+}
+
+#[test]
+fn test_array_reduce_scalar_and_general_callbacks() {
+    let out = run_php(
+        r#"<?php
+function sumValues($carry, $value) { return $carry + $value; }
+$factor = 2;
+$closure = function($carry, $value) use ($factor) { return $carry + $value * $factor; };
+echo array_reduce([1, 2, 3, 4], "sumValues", 0) . ":";
+echo array_reduce([1, 2, 3, 4], $closure, 0);
+"#,
+    );
+    assert_eq!(out, "10:20");
 }
 
 #[test]

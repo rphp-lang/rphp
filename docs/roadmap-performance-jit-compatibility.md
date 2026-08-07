@@ -5576,6 +5576,56 @@ and 32 x86-64 backend-specific JIT tests, all five shared native indexed-array
 tests and every end-to-end suite. The recursive Ackermann test again uses the
 established 16 MiB test-thread stack on both hosts.
 
+### Guarded scalar callback ABI checkpoint
+
+The first callback-pipeline checkpoint is implemented (2026-08-07). Resolved
+plain user callbacks can now evaluate a compiler-proven pure
+`ScalarLongFunctionPlan` without allocating, initializing and cleaning one VM
+frame per array member. The shared boundary verifies the exact user function,
+fixed public arity, scalar-plan-compatible signature, raw non-reference Long
+arguments and checked arithmetic before publishing a result. Any callable,
+type or arithmetic mismatch uses the existing canonical callback path. Plan
+evaluation is side-effect free, so an overflow guard may safely replay the
+original callback and preserve PHP's ordinary result or exception.
+
+`array_map`, `array_filter` and packed `call_user_func_array` calls share this
+invocation boundary; `array_reduce` feeds its already-owned carry and item into
+the same ABI without cloning either value on an admitted iteration. Direct
+internal handlers keep their existing slice ABI. Closures with captures,
+instance and static methods, inherited methods, invokable objects, reference
+arguments, impure bodies and unsupported return types retain the canonical
+receiver/capture-aware frame path.
+
+As part of the same cleanup, `array_map` and `array_filter` now use the common
+callback resolver rather than their former string-only lookup. That adds the
+callable forms above while retaining the monomorphic string cache, visibility
+checks, key order, exception propagation and partial-progress behavior.
+`array_map` also creates its result with the input's known packed or associative
+capacity; filtering remains streaming because its result cardinality is not
+known. Permanent isolated map/filter/reduce benchmarks and one three-stage
+pipeline benchmark cover the new boundary.
+
+Alternating same-host A/B runs compare exact commit `e9b2665` with the final
+source under identical `--release --features jit-prototype` builds. Each result
+is the median of 103 measured pairs after five warmups and times only the PHP
+callback operation over 500,000 input values:
+
+| Workload | ARM64 before | ARM64 callback ABI | Delta | x86-64 before | x86-64 callback ABI | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| `array_map` Long transform | 8.491 ms | 4.108 ms | -51.62% | 16.539 ms | 8.588 ms | -48.07% |
+| `array_filter` Long predicate | 9.011 ms | 5.958 ms | -33.88% | 15.421 ms | 9.266 ms | -39.91% |
+| `array_reduce` Long sum | 8.583 ms | 4.620 ms | -46.17% | 17.075 ms | 9.722 ms | -43.06% |
+| map/filter/reduce pipeline | 21.973 ms | 12.320 ms | -43.93% | 40.447 ms | 22.342 ms | -44.76% |
+
+Every workload retains its exact value and element count. The complete ARM64
+all-feature suite passes 216 library tests, all end-to-end suites, 118
+quick-loop tests, 100 backend JIT tests and all five shared native indexed-array
+tests. Focused x86-64 validation passes 241 library tests, 33 callback-array
+tests, 54 general callable tests, 118 quick-loop tests, all 32 backend JIT tests
+and the same five shared indexed-array tests. Both hosts also pass the
+no-default-feature build; the established 16 MiB test-thread stack is used for
+the complete ARM64 run.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a
