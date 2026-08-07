@@ -370,13 +370,17 @@ impl OpArray {
             }
         }
         for init_ip in 0..self.instructions.len() {
-            if crate::vm::callback_pipeline::detect_filter_map_callback_array_pipeline_span(
-                self, init_ip,
-            )
-            .is_some()
+            if let Some(span) =
+                crate::vm::callback_pipeline::detect_filter_map_callback_array_pipeline_span(
+                    self, init_ip,
+                )
             {
                 self.instructions[init_ip]._pad |=
                     crate::vm::instruction::CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE;
+                if span.discarded_cvs.is_some() {
+                    self.instructions[init_ip]._pad |=
+                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA;
+                }
             }
         }
         for init_ip in 0..self.instructions.len() {
@@ -391,11 +395,11 @@ impl OpArray {
                     == crate::vm::callback_pipeline::CallbackArrayPipelineOrder::FilterMap
                 {
                     self.instructions[init_ip]._pad |=
-                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST;
+                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST;
                 }
                 if span.pipeline.discarded_cvs.is_some() {
                     self.instructions[init_ip]._pad |=
-                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED;
+                        crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA;
                 }
             }
         }

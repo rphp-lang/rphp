@@ -188,7 +188,7 @@ unsafe fn execute_callback_array_pipeline_program(
 
 /// Execute an exact nested map/filter/reduce span as one streaming pass.
 #[inline(never)]
-unsafe fn try_execute_callback_array_pipeline(
+unsafe fn try_execute_uncached_callback_array_pipeline(
     eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
@@ -221,7 +221,7 @@ unsafe fn try_execute_callback_array_pipeline(
 
 /// Keep staged entry guards separate while sharing the normalized program.
 #[inline(never)]
-unsafe fn try_execute_staged_callback_array_pipeline(
+unsafe fn try_execute_uncached_staged_callback_array_pipeline(
     eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
@@ -256,7 +256,7 @@ unsafe fn try_execute_staged_callback_array_pipeline(
 
 /// Execute nested or dead-staged filter/map/reduce through the same program.
 #[inline(never)]
-unsafe fn try_execute_filter_map_callback_array_pipeline(
+unsafe fn try_execute_uncached_filter_map_callback_array_pipeline(
     eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
@@ -298,16 +298,14 @@ unsafe fn prepared_json_callback_array_pipeline_program(
     entry_ip: usize,
     entry: &Instruction,
 ) -> Option<(CallbackArrayPipelineProgram, usize, usize)> {
-    let filter_first =
-        entry._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST != 0;
-    let staged = entry._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED != 0;
+    let filter_first = entry._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST != 0;
+    let staged = entry._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA != 0;
     let instruction = |offset: usize| {
         caller_op_array
             .instructions
             .get(entry_ip + offset)
             .copied()
     };
-
     let (map_callback, source, filter_callback, reduce_callback, initial) =
         match (staged, filter_first) {
             (false, false) => (
@@ -348,7 +346,6 @@ unsafe fn prepared_json_callback_array_pipeline_program(
     let json_init_ip = entry_ip + if staged { 10 } else { 0 };
     let json_do_ip = entry_ip + if staged { 17 } else { 15 };
     caller_op_array.instructions.get(json_do_ip)?;
-
     Some((
         CallbackArrayPipelineProgram {
             span: CallbackArrayPipelineSpan {
@@ -435,4 +432,189 @@ unsafe fn try_execute_json_callback_array_pipeline(
             caller_op_array.instructions.as_ptr().add(json_do_ip),
         )
     }))
+}
+
+/// Decode immutable compiler metadata after this call site has completed the
+/// full structural detector once. The four admitted layouts are fixed by the
+/// same compiler pass that sets their entry marker.
+#[inline(always)]
+unsafe fn callback_array_pipeline_program_from_metadata(
+    caller_op_array: &crate::compiler::OpArray,
+    entry_ip: usize,
+    order: CallbackArrayPipelineOrder,
+    staged: bool,
+) -> Option<CallbackArrayPipelineProgram> {
+    let instruction = |offset: usize| {
+        caller_op_array
+            .instructions
+            .get(entry_ip + offset)
+            .copied()
+    };
+    let (map_callback, source, filter_callback, reduce_callback, initial, do_fcall_ip) =
+        match (staged, order) {
+            (false, CallbackArrayPipelineOrder::MapFilter) => (
+                instruction(3)?,
+                instruction(4)?,
+                instruction(7)?,
+                instruction(10)?,
+                instruction(11)?,
+                entry_ip + 12,
+            ),
+            (false, CallbackArrayPipelineOrder::FilterMap) => (
+                instruction(2)?,
+                instruction(4)?,
+                instruction(5)?,
+                instruction(10)?,
+                instruction(11)?,
+                entry_ip + 12,
+            ),
+            (true, CallbackArrayPipelineOrder::MapFilter) => (
+                instruction(1)?,
+                instruction(2)?,
+                instruction(7)?,
+                instruction(12)?,
+                instruction(13)?,
+                entry_ip + 14,
+            ),
+            (true, CallbackArrayPipelineOrder::FilterMap) => (
+                instruction(6)?,
+                instruction(1)?,
+                instruction(2)?,
+                instruction(12)?,
+                instruction(13)?,
+                entry_ip + 14,
+            ),
+        };
+    caller_op_array.instructions.get(do_fcall_ip)?;
+    let discarded_cvs = if staged {
+        Some((instruction(4)?.op1, instruction(9)?.op1))
+    } else {
+        None
+    };
+    Some(CallbackArrayPipelineProgram {
+        span: CallbackArrayPipelineSpan {
+            map_callback,
+            source,
+            filter_callback,
+            reduce_callback,
+            initial,
+            do_fcall_ip,
+        },
+        order,
+        discarded_cvs,
+    })
+}
+
+#[inline(always)]
+unsafe fn callback_array_pipeline_metadata_is_armed(
+    caller_op_array: &crate::compiler::OpArray,
+    entry_ip: usize,
+) -> bool {
+    (*caller_op_array.cache.as_ptr().add(entry_ip)).callback_pipeline_metadata_armed()
+}
+
+#[inline(always)]
+unsafe fn arm_callback_array_pipeline_metadata(
+    caller_op_array: &crate::compiler::OpArray,
+    entry_ip: usize,
+) {
+    (*(caller_op_array.cache.as_ptr().add(entry_ip)
+        as *mut crate::vm::instruction::InlineCache))
+        .arm_callback_pipeline_metadata();
+}
+
+/// The first successful execution retains the canonical structural detector;
+/// later executions at the same call site consume compiler-proven metadata.
+#[inline(never)]
+unsafe fn try_execute_callback_array_pipeline(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    reduce_ptr: *const Instruction,
+) -> Result<Option<(i64, *const Instruction)>, VmError> {
+    let entry_ip = reduce_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    if callback_array_pipeline_metadata_is_armed(caller_op_array, entry_ip) {
+        let Some(program) = callback_array_pipeline_program_from_metadata(
+            caller_op_array,
+            entry_ip,
+            CallbackArrayPipelineOrder::MapFilter,
+            false,
+        ) else {
+            return Ok(None);
+        };
+        return execute_callback_array_pipeline_program(eg, caller, caller_op_array, program);
+    }
+    let result = try_execute_uncached_callback_array_pipeline(
+        eg,
+        caller,
+        caller_op_array,
+        reduce_ptr,
+    )?;
+    if result.is_some() {
+        arm_callback_array_pipeline_metadata(caller_op_array, entry_ip);
+    }
+    Ok(result)
+}
+
+#[inline(never)]
+unsafe fn try_execute_staged_callback_array_pipeline(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    map_ptr: *const Instruction,
+) -> Result<Option<(i64, *const Instruction)>, VmError> {
+    let entry_ip = map_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    if callback_array_pipeline_metadata_is_armed(caller_op_array, entry_ip) {
+        let Some(program) = callback_array_pipeline_program_from_metadata(
+            caller_op_array,
+            entry_ip,
+            CallbackArrayPipelineOrder::MapFilter,
+            true,
+        ) else {
+            return Ok(None);
+        };
+        return execute_callback_array_pipeline_program(eg, caller, caller_op_array, program);
+    }
+    let result = try_execute_uncached_staged_callback_array_pipeline(
+        eg,
+        caller,
+        caller_op_array,
+        map_ptr,
+    )?;
+    if result.is_some() {
+        arm_callback_array_pipeline_metadata(caller_op_array, entry_ip);
+    }
+    Ok(result)
+}
+
+#[inline(never)]
+unsafe fn try_execute_filter_map_callback_array_pipeline(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    pipeline_ptr: *const Instruction,
+) -> Result<Option<(i64, *const Instruction)>, VmError> {
+    let entry_ip = pipeline_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    if callback_array_pipeline_metadata_is_armed(caller_op_array, entry_ip) {
+        let staged = (*pipeline_ptr)._pad & CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA != 0;
+        let Some(program) = callback_array_pipeline_program_from_metadata(
+            caller_op_array,
+            entry_ip,
+            CallbackArrayPipelineOrder::FilterMap,
+            staged,
+        ) else {
+            return Ok(None);
+        };
+        return execute_callback_array_pipeline_program(eg, caller, caller_op_array, program);
+    }
+    let result = try_execute_uncached_filter_map_callback_array_pipeline(
+        eg,
+        caller,
+        caller_op_array,
+        pipeline_ptr,
+    )?;
+    if result.is_some() {
+        arm_callback_array_pipeline_metadata(caller_op_array, entry_ip);
+    }
+    Ok(result)
 }

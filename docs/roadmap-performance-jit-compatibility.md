@@ -5879,6 +5879,53 @@ passes 218 ARM64 and 243 x86-64 JIT-prototype library tests, 222 and 247
 all-feature library tests respectively, plus all 48 callback-array tests under
 both default and no-default feature configurations.
 
+### Adaptive callback-pipeline metadata cache checkpoint
+
+Ordinary nested and dead-staged callback pipelines now stop rescanning their
+immutable instruction span after the first successful fused execution
+(2026-08-07). The first pass deliberately retains the complete structural
+detector and all existing runtime guards. Only a successful scalar Long result
+arms one otherwise-unused bit in the entry instruction's inline-cache side
+table; subsequent executions reconstruct the normalized collection program
+from compiler-proven layout metadata.
+
+The four map/filter order and staged/non-staged layouts remain separate,
+fixed compiler admissions. Staged filter/map sites carry one explicit metadata
+bit; the previously JSON-specific order and staged bits are generalized and
+shared with the ordinary pipeline decoder. The global function cache pointer
+and method class guard are unchanged. Runtime destination, callback identity,
+purity, arity, source, carry, member-type and checked-arithmetic guards remain
+authoritative on every execution. A site that has never completed fusion is
+not armed, while a later mismatch at an armed site still replays untouched
+canonical bytecode.
+
+Alternating same-host A/B runs compare exact commit `0817026` with this source
+under identical release builds. Each workload uses 103 measured pairs after
+five warmups; x86-64 processes are pinned to CPU 2. Values are medians of the
+PHP-internal timed region:
+
+| Workload | ARM64 before | ARM64 metadata cache | Delta | x86-64 before | x86-64 metadata cache | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| Repeated small map/filter/reduce | 22.724 ms | 19.528 ms | -14.06% | 29.500 ms | 24.739 ms | -16.14% |
+| Nested map/filter/reduce control | 4.729 ms | 4.133 ms | -12.60% | 5.761 ms | 5.102 ms | -11.43% |
+| Dead-staged map/filter/reduce control | 4.833 ms | 4.187 ms | -13.37% | 5.769 ms | 5.141 ms | -10.90% |
+| Filter/map/reduce control | 4.103 ms | 3.260 ms | -20.54% | 4.985 ms | 3.751 ms | -24.75% |
+| Repeated JSON-sink control | 27.119 ms | 26.255 ms | -3.19% | 32.552 ms | 31.231 ms | -4.06% |
+
+All checksums remain exact. The permanent repeated-small benchmark performs
+100,000 calls over a six-member packed array. Existing regression coverage
+already exercises a successful Long call followed by a Double fallback at the
+same call site, plus overflow, impure ordering, escaping destinations and all
+four admitted layouts. Formatting and all-target compilation pass; both hosts
+pass all 48 callback-array tests under default and no-default features. The
+JIT-prototype and all-feature library matrices remain green at 218/222 tests on
+ARM64 and 243/247 tests on x86-64.
+
+The next callback checkpoint should profile repeated callback identity and
+scalar-plan resolution. Any cache there must be request-stable, validate the
+actual function targets and preserve late definition or replacement behavior;
+the bytecode and runtime type guards remain the fallback contract.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

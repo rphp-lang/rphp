@@ -35,10 +35,10 @@ pub const CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE: u16 = 1 << 5;
 /// InitFcall flag: exact one-argument json_encode wrapper around an admitted
 /// scalar callback pipeline whose final Long can be encoded directly.
 pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK: u16 = 1 << 6;
-/// Json callback-pipeline sink metadata: filter executes before map.
-pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_FILTER_FIRST: u16 = 1 << 7;
-/// Json callback-pipeline sink metadata: two dead assigned arrays are omitted.
-pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_STAGED: u16 = 1 << 8;
+/// Callback-pipeline metadata: filter executes before map.
+pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST: u16 = 1 << 7;
+/// Callback-pipeline metadata: two dead assigned arrays are omitted.
+pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA: u16 = 1 << 8;
 
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
@@ -197,6 +197,7 @@ impl InlineCache {
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
     const METHOD_PROPERTY_GETTER_PLAN: u32 = 4;
+    const CALLBACK_PIPELINE_METADATA_ARMED: u32 = 1 << 31;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
     pub fn empty() -> Self {
@@ -329,6 +330,18 @@ impl InlineCache {
     #[inline(always)]
     pub fn method_has_property_getter_plan(&self) -> bool {
         self.prop_info & Self::METHOD_PROPERTY_GETTER_PLAN != 0
+    }
+
+    /// InitFcall does not otherwise consume `prop_info`; callback-pipeline
+    /// sites use its top bit after one full structural validation.
+    #[inline(always)]
+    pub fn callback_pipeline_metadata_armed(&self) -> bool {
+        self.prop_info & Self::CALLBACK_PIPELINE_METADATA_ARMED != 0
+    }
+
+    #[inline(always)]
+    pub fn arm_callback_pipeline_metadata(&mut self) {
+        self.prop_info |= Self::CALLBACK_PIPELINE_METADATA_ARMED;
     }
 
     /// String identity retained by a dynamic-callback DoFcall cache entry.
