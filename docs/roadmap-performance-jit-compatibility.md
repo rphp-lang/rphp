@@ -6687,6 +6687,14 @@ SHA-256 `695b7e472ce1913a59e2fdfed105f5626c4d41ae7deea86027eac000de8dab7d`,
 and the x86-64 ELF remains byte-identical at SHA-256
 `5359c1d345ecd9878c5e6bc0d358a7d97f294b80dc2b93be745a3e6cc533dcb8`.
 
+The callback-array integration target follows the same safe boundary. Its
+889-line source becomes an 11-line harness plus four files for map basics (104
+lines), filter and optimized pipelines (453), combined usage and callback
+errors (229), and Error/Exception hierarchy regressions (96). All 48 tests
+retain their original target names and pass with no-default and all-feature
+builds on both architectures; complete integration and all-target checks pass
+as well. The release Mach-O and ELF retain the exact hashes recorded above.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
