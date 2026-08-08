@@ -6704,6 +6704,14 @@ in both feature configurations on ARM64 and x86-64. Complete integration and
 all-target checks pass on both hosts, while the release Mach-O and ELF remain
 bit-identical to the preceding test-only checkpoints.
 
+Exception-flow coverage follows the same pattern. The 710-line try/catch
+target becomes an 11-line harness plus four files for basic flow (158 lines),
+finally control flow (220), Error/Exception hierarchy (124), and throw
+validation (201). All 35 tests retain their original target names and pass in
+both feature configurations on ARM64 and x86-64. Complete integration and
+all-target checks pass on both hosts, and both release binaries remain
+bit-identical to the preceding test-only checkpoints.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
