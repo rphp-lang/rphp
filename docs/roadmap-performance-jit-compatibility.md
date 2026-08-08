@@ -6552,6 +6552,26 @@ and compiler units. Their next splits require an explicit dependency boundary
 and the same two-architecture code/performance gate rather than another broad
 mechanical move.
 
+The first accepted production split (2026-08-08) separates the parser without
+changing its public paths. `src/parser.rs` is now a 19-line composition root;
+the AST (405 lines), statement parser (678), expression parser (764),
+declaration parser (739), and shared parser helpers (570) live in focused
+included files. The associated methods are grouped into four `impl Parser`
+blocks, while callers continue to use the exact `crate::parser::*` API.
+
+Source-span changes alter executable hashes even though section sizes remain
+constant. ARM64 keeps the measured hot regex symbols at their previous
+addresses; x86-64 moves them uniformly by 64 bytes, so both targets were gated
+rather than treating the move as cosmetic. The 1,003-pair ARM64 result ranges
+from -1.98% to +0.91%; the 303-pair pinned x86-64 result ranges from -1.87% to
++0.79%. The ARM64 retention holdout is +0.91% (0.014 ms), and all other
+positive ARM64 movements are at most +0.48%. Default, no-default and
+all-feature library matrices pass on both hosts, as do every all-feature
+integration test and all-target compilation. This establishes the parser
+composition-root pattern as the preferred next boundary shape: domain files
+remain independently readable while exported type and method ownership stays
+stable.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
