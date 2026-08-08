@@ -6623,6 +6623,13 @@ parameter hints, return hints, runtime guards, scalar propagation, String
 plans, and object plans. The responsibility files range from 193 to 633 lines;
 the target passes 106 tests without default features and 108 with all features.
 
+The internal quick-plan unit suite is also test-only modularized. Its
+2,098-line wrapper becomes a 20-line module index plus five files for Double
+plans, plan selection, scalar loops, array/hash loops, and dynamic control
+flow. The files range from 299 to 521 lines and retain all 58 tests. ARM64
+library matrices pass 161 tests without default features and 241 with all
+features; x86-64 passes 161 and 266 respectively.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
