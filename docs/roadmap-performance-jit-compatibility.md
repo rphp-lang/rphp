@@ -6476,6 +6476,51 @@ and compilation latency for long-lived production deployments. A later build
 mode may package the same artifact with the RPHP runtime as a standalone
 executable, without requiring an external compiler backend or package.
 
+## Phase 4.25: codegen-stability and maintainability refactor
+
+Before another runtime optimization family, stabilize the boundaries exposed
+by the regex callback work. Small source edits repeatedly changed unrelated
+x86-64 `preg_match` and count-only results by 3--20% even when their algorithms
+and symbol sizes were unchanged. That makes successful local optimization too
+dependent on linker placement and makes the 6,000-plus-line stdlib unit harder
+to evolve safely.
+
+This is a behavior-preserving phase, not a license to mix cleanup with new fast
+paths. Each checkpoint starts from exact ARM64 and x86-64 binaries, moves one
+responsibility, passes the full test matrix, and runs the common paired regex
+gate in `benches/compare_regex_stability.sh`. A refactor is accepted only when
+participating workloads do not slow materially and unrelated controls stay
+within one percent, allowing a narrowly documented exception only after a
+longer paired run proves a small absolute movement.
+
+The intended sequence is:
+
+1. Move public regex stdlib handlers beside their domain implementations while
+   retaining the canonical frame-argument and return macros.
+2. Give single-match, match-all/count, replacement and callback consumers
+   separate non-inlined ownership boundaries so their generic visitors cannot
+   silently merge into one code-layout dependency.
+3. Replace ad-hoc callback readback variants with one explicit owned-frame
+   result contract, then keep COW policy in the consuming domain rather than
+   the baseline executor.
+4. Split remaining high-churn domains out of `stdlib.rs` only when a dependency
+   audit shows that helpers and unsafe frame access are not being duplicated.
+5. Record symbol sizes and paired holdouts with every structural commit; never
+   add padding or benchmark-specific branches merely to recover a favorable
+   address.
+
+Exit this phase when the regex handler family has clear module ownership,
+future callback-only edits do not recompile or materially move single-match and
+count consumers, `stdlib.rs` is smaller without duplicated ABI helpers, and
+both architectures pass the established correctness and performance gates.
+
+The first audit checkpoint adds the shared gate without changing runtime code.
+Moving only the public callback handler beside its existing implementation
+passed correctness but moved the ARM64 no-literal count control by +9.55%; an
+explicit 64-byte loop alignment still measured +8.91%. Both runtime edits were
+reverted. This establishes the phase rule in practice: source organization is
+not accepted as a refactor when the generated program materially regresses.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
