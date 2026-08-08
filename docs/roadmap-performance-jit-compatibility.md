@@ -6695,6 +6695,15 @@ retain their original target names and pass with no-default and all-feature
 builds on both architectures; complete integration and all-target checks pass
 as well. The release Mach-O and ELF retain the exact hashes recorded above.
 
+Callable coverage is modularized next. The 873-line integration target is now
+a 31-line harness that keeps the shared compiler/opcode helpers, plus four
+files for string callbacks and direct lowering (218 lines), callback-array
+shapes (323), callable values and closures (94), and method visibility and
+inheritance (212). All 56 tests preserve their original target names and pass
+in both feature configurations on ARM64 and x86-64. Complete integration and
+all-target checks pass on both hosts, while the release Mach-O and ELF remain
+bit-identical to the preceding test-only checkpoints.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
