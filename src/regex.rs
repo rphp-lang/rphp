@@ -260,7 +260,7 @@ impl Regex {
     /// Test whether the pattern matches without materializing capture output.
     /// Internal capture slots are retained only when the pattern needs their
     /// contents for backreferences.
-    #[inline]
+    #[inline(always)]
     pub fn is_match(&self, subject: &str) -> bool {
         let chars: Vec<char> = subject.chars().collect();
         let byte_offsets = if self.uses_backreferences {
@@ -395,6 +395,21 @@ impl Regex {
             }
         }
         result
+    }
+
+    /// Count non-overlapping matches without publishing capture data.
+    #[inline(always)]
+    pub(crate) fn count_matches(&self, subject: &str) -> usize {
+        if self.num_groups == 0
+            && linear::is_supported(&self.ast)
+            && let Some(count) = linear::try_count_matches(self, subject)
+        {
+            return count;
+        }
+
+        let count: Result<usize, std::convert::Infallible> =
+            self.try_visit_captures(subject, |_| Ok(true));
+        count.unwrap()
     }
 
     /// Visit non-overlapping matches in order while reusing one capture-slot
@@ -2128,6 +2143,17 @@ mod tests {
                 ("č2".to_string(), "č".to_string())
             ]
         );
+    }
+
+    #[test]
+    fn test_count_matches_uses_ascii_and_capture_fallbacks() {
+        let ascii = Regex::new("user[0-9]+", RegexFlags::default()).unwrap();
+        let utf8 = Regex::new("uživatel[0-9]+", RegexFlags::default()).unwrap();
+        let grouped = Regex::new("(a)", RegexFlags::default()).unwrap();
+
+        assert_eq!(ascii.count_matches("user1 x user22"), 2);
+        assert_eq!(utf8.count_matches("uživatel1 uživatel22"), 2);
+        assert_eq!(grouped.count_matches("a a"), 2);
     }
 
     #[test]

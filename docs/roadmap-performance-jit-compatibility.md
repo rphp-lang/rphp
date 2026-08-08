@@ -6399,6 +6399,62 @@ configurations, plus all 70 hot-tier tests. All-feature library matrices pass
 240 tests on ARM64 and 265 on x86-64; formatting and all-feature/all-target
 compilation pass on both hosts.
 
+### Capture-free callback match-array reuse checkpoint
+
+An ARM64 sample of the post-ASCII `preg_replace_callback` workload left 4,218
+samples dominated by allocation/free work and `call_function_owned_iter`.
+Capture-free callbacks now move their one-element `$matches` array into the
+callback frame and read the first public argument back after execution
+(2026-08-08). If that value is still the uniquely owned array, the next match
+replaces element zero in place. If callback code retained, returned, replaced
+or otherwise shared the value, the ordinary COW test fails and the next match
+gets a fresh array. Methods remain correct because readback uses
+`param_cv_index(0)`, which skips their hidden `$this` slot.
+
+The specialized streaming consumer lives in `stdlib/regex_callback.rs`, away
+from the general stdlib codegen unit. Grouped and named patterns keep the
+canonical array builder and callback path. Callback resolution and output
+allocation remain lazy, exceptions still discard partial output, and two E2E
+tests cover both escaped arrays and callback-local mutation. The ASCII visitor
+also stops clearing its single group-zero slot before immediately overwriting
+it on every published match.
+
+The code-layout audit exposed two non-local effects. `Regex::is_match` is now
+forced inline so the separate callback monomorph does not pessimize ordinary
+`preg_match` on x86-64. Count-only fixed-prefix ASCII `preg_match_all` uses a
+small non-generic counter, avoiding a capture view and stabilizing its hot loop;
+no-prefix, grouped and non-ASCII shapes retain the established visitor. A
+version that kept another array owner alive across the callback was rejected
+because callback mutation then forced COW and regressed x86-64 by 10.52%.
+Variants that changed the shared callback helper, split capture-free and
+grouped visitors, or cached per-match classification were also rejected after
+moving unrelated x86 controls by 3--18%.
+
+Alternating same-host A/B runs compare exact commit `253c315` with this source.
+Rows use 1,003 measured pairs after fifty warmups and x86-64 is pinned to CPU 2;
+the final x86 UTF-8 holdout uses 3,003 pairs after one hundred warmups:
+
+| Workload | ARM64 baseline | ARM64 reuse | Delta | x86-64 baseline | x86-64 reuse | Delta |
+|---|---:|---:|---:|---:|---:|---:|
+| 5,000-match count-only `user[0-9]+` | 0.076611 ms | 0.075314 ms | -1.69% | 0.059866 ms | 0.060095 ms | +0.38% |
+| Count-only `[0-9]+` without a start literal | 0.113888 ms | 0.113332 ms | -0.49% | 0.098837 ms | 0.093166 ms | -5.74% |
+| UTF-8 count-only `uživatel[0-9]+` control | 0.309836 ms | 0.311245 ms | +0.45% | 0.516906 ms | 0.525540 ms | +1.67% |
+| 5,000-match capture-free callback | 0.710332 ms | 0.488812 ms | -31.19% | 0.520580 ms | 0.374073 ms | -28.14% |
+| Callback that mutates `$matches[0]` | 0.772371 ms | 0.571248 ms | -26.04% | 0.568192 ms | 0.442155 ms | -22.18% |
+| Callback that retains the prior `$matches` | 1.528322 ms | 1.512783 ms | -1.02% | 1.698780 ms | 1.617939 ms | -4.76% |
+| Grouped callback fallback | 4.072361 ms | 4.000808 ms | -1.76% | 2.321924 ms | 2.309887 ms | -0.52% |
+| Grouped/named `preg_match_all` with output | 3.550468 ms | 3.510766 ms | -1.12% | 2.665763 ms | 2.635668 ms | -1.13% |
+| 20,000 cached `preg_match` calls without groups | 7.681123 ms | 7.726817 ms | +0.59% | 6.902440 ms | 6.319882 ms | -8.44% |
+| 20,000 failed matches with an unused group | 7.433335 ms | 7.482945 ms | +0.67% | 6.655008 ms | 6.032375 ms | -9.36% |
+
+The x86 UTF-8 holdout is a measured 0.009 ms absolute movement; the UTF-8
+matcher itself is unchanged and all participating and grouped controls are
+neutral or faster. Both hosts pass 168 default-feature, 161
+no-default-feature and 37 regex E2E tests under both configurations, plus all
+70 hot-tier tests. All-feature library matrices pass 241 tests on ARM64 and
+266 on x86-64; formatting and all-feature/all-target compilation pass on both
+hosts.
+
 ### Nice to have: persistent compiled artifacts
 
 After the in-memory typed-region JIT is correct and profitable, consider a

@@ -244,6 +244,24 @@ where
     Ok(return_value)
 }
 
+/// Owned-argument form that reads back the first public argument after user
+/// code finishes. The argument is moved into the frame as its sole owner, so
+/// ordinary PHP COW mutation stays in place; the readback clone becomes the
+/// reusable owner after frame cleanup.
+pub fn call_function_owned_iter_readback_arg0<I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<(Value, Value), VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, arg0) =
+        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args)?;
+    Ok((return_value, arg0.unwrap_or_else(Value::null)))
+}
+
 /// Shared callback invocation path. `READBACK_ARG0` keeps the ordinary path
 /// free of the extra first-public-argument clone required by `array_walk`.
 fn call_function_value_iter<I, const READBACK_ARG0: bool>(

@@ -335,6 +335,42 @@ fn test_preg_replace_callback_builds_empty_replacements() {
 }
 
 #[test]
+fn test_preg_replace_callback_preserves_escaped_capture_free_match_arrays() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function retain_first_match($matches) {
+                static $first = null;
+                if ($first === null) {
+                    $first = $matches;
+                    return $matches[0];
+                }
+                return $first[0] . ':' . $matches[0];
+            }
+            echo preg_replace_callback('/[a-z]+/', 'retain_first_match', 'a bb');
+            "#,
+        ),
+        "a a:bb"
+    );
+}
+
+#[test]
+fn test_preg_replace_callback_capture_free_argument_keeps_cow_mutation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            function mutate_match($matches) {
+                $matches[0] = '<' . $matches[0] . '>';
+                return $matches[0];
+            }
+            echo preg_replace_callback('/[a-z]+/', 'mutate_match', 'a bb');
+            "#,
+        ),
+        "<a> <bb>"
+    );
+}
+
+#[test]
 fn test_preg_replace_callback_exception_does_not_publish_partial_output() {
     assert_eq!(
         run_php(

@@ -10,6 +10,14 @@ use super::{
 
 mod ascii;
 
+/// Count fixed-prefix ASCII shapes without a generic visitor. Unsupported
+/// shapes return before looking at the subject and retain the established
+/// visitor executor.
+#[inline(always)]
+pub(super) fn try_count_matches(regex: &Regex, subject: &str) -> Option<usize> {
+    ascii::try_count_matches(regex, subject)
+}
+
 /// Prove a shape that never needs continuation backtracking or capture state.
 /// A terminal quantifier is safe because no later atom can ask it to give
 /// characters back; every preceding atom has exactly one outcome.

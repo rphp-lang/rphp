@@ -31,6 +31,44 @@ struct ClassTailPlan<'a> {
     greedy: bool,
 }
 
+/// Count fixed-prefix ASCII matches directly. The count-only `preg_match_all`
+/// form never observes captures, so keeping its loop non-generic avoids both
+/// the group-zero write and visitor code-layout sensitivity. Other shapes
+/// return before scanning the subject and retain the existing visitor path.
+#[inline(never)]
+pub(super) fn try_count_matches(regex: &Regex, subject: &str) -> Option<usize> {
+    if regex.flags.case_insensitive {
+        return None;
+    }
+    let Some(prefix_plan) = prefix_plan(&regex.ast) else {
+        return None;
+    };
+    if !subject.is_ascii() {
+        return None;
+    }
+    let bytes = subject.as_bytes();
+    let mut pos = 0;
+    let mut count = 0;
+    let start_literal = regex.start_literal;
+
+    while pos <= bytes.len() {
+        if let Some(literal) = start_literal {
+            let Some(relative_pos) = find_literal(&bytes[pos..], literal) else {
+                break;
+            };
+            pos += relative_pos;
+        }
+        let end = match_prefix_plan(prefix_plan, pos, bytes, regex.flags);
+        if let Some(end) = end {
+            count += 1;
+            pos = if end == pos { pos + 1 } else { end };
+        } else {
+            pos += 1;
+        }
+    }
+    Some(count)
+}
+
 /// Scan an ASCII subject without materializing `Vec<char>`. ASCII character
 /// indexes are exact UTF-8 byte offsets, so capture boundaries remain direct.
 #[inline(never)]
@@ -63,7 +101,6 @@ where
             };
             pos += relative_pos;
         }
-        groups.fill(None);
         let end = match prefix_plan {
             Some(plan) => match_prefix_plan(plan, pos, bytes, regex.flags),
             None => match_terminal_class(class_tail_plan.unwrap(), pos, bytes),

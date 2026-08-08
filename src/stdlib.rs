@@ -31,6 +31,7 @@ use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
 
 mod json_decode;
+mod regex_callback;
 
 // ============================================================================
 // Helper macros — zero-cost abstractions for stdlib handlers
@@ -6604,9 +6605,7 @@ fn fn_preg_match_all(
     };
 
     if !has_matches {
-        let count: Result<usize, std::convert::Infallible> =
-            re.try_visit_captures(&subject, |_| Ok(true));
-        ret!(rv, Value::long(count.unwrap() as i64));
+        ret!(rv, Value::long(re.count_matches(&subject) as i64));
     }
 
     // PHP default: PREG_PATTERN_ORDER — matches[0] contains every full
@@ -6699,62 +6698,9 @@ fn fn_preg_replace_callback(
         }
     };
 
-    // Stream ordered, non-overlapping matches through one reusable capture
-    // buffer. Callback resolution and output allocation stay lazy so a subject
-    // with no matches preserves the existing no-op behavior.
-    let mut resolved = None;
-    let mut result = String::new();
-    let mut previous_end = 0;
-    let count = re.try_visit_captures(&subject, |caps| {
-        if resolved.is_none() {
-            resolved = Some(resolve_callback_or_fatal(eg, &callback, ed)?);
-            result.reserve(subject.len());
-        }
-        let resolved = resolved.as_ref().unwrap();
-        let full_match = caps.get(0).unwrap();
-        let match_start = full_match.start;
-        let match_end = full_match.end;
-        // Build matches array for callback — numeric + named group keys (like PHP)
-        let mut matches_arr = PhpArray::new();
-        for i in 0..caps.len() {
-            match caps.get(i) {
-                Some(m) => matches_arr.push(Value::string(m.as_str(&subject))),
-                None => matches_arr.push(Value::string("")),
-            }
-        }
-        // Add named capture groups as string-keyed entries
-        for (name, &idx) in caps.named_groups() {
-            if let Some(m) = caps.get(idx) {
-                matches_arr.set_str(name, Value::string(m.as_str(&subject)));
-            }
-        }
-        let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
-        let cb_result = call_function_owned_iter(
-            eg,
-            resolved.func_ptr,
-            num_args,
-            resolved
-                .prepend_args
-                .iter()
-                .cloned()
-                .chain(std::iter::once(Value::array(matches_arr)))
-                .chain(resolved.use_vars.iter().cloned()),
-        )?;
-        if eg.exception.is_some() {
-            return Ok(false);
-        }
-        result.push_str(&subject[previous_end..match_start]);
-        result.push_str(&cb_result.echo_to_string());
-        previous_end = match_end;
-        Ok(true)
-    })?;
-    if eg.exception.is_some() {
+    let Some(result) = regex_callback::replace(&re, subject, &callback, ed, eg)? else {
         return Ok(());
-    }
-    if count == 0 {
-        ret!(rv, Value::string(subject));
-    }
-    result.push_str(&subject[previous_end..]);
+    };
 
     ret!(rv, Value::string(result));
 }
