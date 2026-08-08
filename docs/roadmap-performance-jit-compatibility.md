@@ -6595,6 +6595,21 @@ checkpoint also identifies expression compilation as a code-layout-sensitive
 boundary: it stays in place until the affected callback code can be isolated
 without moving participating runtime paths.
 
+A subsequent `OpArray` extraction from `compiler/mod.rs` was likewise rejected
+despite a neutral ARM64 gate. The pinned 303-pair x86-64 control moved retained
+callbacks by +6.89%, grouped callbacks by +3.99%, fixed-prefix count by +1.34%,
+and UTF-8 count by +1.52%. The experiment was fully reverted, including the
+server binary, before any further cleanup was admitted.
+
+The safe follow-up instead removes a test-maintenance bottleneck without
+changing the release crate. The 4,519-line ARM64 prototype integration test is
+now a 52-line shared harness plus six responsibility files covering Double
+runtime paths, scalar code generation, guarded runtime paths, scalar calls,
+straight-loop code generation, and straight-loop runtime behavior. Individual
+files stay between 578 and 874 lines, all 100 prototype tests retain their
+original root-module names, and the complete all-feature integration matrix
+passes.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
