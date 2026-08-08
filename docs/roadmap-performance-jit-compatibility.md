@@ -6656,6 +6656,12 @@ paths, and scalar calls/guards. Files range from 285 to 407 lines; all 32
 target-specific tests pass natively with all features, while the no-default
 configuration correctly selects zero prototype tests.
 
+The low-level VM integration suite is split at the same maintenance boundary.
+Its 1,054-line file becomes a 37-line shared harness plus three files for
+basic/CV instructions, function calls, and recursion/interrupt/result
+contracts. Files range from 315 to 374 lines and all 14 tests pass in both
+feature configurations.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
