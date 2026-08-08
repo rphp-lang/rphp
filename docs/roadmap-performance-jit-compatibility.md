@@ -6630,6 +6630,13 @@ flow. The files range from 299 to 521 lines and retain all 58 tests. ARM64
 library matrices pass 161 tests without default features and 241 with all
 features; x86-64 passes 161 and 266 respectively.
 
+The x86-64 backend unit suite follows the same test-only structure. Its
+2,120-line file becomes an 8-line index plus six files for shared context,
+scalar code generation, linear polling, structured residency, structured
+arithmetic, and chunk/side-exit contracts. Files range from 195 to 542 lines,
+all 51 target-specific tests remain present, and the native x86-64 library
+matrices pass 161/266 tests together with all-target compilation.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
