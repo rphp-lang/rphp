@@ -6649,6 +6649,13 @@ instantiation, contract/private-scope regressions, parameter compatibility,
 and return compatibility. Files range from 232 to 428 lines and all 77 tests
 pass in both feature configurations without changing release code.
 
+The Linux x86-64 prototype integration target is likewise split without
+touching release code. Its 1,362-line file becomes a 22-line harness and four
+files for Double calls, Double composition/fallback, mixed corpus/runtime
+paths, and scalar calls/guards. Files range from 285 to 407 lines; all 32
+target-specific tests pass natively with all features, while the no-default
+configuration correctly selects zero prototype tests.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
