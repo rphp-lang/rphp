@@ -6643,6 +6643,12 @@ execution, and method execution. The extracted files range from 397 to 447
 lines and all 70 tests pass with both no-default and all-feature builds; the
 release crate is unchanged.
 
+The 1,602-line interface/visibility end-to-end suite is now a 9-line harness
+plus five files for interface basics and `Throwable`, visibility and
+instantiation, contract/private-scope regressions, parameter compatibility,
+and return compatibility. Files range from 232 to 428 lines and all 77 tests
+pass in both feature configurations without changing release code.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
