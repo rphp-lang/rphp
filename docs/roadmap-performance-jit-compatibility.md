@@ -6662,6 +6662,20 @@ basic/CV instructions, function calls, and recursion/interrupt/result
 contracts. Files range from 315 to 374 lines and all 14 tests pass in both
 feature configurations.
 
+The next production-boundary experiment (2026-08-08) tested a narrow extraction
+of the 145-line Generator method implementation from `stdlib.rs`. The function
+bodies, public paths, and lexical include position remained unchanged; all
+Generator, no-default, all-feature, integration, and all-target test matrices
+passed on ARM64 and x86-64. ARM64 was neutral across the 1,003-pair regex gate
+(-0.84% to +0.73%) and five representative VM workloads (-0.34% to +0.09%).
+The candidate was nevertheless rejected by the pinned x86-64 gate. Although
+the ELF total size stayed byte-for-byte constant, 64 bytes moved from BSS to
+text; a focused 3,003-pair run then measured retained callbacks at +1.65% and
+UTF-8 count at +1.29%. The source and release binary were restored exactly on
+both hosts. This confirms that even cold-looking `stdlib.rs` extraction is a
+code-layout change, not test-only maintenance, and must wait for a boundary
+that isolates participating runtime code rather than merely moving source.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
