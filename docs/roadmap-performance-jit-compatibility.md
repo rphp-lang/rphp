@@ -6712,6 +6712,14 @@ both feature configurations on ARM64 and x86-64. Complete integration and
 all-target checks pass on both hosts, and both release binaries remain
 bit-identical to the preceding test-only checkpoints.
 
+Named-argument coverage is grouped into larger responsibilities rather than
+its former sequence of tiny regression sections. The 707-line target is now an
+11-line harness plus files for basic calls (222 lines), references and internal
+functions (127), duplicate/keyword/variadic handling (205), and variadic errors
+with recovery (146). All 45 tests retain their original target names and pass
+in both feature configurations on ARM64 and x86-64. Complete integration and
+all-target checks pass on both hosts, with bit-identical release binaries.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
