@@ -6742,6 +6742,30 @@ context model, milestones, correctness requirements and the initial 150 ns
 internal hand-off target are maintained in
 [the runtime architecture roadmap](roadmap-runtime-architecture.md).
 
+### Internal context prototype checkpoint (2026-08-09)
+
+Milestone one is complete as the executable integration prototype in
+`tests/e2e_coroutine_context.rs`. It proves pinned two-context ownership, an
+executor-lifetime-bound driver, O(1) exchange of both VM stacks and all
+frame-bound transient state, deterministic isolation, invalid-transition
+rejection and result completion without adding a PHP API. The permanent
+one-million-switch release test measures 13.78 ns per hand-off on ARM64 and
+11.44 ns on pinned x86-64.
+
+The prototype is intentionally not linked into the ordinary runtime yet.
+Direct `ExecutorGlobals` storage and later opt-in sidecar placements were all
+correct, but repeated x86-64 gates exposed code-layout regressions ranging from
+1.54 to 4.84 percent in otherwise unrelated callback and regex controls. Those
+variants were rejected rather than weakening the one-percent rule. With the
+accepted standalone test boundary, ARM64 and x86-64 release binaries retain
+their exact pre-milestone SHA-256 hashes (`695b7e472ce1913a59e2fdfed105f5626c4d41ae7deea86027eac000de8dab7d`
+and `5359c1d345ecd9878c5e6bc0d358a7d97f294b80dc2b93be745a3e6cc533dcb8`),
+so ordinary execution has provably zero allocation, layout, branch and code
+size cost. Both feature configurations, the complete integration matrices and
+all-target checks pass on both hosts. The next checkpoint is lazy pooled stack
+segments with cleanup, exception and `finally` proofs before the substrate is
+again considered for production-crate linkage.
+
 ## Phase 5: compatibility breadth and production use
 
 Once the execution architecture and minimal JIT are proven, broaden support

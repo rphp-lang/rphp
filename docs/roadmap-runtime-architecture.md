@@ -282,6 +282,48 @@ before a context becomes externally resumable.
 5. Evaluate optional multi-threaded scheduling and work stealing separately;
    reject it if thread-safety costs leak into single-threaded PHP execution.
 
+### Milestone 1 checkpoint (2026-08-09)
+
+The first context-switch primitive is proven as the standalone executable
+prototype in `tests/e2e_coroutine_context.rs`. `CoroutineExecutionState` owns
+the main and pending VM stacks, top `ExecuteData`, exception, pending named
+variadics, active generator and pending `__invoke` receiver. A pinned
+`CoroutineContext` owns that state plus ID, status and result. The opt-in
+`CoroutineDriver` owns the active-context pointer and borrows one exact
+`ExecutorGlobals` for its full lifetime, so a suspended context cannot be
+accidentally resumed against a different executor. Attach, detach and direct
+context-to-context hand-off perform a fixed set of swaps and never inspect a
+frame or dormant value.
+
+The deterministic two-context test gives each context a real frame, distinct
+exception, generator, variadic state and receiver, then switches in both
+directions and verifies exact isolation and root-state restoration. Separate
+state-machine coverage rejects busy-executor activation, inactive suspension,
+completion with a live frame and resume after completion. Dropping a running
+context or driver is an invariant failure rather than a dangling-pointer
+escape.
+
+Milestone one deliberately remains an integration-test prototype until lazy
+stack ownership is ready in milestone two. Several semantically correct
+production-linked variants were rejected: adding the active pointer directly
+to `ExecutorGlobals` reproducibly regressed two pinned x86-64 regex controls by
+4.84 and 3.67 percent, while sidecar/module-placement variants moved other
+controls by up to 2.75 and 1.54 percent. Keeping an unused substrate linked
+would therefore violate pay-for-use even without an executed branch. The
+accepted boundary leaves both ordinary release binaries bit-identical to their
+baselines: ARM64 SHA-256 `695b7e472ce1913a59e2fdfed105f5626c4d41ae7deea86027eac000de8dab7d`
+and x86-64 `5359c1d345ecd9878c5e6bc0d358a7d97f294b80dc2b93be745a3e6cc533dcb8`.
+
+The permanent one-million-hand-off release benchmark records 13.78 ns/switch
+on the Apple ARM64 reference host and 11.44 ns/switch on the pinned x86-64
+host, well below the initial 150 ns target. The prototype passes with default,
+no-default and all features on both architectures, and all existing release
+integration suites plus all-target/all-feature checks remain green. Milestone
+two can now replace the eager prototype stacks with lazy pooled segments,
+prove repeated resume/drop cleanup plus exception/`finally` behavior, and only
+then re-evaluate promotion into the production crate under the same binary and
+performance gates.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
