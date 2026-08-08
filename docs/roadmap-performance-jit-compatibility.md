@@ -6637,6 +6637,12 @@ arithmetic, and chunk/side-exit contracts. Files range from 195 to 542 lines,
 all 51 target-specific tests remain present, and the native x86-64 library
 matrices pass 161/266 tests together with all-target compilation.
 
+The 1,701-line hot-tier end-to-end suite is reduced to a 22-line harness and
+four files for promotion/scalar plans, bailout/tier transitions, property
+execution, and method execution. The extracted files range from 397 to 447
+lines and all 70 tests pass with both no-default and all-feature builds; the
+release crate is unchanged.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
