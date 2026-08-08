@@ -6610,6 +6610,13 @@ files stay between 578 and 874 lines, all 100 prototype tests retain their
 original root-module names, and the complete all-feature integration matrix
 passes.
 
+The same test-only boundary is applied to the 2,883-line quick-loop end-to-end
+suite. Its root is now an 11-line harness and seven responsibility files cover
+basic loops, scalar/object calls, conditional kernels, array reads, array
+mutation, hash kernels, and foreach/Double fallback behavior. The extracted
+files range from 188 to 708 lines and all 118 existing tests pass without a
+release-crate change.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
