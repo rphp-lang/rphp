@@ -6572,6 +6572,29 @@ composition-root pattern as the preferred next boundary shape: domain files
 remain independently readable while exported type and method ownership stays
 stable.
 
+The compiler follow-up applies the same gate more narrowly. A proposed
+seven-file split of `compiler/compile.rs` was rejected after its isolated
+1,003-pair x86-64 run moved the grouped callback by +2.23% and fixed-prefix
+count by +1.12%. A smaller statements-plus-expressions split was also rejected
+when the mutating callback remained +1.81%. The favorable 3.9--5.0% movements
+in unrelated `preg_match` controls did not override either regression.
+
+The accepted boundary moves only `Compiler::compile_stmt` into a dedicated
+1,436-line file and leaves expression compilation, analysis, constants,
+parameters, and emission helpers in their original lexical order.
+`compiler/compile.rs` falls from 4,472 to 3,041 lines while all public paths
+remain unchanged. On x86-64 the tracked regex handlers retain exactly the
+same addresses and symbol sizes as the parser-only baseline, and ELF `.text`
+remains 2,424,113 bytes. The 303-pair ARM64 gate ranges from -1.03% to +0.37%;
+the isolated 1,003-pair x86-64 gate ranges from -3.36% to +0.99%, with
+fixed-prefix count at +0.58% and the mutating callback at +0.99%.
+
+Both hosts again pass no-default and all-feature library matrices, every
+all-feature integration test, formatting, and all-target compilation. This
+checkpoint also identifies expression compilation as a code-layout-sensitive
+boundary: it stays in place until the affected callback code can be isolated
+without moving participating runtime paths.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
