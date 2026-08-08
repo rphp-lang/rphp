@@ -6617,6 +6617,12 @@ mutation, hash kernels, and foreach/Double fallback behavior. The extracted
 files range from 188 to 708 lines and all 118 existing tests pass without a
 release-crate change.
 
+Type-hint coverage is split at the same test-only boundary. The former
+2,404-line end-to-end file is now a 34-line harness plus six files for
+parameter hints, return hints, runtime guards, scalar propagation, String
+plans, and object plans. The responsibility files range from 193 to 633 lines;
+the target passes 106 tests without default features and 108 with all features.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
