@@ -6521,6 +6521,37 @@ explicit 64-byte loop alignment still measured +8.91%. Both runtime edits were
 reverted. This establishes the phase rule in practice: source organization is
 not accepted as a refactor when the generated program materially regresses.
 
+The second audit checkpoint (2026-08-08) starts with test ownership before
+touching another production boundary. A textual extraction of the complete
+regex handler family was rejected after the 1,003-pair ARM64 gate measured the
+mutating and retaining callback controls at +1.42% and +1.44%. Keeping only
+`preg_match` and `preg_replace` in the extracted file was also rejected when
+the longer mutating-callback result moved by +3.20%. Neither code-layout
+outcome was committed.
+
+The accepted checkpoint moves 3,770 lines of in-source tests into dedicated
+files without changing their module names. `src/jit/x86_64.rs` falls from
+6,277 to 4,141 lines, `src/regex.rs` from 2,516 to 1,913,
+`src/parser.rs` from 3,268 to 3,167, and `src/value/mod.rs` from 4,925 to
+3,995. The ARM64 Mach-O `__text` remains byte-identical at SHA-256
+`8ac94a60a27bbe541cab022377a4635edb4c17038c3fcf5479545caa31161bc0`;
+the x86-64 ELF `.text` remains byte-identical at SHA-256
+`bdad28a36aa0b5efff5fefc1c13c494f8924a3b8020472e7288b5db338dda046`.
+The paired x86 gate stays between -0.53% and +0.66%. One 303-pair ARM64
+mutating-callback sample reported +2.31%, but the baseline and candidate have
+identical executable bytes and symbol addresses, so this is recorded as
+measurement noise rather than a code change.
+
+Both hosts pass 168 default-feature and 161 no-default-feature library tests,
+37 regex E2E tests in both configurations, and 70 hot-tier tests. The
+all-feature library matrix passes 241 tests on ARM64 and 266 on x86-64,
+including the relocated target-specific x86 tests; formatting and all-target
+all-feature compilation also pass on both hosts. The remaining largest files
+are now the production-heavy `stdlib.rs`, `vm/execute.rs`, `jit/aarch64.rs`,
+and compiler units. Their next splits require an explicit dependency boundary
+and the same two-architecture code/performance gate rather than another broad
+mechanical move.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
