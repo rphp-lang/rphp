@@ -6676,6 +6676,17 @@ both hosts. This confirms that even cold-looking `stdlib.rs` extraction is a
 code-layout change, not test-only maintenance, and must wait for a boundary
 that isolates participating runtime code rather than merely moving source.
 
+The safe follow-up splits the 891-line array integration target without
+touching the release crate. `tests/e2e_arrays.rs` is now a 9-line harness plus
+three responsibility files for basic operations (414 lines), copy-on-write
+isolation (275), and mutation/hot-path regressions (196). All 72 tests retain
+their original root target and pass with both no-default and all-feature builds
+on ARM64 and x86-64; the complete all-feature integration matrix and all-target
+compilation pass on both hosts. The ARM64 Mach-O remains byte-identical at
+SHA-256 `695b7e472ce1913a59e2fdfed105f5626c4d41ae7deea86027eac000de8dab7d`,
+and the x86-64 ELF remains byte-identical at SHA-256
+`5359c1d345ecd9878c5e6bc0d358a7d97f294b80dc2b93be745a3e6cc533dcb8`.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly
