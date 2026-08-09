@@ -7169,6 +7169,27 @@ directory. A clean rebuild exposed one stale intermediate image during this
 checkpoint; the recorded hashes and deltas above are the corrected comparison
 of actual source states.
 
+### Cohesive stream lifecycle adapter retry (rejected)
+
+With the corrected fresh-target protocol, one broader dependency-free adapter
+tested TCP local/peer address metadata, Unix/TCP shutdown and explicit idle
+descriptor close as a single Phase 5 slice. Its lifecycle contract was sound:
+shutdown delivered EOF, listener close allowed immediate rebinding, and close
+rejected queued, in-flight or connecting descriptors. Nine I/O tests and 25/3
+coroutine E2E scenarios passed on ARM64 and x86-64.
+
+Clean candidate feature-test SHA-256 values were
+`5b105bb10a71e311e1496382d2661b533eb8b8dfea669c8f7ebdbf5ec5b543c0`
+on ARM64 and
+`b9ac49c1efe76d68d49b76a0b64b93d286a82248630fdc01fe6acf0983ab2dac`
+on x86-64. The valid 20-pair comparison against the clean stream-policy
+baseline measured +2.67%/+1.44%/+0.05% for suspend/channel/readiness on ARM64
+and +10.99%/+3.99%/+0.04% on pinned x86-64. Both hosts therefore reject the
+slice at the one-percent gate. All source, API and tests were removed; no
+external library or Cargo change was introduced. Generic stream resources now
+require a code-placement boundary that does not perturb existing coroutine
+handlers, rather than another larger static-table retry.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

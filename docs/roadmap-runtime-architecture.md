@@ -831,6 +831,25 @@ hashing or timing. Rebuilding this checkpoint that way exposed and replaced
 one stale intermediate artifact; the figures and hashes above are from the
 corrected clean two-host comparison.
 
+### Cohesive stream lifecycle adapter rejected (2026-08-09)
+
+A broader standard-library-only adapter then tested four operations together:
+TCP local/peer address inspection, Unix/TCP half-close, and explicit idle
+descriptor close. Close rejected queued, in-flight or connecting descriptors;
+shutdown delivered EOF, listener close permitted immediate rebinding, and
+address pairs matched across a real loopback connection. Nine descriptor tests
+and 25 coroutine E2E scenarios passed on both hosts without a new dependency.
+
+The candidate was rebuilt from scratch in separate target directories before
+measurement. Against the clean stream-policy baseline, an order-balanced
+20-pair ARM64 gate recorded +2.67% suspend/resume, +1.44% channel and +0.05%
+readiness. Pinned x86-64 recorded +10.99%/+3.99%/+0.04%. The first two paths
+exceed the one-percent ceiling on both hosts, so the complete API, scheduler,
+policy and test candidate was removed. No lifecycle or metadata handler
+remains. A future generic stream surface must first isolate API-handler code
+placement from the existing coroutine paths; adding more correct operations to
+the same static table is not sufficient.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
