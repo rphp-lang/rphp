@@ -44,7 +44,7 @@ impl CoroutineScheduler {
                 .filter_map(|(id, context)| {
                     let context = context.as_ref().get_ref();
                     (context.status == CoroutineStatus::Failed && context.failure.is_some())
-                        .then_some(*id)
+                        .then_some(id)
                 })
                 .min();
             if let Some(context) = failed_id.and_then(|id| self.contexts.get_mut(&id)) {

@@ -1087,6 +1087,61 @@ on x86-64. Default releases remain exact at
 and `1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
 No dependency or Cargo configuration changed.
 
+### Generic PHP stream resources and dense coroutine registries (2026-08-09)
+
+The first generic stream slice is accepted using only Rust's standard library.
+A PHP resource remains a 16-byte scalar `Value` containing one request-local
+integer id; the lazily created request registry owns the actual backend. This
+keeps resource assignment and destruction out of the ordinary heap-value
+reference-count path. Explicit `fclose()` drops the backend immediately and
+request shutdown drops every entry still open. No `ExecutorGlobals` field,
+crate, Cargo feature or external stream/event library was added.
+
+`PhpStream` owns either `std::fs::File` or `Cursor<Vec<u8>>` and admits bare
+paths, `file://`, `php://memory`, `r/w/a/x/c` modes plus `+`, read, write,
+flush, seek, position and EOF. The PHP surface is `fopen`, `fread`, `fwrite`,
+`fclose`, `fflush`, `feof`, `ftell`, `fseek`, `rewind`, `is_resource`,
+`get_resource_type`, `get_resource_id` and `SEEK_SET/CUR/END`. Seven E2E
+scenarios cover memory and real files, every admitted creation policy, alias
+invalidation, closed-resource identity, seek/EOF behavior, invalid wrappers
+and the large-frame fallback. The intentionally recorded remaining lifetime
+difference is that dropping the last resource zval without `fclose()` retains
+its backend until request shutdown.
+
+The admission work also removes two measured scheduler costs instead of
+hiding feature layout movement. Monotonic coroutine and channel identifiers
+now index private dense `Vec` registries rather than `HashMap`s. Pinned context
+allocations retain stable addresses, explicit zero-cost reserve words preserve
+the established later scheduler-field offsets, channel blocking reuses the
+already validated active task, and `resume` no longer repeats an executor
+identity check already performed by every entry path. A packed PHP array append
+also returns through one direct `Vec::push` fast path rather than dispatching
+the storage enum twice.
+
+Fresh-source, order-balanced 20-pair coroutine gates against `1f28a2b` record
+-18.517%/-55.960%/-3.457% on ARM64 and
+-19.220%/-39.062%/-3.990% on pinned x86-64 for suspend/resume, bounded channel
+and stream readiness. These are direct dense-registry wins, not neutral layout
+claims. The new dependency-free default-runtime gate builds candidate and
+baseline in fresh targets and runs scalar, packed-array, string, order and
+ledger workloads under the same +1% ceiling. Pinned x86-64 records
+-0.197%/-0.987%/-0.144%/+0.742%/+1.115%; the sole failure is not reproduced
+by an independent 20-pair ledger rerun at +0.508%. A thermally drifting ARM64 full batch
+put only String above the ceiling at +1.668%; its independent 20-pair rerun is
++0.202%, while scalar/array/order/ledger in the full batch are
+-0.174%/-2.370%/-0.265%/-1.566%. The focused array rerun is -2.829%.
+
+Both hosts pass 167 no-default library tests, 265 ARM64 or 290 x86-64
+all-feature library tests, all seven stream scenarios and complete
+all-feature/all-target compilation. Clean default release SHA-256 values are
+`de0fec7335fa71d1cdc5720637dbe970de4be0cfde604f455971465aa638af31`
+and `a0228fe3e34a6a367c96a71a9f4a2322db2d963d7f83d3f4a0b487a3bf6c23e0`;
+clean coroutine integration hashes are
+`813117642d8b990b574eae5e5de5f2db87fbd722deeb50912c27dd98aa606909`
+and `bccc63469e4967ddf5a37cf6aa37f12399108446fac69d9a788b2e4d2c2dc796`.
+The next stream slices may add `php://temp`, line-oriented reads and metadata,
+but must retain this standard-library-first ownership boundary.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -1653,6 +1653,11 @@ impl PhpArray {
     pub fn push(&mut self, val: Value) {
         let key = self.next_int_key;
         self.next_int_key = key + 1;
+        if let ArrayStorage::Packed(values) = &mut self.storage {
+            values.push(val);
+            return;
+        }
+
         match &self.storage {
             ArrayStorage::SmallHash(small) if small.len() == SMALL_HASH_CAPACITY => {
                 self.promote_small_hash(0, 1);
@@ -1663,9 +1668,7 @@ impl PhpArray {
             _ => {}
         }
         match &mut self.storage {
-            ArrayStorage::Packed(values) => {
-                values.push(val);
-            }
+            ArrayStorage::Packed(_) => unreachable!("packed append returned through fast path"),
             ArrayStorage::SmallHash(small) => {
                 let inserted = small.push(ArrayEntryKey::Int(key), val);
                 debug_assert!(inserted);
@@ -3691,6 +3694,9 @@ impl Value {
                 let obj = refcell.borrow();
                 format!("{} Object", obj.class_name)
             }
+            ValueType::Resource => {
+                format!("Resource id #{}", self.as_resource_id().unwrap())
+            }
             _ => "<unsupported>".to_string(),
         }
     }
@@ -3721,6 +3727,9 @@ impl Value {
                 let obj = refcell.borrow();
                 let _ = write!(output, "{} Object", obj.class_name);
             }
+            ValueType::Resource => {
+                let _ = write!(output, "Resource id #{}", self.as_resource_id().unwrap());
+            }
             _ => output.push_str("<unsupported>"),
         }
     }
@@ -3739,6 +3748,7 @@ impl Value {
                 let refcell = unsafe { &*(self.data.ptr as *const RefCell<PhpObject>) };
                 refcell.borrow().class_name.len() + 7
             }
+            ValueType::Resource => 22,
             _ => 13,
         }
     }
@@ -3795,6 +3805,7 @@ impl Value {
                 }
                 s[..end].parse().unwrap_or(0)
             }
+            ValueType::Resource => self.as_resource_id().unwrap(),
             _ => 0,
         }
     }
@@ -3810,6 +3821,7 @@ impl Value {
                 let s = unsafe { &*(self.data.ptr as *const String) };
                 s.trim().parse::<f64>().unwrap_or(0.0)
             }
+            ValueType::Resource => self.as_resource_id().unwrap() as f64,
             _ => 0.0,
         }
     }
@@ -3860,6 +3872,27 @@ impl Value {
     #[inline]
     pub unsafe fn as_ref_ptr(&self) -> *mut Value {
         self.data.ptr as *mut Value
+    }
+
+    /// Create a scalar handle for one request-owned resource-registry entry.
+    /// Assignment preserves identity without touching the ordinary heap-value
+    /// clone/drop fast path.
+    #[inline]
+    pub fn resource(id: i64) -> Self {
+        Self {
+            data: ValueData { long: id },
+            type_info: ValueType::Resource as u32,
+            _not_send: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub fn as_resource_id(&self) -> Option<i64> {
+        if self.value_type() == ValueType::Resource {
+            Some(unsafe { self.data.long })
+        } else {
+            None
+        }
     }
 }
 
@@ -3987,9 +4020,11 @@ impl std::fmt::Debug for Value {
                 let obj = refcell.borrow();
                 write!(f, "Value(object({}))", obj.class_name)
             }
+            ValueType::Resource => {
+                write!(f, "Value(resource({}))", self.as_resource_id().unwrap())
+            }
             ValueType::Reference => write!(f, "Value(ref={:p})", unsafe { self.data.ptr }),
             ValueType::Closure => write!(f, "Value(Closure)"),
-            _ => write!(f, "Value({:?})", self.value_type()),
         }
     }
 }

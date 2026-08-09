@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::VecDeque;
 
 use crate::value::Value;
 use crate::vm::execute::VmError;
@@ -50,15 +50,18 @@ pub(super) enum ReceiveOutcome {
 }
 
 pub(super) struct ChannelSet {
-    next_id: u64,
-    channels: HashMap<u64, Channel>,
+    channels: Vec<Channel>,
+    // Preserve the established 64-bit scheduler field layout after replacing
+    // `(next_id, HashMap)` with the denser Vec index. Later scheduler fields
+    // remain at their measured offsets without any allocation or hot-path work.
+    _layout_reserve: [usize; 4],
 }
 
 impl Default for ChannelSet {
     fn default() -> Self {
         Self {
-            next_id: 1,
-            channels: HashMap::new(),
+            channels: Vec::new(),
+            _layout_reserve: [0; 4],
         }
     }
 }
@@ -70,17 +73,12 @@ impl ChannelSet {
                 "coroutine_channel capacity must be greater than zero".into(),
             ));
         }
-        let id = self.next_id;
-        if id > i64::MAX as u64 {
-            return Err(VmError::Fatal(
-                "coroutine channel identifier space exhausted".into(),
-            ));
-        }
-        self.next_id = self
-            .next_id
-            .checked_add(1)
+        let id = u64::try_from(self.channels.len())
+            .ok()
+            .and_then(|index| index.checked_add(1))
+            .filter(|id| *id <= i64::MAX as u64)
             .ok_or_else(|| VmError::Fatal("coroutine channel identifier space exhausted".into()))?;
-        self.channels.insert(id, Channel::new(capacity));
+        self.channels.push(Channel::new(capacity));
         Ok(id)
     }
 
@@ -127,8 +125,11 @@ impl ChannelSet {
     }
 
     fn channel_mut(&mut self, id: u64) -> Result<&mut Channel, VmError> {
+        let index = id
+            .checked_sub(1)
+            .and_then(|index| usize::try_from(index).ok());
         self.channels
-            .get_mut(&id)
+            .get_mut(index.unwrap_or(usize::MAX))
             .ok_or_else(|| VmError::Fatal(format!("unknown coroutine channel {}", id)))
     }
 }
@@ -136,6 +137,12 @@ impl ChannelSet {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn dense_registry_preserves_established_scheduler_field_width() {
+        assert_eq!(std::mem::size_of::<ChannelSet>(), 56);
+    }
 
     #[test]
     fn bounded_channel_preserves_fifo_for_buffer_and_blocked_senders() {

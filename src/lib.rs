@@ -88,6 +88,11 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "STR_PAD_LEFT" => Some(value::Value::long(0)),
         "STR_PAD_BOTH" => Some(value::Value::long(2)),
 
+        // Streams
+        "SEEK_SET" => Some(value::Value::long(0)),
+        "SEEK_CUR" => Some(value::Value::long(1)),
+        "SEEK_END" => Some(value::Value::long(2)),
+
         _ => None,
     }
 }

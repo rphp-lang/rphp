@@ -7417,6 +7417,50 @@ Default ARM64/x86-64 releases remain exact at
 and `1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
 The checkpoint adds no crate, Cargo feature or external library.
 
+### Generic PHP stream-resource checkpoint
+
+Phase 5 now has a generic, request-owned PHP resource identity and its first
+file/memory stream implementation without an external library or Cargo change.
+The 16-byte `Value` stores only a request-local integer id; a lazy registry owns
+`std::fs::File` or `Cursor<Vec<u8>>`, closes explicitly on `fclose()` and drops
+everything still open with the request. Ordinary scalar clone/drop remains
+unchanged. Bare paths, `file://`, `php://memory`, `r/w/a/x/c` plus update modes,
+read/write/flush/seek/position/EOF and the resource inspection functions are
+covered by seven E2E scenarios. Dropping the last alias without `fclose()`
+still retains the backend until request shutdown and is the explicit next
+lifecycle boundary, not hidden as full PHP compatibility.
+
+Admission includes general runtime work exposed by the two-host gate. Packed
+`$array[]` appends now take one direct `Vec::push` fast path. Monotonic
+coroutine contexts and channels use dense private vectors instead of hashed
+registries while preserving pinned context addresses and established scheduler
+field offsets. Channel blocking reuses its validated task id, and resume entry
+does not repeat the scheduler/executor check already made by all callers.
+
+The permanent fresh-build coroutine gate measures suspend/channel/readiness at
+-18.517%/-55.960%/-3.457% on ARM64 and
+-19.220%/-39.062%/-3.990% on pinned x86-64 against `1f28a2b`. A new
+standard-library-only runtime gate applies the same alternating 20-pair and
++1% protocol to five default workloads. Pinned x86-64 records
+-0.197%/-0.987%/-0.144%/+0.742%/+1.115% for scalar/array/string/order/ledger;
+the sole failure is not reproduced by an independent 20-pair ledger rerun at
++0.508%.
+The ARM64 full run records -0.174%/-2.370%/+1.668%/-0.265%/-1.566%; the sole
+String failure occurs during visible thermal drift and an independent 20-pair
+rerun is +0.202%. The focused packed-array result is -2.829%.
+
+Both architectures pass 167 no-default library tests, complete all-feature
+sets (265 ARM64 / 290 x86-64), seven stream scenarios and all-feature/all-target
+compilation. Clean default hashes are
+`de0fec7335fa71d1cdc5720637dbe970de4be0cfde604f455971465aa638af31` and
+`a0228fe3e34a6a367c96a71a9f4a2322db2d963d7f83d3f4a0b487a3bf6c23e0`;
+clean coroutine integration hashes are
+`813117642d8b990b574eae5e5de5f2db87fbd722deeb50912c27dd98aa606909` and
+`bccc63469e4967ddf5a37cf6aa37f12399108446fac69d9a788b2e4d2c2dc796`.
+The next compatibility step is a bounded stream extension such as
+`php://temp` plus line-oriented reads and metadata, retaining the
+standard-library-first policy.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

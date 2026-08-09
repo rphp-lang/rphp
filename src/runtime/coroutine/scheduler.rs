@@ -9,7 +9,6 @@ mod readiness;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 mod resolver;
 
-use std::collections::HashMap;
 #[cfg(unix)]
 use std::collections::VecDeque;
 #[cfg(unix)]
@@ -33,11 +32,63 @@ use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
 use crate::vm::execute::{VmError, execute_coroutine_frame, write_coroutine_result};
 
+struct ContextSet {
+    entries: Vec<Pin<Box<CoroutineContext>>>,
+    // Match the former HashMap field width so later scheduler fields retain
+    // their established offsets while dense IDs avoid hashing on every switch.
+    _layout_reserve: [usize; 3],
+}
+
+impl ContextSet {
+    fn new() -> Self {
+        Self {
+            entries: Vec::new(),
+            _layout_reserve: [0; 3],
+        }
+    }
+
+    fn insert(&mut self, id: u64, context: Pin<Box<CoroutineContext>>) {
+        debug_assert_eq!(usize::try_from(id).ok(), self.entries.len().checked_add(1));
+        self.entries.push(context);
+    }
+
+    #[inline]
+    fn get(&self, id: &u64) -> Option<&Pin<Box<CoroutineContext>>> {
+        self.entries.get(context_index(*id)?)
+    }
+
+    #[inline]
+    fn get_mut(&mut self, id: &u64) -> Option<&mut Pin<Box<CoroutineContext>>> {
+        self.entries.get_mut(context_index(*id)?)
+    }
+
+    fn values(&self) -> impl Iterator<Item = &Pin<Box<CoroutineContext>>> {
+        self.entries.iter()
+    }
+
+    fn values_mut(&mut self) -> impl Iterator<Item = &mut Pin<Box<CoroutineContext>>> {
+        self.entries.iter_mut()
+    }
+
+    fn iter(&self) -> impl Iterator<Item = (u64, &Pin<Box<CoroutineContext>>)> {
+        self.entries
+            .iter()
+            .enumerate()
+            .map(|(index, context)| (index as u64 + 1, context))
+    }
+}
+
+#[inline]
+fn context_index(id: u64) -> Option<usize> {
+    id.checked_sub(1)
+        .and_then(|index| usize::try_from(index).ok())
+}
+
 pub(super) struct CoroutineScheduler {
     executor: *mut ExecutorGlobals,
     next_id: u64,
     pub(super) active: Option<u64>,
-    contexts: HashMap<u64, Pin<Box<CoroutineContext>>>,
+    contexts: ContextSet,
     pool: CoroutineStackPool,
     channels: ChannelSet,
     readiness: Readiness,
@@ -55,7 +106,7 @@ impl CoroutineScheduler {
             executor: eg,
             next_id: 1,
             active: None,
-            contexts: HashMap::new(),
+            contexts: ContextSet::new(),
             pool: CoroutineStackPool::default(),
             channels: ChannelSet::default(),
             readiness: Readiness::default(),
@@ -105,7 +156,7 @@ impl CoroutineScheduler {
         match self.channels.send(channel, task, value)? {
             SendOutcome::Complete => Ok(false),
             SendOutcome::Blocked => {
-                self.block_active(WaitReason::ChannelSend(channel))?;
+                self.block_task(task, WaitReason::ChannelSend(channel))?;
                 Ok(true)
             }
             SendOutcome::WakeReceiver { waiter, value } => {
@@ -131,7 +182,7 @@ impl CoroutineScheduler {
                 Ok(Some(value))
             }
             ReceiveOutcome::Blocked => {
-                self.block_active(WaitReason::ChannelReceive(channel))?;
+                self.block_task(task, WaitReason::ChannelReceive(channel))?;
                 Ok(None)
             }
         }
@@ -267,6 +318,10 @@ impl CoroutineScheduler {
 
     fn block_active(&mut self, reason: WaitReason) -> Result<(), VmError> {
         let task = self.active_task("coroutine wait")?;
+        self.block_task(task, reason)
+    }
+
+    fn block_task(&mut self, task: u64, reason: WaitReason) -> Result<(), VmError> {
         let context = self.context_ptr(task)?;
         unsafe {
             if (*context).status != CoroutineStatus::Running || (*context).wait_reason.is_some() {
@@ -307,6 +362,9 @@ impl CoroutineScheduler {
         Ok(unsafe { context.as_mut().get_unchecked_mut() as *mut CoroutineContext })
     }
 
+    /// Resume a task on an executor already validated against this scheduler.
+    /// PHP API entry points obtain the scheduler through `scheduler_ptr`, and
+    /// `join` retains that same validated scheduler/executor pair.
     pub(super) unsafe fn resume(
         scheduler: *mut Self,
         id: u64,
@@ -314,7 +372,6 @@ impl CoroutineScheduler {
     ) -> Result<bool, VmError> {
         let context = unsafe {
             let scheduler = &mut *scheduler;
-            scheduler.verify_executor(eg)?;
             if scheduler.active.is_some() {
                 return Err(VmError::Fatal(
                     "coroutine resume and join are only allowed from the scope root".into(),
@@ -481,6 +538,12 @@ mod tests {
     use crate::lexer::Lexer;
     use crate::parser::Parser;
     use crate::vm::function::FunctionCommon;
+
+    #[cfg(target_pointer_width = "64")]
+    #[test]
+    fn dense_context_registry_preserves_established_scheduler_field_width() {
+        assert_eq!(std::mem::size_of::<ContextSet>(), 48);
+    }
 
     #[test]
     fn scheduler_is_lazy_and_reuses_one_stack_pair() {

@@ -6509,6 +6509,7 @@ fn values_identical(a: &Value, b: &Value) -> bool {
             let rc_b = b.as_object_rc().unwrap();
             std::rc::Rc::ptr_eq(&rc_a, &rc_b)
         }
+        ValueType::Resource => a.as_resource_id() == b.as_resource_id(),
         _ => false,
     }
 }

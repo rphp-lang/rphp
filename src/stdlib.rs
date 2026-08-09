@@ -230,7 +230,7 @@ pub(crate) fn invoke_direct_internal2(
 /// Register all stdlib functions into the executor globals.
 /// The returned Vec must live as long as the EG (owns the InternalFunction structs).
 pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(80);
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(96);
 
     // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
     let class_funcs = register_builtin_classes(eg);
@@ -635,6 +635,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("die", fn_exit, 1, 0, "status");
 
     // --- Filesystem ---
+    streams::register(eg, &mut funcs);
     reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");
     reg!(
         "file_put_contents",
@@ -2611,9 +2612,10 @@ fn fn_is_object(
 fn fn_gettype(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let name = match arg!(ed, 0).value_type() {
+    let value = arg!(ed, 0);
+    let name = match value.value_type() {
         ValueType::Null => "NULL",
         ValueType::True | ValueType::False => "boolean",
         ValueType::Long => "integer",
@@ -2621,7 +2623,13 @@ fn fn_gettype(
         ValueType::String => "string",
         ValueType::Array => "array",
         ValueType::Object => "object",
-        ValueType::Resource => "resource",
+        ValueType::Resource => {
+            if resource::is_open_for_request(eg, value.as_resource_id().unwrap()) {
+                "resource"
+            } else {
+                "resource (closed)"
+            }
+        }
         _ => "unknown type",
     };
     ret!(rv, Value::string(name));
@@ -2890,7 +2898,7 @@ fn fn_var_dump(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let v = arg!(ed, 0);
-    let output = var_dump_value(v, 0);
+    let output = var_dump_value(v, 0, eg);
     eg.write_output(output.as_bytes());
     Ok(())
 }
@@ -3060,6 +3068,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
         | (ValueType::Double, ValueType::Double) => a.to_double() == b.to_double(),
         (ValueType::Null, ValueType::Null) => true,
         (ValueType::True, ValueType::True) | (ValueType::False, ValueType::False) => true,
+        (ValueType::Resource, ValueType::Resource) => a.as_resource_id() == b.as_resource_id(),
         (ValueType::String, ValueType::Long) | (ValueType::Long, ValueType::String) => {
             let (s_val, i_val) = if a.value_type() == ValueType::String {
                 (a, b)
@@ -3072,7 +3081,7 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
-fn var_dump_value(val: &Value, indent: usize) -> String {
+fn var_dump_value(val: &Value, indent: usize, eg: &ExecutorGlobals) -> String {
     let prefix = "  ".repeat(indent);
     match val.value_type() {
         ValueType::Null => format!("{}NULL\n", prefix),
@@ -3093,10 +3102,19 @@ fn var_dump_value(val: &Value, indent: usize) -> String {
                     ArrayKey::String(k) => format!("[\"{}\"]", k),
                 };
                 out.push_str(&format!("{}  {}=>\n", prefix, key_str));
-                out.push_str(&var_dump_value(v, indent + 1));
+                out.push_str(&var_dump_value(v, indent + 1, eg));
             }
             out.push_str(&format!("{}}}\n", prefix));
             out
+        }
+        ValueType::Resource => {
+            let id = val.as_resource_id().unwrap();
+            format!(
+                "{}resource({}) of type ({})\n",
+                prefix,
+                id,
+                resource::type_for_request(eg, id)
+            )
         }
         _ => format!("{}unknown\n", prefix),
     }
@@ -3141,6 +3159,7 @@ fn print_r_value(val: &Value, indent: usize) -> String {
             out.push_str(&format!("{})\n", prefix));
             out
         }
+        ValueType::Resource => val.echo_to_string(),
         _ => String::new(),
     }
 }
@@ -6704,3 +6723,9 @@ fn fn_preg_replace_callback(
 
     ret!(rv, Value::string(result));
 }
+
+#[path = "resource.rs"]
+pub(crate) mod resource;
+#[path = "stream.rs"]
+mod stream;
+mod streams;
