@@ -7070,6 +7070,48 @@ bit-for-bit identical before and after that refactor. This checkpoint claims a
 numeric connect primitive only. Explicit close, timeouts, DNS and a generic PHP
 stream adapter remain separate measured slices.
 
+### Optional outbound TCP connect timeout checkpoint
+
+The numeric API now accepts an optional second argument as
+`coroutine_tcp_connect(address, timeoutMilliseconds)`. Omitting it preserves
+the unbounded connect behavior. A supplied value must be a non-negative PHP
+integer; the scheduler converts it to a checked `Instant` deadline before
+creating the socket, so an unrepresentable duration fails without leaving a
+descriptor behind. The address surface remains numeric IPv4/IPv6 only.
+
+Connect deadlines reuse the existing readiness timer heap. Only an
+in-progress connect schedules a timer. Successful writable completion removes
+that task's timer before publishing the descriptor, preventing a stale future
+deadline from keeping an otherwise idle scheduler alive. If the deadline is
+drained while the task still has `WaitReason::TcpConnect`, the driver removes
+the private continuation and descriptor and returns a fatal timed-out connect
+result. Ordinary sleep timers retain their previous wake path. No crate,
+Cargo feature or external resolver/event library was added.
+
+Two earlier representations were rejected by the one-percent rule. Scanning a
+separate connect-deadline map on every driver pass produced +2.13% ARM64
+channel and +1.38% readiness controls. Guarding that scan behind existing I/O
+work removed the channel cost but left readiness at +1.10%. Both candidates
+were removed. Reusing the established timer heap leaves `next_runnable`'s
+ordinary I/O branch unchanged and passes an order-balanced 20-pair ARM64 gate
+at -2.47%/+0.35%/+0.20% for suspend/channel/readiness. Pinned x86-64 records
+-11.21%/-3.08%/-0.79%; these are control results, not claimed speedups.
+
+Complete all-feature/all-target matrices pass 255 ARM64 and 280 x86-64
+library tests, with 23/3 coroutine E2E scenarios; both no-default matrices pass
+161 library tests. The default ARM64 release remains byte-identical at
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+The metadata-normalized x86-64 release remains byte-identical at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`
+with unchanged text/data/BSS sizes 2,931,803/49,784/2,504 bytes. The accepted
+feature test executables have SHA-256
+`fdfe498ac84fefed63c470ed136a692b5fc71334b32dce01951fe87213da4621`
+on ARM64 and
+`275b9d6c9031f2ab234056d9e51e8055ccdc427c8adb9dd926f28676035669d5`
+on x86-64. Scheduler timeout tests live in a separate `driver_tests.rs`,
+leaving the production driver at 118 lines. Explicit close, DNS and generic
+PHP stream integration remain independent Phase 5 slices.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

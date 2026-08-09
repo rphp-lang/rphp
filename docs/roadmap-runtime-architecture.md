@@ -740,6 +740,41 @@ and metadata-normalized x86-64 SHA-256
 `0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`;
 the x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes.
 
+### Optional TCP connect timeout checkpoint (2026-08-09)
+
+`coroutine_tcp_connect` now admits an optional non-negative integer timeout in
+milliseconds. The one-argument form remains unbounded. The scheduler checks
+deadline arithmetic before opening the socket, starts the same non-blocking
+numeric connection, and schedules a timer only when that connection actually
+enters the in-progress state.
+
+The deadline deliberately uses the existing `Readiness` timer heap instead of
+adding a second driver-wide deadline structure. On successful writable
+completion, the connect continuation cancels its timer before the VM return
+slot receives the descriptor. A due timer is routed by the task's current wait
+reason: ordinary `Timer` waiters wake normally, while `TcpConnect(descriptor)`
+removes the private socket/continuation and reports a fatal timeout. The timer
+therefore cannot outlive a successful suspended frame or keep an idle scope
+sleeping after connect completion. Scope cleanup retains its idempotent
+descriptor cancellation.
+
+This shape followed two measured rejections. An unconditional secondary-map
+scan regressed ARM64 channel/readiness by +2.13%/+1.38%; gating the scan still
+left readiness at +1.10%. The accepted timer-heap representation records
+-2.47%/+0.35%/+0.20% on ARM64 and -11.21%/-3.08%/-0.79% on pinned x86-64 for
+the established suspend/channel/readiness controls. No regression exceeds the
+one-percent ceiling. The figures are admission controls rather than speedup
+claims.
+
+Tests cover invalid PHP timeout values, successful timed loopback progress,
+deadline cancellation, expiry routing and private-descriptor cleanup. Driver
+tests were moved to `driver_tests.rs`, keeping production `driver.rs` at 118
+lines. Complete matrices pass 255/280 host library tests, 23/3 coroutine E2E
+scenarios and 161 no-default library tests on both architectures. Default
+release hashes and x86-64 section sizes remain exact at the established
+baselines. No dependency or Cargo feature changed. Explicit close, DNS and a
+generic PHP stream adapter remain separate Phase 5 work.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

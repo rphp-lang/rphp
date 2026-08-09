@@ -154,16 +154,27 @@ impl CoroutineScheduler {
     pub(super) fn connect_tcp(
         &mut self,
         address: SocketAddr,
+        timeout: Option<Duration>,
         frame: *mut crate::vm::frame::ExecuteData,
         return_value: *mut Value,
     ) -> Result<Option<u64>, VmError> {
         let task = self.active_task("coroutine_tcp_connect")?;
+        let deadline = timeout
+            .map(|duration| {
+                Instant::now().checked_add(duration).ok_or_else(|| {
+                    VmError::Fatal("coroutine TCP connect timeout is too large".into())
+                })
+            })
+            .transpose()?;
         match self.io.create_tcp_connection(address)? {
             ConnectOutcome::Connected(stream) => Ok(Some(stream)),
             ConnectOutcome::InProgress(stream) => {
                 self.block_active(WaitReason::TcpConnect(stream))?;
                 self.io
                     .enqueue_tcp_connect(stream, task, frame, return_value);
+                if let Some(deadline) = deadline {
+                    self.readiness.schedule_timer(task, deadline);
+                }
                 Ok(None)
             }
         }

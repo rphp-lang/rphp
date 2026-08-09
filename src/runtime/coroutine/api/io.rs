@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use super::{
     ExecuteData, ExecutorGlobals, SuspendKind, Value, VmError, argument, positive_argument,
@@ -58,9 +59,23 @@ pub(super) fn coroutine_tcp_connect(
                 .into(),
         )
     })?;
+    let timeout = if unsafe { (*execute_data).num_args } > 1 {
+        let milliseconds = unsafe { argument(execute_data, 1) }
+            .as_long()
+            .filter(|milliseconds| *milliseconds >= 0)
+            .map(|milliseconds| milliseconds as u64)
+            .ok_or_else(|| {
+                VmError::Fatal(
+                    "coroutine_tcp_connect expects non-negative timeout milliseconds".into(),
+                )
+            })?;
+        Some(Duration::from_millis(milliseconds))
+    } else {
+        None
+    };
     let caller = suspension_caller(execute_data)?;
     let scheduler = scheduler_ptr(eg)?;
-    match unsafe { (&mut *scheduler).connect_tcp(address, caller, return_value)? } {
+    match unsafe { (&mut *scheduler).connect_tcp(address, timeout, caller, return_value)? } {
         Some(stream) => {
             write_result(return_value, Value::long(stream as i64));
             Ok(())

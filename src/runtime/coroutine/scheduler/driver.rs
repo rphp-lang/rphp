@@ -60,6 +60,7 @@ impl CoroutineScheduler {
                 else {
                     continue;
                 };
+                self.readiness.cancel_timer(event.task);
                 unsafe {
                     write_coroutine_result(
                         waiter.frame,
@@ -83,15 +84,33 @@ impl CoroutineScheduler {
         let mut due = Vec::new();
         self.readiness.drain_due(Instant::now(), &mut due);
         for task in due {
-            let is_waiting = self.contexts.get(&task).is_some_and(|context| {
+            let wait_reason = self.contexts.get(&task).and_then(|context| {
                 let context = context.as_ref().get_ref();
-                context.status == CoroutineStatus::Waiting
-                    && context.wait_reason == Some(WaitReason::Timer)
+                (context.status == CoroutineStatus::Waiting)
+                    .then_some(context.wait_reason)
+                    .flatten()
             });
-            if is_waiting {
-                self.wake_task(task, WaitReason::Timer)?;
+            match wait_reason {
+                Some(WaitReason::Timer) => self.wake_task(task, WaitReason::Timer)?,
+                #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+                Some(WaitReason::TcpConnect(descriptor)) => {
+                    self.expire_tcp_connect(descriptor, task)?
+                }
+                _ => {}
             }
         }
         Ok(())
     }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    fn expire_tcp_connect(&mut self, descriptor: u64, task: u64) -> Result<(), VmError> {
+        self.io.cancel_tcp_connect(descriptor, task);
+        Err(VmError::Fatal(
+            "failed to connect coroutine TCP stream: timed out".into(),
+        ))
+    }
 }
+
+#[cfg(all(test, any(target_vendor = "apple", target_os = "linux")))]
+#[path = "driver_tests.rs"]
+mod tests;

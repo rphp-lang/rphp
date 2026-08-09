@@ -301,9 +301,9 @@ const PLATFORM_API_DEFINITIONS: &[ApiDefinition] = &[
     (
         "coroutine_tcp_connect",
         coroutine_tcp_connect,
+        2,
         1,
-        1,
-        &["address"],
+        &["address", "timeoutMilliseconds"],
     ),
     (
         "coroutine_wait_readable",

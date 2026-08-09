@@ -514,7 +514,7 @@ fn tcp_connect_completes_without_blocking_other_logical_tasks() {
         r#"<?php
 coroutine_scope(function () {{
     $client = coroutine_spawn(function () {{
-        $stream = coroutine_tcp_connect("{address}");
+        $stream = coroutine_tcp_connect("{address}", 2000);
         echo $stream . ":";
         coroutine_stream_write($stream, "ping");
         coroutine_wait_readable($stream);
@@ -566,6 +566,22 @@ coroutine_scope(function () {
         address_error,
         execute::VmError::Fatal(message)
             if message.starts_with("coroutine_tcp_connect expects a numeric IP address")
+    ));
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[test]
+fn tcp_connect_rejects_invalid_timeout() {
+    let timeout_error = run(r#"<?php
+coroutine_scope(function () {
+    coroutine_tcp_connect("127.0.0.1:1", -1);
+});
+"#)
+    .unwrap_err();
+    assert!(matches!(
+        timeout_error,
+        execute::VmError::Fatal(message)
+            if message == "coroutine_tcp_connect expects non-negative timeout milliseconds"
     ));
 }
 

@@ -33,6 +33,11 @@ impl Readiness {
         self.timers.push(Reverse((deadline, sequence, task)));
     }
 
+    pub(super) fn cancel_timer(&mut self, task: u64) {
+        self.timers
+            .retain(|Reverse((_, _, queued_task))| *queued_task != task);
+    }
+
     pub(super) fn drain_due(&mut self, now: Instant, due: &mut Vec<u64>) {
         while let Some(Reverse((deadline, _, _))) = self.timers.peek() {
             if *deadline > now {
@@ -79,5 +84,20 @@ mod tests {
         readiness.remove_ready(1);
         assert_eq!(readiness.pop_ready(), Some(2));
         assert_eq!(readiness.pop_ready(), None);
+    }
+
+    #[test]
+    fn cancelled_timer_no_longer_contributes_a_deadline() {
+        let mut readiness = Readiness::default();
+        let deadline = Instant::now() + Duration::from_secs(1);
+        readiness.schedule_timer(7, deadline);
+        assert_eq!(readiness.next_deadline(), Some(deadline));
+
+        readiness.cancel_timer(7);
+
+        assert_eq!(readiness.next_deadline(), None);
+        let mut due = Vec::new();
+        readiness.drain_due(deadline, &mut due);
+        assert!(due.is_empty());
     }
 }
