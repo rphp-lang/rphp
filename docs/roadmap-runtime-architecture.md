@@ -367,6 +367,83 @@ spawn/suspend/resume/join surface. The internal caller and the substrate should
 be admitted together; linking unused coroutine code ahead of that caller has
 already proven capable of perturbing unrelated hot-code placement.
 
+### Milestone 3 checkpoint (2026-08-09)
+
+The first production integration is complete behind the non-default
+`coroutines` Cargo feature. The PHP surface is deliberately small:
+`coroutine_scope(callable)` establishes lexical ownership,
+`coroutine_spawn(callable)` returns a positive task ID,
+`coroutine_suspend()` cooperatively yields a running child,
+`coroutine_resume(id)` reports suspended versus terminal state, and
+`coroutine_join(id)` returns the child result or rethrows its exception.
+Callbacks are zero-required-argument user functions or closures; generator
+functions are rejected until generator/coroutine interaction has a separate
+contract.
+
+The implementation is split by responsibility rather than collected in one
+runtime file. `runtime/coroutine.rs` owns the PHP boundary and feature-private
+thread-local registration, `runtime/coroutine/state.rs` owns detached executor
+state and cleanup, and `runtime/coroutine/scheduler.rs` owns task transitions,
+the stack pool and structured teardown. The scheduler remains bound to one
+`ExecutorGlobals` without adding a field to that structure. Contexts are pinned
+boxes, and no mutable scheduler reference survives VM re-entry, so a running
+child may safely insert a nested child even if the task map rehashes.
+
+Scope teardown cancels every created or suspended child, cleans its complete
+frame chain before recycling storage and propagates an unjoined failure. If
+multiple children fail, the lowest task ID wins, making failure selection
+deterministic rather than dependent on `HashMap` iteration order. Sixty-four
+sequential production tasks construct one lazy stack pair and reuse it 63
+times. Seven PHP integration scenarios cover suspend/resume/join, nested spawn
+ownership, cancellation, joined and unjoined exceptions, parent
+catch/`finally`, deterministic multiple failure selection and suspension below
+a multi-frame PHP call chain.
+
+Deep resumption retains the original two-argument `execute_ex` ABI and hot loop.
+The feature-only wrapper repeatedly enters the current top frame until the
+owned bottom frame completes; an exception may still cross the chain in one
+entry, while suspension exits immediately. A feature-private thread-local
+control bit distinguishes that suspension from the existing error carrier and
+is consumed by the scheduler at the same boundary. It uses an empty
+`String::new()` carrier, so steady-state hand-off allocates nothing and the
+ordinary executor gains no TLS lookup, branch or extra argument.
+
+The permanent million-cycle PHP API benchmark records 79.74 ns per
+suspend/resume on ARM64 and 84.28 ns on pinned x86-64, including PHP internal
+function dispatch and scheduler state transitions. This remains comfortably
+below the original 150 ns target even though the final benchmark measures more
+than the milestone-one internal pointer exchange. Default, no-default,
+all-feature, all-target and complete release integration matrices pass on both
+hosts.
+
+Pay-for-use is checked against the intermediate regex callback optimization
+commit `9f038eb`. On ARM64 the default release binary is byte-identical at
+SHA-256 `f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+GNU build-id and symbol metadata differ on x86-64 because the Cargo feature list
+changes, but executable/data/BSS sizes are identical at
+2,931,803/49,784/2,504 bytes; removing only that metadata yields byte-identical
+binaries at SHA-256
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+Thus the default program remains unchanged after the coroutine commit.
+
+The final feature-enabled release is admitted against the pre-phase
+`3d546a2` binaries, not against a selectively chosen workload. Across 1,003
+alternating pairs, ARM64 regex controls range from +0.54 to -17.86 percent and
+pinned x86-64 from +0.07 to -12.57 percent. Across 101 application pairs,
+ARM64 ranges from +0.33 to -1.98 percent and x86-64 from +0.47 to -10.41
+percent. No control regresses by more than one percent. The callback wins come
+from replacing a temporary `echo_to_string()` clone with the existing direct
+`append_echo_to()` path; that independent optimization is committed separately
+so the source of the gain remains reviewable. An isolated x86 comparison
+against that intermediate commit still moves the most layout-sensitive callback
+by +1.70 percent, confirming that multi-codegen-unit ELF placement remains a
+measurement concern rather than claiming it has disappeared.
+
+Milestone four can now add bounded channels plus a readiness scheduler for
+timers and non-blocking I/O. It must preserve the current lexical ownership,
+no-poll ordinary executor and single-threaded value contract; work stealing
+remains a separate decision.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

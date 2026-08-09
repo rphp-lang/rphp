@@ -1028,3 +1028,6 @@ impl ExecutorGlobals {
         self.output.borrow_mut().write_all(data).unwrap();
     }
 }
+
+#[cfg(feature = "coroutines")]
+pub mod coroutine;

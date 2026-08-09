@@ -78,7 +78,7 @@ fn main() {
 
     // Register stdlib
     let _stdlib = stdlib::register_stdlib(&mut eg);
-
+    let _coroutines = register_coroutine_api(&mut eg);
     // Register declared functions
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)
@@ -112,3 +112,14 @@ fn main() {
         }
     }
 }
+
+#[cfg(feature = "coroutines")]
+fn register_coroutine_api(
+    eg: &mut ExecutorGlobals,
+) -> Vec<Box<rphp::vm::function::InternalFunction>> {
+    rphp::runtime::coroutine::register_api(eg)
+}
+
+#[cfg(not(feature = "coroutines"))]
+#[inline(always)]
+fn register_coroutine_api(_eg: &mut ExecutorGlobals) {}

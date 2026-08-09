@@ -6792,6 +6792,54 @@ move to structured parent ownership and the first minimal PHP-facing API,
 while production linkage remains subject to the same one-percent admission
 rule.
 
+### Structured coroutine API checkpoint (2026-08-09)
+
+Milestone three promotes the lazy pooled substrate into the production crate
+behind the non-default `coroutines` feature. One lexical `coroutine_scope`
+owns every task created directly or by a running child. The minimal PHP API is
+`coroutine_spawn`, `coroutine_suspend`, `coroutine_resume` and
+`coroutine_join`; join returns a result or restores the child exception for
+normal PHP catch/`finally` handling. Scope exit cancels unfinished children and
+propagates the oldest unjoined failure deterministically.
+
+Production code is split into API, state and scheduler modules. The scheduler
+does not enlarge `ExecutorGlobals`, and its pinned boxed contexts make nested
+spawn safe across task-map rehashing. Stack storage remains lazy and pooled:
+64 sequential tasks construct one pair and reuse it 63 times. Seven PHP-facing
+integration scenarios include nested ownership, cancellation, exception and
+`finally` propagation, deterministic multiple failure selection and a
+multi-frame suspend/resume chain.
+
+The ordinary executor loop and two-argument ABI remain unchanged. Deep resume
+is implemented by a feature-only wrapper that re-enters successive preserved
+frames until the owned bottom frame completes. Suspension uses a feature-local
+sidecar control bit and a zero-capacity existing error carrier, avoiding a new
+hot enum variant, per-entry TLS lookup, added branch, copied frame or allocation.
+The complete PHP API cycle measures 79.74 ns on ARM64 and 84.28 ns on pinned
+x86-64 for one million iterations.
+
+A separate callback cleanup replaces `echo_to_string()` temporaries with
+`append_echo_to()` and is retained as commit `9f038eb`. Relative to that commit,
+the default ARM64 binary is byte-identical at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+On x86-64 only GNU build-id/symbol metadata changes; program section sizes are
+identical and stripped binaries match at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+
+Against the original `3d546a2` phase baseline, all 1,003-pair regex gates and
+101-pair application gates remain within the one-percent ceiling on both
+architectures. ARM64 ranges are +0.54 to -17.86 percent for regex and +0.33 to
+-1.98 percent for applications; pinned x86-64 ranges are +0.07 to -12.57 and
++0.47 to -10.41 percent. Complete default, no-default and all-feature release
+integration matrices plus all-target checks pass on both hosts. An isolated
+x86 callback comparison against the intermediate regex commit is +1.70 percent,
+so future opt-in modules must continue treating ELF code layout as an explicit
+gate rather than assuming source-level separation is sufficient.
+
+The bounded branch now advances to channels and a readiness scheduler for
+timers and non-blocking I/O. Multi-threaded work stealing remains outside this
+milestone and must not impose thread-safety costs on ordinary PHP execution.
+
 ## Phase 5: compatibility breadth and production use
 
 Once the execution architecture and minimal JIT are proven, broaden support

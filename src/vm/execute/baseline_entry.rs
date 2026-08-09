@@ -653,3 +653,28 @@ pub fn resume_generator(
 
     result
 }
+
+/// Enter the canonical executor without imposing its top-level cleanup policy.
+///
+/// The opt-in coroutine runtime owns the detached stack and must distinguish a
+/// cooperative suspension from completion before it can clean or recycle the
+/// frame chain. Keeping this wrapper feature-gated leaves the ordinary entry
+/// point and dispatch loop unchanged in non-coroutine builds.
+#[cfg(feature = "coroutines")]
+pub(crate) fn execute_coroutine_frame(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    boundary: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let mut entry = frame;
+    loop {
+        execute_ex(eg, entry)?;
+        if entry == boundary {
+            return Ok(());
+        }
+        entry = eg.current_execute_data.get();
+        if entry.is_null() {
+            return Ok(());
+        }
+    }
+}
