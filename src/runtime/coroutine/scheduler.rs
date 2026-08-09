@@ -1,4 +1,6 @@
 mod channel;
+#[cfg(unix)]
+mod datagram;
 mod driver;
 #[cfg(unix)]
 mod io;

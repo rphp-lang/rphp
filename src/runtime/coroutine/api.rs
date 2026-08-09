@@ -1,5 +1,9 @@
 #[cfg(unix)]
+mod datagram;
+#[cfg(unix)]
 mod io;
+#[cfg(unix)]
+use self::datagram::{coroutine_udp_bind, coroutine_udp_recv_from, coroutine_udp_send_to};
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 use self::io::coroutine_tcp_connect;
 #[cfg(unix)]
@@ -164,6 +168,21 @@ const PLATFORM_API_DEFINITIONS: &[ApiDefinition] = &[
         2,
         1,
         &["address", "timeoutMilliseconds"],
+    ),
+    ("coroutine_udp_bind", coroutine_udp_bind, 1, 1, &["address"]),
+    (
+        "coroutine_udp_send_to",
+        coroutine_udp_send_to,
+        3,
+        3,
+        &["socket", "data", "address"],
+    ),
+    (
+        "coroutine_udp_recv_from",
+        coroutine_udp_recv_from,
+        2,
+        2,
+        &["socket", "length"],
     ),
     (
         "coroutine_wait_readable",

@@ -7380,6 +7380,43 @@ override the ARM64 failure. Both source trees were restored exactly to
 ownership-only movement of this resolver path requires a stronger linker or
 code-placement boundary rather than another module reshuffle.
 
+### Non-blocking UDP coroutine adapter
+
+The next accepted Phase 5 slice extends the existing scoped descriptor and
+`poll(2)` driver to datagrams using only `std::net::UdpSocket`.
+`coroutine_udp_bind` accepts a numeric address and returns `[socket,
+localAddress]`; `coroutine_udp_send_to` returns a byte count or `false` on
+`WouldBlock`; `coroutine_udp_recv_from` returns `[data, peerAddress]` or
+`false`. Callers suspend through the unchanged readable/writable wait API and
+retry, so UDP shares the same timer/readiness ordering and adds no scheduler
+scan.
+
+The descriptor registry represents datagrams explicitly. UDP receive retains
+one packet boundary and its peer, while generic byte-stream and TCP-listener
+operations reject that descriptor kind. Receive buffers are capped at 65,535
+bytes. Binding and destinations remain numeric-only; introducing a resolver
+into the non-suspending send operation is intentionally outside this slice.
+Implementation ownership is split from the outset into an 85-line I/O policy,
+37-line scheduler bridge and 111-line PHP adapter, with 95 lines of dedicated
+descriptor tests.
+
+Tests cover bidirectional loopback traffic, sender identity, readable and
+writable poll integration, `WouldBlock`, wrong descriptor kinds, scheduler
+fairness, malformed DNS-style bind input and oversized receives. ARM64 passes
+257 all-feature library tests and x86-64 282; both pass 168 no-default tests,
+26/3 coroutine E2E scenarios and every all-feature/all-target compile.
+
+Fresh 20-pair admission against the accepted DNS source reports
+-2.861%/-0.288%/-0.486% on ARM64 and +0.079%/-0.529%/+0.001% on pinned
+x86-64 for suspend/channel/stream readiness. All controls remain below +1%.
+Clean feature-test hashes are
+`6d9b3278845b051844d2613ba4b7b17b96c41d4fe85752b79f478dec633e60b0`
+and `7f038c8bfbe1be43af5380c2071880a45acbec68185b0dbab96c9046567108cb`.
+Default ARM64/x86-64 releases remain exact at
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`
+and `1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
+The checkpoint adds no crate, Cargo feature or external library.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

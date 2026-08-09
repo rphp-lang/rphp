@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{c_int, c_short};
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{SocketAddr, TcpListener, TcpStream, UdpSocket};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -13,6 +13,10 @@ use crate::vm::execute::VmError;
 mod connect;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 pub(super) use connect::{ConnectCompletion, ConnectOutcome, ConnectWaiter};
+
+#[path = "io_datagram.rs"]
+mod datagram;
+pub(super) use datagram::DatagramReceiveOutcome;
 
 #[path = "io_stream.rs"]
 mod stream;
@@ -118,6 +122,7 @@ impl ByteStream {
 enum Descriptor {
     Stream(ByteStream),
     Listener(TcpListener),
+    Datagram(UdpSocket),
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     ResolverWake(UnixStream),
 }
@@ -127,6 +132,7 @@ impl Descriptor {
         match self {
             Self::Stream(stream) => stream.raw_fd(),
             Self::Listener(listener) => listener.as_raw_fd(),
+            Self::Datagram(socket) => socket.as_raw_fd(),
             #[cfg(any(target_vendor = "apple", target_os = "linux"))]
             Self::ResolverWake(stream) => stream.as_raw_fd(),
         }
@@ -135,7 +141,7 @@ impl Descriptor {
     fn stream_mut(&mut self) -> Option<&mut ByteStream> {
         match self {
             Self::Stream(stream) => Some(stream),
-            Self::Listener(_) => None,
+            Self::Listener(_) | Self::Datagram(_) => None,
             #[cfg(any(target_vendor = "apple", target_os = "linux"))]
             Self::ResolverWake(_) => None,
         }
@@ -144,7 +150,7 @@ impl Descriptor {
     fn listener(&self) -> Option<&TcpListener> {
         match self {
             Self::Listener(listener) => Some(listener),
-            Self::Stream(_) => None,
+            Self::Stream(_) | Self::Datagram(_) => None,
             #[cfg(any(target_vendor = "apple", target_os = "linux"))]
             Self::ResolverWake(_) => None,
         }

@@ -270,6 +270,72 @@ coroutine_scope(function () {
 
 #[cfg(unix)]
 #[test]
+fn udp_round_trip_uses_shared_readiness_without_blocking_ready_tasks() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $first = coroutine_udp_bind("127.0.0.1:0");
+    $second = coroutine_udp_bind("127.0.0.1:0");
+    $receiver = coroutine_spawn(function () use ($second) {
+        coroutine_wait_readable($second[0]);
+        $packet = coroutine_udp_recv_from($second[0], 64);
+        echo "P" . $packet[0] . ":";
+        coroutine_udp_send_to($second[0], "pong", $packet[1]);
+        return "receiver";
+    });
+    coroutine_resume($receiver);
+    $sender = coroutine_spawn(function () use ($first, $second) {
+        coroutine_udp_send_to($first[0], "ping", $second[1]);
+        coroutine_wait_readable($first[0]);
+        $packet = coroutine_udp_recv_from($first[0], 64);
+        echo "Q" . $packet[0] . ":";
+        return "sender";
+    });
+    coroutine_resume($sender);
+    $ready = coroutine_spawn(function () {
+        echo "R";
+    });
+
+    echo coroutine_join($receiver) . ":";
+    echo coroutine_join($sender);
+    coroutine_join($ready);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "RPping:receiver:Qpong:sender");
+}
+
+#[cfg(unix)]
+#[test]
+fn udp_rejects_dns_bind_names_and_oversized_reads() {
+    let address_error = run(r#"<?php
+coroutine_scope(function () {
+    coroutine_udp_bind("localhost:0");
+});
+"#)
+    .unwrap_err();
+    assert!(matches!(
+        address_error,
+        execute::VmError::Fatal(message)
+            if message == "coroutine_udp_bind expects a numeric IP address and port"
+    ));
+
+    let length_error = run(r#"<?php
+coroutine_scope(function () {
+    $socket = coroutine_udp_bind("127.0.0.1:0");
+    coroutine_udp_recv_from($socket[0], 65536);
+});
+"#)
+    .unwrap_err();
+    assert!(matches!(
+        length_error,
+        execute::VmError::Fatal(message)
+            if message == "coroutine_udp_recv_from length exceeds 65535 bytes"
+    ));
+}
+
+#[cfg(unix)]
+#[test]
 fn tcp_accept_reports_would_block_before_a_connection_arrives() {
     let output = run(r#"<?php
 coroutine_scope(function () {

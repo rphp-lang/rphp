@@ -1048,6 +1048,45 @@ are restored exactly to `4cf4abb`. The accepted combined resolver and wake
 ownership remains in place until a stronger code-placement boundary can make
 this cleanup neutral on both architectures.
 
+### Non-blocking UDP coroutine adapter checkpoint (2026-08-09)
+
+Phase 5 now adds a packet-preserving UDP adapter without a socket crate or
+external event loop. `coroutine_udp_bind(numericAddress)` creates a
+scope-owned non-blocking `std::net::UdpSocket` and returns its descriptor plus
+resolved local address. `coroutine_udp_send_to(socket, data, numericAddress)`
+returns the sent byte count or `false` for `WouldBlock`;
+`coroutine_udp_recv_from(socket, length)` returns `[data, peerAddress]` or
+`false`. The existing readable/writable wait functions provide suspension and
+retry, so the adapter adds no parallel readiness mechanism.
+
+Datagrams are a distinct descriptor kind rather than pretending to be byte
+streams. Packet boundaries and sender addresses survive receive, while
+stream-only read/write and TCP accept operations reject a UDP descriptor.
+Receive allocation is capped at 65,535 bytes. Bind and peer addresses are
+numeric-only so no resolver call can occur inside send or bind. The policy is
+isolated in an 85-line `io_datagram.rs`, with a 37-line scheduler bridge and a
+111-line PHP adapter; 95 lines of lower-level tests stay outside production.
+
+Real loopback coverage proves bidirectional ping/pong, peer identity,
+`WouldBlock`, shared readable and writable readiness, descriptor-kind errors,
+runnable-before-datagram fairness, numeric-address validation and the receive
+cap. Both hosts pass 168 no-default library tests, 257 ARM64 or 282 x86-64
+all-feature library tests, 26 coroutine scenarios with three ignored release
+benchmarks and complete all-feature/all-target compilation.
+
+The fresh 20-pair gate against the accepted DNS source records
+-2.861%/-0.288%/-0.486% on ARM64 and +0.079%/-0.529%/+0.001% on pinned
+x86-64 for suspend/channel/stream readiness. Every control remains under the
++1% ceiling; negative values are not treated as UDP speedup claims. Clean
+feature-test SHA-256 values are
+`6d9b3278845b051844d2613ba4b7b17b96c41d4fe85752b79f478dec633e60b0`
+on ARM64 and
+`7f038c8bfbe1be43af5380c2071880a45acbec68185b0dbab96c9046567108cb`
+on x86-64. Default releases remain exact at
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`
+and `1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
+No dependency or Cargo configuration changed.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
