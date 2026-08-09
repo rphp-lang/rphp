@@ -89,7 +89,7 @@ pub(super) fn replace(
         }
 
         result.push_str(&subject[previous_end..full_match.start]);
-        result.push_str(&callback_result.echo_to_string());
+        callback_result.append_echo_to(&mut result);
         previous_end = full_match.end;
         Ok(true)
     })?;
