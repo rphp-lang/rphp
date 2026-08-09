@@ -831,6 +831,14 @@ hashing or timing. Rebuilding this checkpoint that way exposed and replaced
 one stale intermediate artifact; the figures and hashes above are from the
 corrected clean two-host comparison.
 
+The repository now enforces that protocol through
+`benches/run_coroutine_gate.sh CANDIDATE_ROOT BASELINE_ROOT [CPU]`. The runner
+creates two fresh temporary Cargo target directories, builds both release test
+executables with `--no-run`, alternates candidate/baseline order for an even
+number of pairs, reports the mean of the two order-specific median ratios and
+returns failure above the configurable one-percent default ceiling. It uses
+only the existing toolchain and standard shell utilities.
+
 ### Cohesive stream lifecycle adapter rejected (2026-08-09)
 
 A broader standard-library-only adapter then tested four operations together:

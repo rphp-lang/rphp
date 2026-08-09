@@ -7169,6 +7169,13 @@ directory. A clean rebuild exposed one stale intermediate image during this
 checkpoint; the recorded hashes and deltas above are the corrected comparison
 of actual source states.
 
+`benches/run_coroutine_gate.sh` makes the corrected protocol repeatable. Given
+candidate and baseline source roots, it builds each release integration target
+in a separate fresh temporary directory, alternates execution order, computes
+the balanced order-specific median ratios and exits nonzero above the default
++1% ceiling. Optional Linux CPU pinning remains explicit; the script adds no
+crate, Cargo feature or non-system runtime dependency.
+
 ### Cohesive stream lifecycle adapter retry (rejected)
 
 With the corrected fresh-target protocol, one broader dependency-free adapter
