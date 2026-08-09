@@ -6978,6 +6978,23 @@ candidate code remains. Explicit close should return only after feature API
 placement is stabilized or as part of a larger adapter with an independently
 measured payoff.
 
+The first placement prerequisite is now accepted. Coroutine API metadata is
+split into immutable core and platform descriptor slices, and registration
+iterates them directly into the owned function vector. This removes the
+temporary definitions vector and its startup allocation; future entries alter
+static table data instead of the construction sequence. The API source remains
+357 lines and uses no new dependency.
+
+The gate also corrects the comparison protocol exposed by the rejected close
+experiment: twenty pairs provide ten runs in each order, and the reported
+paired result is the mean of the two order-specific medians. ARM64
+suspend/channel/readiness changes are -0.73%, -0.68% and -0.16%; pinned x86-64
+records +0.55%, -1.20% and +0.24%. Complete host matrices pass, and default
+ARM64 plus metadata-normalized x86-64 executables remain byte-identical at
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`
+and `0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+The x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

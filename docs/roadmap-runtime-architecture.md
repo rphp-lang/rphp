@@ -620,6 +620,36 @@ API or lifecycle source file remains. A future lifecycle design must first
 stabilize feature API/code placement or combine close with a broader adapter
 whose measured benefit justifies that one-time layout movement.
 
+### Static coroutine API registration checkpoint (2026-08-09)
+
+The first placement-stability prerequisite is accepted. Core and Unix-specific
+API descriptors now live in immutable `CORE_API_DEFINITIONS` and
+`PLATFORM_API_DEFINITIONS` slices. Registration iterates those slices directly
+into the owned internal-function vector instead of allocating, populating and
+extending a temporary definitions vector first. The runtime therefore performs
+one registration allocation instead of two, and a future adapter entry changes
+the static descriptor data rather than expanding the construction sequence.
+The complete API unit remains 357 lines and no dependency is introduced.
+
+Performance evaluation now uses an even, order-balanced protocol so neither
+binary receives an extra first or second position. Across twenty ARM64 pairs,
+candidate medians are 50.76 ns per suspend/resume, 146.52 ns per channel value
+and 2,465.87 ns per readiness round trip; the mean of the two order-specific
+paired medians is -0.73%, -0.68% and -0.16%. Pinned x86-64 records 79.86 ns,
+146.87 ns and 4,436.61 ns, with balanced changes of +0.55%, -1.20% and +0.24%.
+All three existing paths therefore remain within the one-percent regression
+ceiling on both architectures. Complete all-feature/all-target and no-default
+matrices pass with the unchanged 250/275 host library counts and 20 passing
+plus three ignored coroutine scenarios.
+
+Default execution remains byte-identical: ARM64 retains SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`,
+while x86-64 retains text/data/BSS sizes 2,931,803/49,784/2,504 bytes and the
+metadata-normalized SHA-256
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+This checkpoint stabilizes registration allocation and construction shape; a
+new API still requires its own two-host layout gate.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

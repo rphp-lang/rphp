@@ -252,86 +252,93 @@ fn positive_argument(value: &Value, function: &str, argument: &str) -> Result<u6
         .ok_or_else(|| VmError::Fatal(format!("{} expects a positive {}", function, argument)))
 }
 
+type ApiDefinition = (
+    &'static str,
+    InternalFunctionHandler,
+    u32,
+    u32,
+    &'static [&'static str],
+);
+
+const CORE_API_DEFINITIONS: &[ApiDefinition] = &[
+    ("coroutine_scope", coroutine_scope, 1, 1, &["callback"]),
+    ("coroutine_spawn", coroutine_spawn, 1, 1, &["callback"]),
+    ("coroutine_suspend", suspend, 0, 0, &[]),
+    ("coroutine_resume", coroutine_resume, 1, 1, &["task"]),
+    ("coroutine_join", coroutine_join, 1, 1, &["task"]),
+    ("coroutine_channel", coroutine_channel, 1, 1, &["capacity"]),
+    (
+        "coroutine_send",
+        coroutine_send,
+        2,
+        2,
+        &["channel", "value"],
+    ),
+    ("coroutine_receive", coroutine_receive, 1, 1, &["channel"]),
+    ("coroutine_sleep", coroutine_sleep, 1, 1, &["milliseconds"]),
+];
+
+#[cfg(unix)]
+const PLATFORM_API_DEFINITIONS: &[ApiDefinition] = &[
+    ("coroutine_stream_pair", coroutine_stream_pair, 0, 0, &[]),
+    (
+        "coroutine_tcp_listen",
+        coroutine_tcp_listen,
+        1,
+        1,
+        &["address"],
+    ),
+    (
+        "coroutine_tcp_accept",
+        coroutine_tcp_accept,
+        1,
+        1,
+        &["listener"],
+    ),
+    (
+        "coroutine_wait_readable",
+        coroutine_wait_readable,
+        1,
+        1,
+        &["stream"],
+    ),
+    (
+        "coroutine_wait_writable",
+        coroutine_wait_writable,
+        1,
+        1,
+        &["stream"],
+    ),
+    (
+        "coroutine_stream_read",
+        coroutine_stream_read,
+        2,
+        2,
+        &["stream", "length"],
+    ),
+    (
+        "coroutine_stream_write",
+        coroutine_stream_write,
+        2,
+        2,
+        &["stream", "data"],
+    ),
+];
+
+#[cfg(not(unix))]
+const PLATFORM_API_DEFINITIONS: &[ApiDefinition] = &[];
+
 /// Register the experimental PHP-facing coroutine API.
 ///
 /// Registration itself is feature-gated, so a normal build neither links the
 /// runtime nor allocates its internal-function descriptors.
 pub fn register_api(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    type ApiDefinition = (
-        &'static str,
-        InternalFunctionHandler,
-        u32,
-        u32,
-        &'static [&'static str],
-    );
-
-    let mut definitions: Vec<ApiDefinition> = vec![
-        ("coroutine_scope", coroutine_scope, 1, 1, &["callback"]),
-        ("coroutine_spawn", coroutine_spawn, 1, 1, &["callback"]),
-        ("coroutine_suspend", suspend, 0, 0, &[]),
-        ("coroutine_resume", coroutine_resume, 1, 1, &["task"]),
-        ("coroutine_join", coroutine_join, 1, 1, &["task"]),
-        ("coroutine_channel", coroutine_channel, 1, 1, &["capacity"]),
-        (
-            "coroutine_send",
-            coroutine_send,
-            2,
-            2,
-            &["channel", "value"],
-        ),
-        ("coroutine_receive", coroutine_receive, 1, 1, &["channel"]),
-        ("coroutine_sleep", coroutine_sleep, 1, 1, &["milliseconds"]),
-    ];
-    #[cfg(unix)]
-    let io_definitions: [ApiDefinition; 7] = [
-        ("coroutine_stream_pair", coroutine_stream_pair, 0, 0, &[]),
-        (
-            "coroutine_tcp_listen",
-            coroutine_tcp_listen,
-            1,
-            1,
-            &["address"],
-        ),
-        (
-            "coroutine_tcp_accept",
-            coroutine_tcp_accept,
-            1,
-            1,
-            &["listener"],
-        ),
-        (
-            "coroutine_wait_readable",
-            coroutine_wait_readable,
-            1,
-            1,
-            &["stream"],
-        ),
-        (
-            "coroutine_wait_writable",
-            coroutine_wait_writable,
-            1,
-            1,
-            &["stream"],
-        ),
-        (
-            "coroutine_stream_read",
-            coroutine_stream_read,
-            2,
-            2,
-            &["stream", "length"],
-        ),
-        (
-            "coroutine_stream_write",
-            coroutine_stream_write,
-            2,
-            2,
-            &["stream", "data"],
-        ),
-    ];
-    #[cfg(unix)]
-    definitions.extend(io_definitions);
-    let mut functions = Vec::with_capacity(definitions.len());
-    for (name, handler, max_args, required_args, parameters) in definitions {
+    let mut functions =
+        Vec::with_capacity(CORE_API_DEFINITIONS.len() + PLATFORM_API_DEFINITIONS.len());
+    for &(name, handler, max_args, required_args, parameters) in CORE_API_DEFINITIONS
+        .iter()
+        .chain(PLATFORM_API_DEFINITIONS.iter())
+    {
         let parameter_names = parameters
             .iter()
             .map(|parameter| (*parameter).to_string())
