@@ -775,6 +775,24 @@ release hashes and x86-64 section sizes remain exact at the established
 baselines. No dependency or Cargo feature changed. Explicit close, DNS and a
 generic PHP stream adapter remain separate Phase 5 work.
 
+### Isolated close-section retry rejected (2026-08-09)
+
+The post-timeout baseline received one final standalone close experiment. All
+new lifecycle code was kept non-inline and cold in a dedicated ARM64 Mach-O
+`__TEXT,__rphp_life` section, including the PHP handler, scheduler bridge and
+idle-only `IoSet` removal. The contract remained sound: stream close delivered
+EOF, listener close allowed immediate rebinding, and descriptors with queued
+or in-flight readiness work were rejected.
+
+Despite the separate `0x308`-byte section, the ordinary feature-test `__text`
+layout still changed and the order-balanced ARM64 suspend control regressed
+5.84%. Channel/readiness were -0.48%/-0.23%; pinned x86-64 was
++0.97%/-0.37%/+0.10%. The ARM64 result exceeds the one-percent ceiling, so the
+entire candidate was removed. Local and server feature executables were then
+rebuilt bit-identically at the accepted timeout hashes. This rules out another
+standalone placement retry; explicit close should be reconsidered only within
+a broader stream-adapter checkpoint.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -7112,6 +7112,26 @@ on x86-64. Scheduler timeout tests live in a separate `driver_tests.rs`,
 leaving the production driver at 118 lines. Explicit close, DNS and generic
 PHP stream integration remain independent Phase 5 slices.
 
+### Post-timeout close section retry (rejected)
+
+A third explicit-close experiment tested stronger code-placement isolation
+than the two earlier cold-module attempts. The handler, scheduler bridge and
+idle-only descriptor removal were all marked non-inline/cold and placed in a
+dedicated ARM64 Mach-O `__TEXT,__rphp_life` section. That section contained
+only the three lifecycle functions and occupied `0x308` bytes. Functional
+tests again proved EOF delivery, immediate listener rebinding and rejection of
+queued or in-flight readiness waiters without adding a dependency.
+
+The separate section did not stabilize the rest of the linked test image:
+ordinary `__text` moved from `0x257b5c` to `0x25698c`. An order-balanced
+20-pair ARM64 gate then recorded +5.84%/-0.48%/-0.23% for
+suspend/channel/readiness. Pinned x86-64 was +0.97%/-0.37%/+0.10%, but the
+ARM64 suspend result rejects the slice. All close API/source/test changes were
+removed and both feature executables returned bit-for-bit to the accepted
+timeout hashes. A future explicit lifecycle surface should therefore arrive as
+part of a broader stream adapter with its own measured payoff, not as another
+handler-placement retry.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
