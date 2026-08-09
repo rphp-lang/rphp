@@ -12,6 +12,15 @@ impl CoroutineScheduler {
             if let Some(WaitReason::TcpConnect(descriptor)) = context.wait_reason {
                 self.io.cancel_tcp_connect(descriptor, context.id);
             }
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            if let Some(WaitReason::DnsResolve(job)) = context.wait_reason {
+                if let Some(resolver) = self.resolver.as_mut() {
+                    resolver.cancel(job, context.id);
+                    if !resolver.has_waiters() {
+                        self.io.disarm_resolver_wake(resolver.wake_descriptor);
+                    }
+                }
+            }
             match context.status {
                 CoroutineStatus::Ready | CoroutineStatus::Suspended | CoroutineStatus::Waiting => {
                     context.state.cleanup_frames();

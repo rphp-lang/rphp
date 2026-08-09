@@ -12,7 +12,7 @@ use crate::vm::execute::VmError;
 #[path = "io_connect.rs"]
 mod connect;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
-pub(super) use connect::ConnectOutcome;
+pub(super) use connect::{ConnectCompletion, ConnectOutcome, ConnectWaiter};
 
 #[path = "io_stream.rs"]
 mod stream;
@@ -23,6 +23,8 @@ mod stream;
 const READ_EVENTS: c_short = 0x0001;
 const WRITE_EVENTS: c_short = 0x0004;
 const TERMINAL_EVENTS: c_short = 0x0008 | 0x0010 | 0x0020;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+pub(super) const RESOLVER_WAKE_TASK: u64 = u64::MAX;
 
 #[repr(C)]
 struct PollFd {
@@ -116,6 +118,8 @@ impl ByteStream {
 enum Descriptor {
     Stream(ByteStream),
     Listener(TcpListener),
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    ResolverWake(UnixStream),
 }
 
 impl Descriptor {
@@ -123,6 +127,8 @@ impl Descriptor {
         match self {
             Self::Stream(stream) => stream.raw_fd(),
             Self::Listener(listener) => listener.as_raw_fd(),
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            Self::ResolverWake(stream) => stream.as_raw_fd(),
         }
     }
 
@@ -130,6 +136,8 @@ impl Descriptor {
         match self {
             Self::Stream(stream) => Some(stream),
             Self::Listener(_) => None,
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            Self::ResolverWake(_) => None,
         }
     }
 
@@ -137,6 +145,8 @@ impl Descriptor {
         match self {
             Self::Listener(listener) => Some(listener),
             Self::Stream(_) => None,
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            Self::ResolverWake(_) => None,
         }
     }
 }
@@ -296,6 +306,65 @@ impl IoSet {
             }
         }
         Ok(())
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    pub(super) fn register_resolver_wake(&mut self, stream: UnixStream) -> Result<u64, VmError> {
+        let descriptor = self.allocate_id()?;
+        self.descriptors.insert(
+            descriptor,
+            DescriptorState::new(Descriptor::ResolverWake(stream)),
+        );
+        Ok(descriptor)
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    pub(super) fn arm_resolver_wake(&mut self, descriptor: u64) {
+        if self.in_flight.contains_key(&RESOLVER_WAKE_TASK) {
+            return;
+        }
+        let state = self
+            .descriptors
+            .get_mut(&descriptor)
+            .expect("coroutine resolver wake descriptor must remain registered");
+        if !state.readers.contains(&RESOLVER_WAKE_TASK) {
+            state.readers.push_back(RESOLVER_WAKE_TASK);
+        }
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    pub(super) fn disarm_resolver_wake(&mut self, descriptor: u64) {
+        let state = self
+            .descriptors
+            .get_mut(&descriptor)
+            .expect("coroutine resolver wake descriptor must remain registered");
+        state.readers.retain(|task| *task != RESOLVER_WAKE_TASK);
+        if self.in_flight.remove(&RESOLVER_WAKE_TASK).is_some() {
+            state.reader_in_flight = false;
+        }
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    pub(super) fn drain_resolver_wake(&mut self, descriptor: u64) -> Result<(), VmError> {
+        let state = self
+            .descriptors
+            .get_mut(&descriptor)
+            .expect("coroutine resolver wake descriptor must remain registered");
+        let Descriptor::ResolverWake(stream) = &mut state.descriptor else {
+            return Err(VmError::Fatal(
+                "coroutine resolver wake descriptor has inconsistent type".into(),
+            ));
+        };
+        let mut bytes = [0_u8; 256];
+        loop {
+            match stream.read(&mut bytes) {
+                Ok(0) => return Ok(()),
+                Ok(_) => {}
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => return Ok(()),
+                Err(error) => return Err(os_error("drain coroutine resolver wake stream", error)),
+            }
+        }
     }
 
     fn prepare_poll_set(&mut self) {

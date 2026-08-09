@@ -7314,6 +7314,52 @@ not make OS resolver calls cancellable. Production integration remains gated
 on lazy pool ownership, scope-safe continuation cleanup and the existing
 two-host coroutine performance controls.
 
+### Lazy production coroutine DNS checkpoint
+
+Phase 5 now promotes the bounded standard-library resolver into the
+feature-only runtime. `coroutine_tcp_connect` accepts numeric IPv4/IPv6 exactly
+as before and additionally accepts `hostname:port`. Hostnames are submitted by
+`try_send` to one lazily initialized process-wide pool: two named workers and a
+64-entry `sync_channel`. There is no crate, Cargo feature, external DNS client
+or event-loop dependency.
+
+Each scheduler that actually resolves a hostname owns a completion channel and
+non-blocking `UnixStream` wake pair. Its read side is a hidden `IoSet`
+descriptor, armed only while resolver jobs have live continuations. Resolver
+completion therefore shares the existing `poll(2)` call and ordinary readiness
+queue. Cancellation removes the waiter and disarms that descriptor without
+joining a worker. The platform's blocking `ToSocketAddrs` call itself remains
+non-cancellable; a result arriving after timeout or scope cancellation is
+filtered by job id or discarded with the scheduler-local receiver.
+
+The connect deadline starts before DNS and remains unchanged across every
+resolved address. A failed asynchronous candidate preserves its suspended
+frame and tries the next address, covering common `localhost` IPv6-to-IPv4
+fallback. Success cancels the timer before waking the task. Resolver error,
+queue saturation, address exhaustion, timeout and scope cleanup all leave no
+live scheduler continuation or private connect descriptor.
+
+An initial production version was functionally green but checked an optional
+resolver fd in every scheduler pass. ARM64's fresh 20-pair gate rejected it at
++9.452%/+1.361%/+1.110% for suspend/channel/readiness. Moving resolver wake
+ownership into the existing I/O descriptor set and keeping transition methods
+in the cold resolver module restores the inactive path. Final fresh-target
+20-pair deltas are -0.333%/-1.938%/-0.401% on ARM64 and
+-2.797%/-3.112%/-0.644% on pinned x86-64. All are below the +1% ceiling and
+are treated as neutral admission evidence rather than performance gains.
+
+Both architectures pass 168 no-default library tests, 255 ARM64 or 280 x86-64
+all-feature library tests, 24/3 coroutine E2E scenarios and complete
+all-feature/all-target compilation. Clean coroutine feature-test hashes are
+`52f85dd6c78789a3f5718ca095767de842bde3811ece7e1bd7776bc3478bbbb2`
+and `863e991e667d667133a756c697fd7085b4c7d95dd1b6473def19135084b94a0d`.
+Default ARM64 remains exact at
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`;
+fresh x86-64 candidate and exact baseline default releases are identical at
+`1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
+Generic PHP stream resources remain the next independent compatibility
+boundary.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

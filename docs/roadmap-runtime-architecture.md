@@ -980,6 +980,54 @@ integration must create the pool lazily, surface queue saturation without
 losing the suspended frame, and retain completion filtering until scope
 cancellation has released every continuation.
 
+### Lazy production hostname resolution checkpoint (2026-08-09)
+
+The bounded prototype is now integrated into the feature-only coroutine TCP
+path without adding a crate, Cargo feature or external resolver/event library.
+`coroutine_tcp_connect` accepts either a numeric socket address or a
+`hostname:port` target. Numeric targets retain their direct non-blocking path;
+hostname targets submit owned work to a process-wide pool of two named
+standard-library workers behind a 64-entry `sync_channel`. Submission remains
+`try_send`, so saturation fails immediately instead of blocking the scheduler.
+
+Every scheduler that first uses DNS creates only its private completion queue
+and non-blocking `UnixStream` wake pair. The read side is registered as a
+private descriptor in the existing `IoSet`, so resolver completion uses the
+same `poll(2)` set and readiness queue as streams rather than adding a second
+poll or an unconditional scheduler scan. Pool threads are created lazily and
+live for the process lifetime. Scope cancellation removes the continuation and
+disarms its wake waiter without joining a worker; an already-running
+`ToSocketAddrs` call is not forcibly cancellable, but its late owned result is
+discarded when no waiter remains.
+
+One absolute deadline is computed before DNS submission and is retained while
+resolved addresses are attempted in order. An asynchronous refusal therefore
+continues to the next IPv6/IPv4 candidate under the original timeout. Success
+writes the descriptor into the suspended VM return slot, cancels the timer and
+wakes the exact task; exhaustion, resolver failure, timeout and scope cleanup
+release every private continuation and socket.
+
+The first correct integration polled a separate optional resolver fd from
+every scheduler pass. ARM64 rejected it at +9.452% suspend/resume, +1.361%
+channel and +1.110% readiness. Registering the lazy wake source inside the
+existing descriptor set removes that inactive-path tax. The final fresh-target
+20-pair gate records -0.333%/-1.938%/-0.401% on ARM64 and
+-2.797%/-3.112%/-0.644% on pinned x86-64 for the same controls. These are
+admission results, not speedup claims.
+
+Both hosts pass 168 no-default library tests, 255 ARM64 or 280 x86-64
+all-feature library tests, 24 coroutine scenarios with three ignored release
+benchmarks, and the complete all-feature/all-target compile matrix. Clean
+feature-test SHA-256 values are
+`52f85dd6c78789a3f5718ca095767de842bde3811ece7e1bd7776bc3478bbbb2`
+on ARM64 and
+`863e991e667d667133a756c697fd7085b4c7d95dd1b6473def19135084b94a0d`
+on x86-64. The default ARM64 release remains exact at
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`;
+the fresh x86-64 candidate and exact baseline are byte-identical at
+`1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
+Generic PHP stream-resource integration remains a separate Phase 5 slice.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

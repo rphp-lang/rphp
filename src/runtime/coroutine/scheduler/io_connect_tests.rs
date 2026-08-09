@@ -92,7 +92,13 @@ fn cancelling_connect_continuation_closes_its_private_descriptor() {
     let client = match io.create_tcp_connection(address).unwrap() {
         ConnectOutcome::Connected(client) | ConnectOutcome::InProgress(client) => client,
     };
-    io.enqueue_tcp_connect(client, 71, std::ptr::null_mut(), std::ptr::null_mut());
+    io.enqueue_tcp_connect(
+        client,
+        71,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::collections::VecDeque::new(),
+    );
 
     io.cancel_tcp_connect(client, 71);
 

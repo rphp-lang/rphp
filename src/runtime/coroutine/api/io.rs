@@ -7,6 +7,12 @@ use super::{
     scheduler_ptr, suspend_from_internal_call, suspension_caller, write_result,
 };
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+enum TcpConnectTarget {
+    Numeric(SocketAddr),
+    Host { host: String, port: u16 },
+}
+
 pub(super) fn coroutine_stream_pair(
     _execute_data: *mut ExecuteData,
     return_value: *mut Value,
@@ -53,12 +59,7 @@ pub(super) fn coroutine_tcp_connect(
     let address = unsafe { argument(execute_data, 0) }
         .as_str()
         .ok_or_else(|| VmError::Fatal("coroutine_tcp_connect expects a string address".into()))?;
-    let address = address.parse::<SocketAddr>().map_err(|_| {
-        VmError::Fatal(
-            "coroutine_tcp_connect expects a numeric IP address and port (for example 127.0.0.1:8080)"
-                .into(),
-        )
-    })?;
+    let target = parse_tcp_connect_target(address)?;
     let timeout = if unsafe { (*execute_data).num_args } > 1 {
         let milliseconds = unsafe { argument(execute_data, 1) }
             .as_long()
@@ -75,16 +76,58 @@ pub(super) fn coroutine_tcp_connect(
     };
     let caller = suspension_caller(execute_data)?;
     let scheduler = scheduler_ptr(eg)?;
-    match unsafe { (&mut *scheduler).connect_tcp(address, timeout, caller, return_value)? } {
-        Some(stream) => {
-            write_result(return_value, Value::long(stream as i64));
-            Ok(())
+    match target {
+        TcpConnectTarget::Numeric(address) => {
+            match unsafe { (&mut *scheduler).connect_tcp(address, timeout, caller, return_value)? }
+            {
+                Some(stream) => {
+                    write_result(return_value, Value::long(stream as i64));
+                    Ok(())
+                }
+                None => {
+                    write_result(return_value, Value::null());
+                    suspend_from_internal_call(caller, SuspendKind::Waiting)
+                }
+            }
         }
-        None => {
+        TcpConnectTarget::Host { host, port } => {
+            unsafe {
+                (&mut *scheduler).resolve_and_connect_tcp(
+                    host,
+                    port,
+                    timeout,
+                    caller,
+                    return_value,
+                )?;
+            }
             write_result(return_value, Value::null());
             suspend_from_internal_call(caller, SuspendKind::Waiting)
         }
     }
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn parse_tcp_connect_target(address: &str) -> Result<TcpConnectTarget, VmError> {
+    if let Ok(address) = address.parse::<SocketAddr>() {
+        return Ok(TcpConnectTarget::Numeric(address));
+    }
+    let (host, port) = address.rsplit_once(':').ok_or_else(connect_address_error)?;
+    let host = host.trim();
+    let port = port.parse::<u16>().map_err(|_| connect_address_error())?;
+    if host.is_empty() || host.contains(':') {
+        return Err(connect_address_error());
+    }
+    Ok(TcpConnectTarget::Host {
+        host: host.to_owned(),
+        port,
+    })
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+fn connect_address_error() -> VmError {
+    VmError::Fatal(
+        "coroutine_tcp_connect expects an IP address or hostname followed by a port".into(),
+    )
 }
 
 pub(super) fn coroutine_tcp_accept(

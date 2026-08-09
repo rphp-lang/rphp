@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::ffi::{c_int, c_void};
 use std::io;
 use std::net::{SocketAddr, TcpStream};
@@ -14,11 +15,21 @@ pub(in crate::runtime::coroutine::scheduler) enum ConnectOutcome {
     InProgress(u64),
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(in crate::runtime::coroutine::scheduler) struct ConnectWaiter {
     pub(in crate::runtime::coroutine::scheduler) task: u64,
     pub(in crate::runtime::coroutine::scheduler) frame: *mut ExecuteData,
     pub(in crate::runtime::coroutine::scheduler) return_value: *mut Value,
+    pub(in crate::runtime::coroutine::scheduler) remaining: VecDeque<SocketAddr>,
+}
+
+pub(in crate::runtime::coroutine::scheduler) enum ConnectCompletion {
+    Connected(ConnectWaiter),
+    Pending,
+    Failed {
+        waiter: ConnectWaiter,
+        error: VmError,
+    },
 }
 
 impl IoSet {
@@ -45,18 +56,27 @@ impl IoSet {
         task: u64,
         frame: *mut ExecuteData,
         return_value: *mut Value,
+        remaining: VecDeque<SocketAddr>,
     ) {
+        self.enqueue_tcp_connect_waiter(
+            descriptor,
+            ConnectWaiter {
+                task,
+                frame,
+                return_value,
+                remaining,
+            },
+        );
+    }
+
+    pub(in crate::runtime::coroutine::scheduler) fn enqueue_tcp_connect_waiter(
+        &mut self,
+        descriptor: u64,
+        waiter: ConnectWaiter,
+    ) {
+        let task = waiter.task;
         assert!(
-            self.connect_waiters
-                .insert(
-                    descriptor,
-                    ConnectWaiter {
-                        task,
-                        frame,
-                        return_value,
-                    },
-                )
-                .is_none(),
+            self.connect_waiters.insert(descriptor, waiter).is_none(),
             "a coroutine TCP descriptor can have only one connect continuation"
         );
         self.enqueue_waiter(descriptor, task, super::IoDirection::Writable);
@@ -66,21 +86,21 @@ impl IoSet {
         &mut self,
         descriptor: u64,
         task: u64,
-    ) -> Result<Option<ConnectWaiter>, VmError> {
+    ) -> Result<ConnectCompletion, VmError> {
         let waiter = self.connect_waiter(descriptor, task)?;
         match self.finish_tcp_connection(descriptor) {
             Ok(true) => {
                 self.connect_waiters.remove(&descriptor);
-                Ok(Some(waiter))
+                Ok(ConnectCompletion::Connected(waiter))
             }
             Ok(false) => {
                 self.acknowledge_ready(task);
                 self.enqueue_waiter(descriptor, task, super::IoDirection::Writable);
-                Ok(None)
+                Ok(ConnectCompletion::Pending)
             }
             Err(error) => {
                 self.cancel_tcp_connect(descriptor, task);
-                Err(error)
+                Ok(ConnectCompletion::Failed { waiter, error })
             }
         }
     }
@@ -113,7 +133,7 @@ impl IoSet {
                 descriptor, waiter.task, task
             )));
         }
-        Ok(*waiter)
+        Ok(waiter.clone())
     }
 
     fn finish_tcp_connection(&mut self, descriptor: u64) -> Result<bool, VmError> {

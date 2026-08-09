@@ -4,6 +4,8 @@ mod driver;
 mod io;
 mod lifecycle;
 mod readiness;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+mod resolver;
 
 use std::collections::HashMap;
 #[cfg(unix)]
@@ -19,6 +21,8 @@ use self::io::ConnectOutcome;
 #[cfg(unix)]
 use self::io::{AcceptOutcome, IoDirection, IoReady, IoSet, ReadOutcome, WriteOutcome};
 use self::readiness::Readiness;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+use self::resolver::ResolverSet;
 use super::state::{
     CoroutineContext, CoroutineEntry, CoroutineStackPool, CoroutineStatus, WaitReason,
     initialize_entry_frame,
@@ -39,6 +43,8 @@ pub(super) struct CoroutineScheduler {
     io: IoSet,
     #[cfg(unix)]
     io_ready: VecDeque<IoReady>,
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    resolver: Option<Box<ResolverSet>>,
 }
 
 impl CoroutineScheduler {
@@ -55,6 +61,8 @@ impl CoroutineScheduler {
             io: IoSet::default(),
             #[cfg(unix)]
             io_ready: VecDeque::new(),
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            resolver: None,
         }
     }
 
@@ -170,8 +178,13 @@ impl CoroutineScheduler {
             ConnectOutcome::Connected(stream) => Ok(Some(stream)),
             ConnectOutcome::InProgress(stream) => {
                 self.block_active(WaitReason::TcpConnect(stream))?;
-                self.io
-                    .enqueue_tcp_connect(stream, task, frame, return_value);
+                self.io.enqueue_tcp_connect(
+                    stream,
+                    task,
+                    frame,
+                    return_value,
+                    std::collections::VecDeque::new(),
+                );
                 if let Some(deadline) = deadline {
                     self.readiness.schedule_timer(task, deadline);
                 }

@@ -4,11 +4,7 @@ use super::CoroutineScheduler;
 #[cfg(unix)]
 use super::io::IoDirection;
 use crate::runtime::coroutine::state::{CoroutineStatus, WaitReason};
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
-use crate::value::Value;
 use crate::vm::execute::VmError;
-#[cfg(any(target_vendor = "apple", target_os = "linux"))]
-use crate::vm::execute::write_coroutine_result;
 
 impl CoroutineScheduler {
     pub(super) fn next_runnable(&mut self) -> Result<Option<u64>, VmError> {
@@ -50,25 +46,19 @@ impl CoroutineScheduler {
         self.io.poll_ready(timeout, &mut self.io_ready)?;
         while let Some(event) = self.io_ready.pop_front() {
             #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            if event.task == super::io::RESOLVER_WAKE_TASK {
+                debug_assert_eq!(event.direction, IoDirection::Readable);
+                self.promote_resolver(event.descriptor)?;
+                continue;
+            }
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
             if event.direction == IoDirection::Writable
                 && self.contexts.get(&event.task).is_some_and(|context| {
                     context.as_ref().get_ref().wait_reason
                         == Some(WaitReason::TcpConnect(event.descriptor))
                 })
             {
-                let Some(waiter) = self.io.complete_tcp_connect(event.descriptor, event.task)?
-                else {
-                    continue;
-                };
-                self.readiness.cancel_timer(event.task);
-                unsafe {
-                    write_coroutine_result(
-                        waiter.frame,
-                        waiter.return_value,
-                        Value::long(event.descriptor as i64),
-                    );
-                }
-                self.wake_task(event.task, WaitReason::TcpConnect(event.descriptor))?;
+                self.promote_tcp_connect(event.descriptor, event.task)?;
                 continue;
             }
             let expected = match event.direction {
@@ -96,6 +86,8 @@ impl CoroutineScheduler {
                 Some(WaitReason::TcpConnect(descriptor)) => {
                     self.expire_tcp_connect(descriptor, task)?
                 }
+                #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+                Some(WaitReason::DnsResolve(job)) => self.expire_dns_resolve(job, task)?,
                 _ => {}
             }
         }
@@ -105,6 +97,14 @@ impl CoroutineScheduler {
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     fn expire_tcp_connect(&mut self, descriptor: u64, task: u64) -> Result<(), VmError> {
         self.io.cancel_tcp_connect(descriptor, task);
+        Err(VmError::Fatal(
+            "failed to connect coroutine TCP stream: timed out".into(),
+        ))
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    fn expire_dns_resolve(&mut self, job: u64, task: u64) -> Result<(), VmError> {
+        self.cancel_dns_resolve(job, task);
         Err(VmError::Fatal(
             "failed to connect coroutine TCP stream: timed out".into(),
         ))

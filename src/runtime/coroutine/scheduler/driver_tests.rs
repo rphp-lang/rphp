@@ -41,9 +41,13 @@ fn expired_connect_returns_timeout_and_closes_private_descriptor() {
             descriptor
         }
     };
-    scheduler
-        .io
-        .enqueue_tcp_connect(descriptor, task, std::ptr::null_mut(), std::ptr::null_mut());
+    scheduler.io.enqueue_tcp_connect(
+        descriptor,
+        task,
+        std::ptr::null_mut(),
+        std::ptr::null_mut(),
+        std::collections::VecDeque::new(),
+    );
     let context = scheduler.contexts.get_mut(&task).unwrap();
     let context = unsafe { context.as_mut().get_unchecked_mut() };
     context.status = CoroutineStatus::Waiting;

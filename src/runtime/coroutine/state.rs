@@ -32,6 +32,8 @@ pub(super) enum WaitReason {
     IoWrite(u64),
     #[cfg(any(target_vendor = "apple", target_os = "linux"))]
     TcpConnect(u64),
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    DnsResolve(u64),
 }
 
 pub(super) struct CoroutineStacks {
