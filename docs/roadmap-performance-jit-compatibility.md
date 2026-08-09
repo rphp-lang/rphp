@@ -7228,6 +7228,30 @@ archived one-file baseline. Suspend/channel/readiness deltas are
 All remain below the +1% admission limit; the measurements establish neutral
 runtime behavior rather than a speedup.
 
+### Codegen-stable coroutine core-API split
+
+The PHP-facing coroutine API now separates its eight structured-concurrency,
+channel and timer handlers into the 141-line `api/core.rs`. The 227-line root
+keeps scope-root invocation, manual suspend mechanics, ABI helpers and the
+complete registration tables. A private `include!` is intentional rather than
+temporary: it preserves the existing `api::*` handler identities and exact
+registration order while establishing physical source ownership. No external
+library, crate, Cargo configuration or public API changes.
+
+A real Rust submodule was functionally correct but failed admission. It passed
+255/280 library tests and 23/3 coroutine E2E scenarios on both hosts, then the
+ARM64 20-pair gate measured +5.957%/-3.813%/+0.882% for
+suspend/channel/readiness. The candidate was removed before the accepted
+checkpoint because the suspend path exceeds +1%.
+
+The codegen-stable split passes the same functional matrix. Fresh-source,
+order-balanced 20-pair deltas are +0.306%/-0.040%/-0.224% on ARM64 and
++0.188%/-0.515%/+0.355% on pinned x86-64. Clean feature-test hashes are
+`2333dd6ee8bcc9ddb300be6e113b050e37b07d83401af43cdd399c8a15061b3d` on ARM64
+and `1922d968ed64ecb069aa1a23290895644a5daf4b3472f165367d34805a7a0e42` on
+x86-64. Default release hashes remain exact, so the checkpoint is accepted as
+ownership cleanup without a performance claim.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -891,6 +891,30 @@ against the archived one-file target. ARM64 records -0.056% suspend/resume,
 ceiling. The split is accepted as test ownership cleanup only and makes no
 runtime speedup claim.
 
+### Codegen-stable coroutine core-API ownership checkpoint (2026-08-09)
+
+The eight structured-concurrency, channel and timer handlers now live in the
+141-line `api/core.rs`, while scope-root invocation, suspend mechanics, shared
+argument/result helpers and registration remain in the 227-line `api.rs`.
+The root uses a private `include!` boundary deliberately: handlers retain their
+existing `api::*` codegen identity and the registration table retains its exact
+order. No PHP API, runtime state, Cargo feature, crate or external library
+changes.
+
+A conventional Rust submodule was tested first and removed. Although it passed
+255 ARM64 and 280 x86-64 library tests plus 23/3 E2E scenarios on both hosts,
+its new symbol identities moved the feature-test layout and the ARM64 gate
+measured +5.957% suspend/resume, -3.813% channel and +0.882% readiness. The
+suspend result exceeds the one-percent ceiling.
+
+The accepted include boundary passes the same functional matrix. Its
+fresh-source, order-balanced 20-pair gate records +0.306%/-0.040%/-0.224% on
+ARM64 and +0.188%/-0.515%/+0.355% on pinned x86-64 for the same three controls.
+Clean feature-test SHA-256 values are
+`2333dd6ee8bcc9ddb300be6e113b050e37b07d83401af43cdd399c8a15061b3d` and
+`1922d968ed64ecb069aa1a23290895644a5daf4b3472f165367d34805a7a0e42`.
+Default production releases remain exact at the established host hashes.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
