@@ -7268,6 +7268,29 @@ the +1% limit, so the entire candidate was removed and both source trees were
 restored exactly to the core-API checkpoint. Do not retry an ownership-only
 split of these hot methods without a stronger linker/code-placement boundary.
 
+### Standard-library resolver wake prototype
+
+Phase 5 now has an isolated asynchronous hostname-resolution transport
+prototype without linking it into production. The 310-line integration target
+uses one named `std::thread`, standard `mpsc` request/completion queues, a
+non-blocking `UnixStream` wake pair, monotonic job ids and a pending-result
+filter. Resolution runs through `ToSocketAddrs` only on the worker; the caller
+can poll the wake descriptor through the same Darwin/Linux ABI shape already
+used by coroutine I/O. No dependency, Cargo feature or runtime source changes.
+
+Both hosts pass four correctness tests with one ignored release benchmark.
+For 10,000 numeric jobs, the complete enqueue/resolve/wake/drain path measures
+513.19 ns/job on ARM64 and 1,022.91 ns/job on x86-64; direct numeric resolution
+controls measure 26.34 and 17.21 ns/job. Default production hashes remain exact
+at the established ARM64 and x86-64 values.
+
+The prototype deliberately makes no PHP DNS claim. Standard-library resolver
+calls are not individually cancellable once inside the OS; cancelled ids only
+filter late completion, and orderly shutdown joins the worker. The next slice
+must define bounded worker lifetime and integrate the wake descriptor behind
+an inactive-by-default scheduler resource, then pass the existing two-host
+coroutine gate before changing `coroutine_tcp_connect` parsing.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

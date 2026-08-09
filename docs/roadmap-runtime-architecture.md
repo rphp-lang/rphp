@@ -932,6 +932,30 @@ removed. The scheduler remains a measured hot layout boundary; future cleanup
 should target tests or genuinely cold resources rather than repackage these
 adapter methods.
 
+### Asynchronous resolver transport prototype (2026-08-09)
+
+A standalone 310-line integration prototype now proves the standard-library
+transport needed for non-blocking hostname resolution without touching the hot
+scheduler. One named worker thread receives owned host/port jobs over `mpsc`,
+runs `ToSocketAddrs` away from the caller, publishes owned address vectors and
+signals a non-blocking `UnixStream` wake descriptor compatible with the
+existing `poll(2)` driver. Monotonic job ids and a `BTreeSet` pending filter
+make cancellation discard late results without hiding later completions.
+
+Four tests on both hosts cover localhost resolution on a distinct thread,
+64 numeric jobs with unique ids, cancellation ordering, invalid input and
+explicit worker shutdown; one release benchmark remains ignored by default.
+Ten thousand numeric jobs cost 513.19 ns/job on ARM64 and 1,022.91 ns/job on
+x86-64, including submission, worker resolution and completion delivery. The
+prototype uses no crate or Cargo change, and default release hashes remain
+exact.
+
+This is not yet a DNS-capable coroutine API. A running OS resolver call cannot
+be forcibly cancelled through `ToSocketAddrs`; cancellation currently filters
+its completion, and shutdown waits for the worker. Production integration must
+therefore bound worker ownership and prove that an idle resolver adds no hot
+scheduler tax before hostname input is admitted.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
