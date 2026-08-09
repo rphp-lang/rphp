@@ -956,6 +956,30 @@ its completion, and shutdown waits for the worker. Production integration must
 therefore bound worker ownership and prove that an idle resolver adds no hot
 scheduler tax before hostname input is admitted.
 
+### Bounded resolver pool prototype (2026-08-09)
+
+The resolver transport now models a production-safe admission boundary more
+closely. Two fixed workers share a bounded 64-job `sync_channel`; scheduler-side
+submission uses `try_send`, so saturation returns `WouldBlock` instead of
+blocking the caller. Worker count and capacity are constructor parameters for
+tests, while job ids, cancellation filtering and the single pollable wake
+descriptor retain their original contract. The standalone target is 431 lines
+and still uses only `std` plus the local `poll(2)` declaration.
+
+Injected resolver tests prove that a fast job completes on worker two while
+worker one is deliberately blocked, and that a one-worker/one-slot pool rejects
+the next submission immediately while preserving both admitted completions.
+Both hosts now pass six tests with one ignored benchmark. Ten thousand numeric
+jobs measure 524.42 ns/job on ARM64 and 827.74 ns/job on x86-64; the bounded
+pool therefore adds no material ARM cost and improves the observed x86
+transport result. Default production releases remain bit-identical.
+
+The remaining limitation is explicit: two simultaneous blocking OS resolver
+calls can occupy both workers, and shutdown must still join them. Scheduler
+integration must create the pool lazily, surface queue saturation without
+losing the suspended frame, and retain completion filtering until scope
+cancellation has released every continuation.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

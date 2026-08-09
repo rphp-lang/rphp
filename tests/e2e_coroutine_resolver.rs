@@ -7,11 +7,13 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, ToSocketAddrs};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
 const READABLE: c_short = 0x0001;
+const DEFAULT_WORKERS: usize = 2;
+const DEFAULT_QUEUE_CAPACITY: usize = 64;
 
 #[repr(C)]
 struct PollFd {
@@ -55,32 +57,64 @@ struct ResolveCompletion {
     result: io::Result<Vec<SocketAddr>>,
 }
 
+type ResolveFn = dyn Fn(&str, u16) -> io::Result<Vec<SocketAddr>> + Send + Sync;
+
 struct ResolverWorker {
-    requests: mpsc::Sender<Option<ResolveRequest>>,
+    requests: mpsc::SyncSender<Option<ResolveRequest>>,
     completions: mpsc::Receiver<ResolveCompletion>,
     wake_reader: UnixStream,
-    worker: Option<thread::JoinHandle<()>>,
+    workers: Vec<thread::JoinHandle<()>>,
     next_id: u64,
     pending: BTreeSet<u64>,
 }
 
 impl ResolverWorker {
     fn new() -> io::Result<Self> {
+        Self::with_resolver(
+            DEFAULT_WORKERS,
+            DEFAULT_QUEUE_CAPACITY,
+            Arc::new(system_resolve),
+        )
+    }
+
+    fn with_resolver(
+        worker_count: usize,
+        queue_capacity: usize,
+        resolve: Arc<ResolveFn>,
+    ) -> io::Result<Self> {
+        if worker_count == 0 || queue_capacity == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "resolver workers and queue capacity must be positive",
+            ));
+        }
         let (wake_reader, wake_writer) = UnixStream::pair()?;
         wake_reader.set_nonblocking(true)?;
         wake_writer.set_nonblocking(true)?;
 
-        let (request_sender, request_receiver) = mpsc::channel();
+        let (request_sender, request_receiver) = mpsc::sync_channel(queue_capacity);
+        let request_receiver = Arc::new(Mutex::new(request_receiver));
         let (completion_sender, completion_receiver) = mpsc::channel();
-        let worker = thread::Builder::new()
-            .name("rphp-resolver".into())
-            .spawn(move || resolver_loop(request_receiver, completion_sender, wake_writer))?;
+        let mut workers = Vec::with_capacity(worker_count);
+        for index in 0..worker_count {
+            let requests = Arc::clone(&request_receiver);
+            let completions = completion_sender.clone();
+            let wake = wake_writer.try_clone()?;
+            let resolve = Arc::clone(&resolve);
+            workers.push(
+                thread::Builder::new()
+                    .name(format!("rphp-resolver-{index}"))
+                    .spawn(move || resolver_loop(requests, completions, wake, resolve))?,
+            );
+        }
+        drop(completion_sender);
+        drop(wake_writer);
 
         Ok(Self {
             requests: request_sender,
             completions: completion_receiver,
             wake_reader,
-            worker: Some(worker),
+            workers,
             next_id: 1,
             pending: BTreeSet::new(),
         })
@@ -97,12 +131,22 @@ impl ResolverWorker {
             host: host.into(),
             port,
         };
-        if self.requests.send(Some(request)).is_err() {
-            self.pending.remove(&id);
-            return Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "resolver worker stopped",
-            ));
+        match self.requests.try_send(Some(request)) {
+            Ok(()) => {}
+            Err(mpsc::TrySendError::Full(_)) => {
+                self.pending.remove(&id);
+                return Err(io::Error::new(
+                    io::ErrorKind::WouldBlock,
+                    "resolver queue is full",
+                ));
+            }
+            Err(mpsc::TrySendError::Disconnected(_)) => {
+                self.pending.remove(&id);
+                return Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "resolver workers stopped",
+                ));
+            }
         }
         Ok(id)
     }
@@ -153,32 +197,41 @@ impl ResolverWorker {
     }
 
     fn shutdown(mut self) -> thread::Result<()> {
-        let _ = self.requests.send(None);
-        self.worker
-            .take()
-            .expect("resolver worker must exist")
-            .join()
+        self.stop_workers()
+    }
+
+    fn stop_workers(&mut self) -> thread::Result<()> {
+        for _ in 0..self.workers.len() {
+            let _ = self.requests.send(None);
+        }
+        while let Some(worker) = self.workers.pop() {
+            worker.join()?;
+        }
+        Ok(())
     }
 }
 
 impl Drop for ResolverWorker {
     fn drop(&mut self) {
-        let _ = self.requests.send(None);
-        if let Some(worker) = self.worker.take() {
-            let _ = worker.join();
-        }
+        let _ = self.stop_workers();
     }
 }
 
 fn resolver_loop(
-    requests: mpsc::Receiver<Option<ResolveRequest>>,
+    requests: Arc<Mutex<mpsc::Receiver<Option<ResolveRequest>>>>,
     completions: mpsc::Sender<ResolveCompletion>,
     mut wake_writer: UnixStream,
+    resolve: Arc<ResolveFn>,
 ) {
-    while let Ok(Some(request)) = requests.recv() {
-        let result = (request.host.as_str(), request.port)
-            .to_socket_addrs()
-            .map(|addresses| addresses.collect());
+    loop {
+        let request = requests
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .recv();
+        let Ok(Some(request)) = request else {
+            break;
+        };
+        let result = resolve(&request.host, request.port);
         if completions
             .send(ResolveCompletion {
                 id: request.id,
@@ -198,6 +251,12 @@ fn resolver_loop(
             }
         }
     }
+}
+
+fn system_resolve(host: &str, port: u16) -> io::Result<Vec<SocketAddr>> {
+    (host, port)
+        .to_socket_addrs()
+        .map(|addresses| addresses.collect())
 }
 
 fn poll_readable(fd: c_int, timeout: Duration) -> io::Result<bool> {
@@ -231,7 +290,12 @@ fn resolver_worker_resolves_localhost_off_the_caller_thread() {
     let addresses = completion.result.unwrap();
     assert!(!addresses.is_empty());
     assert!(addresses.iter().all(|address| address.port() == 43210));
-    assert_ne!(caller, resolver.worker.as_ref().unwrap().thread().id());
+    assert!(
+        resolver
+            .workers
+            .iter()
+            .all(|worker| caller != worker.thread().id())
+    );
     assert_eq!(resolver.pending_count(), 0);
 }
 
@@ -266,6 +330,62 @@ fn cancelled_resolver_job_is_filtered_without_hiding_later_completion() {
 }
 
 #[test]
+fn second_worker_completes_a_fast_job_while_the_first_is_blocked() {
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let release_receiver = Arc::new(Mutex::new(release_receiver));
+    let resolve = Arc::new(move |host: &str, port: u16| {
+        if host == "slow" {
+            started_sender.send(()).unwrap();
+            release_receiver.lock().unwrap().recv().unwrap();
+        }
+        Ok(vec![SocketAddr::from(([127, 0, 0, 1], port))])
+    });
+    let mut resolver = ResolverWorker::with_resolver(2, 4, resolve).unwrap();
+
+    let slow = resolver.submit("slow", 10001).unwrap();
+    started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    let fast = resolver.submit("fast", 10002).unwrap();
+    let ready = resolver.wait_for(1, Duration::from_secs(2)).unwrap();
+    assert_eq!(ready[0].id, fast);
+
+    release_sender.send(()).unwrap();
+    let ready = resolver.wait_for(1, Duration::from_secs(2)).unwrap();
+    assert_eq!(ready[0].id, slow);
+    resolver.shutdown().unwrap();
+}
+
+#[test]
+fn full_resolver_queue_reports_backpressure_without_blocking_submitter() {
+    let (started_sender, started_receiver) = mpsc::sync_channel(1);
+    let (release_sender, release_receiver) = mpsc::sync_channel(1);
+    let release_receiver = Arc::new(Mutex::new(release_receiver));
+    let resolve = Arc::new(move |host: &str, port: u16| {
+        if host == "slow" {
+            started_sender.send(()).unwrap();
+            release_receiver.lock().unwrap().recv().unwrap();
+        }
+        Ok(vec![SocketAddr::from(([127, 0, 0, 1], port))])
+    });
+    let mut resolver = ResolverWorker::with_resolver(1, 1, resolve).unwrap();
+
+    resolver.submit("slow", 10001).unwrap();
+    started_receiver
+        .recv_timeout(Duration::from_secs(2))
+        .unwrap();
+    resolver.submit("queued", 10002).unwrap();
+    let error = resolver.submit("overflow", 10003).unwrap_err();
+    assert_eq!(error.kind(), io::ErrorKind::WouldBlock);
+
+    release_sender.send(()).unwrap();
+    let ready = resolver.wait_for(2, Duration::from_secs(2)).unwrap();
+    assert_eq!(ready.len(), 2);
+    assert_eq!(resolver.pending_count(), 0);
+}
+
+#[test]
 fn resolver_worker_reports_invalid_host_input_and_shuts_down_cleanly() {
     let mut resolver = ResolverWorker::new().unwrap();
     let id = resolver.submit("\0", 80).unwrap();
@@ -292,7 +412,8 @@ fn benchmark_numeric_resolver_worker_round_trips() {
     }
     let direct_elapsed = direct_started.elapsed();
 
-    let mut resolver = ResolverWorker::new().unwrap();
+    let mut resolver =
+        ResolverWorker::with_resolver(DEFAULT_WORKERS, JOBS, Arc::new(system_resolve)).unwrap();
     let worker_started = Instant::now();
     for port in 0..JOBS {
         black_box(resolver.submit("127.0.0.1", port as u16).unwrap());

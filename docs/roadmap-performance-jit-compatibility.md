@@ -7291,6 +7291,29 @@ must define bounded worker lifetime and integrate the wake descriptor behind
 an inactive-by-default scheduler resource, then pass the existing two-host
 coroutine gate before changing `coroutine_tcp_connect` parsing.
 
+### Bounded resolver-pool prototype
+
+The resolver follow-up replaces the single unbounded worker queue with two
+fixed workers and a 64-entry `sync_channel`. Submission is exclusively
+`try_send`: a full queue returns `WouldBlock`, so the future scheduler path can
+apply explicit backpressure without ever waiting on a resolver worker. Tests
+can inject a resolver function and choose pool dimensions; production-shaped
+tests still use standard `ToSocketAddrs`. The target grows to 431 lines and
+adds no runtime source, Cargo setting or external library.
+
+Two deterministic tests block one injected worker while a fast job completes
+on the second, then fill a one-worker/one-slot queue and verify immediate
+overflow rejection plus delivery of both admitted jobs. Together with the
+original cases, ARM64 and x86-64 pass six tests and retain one ignored release
+benchmark. The 10,000-job numeric transport records 524.42 ns/job on ARM64 and
+827.74 ns/job on x86-64, versus the preceding 513.19/1,022.91 ns/job prototype.
+Default release hashes remain exact.
+
+This bounds queue memory and removes one-job head-of-line blocking, but it does
+not make OS resolver calls cancellable. Production integration remains gated
+on lazy pool ownership, scope-safe continuation cleanup and the existing
+two-host coroutine performance controls.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
