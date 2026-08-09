@@ -7190,6 +7190,20 @@ external library or Cargo change was introduced. Generic stream resources now
 require a code-placement boundary that does not perturb existing coroutine
 handlers, rather than another larger static-table retry.
 
+### Coroutine context prototype test split
+
+The standalone context-switch prototype receives a codegen-neutral test-only
+cleanup. Its 1,039-line integration target is now a 451-line model/driver root
+plus a 588-line `e2e_coroutine_context/tests.rs` module. The nested `tests::*`
+paths and all eight names remain unchanged; no production source, Cargo entry
+or dependency changes.
+
+No-default and all-feature configurations pass six tests with two ignored
+benchmarks on both hosts. Isolated ARM64 measurements are 12.36 ns per context
+hand-off and 11.30/11.98 ns for depth=1/slots=0 versus depth=64/slots=32;
+x86-64 records 12.77 ns and 12.89/12.73 ns. The accepted default and
+coroutine feature executables retain their exact hashes on ARM64 and x86-64.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

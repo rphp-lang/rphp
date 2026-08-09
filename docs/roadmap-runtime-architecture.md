@@ -850,6 +850,20 @@ remains. A future generic stream surface must first isolate API-handler code
 placement from the existing coroutine paths; adding more correct operations to
 the same static table is not sufficient.
 
+### Coroutine context prototype test split (2026-08-09)
+
+The standalone milestone-one/two context prototype now keeps its model and
+driver in the 451-line integration root, while its 588-line test module lives
+in `tests/e2e_coroutine_context/tests.rs`. The original `tests::*` paths and
+all eight test names remain unchanged. This is a test-only ownership boundary;
+the production crate, Cargo configuration and dependency graph are untouched.
+
+Both no-default and all-feature modes pass six tests with two ignored release
+benchmarks on ARM64 and x86-64. Isolated ARM64 runs record 12.36 ns per
+hand-off and 11.30/11.98 ns for shallow/deep-wide scaling; x86-64
+records 12.77 ns and 12.89/12.73 ns. The default and coroutine feature release
+hashes remain exactly at their accepted baselines on both hosts.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
