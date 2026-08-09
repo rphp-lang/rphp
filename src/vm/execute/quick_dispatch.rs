@@ -1227,7 +1227,7 @@ unsafe fn run_quick_long_ops_loop(
                 argument_count: _,
                 consumers,
                 consumer_count,
-                trailing_key_literal,
+                trailing_key_literal: _,
                 trailing_result,
                 output_mask,
                 next_target,
@@ -1247,7 +1247,6 @@ unsafe fn run_quick_long_ops_loop(
                     &constructor_arguments,
                     &consumers,
                     consumer_count,
-                    trailing_key_literal,
                     trailing_result,
                 );
                 let Some(evaluated) = evaluated else {

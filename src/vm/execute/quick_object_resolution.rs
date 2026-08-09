@@ -528,6 +528,9 @@ unsafe fn resolve_quick_object_ops(
             QuickLongOp::VirtualObjectArrayPipeline {
                 constructor_arguments,
                 argument_count,
+                consumers,
+                consumer_count,
+                trailing_key_literal,
                 resume_ip,
                 ..
             } => QuickResolvedObjectOp::VirtualPipeline {
@@ -540,6 +543,9 @@ unsafe fn resolve_quick_object_ops(
                     resume_ip,
                     &constructor_arguments,
                     argument_count,
+                    &consumers,
+                    consumer_count,
+                    trailing_key_literal,
                 )?,
             },
             _ => QuickResolvedObjectOp::None,

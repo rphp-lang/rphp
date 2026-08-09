@@ -1695,6 +1695,31 @@ impl PhpArray {
         }
     }
 
+    /// Append one already validated dense Long batch without redispatching the
+    /// storage enum for every member. Quick-loop callers retain a complete
+    /// generic fallback when the array is not in canonical packed state.
+    #[cfg(any(test, feature = "quick-loops"))]
+    #[inline]
+    pub(crate) fn push_packed_long_chunk(&mut self, values: &[i64]) -> bool {
+        let ArrayStorage::Packed(packed) = &mut self.storage else {
+            return false;
+        };
+        if i64::try_from(packed.len()).ok() != Some(self.next_int_key) {
+            return false;
+        }
+        let Ok(count) = i64::try_from(values.len()) else {
+            return false;
+        };
+        let Some(next_int_key) = self.next_int_key.checked_add(count) else {
+            return false;
+        };
+        for value in values.iter().copied() {
+            packed.push(Value::long(value));
+        }
+        self.next_int_key = next_int_key;
+        true
+    }
+
     /// Reserve canonical indexed-hash storage for a bounded native write
     /// estimate without changing the current storage tier.
     #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
@@ -1723,7 +1748,14 @@ impl PhpArray {
         true
     }
 
-    #[cfg(any(test, all(feature = "quick-loops", feature = "jit-prototype")))]
+    #[cfg(all(
+        feature = "quick-loops",
+        feature = "jit-prototype",
+        any(
+            all(target_arch = "aarch64", target_os = "macos"),
+            all(target_arch = "x86_64", target_os = "linux")
+        )
+    ))]
     pub(crate) fn can_reserve_indexed_int_writes(&self) -> bool {
         matches!(self.storage, ArrayStorage::Hash { .. })
     }

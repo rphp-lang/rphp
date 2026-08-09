@@ -67,18 +67,39 @@ enum StreamBackend {
 pub struct PhpStream {
     backend: StreamBackend,
     mode: StreamMode,
+    reported_mode: String,
+    uri: String,
     eof: bool,
+}
+
+/// Stable metadata exposed by the currently admitted seekable backends.
+/// Optional status fields mirror PHP's backend-specific key set: plain files
+/// and memory streams publish blocking/EOF state, while `php://temp` exposes
+/// only its wrapper identity and seekability fields.
+pub struct StreamMetadata<'a> {
+    pub timed_out: Option<bool>,
+    pub blocked: Option<bool>,
+    pub eof: Option<bool>,
+    pub wrapper_type: &'static str,
+    pub stream_type: &'static str,
+    pub mode: &'a str,
+    pub unread_bytes: usize,
+    pub seekable: bool,
+    pub uri: &'a str,
 }
 
 impl PhpStream {
     pub fn open(path: &str, mode: &str) -> io::Result<Self> {
-        let mode = StreamMode::parse(mode)
+        let requested_mode = mode;
+        let mode = StreamMode::parse(requested_mode)
             .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "invalid stream mode"))?;
 
         if path == "php://memory" {
             return Ok(Self {
                 backend: StreamBackend::Memory(Cursor::new(Vec::new())),
                 mode,
+                reported_mode: php_memory_mode(mode).to_string(),
+                uri: path.to_string(),
                 eof: false,
             });
         }
@@ -86,6 +107,8 @@ impl PhpStream {
             return Ok(Self {
                 backend: StreamBackend::Temp(TempStream::new(max_memory)),
                 mode,
+                reported_mode: php_memory_mode(mode).to_string(),
+                uri: path.to_string(),
                 eof: false,
             });
         }
@@ -113,6 +136,8 @@ impl PhpStream {
         Ok(Self {
             backend: StreamBackend::File(file),
             mode,
+            reported_mode: requested_mode.to_string(),
+            uri: path.to_string(),
             eof: false,
         })
     }
@@ -132,14 +157,8 @@ impl PhpStream {
         self.eof
     }
 
-    pub fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if !self.is_readable() {
-            return Err(io::Error::new(
-                io::ErrorKind::PermissionDenied,
-                "stream is not readable",
-            ));
-        }
-        let read = loop {
+    fn read_backend(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        loop {
             let result = match &mut self.backend {
                 StreamBackend::File(file) => file.read(buffer),
                 StreamBackend::Memory(memory) => memory.read(buffer),
@@ -147,11 +166,88 @@ impl PhpStream {
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
-                result => break result?,
+                result => return result,
             }
-        };
+        }
+    }
+
+    fn seek_backend(&mut self, position: SeekFrom) -> io::Result<u64> {
+        match &mut self.backend {
+            StreamBackend::File(file) => file.seek(position),
+            StreamBackend::Memory(memory) => memory.seek(position),
+            StreamBackend::Temp(temp) => temp.seek(position),
+        }
+    }
+
+    pub fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
+        if !self.is_readable() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stream is not readable",
+            ));
+        }
+        let read = self.read_backend(buffer)?;
         self.eof = read == 0;
         Ok(read)
+    }
+
+    /// Read one line without retaining a hidden userspace buffer. A stack
+    /// chunk amortizes file reads; bytes beyond the first newline are returned
+    /// to the seekable backend so `ftell`, writes and later reads observe the
+    /// exact PHP cursor. `length` includes PHP's reserved terminator byte.
+    pub fn read_line(
+        &mut self,
+        buffer: &mut Vec<u8>,
+        length: Option<usize>,
+    ) -> io::Result<Option<usize>> {
+        if !self.is_readable() {
+            return Err(io::Error::new(
+                io::ErrorKind::PermissionDenied,
+                "stream is not readable",
+            ));
+        }
+        let maximum = match length {
+            Some(length) => match length.checked_sub(1) {
+                Some(maximum) if maximum > 0 => maximum,
+                _ => return Ok(None),
+            },
+            None => usize::MAX,
+        };
+        buffer.clear();
+        let mut chunk = [0u8; 8 * 1024];
+
+        while buffer.len() < maximum {
+            let requested = chunk.len().min(maximum - buffer.len());
+            let read = self.read_backend(&mut chunk[..requested])?;
+            if read == 0 {
+                self.eof = true;
+                return Ok((!buffer.is_empty()).then_some(buffer.len()));
+            }
+            self.eof = false;
+
+            let consumed = chunk[..read]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(read, |newline| newline + 1);
+            if buffer.try_reserve(consumed).is_err() {
+                let rewind = i64::try_from(read).expect("line chunk fits in i64");
+                self.seek_backend(SeekFrom::Current(-rewind))?;
+                return Err(io::Error::new(
+                    io::ErrorKind::OutOfMemory,
+                    "line buffer allocation failed",
+                ));
+            }
+            buffer.extend_from_slice(&chunk[..consumed]);
+
+            if consumed < read {
+                let unread = i64::try_from(read - consumed).expect("line chunk fits in i64");
+                self.seek_backend(SeekFrom::Current(-unread))?;
+            }
+            if consumed < read || chunk[consumed - 1] == b'\n' {
+                return Ok(Some(buffer.len()));
+            }
+        }
+        Ok(Some(buffer.len()))
     }
 
     pub fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
@@ -189,11 +285,7 @@ impl PhpStream {
     }
 
     pub fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
-        let position = match &mut self.backend {
-            StreamBackend::File(file) => file.seek(position),
-            StreamBackend::Memory(memory) => memory.seek(position),
-            StreamBackend::Temp(temp) => temp.seek(position),
-        }?;
+        let position = self.seek_backend(position)?;
         self.eof = false;
         Ok(position)
     }
@@ -206,6 +298,31 @@ impl PhpStream {
         }
     }
 
+    pub fn metadata(&self) -> StreamMetadata<'_> {
+        let (timed_out, blocked, eof, wrapper_type, stream_type) = match &self.backend {
+            StreamBackend::File(_) => (
+                Some(false),
+                Some(true),
+                Some(self.eof),
+                "plainfile",
+                "STDIO",
+            ),
+            StreamBackend::Memory(_) => (Some(false), Some(true), Some(self.eof), "PHP", "MEMORY"),
+            StreamBackend::Temp(_) => (None, None, None, "PHP", "TEMP"),
+        };
+        StreamMetadata {
+            timed_out,
+            blocked,
+            eof,
+            wrapper_type,
+            stream_type,
+            mode: &self.reported_mode,
+            unread_bytes: 0,
+            seekable: true,
+            uri: &self.uri,
+        }
+    }
+
     #[cfg(test)]
     fn temp_spill_path(&self) -> Option<&Path> {
         match &self.backend {
@@ -215,77 +332,16 @@ impl PhpStream {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{PhpStream, StreamMode};
-    use std::io::SeekFrom;
-
-    #[test]
-    fn parses_php_file_modes_without_platform_dependencies() {
-        assert_eq!(
-            StreamMode::parse("rb"),
-            Some(StreamMode {
-                read: true,
-                write: false,
-                append: false,
-                create: false,
-                truncate: false,
-                exclusive: false,
-            })
-        );
-        let append_update = StreamMode::parse("a+b").unwrap();
-        assert!(append_update.read);
-        assert!(append_update.write);
-        assert!(append_update.append);
-        assert!(append_update.create);
-        assert!(StreamMode::parse("z").is_none());
-        assert!(StreamMode::parse("r++").is_none());
-        assert!(StreamMode::parse("").is_none());
-    }
-
-    #[test]
-    fn memory_stream_preserves_position_eof_and_append_policy() {
-        let mut stream = PhpStream::open("php://memory", "w+").unwrap();
-        assert_eq!(stream.write(b"hello").unwrap(), 5);
-        assert_eq!(stream.position().unwrap(), 5);
-        stream.seek(SeekFrom::Start(0)).unwrap();
-        let mut buffer = [0; 5];
-        assert_eq!(stream.read(&mut buffer).unwrap(), 5);
-        assert_eq!(&buffer, b"hello");
-        assert!(!stream.is_eof());
-        assert_eq!(stream.read(&mut buffer).unwrap(), 0);
-        assert!(stream.is_eof());
-        assert_eq!(stream.position().unwrap(), 5);
-        assert!(stream.is_eof(), "position inspection must preserve EOF");
-        stream.seek(SeekFrom::Start(1)).unwrap();
-        assert!(!stream.is_eof());
-
-        let mut append = PhpStream::open("php://memory", "a+").unwrap();
-        append.write(b"ab").unwrap();
-        append.seek(SeekFrom::Start(0)).unwrap();
-        append.write(b"c").unwrap();
-        append.seek(SeekFrom::Start(0)).unwrap();
-        let mut buffer = [0; 3];
-        assert_eq!(append.read(&mut buffer).unwrap(), 3);
-        assert_eq!(&buffer, b"abc");
-    }
-
-    #[test]
-    fn temporary_stream_spills_preserves_position_and_removes_its_file() {
-        let mut in_memory = PhpStream::open("php://temp", "w+").unwrap();
-        assert_eq!(in_memory.write(b"small").unwrap(), 5);
-        assert!(in_memory.temp_spill_path().is_none());
-
-        let mut stream = PhpStream::open("php://temp/maxmemory:4", "w+").unwrap();
-        assert_eq!(stream.write(b"abcdef").unwrap(), 6);
-        let path = stream.temp_spill_path().unwrap().to_path_buf();
-        assert!(path.exists());
-        assert_eq!(stream.position().unwrap(), 6);
-        stream.seek(SeekFrom::Start(1)).unwrap();
-        let mut buffer = [0; 4];
-        assert_eq!(stream.read(&mut buffer).unwrap(), 4);
-        assert_eq!(&buffer, b"bcde");
-        drop(stream);
-        assert!(!path.exists());
+fn php_memory_mode(mode: StreamMode) -> &'static str {
+    if mode.append {
+        "a+b"
+    } else if mode.read && !mode.write {
+        "rb"
+    } else {
+        "w+b"
     }
 }
+
+#[cfg(test)]
+#[path = "stream/tests.rs"]
+mod tests;

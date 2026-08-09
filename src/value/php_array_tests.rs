@@ -19,6 +19,22 @@ fn hash_entry_layout_stays_compact() {
 }
 
 #[test]
+fn packed_long_chunks_preserve_keys_and_reject_other_storage() {
+    let mut packed = PhpArray::new();
+    assert!(packed.push_packed_long_chunk(&[-2, 0, 7]));
+    packed.push(Value::long(9));
+    assert_eq!(packed.len(), 4);
+    assert_eq!(packed.get_int(0).and_then(Value::as_long), Some(-2));
+    assert_eq!(packed.get_int(2).and_then(Value::as_long), Some(7));
+    assert_eq!(packed.get_int(3).and_then(Value::as_long), Some(9));
+
+    let mut hashed = PhpArray::new();
+    hashed.set_str("key", Value::long(1));
+    assert!(!hashed.push_packed_long_chunk(&[2, 3]));
+    assert_eq!(hashed.len(), 1);
+}
+
+#[test]
 fn integer_index_compact_long_payload_stays_exact_across_mutation() {
     let keys = [107, -4, 91, 33, 205, 17, 409, 73, 301];
     let mut array = PhpArray::new();

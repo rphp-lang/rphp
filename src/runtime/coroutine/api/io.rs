@@ -86,7 +86,7 @@ pub(super) fn coroutine_tcp_connect(
                 }
                 None => {
                     write_result(return_value, Value::null());
-                    suspend_from_internal_call(caller, SuspendKind::Waiting)
+                    suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
                 }
             }
         }
@@ -101,7 +101,7 @@ pub(super) fn coroutine_tcp_connect(
                 )?;
             }
             write_result(return_value, Value::null());
-            suspend_from_internal_call(caller, SuspendKind::Waiting)
+            suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
         }
     }
 }
@@ -171,7 +171,7 @@ pub(super) fn coroutine_wait_readable(
     let scheduler = scheduler_ptr(eg)?;
     unsafe { (&mut *scheduler).wait_readable(descriptor)? };
     write_result(return_value, Value::null());
-    suspend_from_internal_call(caller, SuspendKind::Waiting)
+    suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
 }
 
 pub(super) fn coroutine_wait_writable(
@@ -188,7 +188,7 @@ pub(super) fn coroutine_wait_writable(
     let scheduler = scheduler_ptr(eg)?;
     unsafe { (&mut *scheduler).wait_writable(descriptor)? };
     write_result(return_value, Value::null());
-    suspend_from_internal_call(caller, SuspendKind::Waiting)
+    suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
 }
 
 pub(super) fn coroutine_stream_read(

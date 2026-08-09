@@ -91,7 +91,7 @@ fn coroutine_send(
     let scheduler = scheduler_ptr(eg)?;
     write_result(return_value, Value::null());
     if unsafe { (&mut *scheduler).send(channel, value)? } {
-        suspend_from_internal_call(caller, SuspendKind::Waiting)
+        suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
     } else {
         Ok(())
     }
@@ -116,7 +116,7 @@ fn coroutine_receive(
         }
         None => {
             write_result(return_value, Value::null());
-            suspend_from_internal_call(caller, SuspendKind::Waiting)
+            suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
         }
     }
 }
@@ -137,5 +137,5 @@ fn coroutine_sleep(
     let scheduler = scheduler_ptr(eg)?;
     write_result(return_value, Value::null());
     unsafe { (&mut *scheduler).sleep(Duration::from_millis(milliseconds))? };
-    suspend_from_internal_call(caller, SuspendKind::Waiting)
+    suspend_from_internal_call(caller, scheduler, SuspendKind::Waiting)
 }

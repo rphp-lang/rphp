@@ -9,6 +9,41 @@ fn quick_long_operand(slots: &[i64; 64], operand: QuickLongOperand) -> i64 {
     }
 }
 
+const QUICK_UNIT_LOOP_CHUNK: i64 = 32;
+
+/// Prove one complete interrupt-sized unit-induction interval. Every slot
+/// capable of changing the loop bound is rejected, leaving unusual aliasing
+/// layouts on the exact one-step implementation.
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+fn quick_unit_loop_chunk(
+    slots: &[i64; 64],
+    header_lhs: u16,
+    header_rhs: QuickLongOperand,
+    condition_tmp: Option<u16>,
+    post_value: u16,
+    post_result: Option<u16>,
+) -> Option<(i64, i64, i64)> {
+    if header_lhs != post_value
+        || condition_tmp == Some(post_value)
+        || post_result == Some(post_value)
+        || condition_tmp.is_some() && condition_tmp == post_result
+    {
+        return None;
+    }
+    if let QuickLongOperand::Slot(bound_slot) = header_rhs
+        && (bound_slot == post_value
+            || condition_tmp == Some(bound_slot)
+            || post_result == Some(bound_slot))
+    {
+        return None;
+    }
+    let current = slots[post_value as usize];
+    let bound = quick_long_operand(slots, header_rhs);
+    let end = current.checked_add(QUICK_UNIT_LOOP_CHUNK)?;
+    (end <= bound).then_some((current, end, bound))
+}
+
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
 fn quick_typed_method_arguments(
@@ -210,3 +245,51 @@ unsafe fn deopt_quick_typed_method_call(
     )
 }
 
+#[cfg(all(test, feature = "quick-loops"))]
+mod quick_unit_loop_chunk_tests {
+    use super::{QuickLongOperand, quick_unit_loop_chunk};
+
+    #[test]
+    fn proves_one_complete_invariant_unit_interval() {
+        let mut slots = [0i64; 64];
+        slots[0] = 5;
+        slots[1] = 37;
+        assert_eq!(
+            quick_unit_loop_chunk(&slots, 0, QuickLongOperand::Const(37), Some(2), 0, Some(3)),
+            Some((5, 37, 37))
+        );
+        assert_eq!(
+            quick_unit_loop_chunk(&slots, 0, QuickLongOperand::Slot(1), Some(2), 0, Some(3)),
+            Some((5, 37, 37))
+        );
+    }
+
+    #[test]
+    fn rejects_short_overflowing_and_mutable_bound_intervals() {
+        let mut slots = [0i64; 64];
+        slots[0] = 5;
+        slots[1] = 36;
+        assert!(
+            quick_unit_loop_chunk(&slots, 0, QuickLongOperand::Slot(1), Some(2), 0, Some(3))
+                .is_none()
+        );
+        slots[0] = i64::MAX - 31;
+        assert!(
+            quick_unit_loop_chunk(
+                &slots,
+                0,
+                QuickLongOperand::Const(i64::MAX),
+                Some(2),
+                0,
+                Some(3),
+            )
+            .is_none()
+        );
+        slots[0] = 0;
+        slots[3] = 100;
+        assert!(
+            quick_unit_loop_chunk(&slots, 0, QuickLongOperand::Slot(3), Some(2), 0, Some(3))
+                .is_none()
+        );
+    }
+}

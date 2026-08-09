@@ -15,7 +15,7 @@ use std::time::Duration;
 
 use super::scheduler::CoroutineScheduler;
 use super::state::{CoroutineEntry, cleanup_frame_chain, initialize_value_slot};
-use super::{ScopeRegistration, SuspendKind, scheduler_ptr, suspend_signal};
+use super::{ScopeRegistration, SuspendKind, scheduler_ptr};
 use crate::compiler::make_internal_function;
 use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
@@ -90,7 +90,7 @@ fn suspend(
 
     write_result(return_value, Value::null());
     let caller = suspension_caller(execute_data)?;
-    suspend_from_internal_call(caller, SuspendKind::Manual)
+    suspend_from_internal_call(caller, scheduler, SuspendKind::Manual)
 }
 
 fn suspension_caller(execute_data: *mut ExecuteData) -> Result<*mut ExecuteData, VmError> {
@@ -103,9 +103,13 @@ fn suspension_caller(execute_data: *mut ExecuteData) -> Result<*mut ExecuteData,
     Ok(caller)
 }
 
-fn suspend_from_internal_call(caller: *mut ExecuteData, kind: SuspendKind) -> Result<(), VmError> {
+fn suspend_from_internal_call(
+    caller: *mut ExecuteData,
+    scheduler: *mut CoroutineScheduler,
+    kind: SuspendKind,
+) -> Result<(), VmError> {
     unsafe { (*caller).opline = (*caller).opline.add(1) };
-    Err(suspend_signal(kind))
+    Err(unsafe { (&mut *scheduler).request_suspend(kind) })
 }
 
 include!("api/core.rs");

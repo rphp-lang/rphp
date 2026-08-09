@@ -36,14 +36,18 @@ struct ContextSet {
     entries: Vec<Pin<Box<CoroutineContext>>>,
     // Match the former HashMap field width so later scheduler fields retain
     // their established offsets while dense IDs avoid hashing on every switch.
-    _layout_reserve: [usize; 3],
+    // The one-byte suspension sidecar replaces one reserve word without
+    // growing this boundary or consulting a second thread-local on every turn.
+    suspend_requested: Option<super::SuspendKind>,
+    _layout_reserve: [usize; 2],
 }
 
 impl ContextSet {
     fn new() -> Self {
         Self {
             entries: Vec::new(),
-            _layout_reserve: [0; 3],
+            suspend_requested: None,
+            _layout_reserve: [0; 2],
         }
     }
 
@@ -127,6 +131,20 @@ impl CoroutineScheduler {
                 "coroutine scope cannot migrate between executors".into(),
             ))
         }
+    }
+
+    #[inline]
+    pub(super) fn request_suspend(&mut self, kind: super::SuspendKind) -> VmError {
+        assert!(
+            self.contexts.suspend_requested.replace(kind).is_none(),
+            "nested coroutine suspend signal"
+        );
+        VmError::Fatal(String::new())
+    }
+
+    #[inline]
+    fn take_suspend_request(&mut self) -> Option<super::SuspendKind> {
+        self.contexts.suspend_requested.take()
     }
 
     pub(super) fn spawn(&mut self, entry: CoroutineEntry) -> Result<u64, VmError> {
@@ -429,7 +447,7 @@ impl CoroutineScheduler {
             (*context).state.exchange(eg);
             scheduler.active = None;
 
-            if let Some(kind) = super::take_suspend_request() {
+            if let Some(kind) = scheduler.take_suspend_request() {
                 assert!(
                     matches!(&execution, Err(VmError::Fatal(message)) if message.is_empty()),
                     "coroutine suspend signal must be the empty internal fatal sidecar"
@@ -543,6 +561,31 @@ mod tests {
     #[test]
     fn dense_context_registry_preserves_established_scheduler_field_width() {
         assert_eq!(std::mem::size_of::<ContextSet>(), 48);
+    }
+
+    #[test]
+    fn scheduler_consumes_each_suspension_sidecar_once() {
+        let mut eg = ExecutorGlobals::new();
+        let mut scheduler = CoroutineScheduler::new(&mut eg);
+
+        assert!(matches!(
+            scheduler.request_suspend(super::super::SuspendKind::Manual),
+            VmError::Fatal(message) if message.is_empty()
+        ));
+        assert_eq!(
+            scheduler.take_suspend_request(),
+            Some(super::super::SuspendKind::Manual)
+        );
+        assert_eq!(scheduler.take_suspend_request(), None);
+
+        assert!(matches!(
+            scheduler.request_suspend(super::super::SuspendKind::Waiting),
+            VmError::Fatal(message) if message.is_empty()
+        ));
+        assert_eq!(
+            scheduler.take_suspend_request(),
+            Some(super::super::SuspendKind::Waiting)
+        );
     }
 
     #[test]

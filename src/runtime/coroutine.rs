@@ -27,21 +27,6 @@ thread_local! {
     static ACTIVE_SCHEDULER: Cell<*mut CoroutineScheduler> = const {
         Cell::new(std::ptr::null_mut())
     };
-    static SUSPEND_REQUESTED: Cell<Option<SuspendKind>> = const { Cell::new(None) };
-}
-
-fn suspend_signal(kind: SuspendKind) -> VmError {
-    SUSPEND_REQUESTED.with(|requested| {
-        assert!(
-            requested.replace(Some(kind)).is_none(),
-            "nested coroutine suspend signal"
-        );
-    });
-    VmError::Fatal(String::new())
-}
-
-fn take_suspend_request() -> Option<SuspendKind> {
-    SUSPEND_REQUESTED.with(|requested| requested.replace(None))
 }
 
 struct ScopeRegistration {

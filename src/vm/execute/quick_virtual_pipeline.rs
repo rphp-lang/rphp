@@ -15,6 +15,8 @@ struct QuickResolvedVirtualPipeline {
     method_plan: *const ObjectArrayFunctionPlan,
     nested_calls: [ResolvedObjectArrayCall; 8],
     nested_call_count: u8,
+    consumer_entries: [u8; 4],
+    trailing_entry: Option<u8>,
 }
 
 /// Pre-resolve nested calls whose receiver belongs to the invariant service
@@ -82,6 +84,9 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
     new_ip: usize,
     constructor_arguments: &[QuickVirtualValueSource; 8],
     argument_count: u8,
+    consumers: &[QuickObjectArrayConsumer; 4],
+    consumer_count: u8,
+    trailing_key_literal: Option<u16>,
 ) -> Option<QuickResolvedVirtualPipeline> {
     let new_object = caller_op_array.instructions.get(new_ip)?;
     if new_object.opcode != OpCode::NewObj
@@ -296,6 +301,36 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
     }
     let (nested_calls, nested_call_count) =
         resolve_quick_object_array_calls(eg, method_receiver, method_user, method_plan)?;
+    if consumer_count as usize > consumers.len() {
+        return None;
+    }
+    let mut consumer_entries = [u8::MAX; 4];
+    for (index, consumer) in consumers
+        .iter()
+        .copied()
+        .take(consumer_count as usize)
+        .enumerate()
+    {
+        consumer_entries[index] = u8::try_from(object_array_entry_index_for_key(
+            caller_op_array,
+            consumer.key_literal,
+            method_user,
+            method_plan,
+        )?)
+        .ok()?;
+    }
+    let trailing_entry = match trailing_key_literal {
+        Some(key) => Some(
+            u8::try_from(object_array_entry_index_for_key(
+                caller_op_array,
+                key,
+                method_user,
+                method_plan,
+            )?)
+            .ok()?,
+        ),
+        None => None,
+    };
 
     Some(QuickResolvedVirtualPipeline {
         class_id: new_cache.class_id,
@@ -310,6 +345,8 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
         method_plan,
         nested_calls,
         nested_call_count,
+        consumer_entries,
+        trailing_entry,
     })
 }
 
@@ -327,7 +364,6 @@ unsafe fn try_execute_resolved_quick_virtual_pipeline(
     constructor_arguments: &[QuickVirtualValueSource; 8],
     consumers: &[QuickObjectArrayConsumer; 4],
     consumer_count: u8,
-    trailing_key_literal: Option<u16>,
     trailing_result: u16,
 ) -> Option<ObjectArrayEvaluated> {
     let mut virtual_object = VirtualObject {
@@ -378,24 +414,13 @@ unsafe fn try_execute_resolved_quick_virtual_pipeline(
             .rposition(|destination| *destination == consumer.accumulator)
             .map(|previous| results[previous])
             .unwrap_or(slots[consumer.accumulator as usize]);
-        let value = object_array_value_for_key(
-            caller_op_array,
-            consumer.key_literal,
-            &*resolved.method_user,
-            &*resolved.method_plan,
-            &evaluated,
-        )?;
+        let entry = *resolved.consumer_entries.get(index)? as usize;
+        let value = *evaluated.values.get(entry)?;
         destinations[index] = consumer.accumulator;
         results[index] = current.checked_add(value)?;
     }
-    let trailing_value = if let Some(key) = trailing_key_literal {
-        Some(object_array_value_for_key(
-            caller_op_array,
-            key,
-            &*resolved.method_user,
-            &*resolved.method_plan,
-            &evaluated,
-        )?)
+    let trailing_value = if let Some(entry) = resolved.trailing_entry {
+        Some(*evaluated.values.get(entry as usize)?)
     } else {
         None
     };

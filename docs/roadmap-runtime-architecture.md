@@ -1180,6 +1180,46 @@ The next stream boundary is line-oriented input and metadata. Final-alias
 backend release before request shutdown remains a separate resource-lifetime
 decision rather than being conflated with stream I/O compatibility.
 
+### Line-oriented streams and scheduler-owned suspension checkpoint (2026-08-10)
+
+`fgets()` and `stream_get_meta_data()` complete the next bounded stream slice
+using only `std`. Line reads retain newlines, implement PHP's `length - 1`
+ceiling, span an arbitrary number of fixed 8 KiB scratch reads and seek back
+over-read data. The final unterminated line sets EOF after its probe. Plain
+files preserve their input mode and URI; `php://memory` exposes normalized
+binary modes and `MEMORY`; `php://temp` exposes `TEMP` before and after spill.
+Backend-specific metadata key sets match PHP 8.5 rather than filling absent
+keys with synthetic defaults.
+
+The hot coroutine control is now less sensitive to unrelated runtime code
+placement. The suspension request no longer uses a second thread-local. Its
+one-byte state replaces one word in the existing 48-byte dense context-registry
+reserve, so later scheduler fields and the opt-in feature boundary retain
+their size. `request_suspend()` rejects a nested sidecar and
+`take_suspend_request()` consumes it exactly once. Execution-state exchange
+also avoids moving exception, named-variadic, generator and pending-invoke
+storage when both sides are empty; any non-empty side still takes the original
+full swap. Unit tests cover the slow exchange and both suspension kinds.
+
+Fresh order-balanced 20-pair gates against `bc54dfe` record
+-7.926%/-3.242%/+0.088% on ARM64 and -7.885%/-1.509%/-2.045% on pinned
+x86-64 for suspend/resume, bounded channel and stream readiness. The default
+runtime gate records -0.966%/-24.187%/-47.041%/-16.267%/-4.400% on ARM64
+and +0.560%/-45.612%/-17.061%/-10.892%/-3.445% on x86-64 for scalar,
+packed-array, String, object-order and ledger workloads.
+
+Both architectures pass 178 no-default tests, 280/305 all-feature library
+tests, 26/3 coroutine scenarios, 11 stream scenarios, 118 quick-loop
+scenarios, four corpus scenarios and complete all-feature/all-target builds.
+Default release SHA-256 values are
+`3816f11807ad36b2a251130e193c52ed2f8e60f7a1a880760ab697f8432785b1` and
+`31d18d9a1af594f9c37c4f8348aa5aeb695d6510085fff93eefa2b0fa409999c`;
+coroutine integration values are
+`49fd48cb26d833bd84b1a57136a592a893f4511429ab415f94bd43ee55bfd801` and
+`192c6d57fa7a93a933181eed19f045bb693572f2bf5044376b4f92b97a2f0b26`.
+No Cargo file, crate or external stream, buffering or scheduler library was
+added. Final-alias resource destruction remains explicit future work.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

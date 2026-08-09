@@ -74,6 +74,66 @@ fn temporary_stream_spills_and_retains_seekable_contents() {
 }
 
 #[test]
+fn line_reads_preserve_newlines_limits_cursor_and_eof() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $stream = fopen('php://memory', 'w+');
+            fwrite($stream, \"a\\nbc\\nlast\"); rewind($stream);
+            echo '['; echo fgets($stream); echo ']';
+            echo '['; echo fgets($stream, 4); echo ']';
+            echo '['; echo fgets($stream, 3); echo ']';
+            echo '['; echo fgets($stream); echo ']';
+            echo ':'; if (feof($stream)) { echo 'eof'; }
+            echo ':'; if (fgets($stream) === false) { echo 'false'; }
+            rewind($stream);
+            echo ':'; if (fgets($stream, 1) === false) { echo 'zero'; }
+            echo ':'; echo ftell($stream);
+
+            $temp = fopen('php://temp/maxmemory:4', 'w+');
+            fwrite($temp, \"x\\nyz\"); rewind($temp);
+            echo ':'; echo strlen(fgets($temp));
+            echo ':'; echo strlen(fgets($temp));
+            echo ':'; if (feof($temp)) { echo 'eof'; }
+            "
+        ),
+        "[a\n][bc\n][la][st]:eof:false:zero:0:2:2:eof"
+    );
+}
+
+#[test]
+fn memory_and_temp_metadata_report_backend_specific_snapshots() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $memory = fopen('php://memory', 'w+');
+            $meta = stream_get_meta_data($memory);
+            echo count($meta); echo ':'; echo $meta['wrapper_type'];
+            echo ':'; echo $meta['stream_type']; echo ':'; echo $meta['mode'];
+            echo ':'; echo $meta['unread_bytes']; echo ':'; echo $meta['seekable'];
+            echo ':'; echo $meta['uri'];
+            echo ':'; if ($meta['timed_out']) { echo 'timeout'; } else { echo 'ready'; }
+            echo ':'; if ($meta['blocked']) { echo 'blocked'; }
+            echo ':'; if ($meta['eof']) { echo 'eof'; } else { echo 'open'; }
+            fgets($memory);
+            $after = stream_get_meta_data($memory);
+            echo ':'; if ($after['eof']) { echo 'eof'; }
+
+            $temp = fopen('php://temp/maxmemory:4', 'a+');
+            $meta = stream_get_meta_data($temp);
+            echo ':'; echo count($meta); echo ':'; echo $meta['wrapper_type'];
+            echo ':'; echo $meta['stream_type']; echo ':'; echo $meta['mode'];
+            echo ':'; echo $meta['unread_bytes']; echo ':'; echo $meta['seekable'];
+            echo ':'; echo $meta['uri'];
+            fclose($temp);
+            echo ':'; if (stream_get_meta_data($temp) === false) { echo 'closed'; }
+            "
+        ),
+        "9:PHP:MEMORY:w+b:0:1:php://memory:ready:blocked:open:eof:6:PHP:TEMP:a+b:0:1:php://temp/maxmemory:4:closed"
+    );
+}
+
+#[test]
 fn closing_one_alias_invalidates_every_alias_but_preserves_id() {
     assert_eq!(
         run_php(
@@ -184,6 +244,31 @@ fn file_stream_reads_seeks_writes_and_flushes_real_files() {
     );
     assert_eq!(run_php(&source), "ab:0:2:1:abcdXY:1");
     assert_eq!(std::fs::read(&path.0).unwrap(), b"abcdXY");
+}
+
+#[test]
+fn file_metadata_retains_original_uri_and_mode() {
+    let path = TemporaryPath::unique("stream-metadata");
+    std::fs::write(&path.0, b"line\n").unwrap();
+    let source = format!(
+        "<?php
+        $stream = fopen('file://{}', 'r+');
+        $meta = stream_get_meta_data($stream);
+        echo count($meta); echo ':'; echo $meta['wrapper_type'];
+        echo ':'; echo $meta['stream_type']; echo ':'; echo $meta['mode'];
+        echo ':'; echo $meta['unread_bytes']; echo ':'; echo $meta['seekable'];
+        echo ':'; if ($meta['uri'] === 'file://{}') {{ echo 'uri'; }}
+        echo ':'; if ($meta['timed_out']) {{ echo 'timeout'; }} else {{ echo 'ready'; }}
+        echo ':'; if ($meta['blocked']) {{ echo 'blocked'; }}
+        echo ':'; if ($meta['eof']) {{ echo 'eof'; }} else {{ echo 'open'; }}
+        ",
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        "9:plainfile:STDIO:r+:0:1:uri:ready:blocked:open"
+    );
 }
 
 #[test]

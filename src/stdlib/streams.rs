@@ -3,7 +3,7 @@ use std::io::SeekFrom;
 
 use crate::compiler::make_internal_function;
 use crate::runtime::ExecutorGlobals;
-use crate::value::{Value, ValueType};
+use crate::value::{PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHandler};
@@ -21,6 +21,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             &["filename", "mode", "use_include_path", "context"][..],
         ),
         ("fread", fn_fread, 2, 2, &["stream", "length"]),
+        ("fgets", fn_fgets, 2, 1, &["stream", "length"]),
         ("fwrite", fn_fwrite, 3, 2, &["stream", "data", "length"]),
         ("fclose", fn_fclose, 1, 1, &["stream"]),
         ("fflush", fn_fflush, 1, 1, &["stream"]),
@@ -37,6 +38,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             &["resource"],
         ),
         ("get_resource_id", fn_get_resource_id, 1, 1, &["resource"]),
+        (
+            "stream_get_meta_data",
+            fn_stream_get_meta_data,
+            1,
+            1,
+            &["stream"],
+        ),
     ] {
         let function = Box::new(make_internal_function(
             handler,
@@ -139,6 +147,36 @@ fn fn_fread(
     match result {
         Some(Ok(read)) => {
             bytes.truncate(read);
+            return_value(
+                return_pointer,
+                Value::string(super::bytes_to_php_string(&bytes)),
+            )
+        }
+        _ => return_value(return_pointer, Value::bool(false)),
+    }
+}
+
+#[cold]
+fn fn_fgets(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let resource = argument(execute_data, 0).as_resource_id();
+    let length = match optional_argument(execute_data, 1) {
+        Some(length) => match usize::try_from(length.to_long_val()) {
+            Ok(length) => Some(length),
+            Err(_) => return return_value(return_pointer, Value::bool(false)),
+        },
+        None => None,
+    };
+    let mut bytes = Vec::new();
+    let result = resource.and_then(|resource| {
+        with_stream(eg, resource, |stream| stream.read_line(&mut bytes, length))
+    });
+    match result {
+        Some(Ok(Some(read))) => {
+            debug_assert_eq!(read, bytes.len());
             return_value(
                 return_pointer,
                 Value::string(super::bytes_to_php_string(&bytes)),
@@ -306,4 +344,41 @@ fn fn_get_resource_id(
         Some(resource) => return_value(return_pointer, Value::long(resource)),
         None => return_value(return_pointer, Value::bool(false)),
     }
+}
+
+#[cold]
+fn fn_stream_get_meta_data(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = argument(execute_data, 0)
+        .as_resource_id()
+        .and_then(|resource| {
+            with_stream(eg, resource, |stream| {
+                let metadata = stream.metadata();
+                let status_fields = usize::from(metadata.timed_out.is_some())
+                    + usize::from(metadata.blocked.is_some())
+                    + usize::from(metadata.eof.is_some());
+                let mut result = PhpArray::with_hash_capacity(6 + status_fields);
+                if let Some(timed_out) = metadata.timed_out {
+                    result.set_str("timed_out", Value::bool(timed_out));
+                }
+                if let Some(blocked) = metadata.blocked {
+                    result.set_str("blocked", Value::bool(blocked));
+                }
+                if let Some(eof) = metadata.eof {
+                    result.set_str("eof", Value::bool(eof));
+                }
+                result.set_str("wrapper_type", Value::string(metadata.wrapper_type));
+                result.set_str("stream_type", Value::string(metadata.stream_type));
+                result.set_str("mode", Value::string(metadata.mode));
+                result.set_str("unread_bytes", Value::long(metadata.unread_bytes as i64));
+                result.set_str("seekable", Value::bool(metadata.seekable));
+                result.set_str("uri", Value::string(metadata.uri));
+                Value::array(result)
+            })
+        })
+        .unwrap_or_else(|| Value::bool(false));
+    return_value(return_pointer, value)
 }

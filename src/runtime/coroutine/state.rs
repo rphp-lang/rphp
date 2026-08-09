@@ -105,13 +105,21 @@ impl CoroutineExecutionState {
 
         let current = eg.current_execute_data.replace(self.current_execute_data);
         self.current_execute_data = current;
-        std::mem::swap(&mut self.exception, &mut eg.exception);
-        std::mem::swap(
-            &mut self.pending_named_variadic,
-            &mut eg.pending_named_variadic,
-        );
-        std::mem::swap(&mut self.active_generator, &mut eg.active_generator);
-        std::mem::swap(&mut self.pending_invoke_this, &mut eg.pending_invoke_this);
+        if self.exception.is_some() || eg.exception.is_some() {
+            std::mem::swap(&mut self.exception, &mut eg.exception);
+        }
+        if !self.pending_named_variadic.is_empty() || !eg.pending_named_variadic.is_empty() {
+            std::mem::swap(
+                &mut self.pending_named_variadic,
+                &mut eg.pending_named_variadic,
+            );
+        }
+        if self.active_generator.is_some() || eg.active_generator.is_some() {
+            std::mem::swap(&mut self.active_generator, &mut eg.active_generator);
+        }
+        if self.pending_invoke_this.is_some() || eg.pending_invoke_this.is_some() {
+            std::mem::swap(&mut self.pending_invoke_this, &mut eg.pending_invoke_this);
+        }
     }
 
     pub(super) fn cleanup_frames(&mut self) {
@@ -307,5 +315,50 @@ pub(super) unsafe fn initialize_entry_frame(
             initialize_value_slot(frame, common.sig.num_args + offset as u32, capture.clone());
         }
         eg.current_execute_data.set(frame);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn execution_state_exchange_preserves_nonempty_side_state() {
+        let mut eg = ExecutorGlobals::new();
+        let mut state = CoroutineExecutionState::new();
+        state.stacks = Some(CoroutineStacks::new());
+
+        eg.exception = Some(Value::long(11));
+        state.exception = Some(Value::long(22));
+        eg.pending_named_variadic
+            .insert(1, vec![("root".into(), Value::long(33))]);
+        state
+            .pending_named_variadic
+            .insert(2, vec![("child".into(), Value::long(44))]);
+        eg.pending_invoke_this = Some(Value::long(55));
+        state.pending_invoke_this = Some(Value::long(66));
+
+        state.exchange(&mut eg);
+
+        assert_eq!(eg.exception.as_ref().and_then(Value::as_long), Some(22));
+        assert_eq!(state.exception.as_ref().and_then(Value::as_long), Some(11));
+        assert!(eg.pending_named_variadic.contains_key(&2));
+        assert!(state.pending_named_variadic.contains_key(&1));
+        assert_eq!(
+            eg.pending_invoke_this.as_ref().and_then(Value::as_long),
+            Some(66)
+        );
+        assert_eq!(
+            state.pending_invoke_this.as_ref().and_then(Value::as_long),
+            Some(55)
+        );
+
+        state.exchange(&mut eg);
+        assert_eq!(eg.exception.as_ref().and_then(Value::as_long), Some(11));
+        assert!(eg.pending_named_variadic.contains_key(&1));
+        assert_eq!(
+            eg.pending_invoke_this.as_ref().and_then(Value::as_long),
+            Some(55)
+        );
     }
 }

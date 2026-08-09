@@ -37,6 +37,49 @@ unsafe fn run_quick_string_append_loop(
     }
 
     while continue_loop {
+        if let Some((_current, end, bound)) = quick_unit_loop_chunk(
+            &slots,
+            kernel.header_lhs,
+            kernel.header_rhs,
+            kernel.header_condition_tmp,
+            kernel.post_value,
+            kernel.post_result,
+        ) {
+            for _ in 0..QUICK_UNIT_LOOP_CHUNK {
+                (*destination).push_str(source);
+            }
+            if let Some(result) = kernel.post_result {
+                slots[result as usize] = end - 1;
+                dirty_long_mask |= 1u64 << result;
+            }
+            slots[kernel.post_value as usize] = end;
+            dirty_long_mask |= 1u64 << kernel.post_value;
+            continue_loop = end < bound;
+            if let Some(slot) = kernel.header_condition_tmp {
+                slots[slot as usize] = i64::from(continue_loop);
+                dirty_bool_mask |= 1u64 << slot;
+            }
+            iterations += QUICK_UNIT_LOOP_CHUNK as u64;
+
+            if eg.vm_interrupt.load(Ordering::Relaxed) {
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    &slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                let target = if continue_loop {
+                    kernel.body_target
+                } else {
+                    kernel.exit_target
+                };
+                let next_ip = plan.target_ip(target).unwrap_unchecked();
+                (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+                handle_interrupt(eg)?;
+            }
+            continue;
+        }
+
         (*destination).push_str(source);
 
         let Some(incremented) = slots[kernel.post_value as usize].checked_add(1) else {

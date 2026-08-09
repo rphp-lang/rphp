@@ -7512,6 +7512,69 @@ Line-oriented reads and stream metadata remain the next compatibility
 boundary; dropping the final resource alias without `fclose()` still
 intentionally retains the backend until request shutdown.
 
+### Line reads, backend metadata and 32-turn dense consumers (2026-08-10)
+
+The stream compatibility boundary now includes `fgets()` and
+`stream_get_meta_data()` without a buffering crate or any Cargo change.
+`fgets()` uses one fixed 8 KiB stack scratch buffer, retains a terminating
+newline, treats the optional length as a `length - 1` byte ceiling and seeks
+back any over-read bytes so the next operation observes the exact cursor.
+Lines longer than the scratch buffer are assembled incrementally. A final
+unterminated line performs the same EOF probe as PHP, while allocation failure
+rewinds the chunk it could not publish.
+
+Metadata is owned by `PhpStream` rather than reconstructed in the PHP handler.
+Plain files report the original URI and mode with `plainfile`/`STDIO`; memory
+streams report normalized binary modes with `PHP`/`MEMORY`; temporary streams
+report `PHP`/`TEMP` and retain their identity after spilling. The backend
+controls which timeout, blocking and EOF keys exist, matching the observed PHP
+8.5 shapes. Stream implementation tests now live in `stream/tests.rs`, leaving
+the production ownership and spill policy in one readable module. Eleven E2E
+stream scenarios cover multi-buffer lines, length/cursor/EOF behavior and all
+three metadata backends.
+
+The no-JIT follow-up removes repeated work from three dense consumers. Virtual
+object-array regions resolve each invariant consumer and trailing key to an
+entry index once at activation, then continue to guard the exact object plan
+and values on every turn. Exact String-append and packed-array-push loops can
+prove one 32-iteration interrupt interval, simulate the same post/condition
+state and publish through one dense batch; short tails, mutable bounds,
+overflow risk and non-canonical arrays retain the one-step path. Canonical
+packed Long batches append directly to their `Vec<Value>` after one checked
+key advance, with an exact generic fallback for every other storage form.
+
+The initial source expansion exposed a genuine coroutine code-placement
+regression even though scheduler source was unchanged. Admission therefore
+removes work from the common switch instead of padding code: empty exception,
+named-variadic, generator and pending-invoke states no longer move between two
+empty sides, and the one-byte suspension sidecar occupies an existing dense
+registry reserve word instead of traversing a second thread-local on suspend
+and resume. Non-empty side state retains the original complete exchange, and
+dedicated tests cover both that path and one-time sidecar consumption.
+
+Fresh 20-pair default-runtime gates against `bc54dfe` record
+-0.966%/-24.187%/-47.041%/-16.267%/-4.400% on ARM64 and
++0.560%/-45.612%/-17.061%/-10.892%/-3.445% on pinned x86-64 for scalar,
+packed array, String, object order and ledger. The matching coroutine gate
+records -7.926%/-3.242%/+0.088% on ARM64 and
+-7.885%/-1.509%/-2.045% on x86-64 for suspend/resume, bounded channel and
+stream readiness. Every positive result remains below the +1% ceiling.
+
+Both hosts pass 178 no-default library tests, 280 ARM64 or 305 x86-64
+all-feature library tests, 11 stream scenarios, 118 quick-loop scenarios, four
+application-corpus scenarios, 26 coroutine scenarios with three ignored
+release benchmarks and complete all-feature/all-target compilation. Final
+ARM64/x86-64 default release SHA-256 values are
+`3816f11807ad36b2a251130e193c52ed2f8e60f7a1a880760ab697f8432785b1` and
+`31d18d9a1af594f9c37c4f8348aa5aeb695d6510085fff93eefa2b0fa409999c`;
+the corresponding coroutine integration values are
+`49fd48cb26d833bd84b1a57136a592a893f4511429ab415f94bd43ee55bfd801` and
+`192c6d57fa7a93a933181eed19f045bb693572f2bf5044376b4f92b97a2f0b26`.
+`Cargo.toml` and `Cargo.lock` are unchanged, and the complete checkpoint uses
+only the Rust standard library. Final-alias resource release remains the next
+lifetime boundary; broader line parsers such as CSV should build on this
+cursor contract rather than add a parallel buffered-stream abstraction.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

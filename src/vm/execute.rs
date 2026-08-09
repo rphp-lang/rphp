@@ -3622,13 +3622,12 @@ impl ObjectArrayAddConsumer {
 }
 
 #[inline(always)]
-fn object_array_value_for_key(
+fn object_array_entry_index_for_key(
     caller_op_array: &crate::compiler::OpArray,
     key_literal: u16,
     callee: &UserFunction,
     plan: &ObjectArrayFunctionPlan,
-    evaluated: &ObjectArrayEvaluated,
-) -> Option<i64> {
+) -> Option<usize> {
     let key = caller_op_array
         .literals
         .get(key_literal as usize)?
@@ -3641,10 +3640,22 @@ fn object_array_value_for_key(
             .as_str()?
             == key
         {
-            return evaluated.values.get(index).copied();
+            return Some(index);
         }
     }
     None
+}
+
+#[inline(always)]
+fn object_array_value_for_key(
+    caller_op_array: &crate::compiler::OpArray,
+    key_literal: u16,
+    callee: &UserFunction,
+    plan: &ObjectArrayFunctionPlan,
+    evaluated: &ObjectArrayEvaluated,
+) -> Option<i64> {
+    let index = object_array_entry_index_for_key(caller_op_array, key_literal, callee, plan)?;
+    evaluated.values.get(index).copied()
 }
 
 /// Commit an already-evaluated ObjectArray result into its proven immediate

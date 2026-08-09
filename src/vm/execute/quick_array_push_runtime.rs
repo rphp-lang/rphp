@@ -26,6 +26,59 @@ unsafe fn run_quick_array_push_loop(
     }
 
     while continue_loop {
+        if let Some((mut current, end, bound)) = quick_unit_loop_chunk(
+            &slots,
+            kernel.header_lhs,
+            kernel.header_rhs,
+            kernel.header_condition_tmp,
+            kernel.post_value,
+            kernel.post_result,
+        ) {
+            let mut values = [0i64; QUICK_UNIT_LOOP_CHUNK as usize];
+            for value in values.iter_mut() {
+                *value = quick_long_operand(&slots, kernel.value);
+                if let Some(result) = kernel.post_result {
+                    slots[result as usize] = current;
+                }
+                current += 1;
+                slots[kernel.post_value as usize] = current;
+            }
+            if !(*array).push_packed_long_chunk(&values) {
+                for value in values {
+                    (*array).push(Value::long(value));
+                }
+            }
+            debug_assert_eq!(current, end);
+            if let Some(result) = kernel.post_result {
+                dirty_long_mask |= 1u64 << result;
+            }
+            dirty_long_mask |= 1u64 << kernel.post_value;
+            continue_loop = end < bound;
+            if let Some(slot) = kernel.header_condition_tmp {
+                slots[slot as usize] = i64::from(continue_loop);
+                dirty_bool_mask |= 1u64 << slot;
+            }
+            iterations += QUICK_UNIT_LOOP_CHUNK as u64;
+
+            if eg.vm_interrupt.load(Ordering::Relaxed) {
+                commit_quick_long_ops_slots(
+                    slot_base,
+                    &slots,
+                    dirty_long_mask,
+                    dirty_bool_mask,
+                );
+                let target = if continue_loop {
+                    kernel.body_target
+                } else {
+                    kernel.exit_target
+                };
+                let next_ip = plan.target_ip(target).unwrap_unchecked();
+                (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
+                handle_interrupt(eg)?;
+            }
+            continue;
+        }
+
         let value = quick_long_operand(&slots, kernel.value);
         (*array).push(Value::long(value));
 
