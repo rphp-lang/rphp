@@ -6929,6 +6929,42 @@ substantially:
 Compatibility is expanded here, not first introduced here: every earlier
 phase already preserves the supported subset and exercises selected real code.
 
+### TCP listener coroutine adapter checkpoint (2026-08-09)
+
+The first Phase 5 compatibility slice extends the feature-only coroutine I/O
+substrate to real inbound TCP without adding a dependency. A coroutine scope
+can bind a numeric `SocketAddr` through `coroutine_tcp_listen`, wait for the
+listener to become readable, accept non-blocking connections through
+`coroutine_tcp_accept`, and use the existing non-blocking byte-stream API on
+each accepted socket. Both listener and accepted-stream ownership end with the
+scope. Port zero returns the resolved local address; DNS names are rejected so
+address resolution cannot block the cooperative scheduler.
+
+The descriptor layer now represents Unix streams, TCP streams and TCP
+listeners directly with standard-library types. It preserves deterministic
+descriptor traversal, FIFO direction waiters and the single-in-flight
+readiness rule. Listener/stream operation mismatches are rejected explicitly.
+The related refactor moves Unix/TCP PHP handlers into a 178-line API unit and
+descriptor tests into a 127-line sibling, leaving the main API, scheduler and
+I/O policy files at 350, 474 and 479 lines respectively.
+
+Real loopback tests cover full listen/accept/read/write progress,
+runnable-before-network fairness, `WouldBlock`, cancellation and invalid
+descriptor operations. The complete all-feature/all-target matrices pass on
+both hosts, including 20 coroutine PHP scenarios and four descriptor-level
+tests. Nine order-alternated pairs against the preceding checkpoint put the
+existing ARM64 suspend/channel/readiness controls at paired median changes of
+-0.50%, +0.42% and -0.05%; pinned x86-64 records +0.97%, -2.11% and +0.04%.
+
+Default execution remains pay-for-use. The ARM64 executable is byte-identical
+at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+The x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes and its
+metadata-normalized SHA-256 remains
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+Non-blocking outbound connect, explicit descriptor lifecycle operations and
+generic PHP stream integration remain follow-up Phase 5 work.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -2,7 +2,15 @@
 
 mod common;
 
+#[cfg(unix)]
+use std::io::{Read, Write};
+#[cfg(unix)]
+use std::net::{SocketAddr, TcpListener, TcpStream};
+#[cfg(unix)]
+use std::thread;
 use std::time::Duration;
+#[cfg(unix)]
+use std::time::Instant;
 
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
@@ -32,6 +40,37 @@ fn run(source: &str) -> Result<String, execute::VmError> {
     execute::execute(&mut eg, &main_function)?;
     let output = String::from_utf8(output.lock().unwrap().clone()).unwrap();
     Ok(output)
+}
+
+#[cfg(unix)]
+fn reserve_loopback_address() -> SocketAddr {
+    TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+}
+
+#[cfg(unix)]
+fn spawn_loopback_client(address: SocketAddr) -> thread::JoinHandle<[u8; 4]> {
+    thread::spawn(move || {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut stream = loop {
+            match TcpStream::connect(address) {
+                Ok(stream) => break stream,
+                Err(_) if Instant::now() < deadline => {
+                    thread::sleep(Duration::from_millis(1));
+                }
+                Err(error) => panic!("failed to connect loopback coroutine client: {error}"),
+            }
+        };
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream.write_all(b"ping").unwrap();
+        let mut response = [0; 4];
+        stream.read_exact(&mut response).unwrap();
+        response
+    })
 }
 
 #[test]
@@ -417,6 +456,107 @@ coroutine_scope(function () {
     .unwrap();
 
     assert_eq!(output, "root");
+}
+
+#[cfg(unix)]
+#[test]
+fn tcp_listener_accepts_without_blocking_other_logical_tasks() {
+    let address = reserve_loopback_address();
+    let client = spawn_loopback_client(address);
+    let output = run(&format!(
+        r#"<?php
+coroutine_scope(function () {{
+    $bound = coroutine_tcp_listen("{address}");
+    $listener = $bound[0];
+    echo $bound[1] . ":";
+    $server = coroutine_spawn(function () use ($listener) {{
+        coroutine_wait_readable($listener);
+        $accepted = coroutine_tcp_accept($listener);
+        $stream = $accepted[0];
+        coroutine_wait_readable($stream);
+        echo coroutine_stream_read($stream, 4);
+        coroutine_stream_write($stream, "pong");
+        return "done";
+    }});
+    coroutine_resume($server);
+    $ready = coroutine_spawn(function () {{
+        echo "R";
+    }});
+
+    echo ":" . coroutine_join($server);
+    coroutine_join($ready);
+}});
+"#
+    ));
+    let response = client.join().unwrap();
+
+    assert_eq!(output.unwrap(), format!("{address}:Rping:done"));
+    assert_eq!(&response, b"pong");
+}
+
+#[cfg(unix)]
+#[test]
+fn tcp_accept_reports_would_block_before_a_connection_arrives() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $bound = coroutine_tcp_listen("127.0.0.1:0");
+    echo coroutine_tcp_accept($bound[0]) ? "accepted" : "waiting";
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "waiting");
+}
+
+#[cfg(unix)]
+#[test]
+fn leaving_scope_cancels_an_unjoined_tcp_accept_waiter() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $bound = coroutine_tcp_listen("127.0.0.1:0");
+    $waiter = coroutine_spawn(function () use ($bound) {
+        coroutine_wait_readable($bound[0]);
+        echo "unreachable";
+    });
+    coroutine_resume($waiter);
+    echo "root";
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "root");
+}
+
+#[cfg(unix)]
+#[test]
+fn tcp_listener_rejects_dns_names_and_writable_waits() {
+    let address_error = run(r#"<?php
+coroutine_scope(function () {
+    coroutine_tcp_listen("localhost:8080");
+});
+"#)
+    .unwrap_err();
+    assert!(matches!(
+        address_error,
+        execute::VmError::Fatal(message)
+            if message.starts_with("coroutine_tcp_listen expects a numeric IP address")
+    ));
+
+    let writable_error = run(r#"<?php
+coroutine_scope(function () {
+    $bound = coroutine_tcp_listen("127.0.0.1:0");
+    $waiter = coroutine_spawn(function () use ($bound) {
+        coroutine_wait_writable($bound[0]);
+    });
+    coroutine_join($waiter);
+});
+"#)
+    .unwrap_err();
+    assert!(matches!(
+        writable_error,
+        execute::VmError::Fatal(message)
+            if message.contains("does not support writable readiness")
+    ));
 }
 
 #[test]

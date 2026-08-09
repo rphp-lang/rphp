@@ -555,6 +555,56 @@ for broader PHP streams and TCP belong to the compatibility phase; optional
 multi-threaded scheduling remains a separate decision and must not impose
 thread-safety costs on ordinary PHP execution.
 
+### Phase 5 TCP listener adapter checkpoint (2026-08-09)
+
+The first compatibility adapter promotes the milestone-four readiness core
+from synthetic Unix pairs to real TCP server sockets. The feature-only API now
+adds `coroutine_tcp_listen(address)`, which accepts a numeric socket address
+and returns `[listener, bound_address]`, and
+`coroutine_tcp_accept(listener)`, which returns `[stream, peer_address]` or
+`false` for `WouldBlock`. Passing port zero is supported, so callers can use
+the resolved address returned by the operating system. Listener readability
+uses the existing suspension API, while accepted streams use the unchanged
+non-blocking read, write and direction-readiness operations.
+
+Descriptors remain owned by the lexical coroutine scope. `scheduler/io.rs`
+now distinguishes byte streams from listeners and byte streams from Unix and
+TCP transports without trait objects or dynamic allocation in the readiness
+loop. Both listener and accepted sockets are non-blocking; descriptor IDs and
+poll registration remain deterministic, readiness waiters stay FIFO, and the
+one-in-flight guard still admits one logical waiter for one level-triggered
+edge. Invalid combinations such as writable waits or byte I/O on a listener,
+and accept on a byte stream, fail explicitly. Address parsing uses
+`std::net::SocketAddr`, deliberately excluding blocking DNS resolution. No
+external library or Cargo dependency is added.
+
+The source boundary was tightened during the adapter work. Unix/TCP handlers
+now occupy the 178-line `runtime/coroutine/api/io.rs`, leaving `api.rs` at 350
+lines. Descriptor policy remains in the 479-line `scheduler/io.rs`, while its
+four lower-level tests moved to a 127-line sibling file; the main scheduler is
+474 lines. Real loopback coverage proves listen/wait/accept/read/write,
+runnable-before-network fairness, pre-connection `WouldBlock`, scope
+cancellation and descriptor-kind rejection. The focused PHP suite now passes
+20 scenarios with three ignored release benchmarks, and the complete host
+matrices pass 250 ARM64 and 275 x86-64 library tests plus all integration
+targets.
+
+Nine order-alternated release pairs against the milestone-four checkpoint show
+no actionable cost in the existing coroutine paths. ARM64 candidate medians
+are 52.53 ns per suspend/resume, 148.36 ns per channel value and 2,488.13 ns
+per Unix-readiness round trip; paired median changes are -0.50%, +0.42% and
+-0.05%. Pinned x86-64 candidate medians are 79.17 ns, 148.36 ns and 4,404.80
+ns; paired changes are +0.97%, -2.11% and +0.04%. The default ARM64 executable
+remains byte-identical at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+The x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes and its
+metadata-normalized executable remains byte-identical at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+
+This checkpoint is the inbound server foundation, not a generic PHP stream
+claim. Non-blocking outbound connect, explicit descriptor lifecycle APIs and
+broader PHP stream adaptation remain later Phase 5 slices.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

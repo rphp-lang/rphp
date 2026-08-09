@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 use std::ffi::{c_int, c_short};
 use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::os::fd::AsRawFd;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
@@ -53,32 +54,96 @@ pub(super) enum IoDirection {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) struct IoReady {
     pub(super) task: u64,
-    pub(super) stream: u64,
+    pub(super) descriptor: u64,
     pub(super) direction: IoDirection,
 }
 
+#[derive(Debug)]
 pub(super) enum ReadOutcome {
     Data(Vec<u8>),
     WouldBlock,
 }
 
+#[derive(Debug)]
 pub(super) enum WriteOutcome {
     Written(usize),
     WouldBlock,
 }
 
-struct StreamState {
-    stream: UnixStream,
+#[derive(Debug)]
+pub(super) enum AcceptOutcome {
+    Accepted { stream: u64, peer: SocketAddr },
+    WouldBlock,
+}
+
+enum ByteStream {
+    Unix(UnixStream),
+    Tcp(TcpStream),
+}
+
+impl ByteStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        match self {
+            Self::Unix(stream) => stream.read(bytes),
+            Self::Tcp(stream) => stream.read(bytes),
+        }
+    }
+
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        match self {
+            Self::Unix(stream) => stream.write(bytes),
+            Self::Tcp(stream) => stream.write(bytes),
+        }
+    }
+
+    fn raw_fd(&self) -> c_int {
+        match self {
+            Self::Unix(stream) => stream.as_raw_fd(),
+            Self::Tcp(stream) => stream.as_raw_fd(),
+        }
+    }
+}
+
+enum Descriptor {
+    Stream(ByteStream),
+    Listener(TcpListener),
+}
+
+impl Descriptor {
+    fn raw_fd(&self) -> c_int {
+        match self {
+            Self::Stream(stream) => stream.raw_fd(),
+            Self::Listener(listener) => listener.as_raw_fd(),
+        }
+    }
+
+    fn stream_mut(&mut self) -> Option<&mut ByteStream> {
+        match self {
+            Self::Stream(stream) => Some(stream),
+            Self::Listener(_) => None,
+        }
+    }
+
+    fn listener(&self) -> Option<&TcpListener> {
+        match self {
+            Self::Listener(listener) => Some(listener),
+            Self::Stream(_) => None,
+        }
+    }
+}
+
+struct DescriptorState {
+    descriptor: Descriptor,
     readers: VecDeque<u64>,
     writers: VecDeque<u64>,
     reader_in_flight: bool,
     writer_in_flight: bool,
 }
 
-impl StreamState {
-    fn new(stream: UnixStream) -> Self {
+impl DescriptorState {
+    fn new(descriptor: Descriptor) -> Self {
         Self {
-            stream,
+            descriptor,
             readers: VecDeque::new(),
             writers: VecDeque::new(),
             reader_in_flight: false,
@@ -100,7 +165,7 @@ impl StreamState {
 
 pub(super) struct IoSet {
     next_id: u64,
-    streams: BTreeMap<u64, StreamState>,
+    descriptors: BTreeMap<u64, DescriptorState>,
     poll_fds: Vec<PollFd>,
     poll_streams: Vec<u64>,
     in_flight: BTreeMap<u64, (u64, IoDirection)>,
@@ -110,7 +175,7 @@ impl Default for IoSet {
     fn default() -> Self {
         Self {
             next_id: 1,
-            streams: BTreeMap::new(),
+            descriptors: BTreeMap::new(),
             poll_fds: Vec::new(),
             poll_streams: Vec::new(),
             in_flight: BTreeMap::new(),
@@ -120,19 +185,6 @@ impl Default for IoSet {
 
 impl IoSet {
     pub(super) fn create_pair(&mut self) -> Result<(u64, u64), VmError> {
-        let first_id = self.next_id;
-        let second_id = first_id
-            .checked_add(1)
-            .ok_or_else(|| VmError::Fatal("coroutine stream identifier space exhausted".into()))?;
-        if second_id > i64::MAX as u64 {
-            return Err(VmError::Fatal(
-                "coroutine stream identifier space exhausted".into(),
-            ));
-        }
-        let next_id = second_id
-            .checked_add(1)
-            .ok_or_else(|| VmError::Fatal("coroutine stream identifier space exhausted".into()))?;
-
         let (first, second) =
             UnixStream::pair().map_err(|error| os_error("create coroutine stream pair", error))?;
         first
@@ -142,28 +194,90 @@ impl IoSet {
             .set_nonblocking(true)
             .map_err(|error| os_error("make coroutine stream non-blocking", error))?;
 
-        self.next_id = next_id;
-        self.streams.insert(first_id, StreamState::new(first));
-        self.streams.insert(second_id, StreamState::new(second));
+        let first_id = self.allocate_id()?;
+        let second_id = self.allocate_id()?;
+        self.descriptors.insert(
+            first_id,
+            DescriptorState::new(Descriptor::Stream(ByteStream::Unix(first))),
+        );
+        self.descriptors.insert(
+            second_id,
+            DescriptorState::new(Descriptor::Stream(ByteStream::Unix(second))),
+        );
         Ok((first_id, second_id))
     }
 
-    pub(super) fn ensure_stream(&self, stream: u64) -> Result<(), VmError> {
-        if self.streams.contains_key(&stream) {
-            Ok(())
-        } else {
-            Err(VmError::Fatal(format!(
-                "unknown coroutine stream {}",
-                stream
-            )))
-        }
+    pub(super) fn create_tcp_listener(
+        &mut self,
+        address: SocketAddr,
+    ) -> Result<(u64, SocketAddr), VmError> {
+        let listener = TcpListener::bind(address)
+            .map_err(|error| os_error("bind coroutine TCP listener", error))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| os_error("make coroutine TCP listener non-blocking", error))?;
+        let local = listener
+            .local_addr()
+            .map_err(|error| os_error("read coroutine TCP listener address", error))?;
+        let id = self.allocate_id()?;
+        self.descriptors
+            .insert(id, DescriptorState::new(Descriptor::Listener(listener)));
+        Ok((id, local))
     }
 
-    pub(super) fn enqueue_waiter(&mut self, stream: u64, task: u64, direction: IoDirection) {
+    pub(super) fn accept(&mut self, listener: u64) -> Result<AcceptOutcome, VmError> {
+        let accepted = {
+            let state = self.descriptor(listener)?;
+            let listener = state.descriptor.listener().ok_or_else(|| {
+                VmError::Fatal(format!(
+                    "coroutine descriptor {} is not a TCP listener",
+                    listener
+                ))
+            })?;
+            match listener.accept() {
+                Ok(accepted) => accepted,
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    return Ok(AcceptOutcome::WouldBlock);
+                }
+                Err(error) => return Err(os_error("accept coroutine TCP connection", error)),
+            }
+        };
+        accepted
+            .0
+            .set_nonblocking(true)
+            .map_err(|error| os_error("make accepted coroutine TCP stream non-blocking", error))?;
+        let stream = self.allocate_id()?;
+        self.descriptors.insert(
+            stream,
+            DescriptorState::new(Descriptor::Stream(ByteStream::Tcp(accepted.0))),
+        );
+        Ok(AcceptOutcome::Accepted {
+            stream,
+            peer: accepted.1,
+        })
+    }
+
+    pub(super) fn ensure_waitable(
+        &self,
+        descriptor: u64,
+        direction: IoDirection,
+    ) -> Result<(), VmError> {
+        let state = self.descriptor(descriptor)?;
+        if direction == IoDirection::Writable && matches!(state.descriptor, Descriptor::Listener(_))
+        {
+            return Err(VmError::Fatal(format!(
+                "coroutine TCP listener {} does not support writable readiness",
+                descriptor
+            )));
+        }
+        Ok(())
+    }
+
+    pub(super) fn enqueue_waiter(&mut self, descriptor: u64, task: u64, direction: IoDirection) {
         let state = self
-            .streams
-            .get_mut(&stream)
-            .expect("validated coroutine stream must remain registered");
+            .descriptors
+            .get_mut(&descriptor)
+            .expect("validated coroutine descriptor must remain registered");
         match direction {
             IoDirection::Readable => state.readers.push_back(task),
             IoDirection::Writable => state.writers.push_back(task),
@@ -171,13 +285,13 @@ impl IoSet {
     }
 
     pub(super) fn read(&mut self, stream: u64, length: usize) -> Result<ReadOutcome, VmError> {
-        let state = self.stream_mut(stream)?;
+        let stream = self.byte_stream_mut(stream)?;
         let mut bytes = Vec::new();
         bytes
             .try_reserve_exact(length)
             .map_err(|_| VmError::Fatal("failed to reserve coroutine stream read buffer".into()))?;
         bytes.resize(length, 0);
-        match state.stream.read(&mut bytes) {
+        match stream.read(&mut bytes) {
             Ok(read) => {
                 bytes.truncate(read);
                 Ok(ReadOutcome::Data(bytes))
@@ -188,8 +302,8 @@ impl IoSet {
     }
 
     pub(super) fn write(&mut self, stream: u64, bytes: &[u8]) -> Result<WriteOutcome, VmError> {
-        let state = self.stream_mut(stream)?;
-        match state.stream.write(bytes) {
+        let stream = self.byte_stream_mut(stream)?;
+        match stream.write(bytes) {
             Ok(written) => Ok(WriteOutcome::Written(written)),
             Err(error) if error.kind() == io::ErrorKind::WouldBlock => Ok(WriteOutcome::WouldBlock),
             Err(error) => Err(os_error("write coroutine stream", error)),
@@ -197,9 +311,9 @@ impl IoSet {
     }
 
     pub(super) fn has_waiters(&self) -> bool {
-        self.streams
+        self.descriptors
             .values()
-            .any(|stream| !stream.readers.is_empty() || !stream.writers.is_empty())
+            .any(|descriptor| !descriptor.readers.is_empty() || !descriptor.writers.is_empty())
     }
 
     pub(super) fn acknowledge_ready(&mut self, task: u64) {
@@ -207,9 +321,9 @@ impl IoSet {
             return;
         };
         let state = self
-            .streams
+            .descriptors
             .get_mut(&stream)
-            .expect("ready coroutine stream must remain registered");
+            .expect("ready coroutine descriptor must remain registered");
         match direction {
             IoDirection::Readable => {
                 assert!(state.reader_in_flight);
@@ -255,11 +369,11 @@ impl IoSet {
             if poll_fd.revents == 0 {
                 continue;
             }
-            let stream = self.poll_streams[index];
+            let descriptor = self.poll_streams[index];
             let state = self
-                .streams
-                .get_mut(&stream)
-                .expect("polled coroutine stream must remain registered");
+                .descriptors
+                .get_mut(&descriptor)
+                .expect("polled coroutine descriptor must remain registered");
             let terminal = poll_fd.revents & TERMINAL_EVENTS != 0;
             if (poll_fd.revents & READ_EVENTS != 0 || terminal)
                 && let Some(task) = state.readers.pop_front()
@@ -268,12 +382,12 @@ impl IoSet {
                 state.reader_in_flight = true;
                 assert!(
                     self.in_flight
-                        .insert(task, (stream, IoDirection::Readable))
+                        .insert(task, (descriptor, IoDirection::Readable))
                         .is_none()
                 );
                 ready.push_back(IoReady {
                     task,
-                    stream,
+                    descriptor,
                     direction: IoDirection::Readable,
                 });
             }
@@ -284,12 +398,12 @@ impl IoSet {
                 state.writer_in_flight = true;
                 assert!(
                     self.in_flight
-                        .insert(task, (stream, IoDirection::Writable))
+                        .insert(task, (descriptor, IoDirection::Writable))
                         .is_none()
                 );
                 ready.push_back(IoReady {
                     task,
-                    stream,
+                    descriptor,
                     direction: IoDirection::Writable,
                 });
             }
@@ -300,13 +414,13 @@ impl IoSet {
     fn prepare_poll_set(&mut self) {
         self.poll_fds.clear();
         self.poll_streams.clear();
-        for (id, state) in &self.streams {
+        for (id, state) in &self.descriptors {
             let events = state.events();
             if events == 0 {
                 continue;
             }
             self.poll_fds.push(PollFd {
-                fd: state.stream.as_raw_fd(),
+                fd: state.descriptor.raw_fd(),
                 events,
                 revents: 0,
             });
@@ -314,10 +428,37 @@ impl IoSet {
         }
     }
 
-    fn stream_mut(&mut self, stream: u64) -> Result<&mut StreamState, VmError> {
-        self.streams
+    fn allocate_id(&mut self) -> Result<u64, VmError> {
+        let id = self.next_id;
+        if id > i64::MAX as u64 {
+            return Err(VmError::Fatal(
+                "coroutine descriptor identifier space exhausted".into(),
+            ));
+        }
+        self.next_id = id.checked_add(1).ok_or_else(|| {
+            VmError::Fatal("coroutine descriptor identifier space exhausted".into())
+        })?;
+        Ok(id)
+    }
+
+    fn descriptor(&self, descriptor: u64) -> Result<&DescriptorState, VmError> {
+        self.descriptors
+            .get(&descriptor)
+            .ok_or_else(|| VmError::Fatal(format!("unknown coroutine descriptor {}", descriptor)))
+    }
+
+    fn byte_stream_mut(&mut self, stream: u64) -> Result<&mut ByteStream, VmError> {
+        self.descriptors
             .get_mut(&stream)
-            .ok_or_else(|| VmError::Fatal(format!("unknown coroutine stream {}", stream)))
+            .ok_or_else(|| VmError::Fatal(format!("unknown coroutine stream {}", stream)))?
+            .descriptor
+            .stream_mut()
+            .ok_or_else(|| {
+                VmError::Fatal(format!(
+                    "coroutine descriptor {} is not a byte stream",
+                    stream
+                ))
+            })
     }
 }
 
@@ -334,60 +475,5 @@ fn os_error(operation: &str, error: io::Error) -> VmError {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn non_blocking_pair_reports_readiness_and_preserves_bytes() {
-        let mut io = IoSet::default();
-        let (reader, writer) = io.create_pair().unwrap();
-        assert!(matches!(
-            io.read(reader, 16).unwrap(),
-            ReadOutcome::WouldBlock
-        ));
-
-        io.enqueue_waiter(reader, 7, IoDirection::Readable);
-        assert!(matches!(
-            io.write(writer, b"ready").unwrap(),
-            WriteOutcome::Written(5)
-        ));
-        let mut ready = VecDeque::new();
-        io.poll_ready(Some(Duration::ZERO), &mut ready).unwrap();
-        assert_eq!(
-            ready.pop_front(),
-            Some(IoReady {
-                task: 7,
-                stream: reader,
-                direction: IoDirection::Readable,
-            })
-        );
-
-        let ReadOutcome::Data(bytes) = io.read(reader, 16).unwrap() else {
-            panic!("readable stream must return the queued bytes");
-        };
-        assert_eq!(bytes, b"ready");
-    }
-
-    #[test]
-    fn one_readiness_edge_has_only_one_in_flight_waiter() {
-        let mut io = IoSet::default();
-        let (reader, writer) = io.create_pair().unwrap();
-        io.enqueue_waiter(reader, 1, IoDirection::Readable);
-        io.enqueue_waiter(reader, 2, IoDirection::Readable);
-        assert!(matches!(
-            io.write(writer, b"x").unwrap(),
-            WriteOutcome::Written(1)
-        ));
-
-        let mut ready = VecDeque::new();
-        io.poll_ready(Some(Duration::ZERO), &mut ready).unwrap();
-        io.poll_ready(Some(Duration::ZERO), &mut ready).unwrap();
-        assert_eq!(ready.len(), 1);
-        assert_eq!(ready.front().unwrap().task, 1);
-
-        io.acknowledge_ready(1);
-        io.poll_ready(Some(Duration::ZERO), &mut ready).unwrap();
-        assert_eq!(ready.len(), 2);
-        assert_eq!(ready.back().unwrap().task, 2);
-    }
-}
+#[path = "io_tests.rs"]
+mod tests;

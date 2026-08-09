@@ -46,8 +46,8 @@ impl CoroutineScheduler {
         self.io.poll_ready(timeout, &mut self.io_ready)?;
         while let Some(event) = self.io_ready.pop_front() {
             let expected = match event.direction {
-                IoDirection::Readable => WaitReason::IoRead(event.stream),
-                IoDirection::Writable => WaitReason::IoWrite(event.stream),
+                IoDirection::Readable => WaitReason::IoRead(event.descriptor),
+                IoDirection::Writable => WaitReason::IoWrite(event.descriptor),
             };
             self.wake_task(event.task, expected)?;
         }

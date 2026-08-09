@@ -8,12 +8,14 @@ mod readiness;
 use std::collections::HashMap;
 #[cfg(unix)]
 use std::collections::VecDeque;
+#[cfg(unix)]
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use self::channel::{ChannelSet, ReceiveOutcome, SendOutcome};
 #[cfg(unix)]
-use self::io::{IoDirection, IoReady, IoSet, ReadOutcome, WriteOutcome};
+use self::io::{AcceptOutcome, IoDirection, IoReady, IoSet, ReadOutcome, WriteOutcome};
 use self::readiness::Readiness;
 use super::state::{
     CoroutineContext, CoroutineEntry, CoroutineStackPool, CoroutineStatus, WaitReason,
@@ -139,28 +141,47 @@ impl CoroutineScheduler {
     }
 
     #[cfg(unix)]
-    pub(super) fn wait_readable(&mut self, stream: u64) -> Result<(), VmError> {
-        self.wait_stream(stream, IoDirection::Readable)
+    pub(super) fn create_tcp_listener(
+        &mut self,
+        address: SocketAddr,
+    ) -> Result<(u64, SocketAddr), VmError> {
+        self.io.create_tcp_listener(address)
     }
 
     #[cfg(unix)]
-    pub(super) fn wait_writable(&mut self, stream: u64) -> Result<(), VmError> {
-        self.wait_stream(stream, IoDirection::Writable)
+    pub(super) fn accept_tcp(
+        &mut self,
+        listener: u64,
+    ) -> Result<Option<(u64, SocketAddr)>, VmError> {
+        match self.io.accept(listener)? {
+            AcceptOutcome::Accepted { stream, peer } => Ok(Some((stream, peer))),
+            AcceptOutcome::WouldBlock => Ok(None),
+        }
     }
 
     #[cfg(unix)]
-    fn wait_stream(&mut self, stream: u64, direction: IoDirection) -> Result<(), VmError> {
+    pub(super) fn wait_readable(&mut self, descriptor: u64) -> Result<(), VmError> {
+        self.wait_descriptor(descriptor, IoDirection::Readable)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn wait_writable(&mut self, descriptor: u64) -> Result<(), VmError> {
+        self.wait_descriptor(descriptor, IoDirection::Writable)
+    }
+
+    #[cfg(unix)]
+    fn wait_descriptor(&mut self, descriptor: u64, direction: IoDirection) -> Result<(), VmError> {
         let task = self.active_task(match direction {
             IoDirection::Readable => "coroutine_wait_readable",
             IoDirection::Writable => "coroutine_wait_writable",
         })?;
-        self.io.ensure_stream(stream)?;
+        self.io.ensure_waitable(descriptor, direction)?;
         let reason = match direction {
-            IoDirection::Readable => WaitReason::IoRead(stream),
-            IoDirection::Writable => WaitReason::IoWrite(stream),
+            IoDirection::Readable => WaitReason::IoRead(descriptor),
+            IoDirection::Writable => WaitReason::IoWrite(descriptor),
         };
         self.block_active(reason)?;
-        self.io.enqueue_waiter(stream, task, direction);
+        self.io.enqueue_waiter(descriptor, task, direction);
         Ok(())
     }
 
