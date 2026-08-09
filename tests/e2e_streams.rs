@@ -57,6 +57,23 @@ fn memory_stream_round_trip_preserves_position_and_eof() {
 }
 
 #[test]
+fn temporary_stream_spills_and_retains_seekable_contents() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $stream = fopen('php://temp/maxmemory:4', 'w+');
+            echo fwrite($stream, 'abcdef'); echo ':';
+            echo fseek($stream, -3, SEEK_END); echo ':';
+            echo fread($stream, 3); echo ':';
+            echo ftell($stream); echo ':';
+            echo fclose($stream);
+            "
+        ),
+        "6:0:def:6:1"
+    );
+}
+
+#[test]
 fn closing_one_alias_invalidates_every_alias_but_preserves_id() {
     assert_eq!(
         run_php(

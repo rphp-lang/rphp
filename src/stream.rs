@@ -1,5 +1,12 @@
 use std::fs::{File, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+#[cfg(test)]
+use std::path::Path;
+
+#[path = "stream/temp.rs"]
+mod temp;
+
+use temp::{TempStream, memory_limit as temp_memory_limit};
 
 /// Parsed PHP stream mode. Binary/text and close-on-exec suffixes do not
 /// change Rust's byte-oriented file operations, but are accepted for PHP
@@ -49,6 +56,7 @@ impl StreamMode {
 enum StreamBackend {
     File(File),
     Memory(Cursor<Vec<u8>>),
+    Temp(TempStream),
 }
 
 /// Initial standard-library stream backend.
@@ -70,6 +78,13 @@ impl PhpStream {
         if path == "php://memory" {
             return Ok(Self {
                 backend: StreamBackend::Memory(Cursor::new(Vec::new())),
+                mode,
+                eof: false,
+            });
+        }
+        if let Some(max_memory) = temp_memory_limit(path) {
+            return Ok(Self {
+                backend: StreamBackend::Temp(TempStream::new(max_memory)),
                 mode,
                 eof: false,
             });
@@ -128,6 +143,7 @@ impl PhpStream {
             let result = match &mut self.backend {
                 StreamBackend::File(file) => file.read(buffer),
                 StreamBackend::Memory(memory) => memory.read(buffer),
+                StreamBackend::Temp(temp) => temp.read(buffer),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -155,6 +171,7 @@ impl PhpStream {
                     }
                     memory.write(buffer)
                 }
+                StreamBackend::Temp(temp) => temp.write(buffer, self.mode.append),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -167,6 +184,7 @@ impl PhpStream {
         match &mut self.backend {
             StreamBackend::File(file) => file.flush(),
             StreamBackend::Memory(memory) => memory.flush(),
+            StreamBackend::Temp(temp) => temp.flush(),
         }
     }
 
@@ -174,6 +192,7 @@ impl PhpStream {
         let position = match &mut self.backend {
             StreamBackend::File(file) => file.seek(position),
             StreamBackend::Memory(memory) => memory.seek(position),
+            StreamBackend::Temp(temp) => temp.seek(position),
         }?;
         self.eof = false;
         Ok(position)
@@ -183,6 +202,15 @@ impl PhpStream {
         match &mut self.backend {
             StreamBackend::File(file) => file.stream_position(),
             StreamBackend::Memory(memory) => Ok(memory.position()),
+            StreamBackend::Temp(temp) => temp.position(),
+        }
+    }
+
+    #[cfg(test)]
+    fn temp_spill_path(&self) -> Option<&Path> {
+        match &self.backend {
+            StreamBackend::Temp(temp) => temp.spill_path(),
+            _ => None,
         }
     }
 }
@@ -240,5 +268,24 @@ mod tests {
         let mut buffer = [0; 3];
         assert_eq!(append.read(&mut buffer).unwrap(), 3);
         assert_eq!(&buffer, b"abc");
+    }
+
+    #[test]
+    fn temporary_stream_spills_preserves_position_and_removes_its_file() {
+        let mut in_memory = PhpStream::open("php://temp", "w+").unwrap();
+        assert_eq!(in_memory.write(b"small").unwrap(), 5);
+        assert!(in_memory.temp_spill_path().is_none());
+
+        let mut stream = PhpStream::open("php://temp/maxmemory:4", "w+").unwrap();
+        assert_eq!(stream.write(b"abcdef").unwrap(), 6);
+        let path = stream.temp_spill_path().unwrap().to_path_buf();
+        assert!(path.exists());
+        assert_eq!(stream.position().unwrap(), 6);
+        stream.seek(SeekFrom::Start(1)).unwrap();
+        let mut buffer = [0; 4];
+        assert_eq!(stream.read(&mut buffer).unwrap(), 4);
+        assert_eq!(&buffer, b"bcde");
+        drop(stream);
+        assert!(!path.exists());
     }
 }

@@ -7461,6 +7461,57 @@ The next compatibility step is a bounded stream extension such as
 `php://temp` plus line-oriented reads and metadata, retaining the
 standard-library-first policy.
 
+### Bounded temporary streams and dense no-JIT loop kernels
+
+The next Phase 5 checkpoint adds `php://temp` without a crate, Cargo change or
+platform stream dependency. The default in-memory budget is 2 MiB and
+`php://temp/maxmemory:N` selects an explicit non-negative budget. Writes stay
+in a seekable `Cursor<Vec<u8>>` until the next write would cross that limit;
+the backend then copies once into a uniquely named owner-only temporary file,
+preserves the logical cursor and continues through the same `PhpStream` API.
+Explicit close, registry shutdown and ordinary backend drop all remove a
+spilled file. Memory-only streams never create one. The parser rejects extra
+path components and malformed limits rather than silently selecting another
+policy.
+
+Admission also turns four recurring no-JIT shapes into target-neutral dense
+execution rather than accepting layout regressions. An exact three-operation
+String-append loop and an exact packed-array-push loop retain the existing
+guard, interrupt and overflow/deoptimization boundaries while avoiding the
+general operation dispatcher. An induction-plus-constant accumulator folds
+one 32-iteration interrupt interval with checked arithmetic and falls back to
+the canonical one-step loop for short, sign-crossing or potentially
+overflowing ranges. Read-only virtual object-array pipelines resolve invariant
+nested receivers, method caches, targets, plans and declaring classes once at
+region entry; changing arguments remain checked per iteration. Finally,
+one-to-four-operation scalar-plan ranges are explicitly unrolled after one
+bounds validation, with larger and malformed public plans retaining the safe
+loop/failure path.
+
+Fresh 20-pair default-runtime gates against `178ef41` report
+-95.649%/-18.367%/-57.683%/-1.716%/-1.326% on ARM64 and
+-96.604%/-12.450%/-59.513%/-10.019%/-2.207% on pinned x86-64 for scalar,
+packed array, String, order and ledger workloads. The independent coroutine
+gate remains neutral and below its +1% ceiling at
++0.367%/-0.841%/-0.741% on ARM64 and -1.869%/-0.086%/+0.343% on x86-64 for
+suspend/resume, bounded channel and readiness.
+
+Both hosts pass 174 no-default library tests, 272 ARM64 or 297 x86-64
+all-feature library tests, eight stream scenarios, four application-corpus
+scenarios and complete all-feature/all-target compilation. Dedicated tests
+cover spill position and deletion, exact kernel selection and rejection,
+chunk overflow fallback, scalar temporary dependencies and malformed range
+rejection. `Cargo.toml` and `Cargo.lock` are unchanged. Clean ARM64/x86-64
+default release SHA-256 values are
+`859e22b8a1fc8d52a3b495b037d68ee347ffe1c560dd5a391f722d4f08c03e2f` and
+`83043325ba2545a2c6517bdaceb4d7cbc368c26a80b649dcb4e773dafb85dab4`;
+the corresponding coroutine integration hashes are
+`40dc251671dca21c978d25cf17978080be51d3cc8f74d6ff2c5d5a6b80a21fac` and
+`8eb5a0592f9c5b1fc888d925fb26cf13717b8a3825929bac8818cd3ffe11c2c1`.
+Line-oriented reads and stream metadata remain the next compatibility
+boundary; dropping the final resource alias without `fclose()` still
+intentionally retains the backend until request shutdown.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -1476,6 +1476,153 @@ fn resolve_scalar_function_source(
 }
 
 #[inline(always)]
+unsafe fn evaluate_scalar_long_operation(
+    operations: &[ScalarLongOp],
+    arguments: &[i64; 8],
+    temporaries: &mut [i64; 8],
+    index: usize,
+) -> Option<()> {
+    let operation = *operations.get_unchecked(index);
+    let lhs = resolve_scalar_function_source(operation.lhs, arguments, temporaries)?;
+    let rhs = resolve_scalar_function_source(operation.rhs, arguments, temporaries)?;
+    *temporaries.get_unchecked_mut(index) = apply_scalar_long_op(operation.kind, lhs, rhs)?;
+    Some(())
+}
+
+/// Execute one validated scalar-plan range without an interpreter backedge
+/// for the common tiny bodies. The compiler caps the complete program at
+/// eight operations; the explicit range check keeps malformed public plans on
+/// the ordinary safe failure path before the unchecked per-operation access.
+#[inline(always)]
+fn evaluate_scalar_long_operation_range(
+    operations: &[ScalarLongOp],
+    arguments: &[i64; 8],
+    temporaries: &mut [i64; 8],
+    start: usize,
+    end: usize,
+) -> Option<()> {
+    let count = end.checked_sub(start)?;
+    if end > operations.len() || end > temporaries.len() {
+        return None;
+    }
+    macro_rules! evaluate {
+        ($offset:expr) => {
+            unsafe {
+                evaluate_scalar_long_operation(
+                    operations,
+                    arguments,
+                    temporaries,
+                    start + $offset,
+                )?;
+            }
+        };
+    }
+    match count {
+        0 => {}
+        1 => evaluate!(0),
+        2 => {
+            evaluate!(0);
+            evaluate!(1);
+        }
+        3 => {
+            evaluate!(0);
+            evaluate!(1);
+            evaluate!(2);
+        }
+        4 => {
+            evaluate!(0);
+            evaluate!(1);
+            evaluate!(2);
+            evaluate!(3);
+        }
+        _ => {
+            for index in start..end {
+                unsafe {
+                    evaluate_scalar_long_operation(operations, arguments, temporaries, index)?;
+                }
+            }
+        }
+    }
+    Some(())
+}
+
+#[cfg(test)]
+mod scalar_long_operation_range_tests {
+    use super::*;
+
+    #[test]
+    fn tiny_ranges_preserve_temporary_dependencies() {
+        let operations = [
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Input(0),
+                rhs: ScalarLongSource::Constant(2),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Multiply,
+                lhs: ScalarLongSource::Temporary(0),
+                rhs: ScalarLongSource::Constant(3),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Subtract,
+                lhs: ScalarLongSource::Temporary(1),
+                rhs: ScalarLongSource::Constant(4),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::BitwiseXor,
+                lhs: ScalarLongSource::Temporary(2),
+                rhs: ScalarLongSource::Constant(1),
+            },
+            ScalarLongOp {
+                kind: ScalarLongOpKind::Add,
+                lhs: ScalarLongSource::Temporary(3),
+                rhs: ScalarLongSource::Input(1),
+            },
+        ];
+        let mut arguments = [0; 8];
+        arguments[0] = 5;
+        arguments[1] = 6;
+        let mut temporaries = [0; 8];
+
+        assert_eq!(
+            evaluate_scalar_long_operation_range(
+                &operations,
+                &arguments,
+                &mut temporaries,
+                0,
+                operations.len(),
+            ),
+            Some(())
+        );
+        assert_eq!(&temporaries[..5], &[7, 21, 17, 16, 22]);
+    }
+
+    #[test]
+    fn malformed_or_failing_ranges_return_none_before_unchecked_access() {
+        let operations = [ScalarLongOp {
+            kind: ScalarLongOpKind::IntDivide,
+            lhs: ScalarLongSource::Input(0),
+            rhs: ScalarLongSource::Constant(0),
+        }];
+        let arguments = [1; 8];
+        let mut temporaries = [0; 8];
+
+        assert_eq!(
+            evaluate_scalar_long_operation_range(&operations, &arguments, &mut temporaries, 1, 0,),
+            None
+        );
+        assert_eq!(
+            evaluate_scalar_long_operation_range(&operations, &arguments, &mut temporaries, 0, 9,),
+            None
+        );
+        assert_eq!(
+            evaluate_scalar_long_operation_range(&operations, &arguments, &mut temporaries, 0, 1,),
+            None
+        );
+    }
+}
+
+#[inline(always)]
 fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]) -> Option<i64> {
     if plan.program.operations.len() > 8 || plan.program.output_count != 1 {
         return None;
@@ -1504,22 +1651,20 @@ fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]
         }
     }
     let mut temporaries = [0i64; 8];
-    let evaluate_operations = |start: usize, end: usize, temporaries: &mut [i64; 8]| {
-        for index in start..end {
-            let operation = plan.program.operations[index];
-            let lhs = resolve_scalar_function_source(operation.lhs, arguments, temporaries)?;
-            let rhs = resolve_scalar_function_source(operation.rhs, arguments, temporaries)?;
-            temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
-        }
-        Some(())
-    };
+    let operations = plan.program.operations.as_ref();
     let output = if let Some(select) = plan.select {
         let shared_end = select.shared_operation_count as usize;
         let true_end = shared_end.checked_add(select.when_true_operation_count as usize)?;
         if true_end > plan.program.operations.len() {
             return None;
         }
-        evaluate_operations(0, shared_end, &mut temporaries)?;
+        evaluate_scalar_long_operation_range(
+            operations,
+            arguments,
+            &mut temporaries,
+            0,
+            shared_end,
+        )?;
         let resolve_condition_operand = |operand| match operand {
             ScalarLongConditionOperand::Source(source) => {
                 resolve_scalar_function_source(source, arguments, &temporaries)
@@ -1538,18 +1683,32 @@ fn evaluate_scalar_long_plan(plan: &ScalarLongFunctionPlan, arguments: &[i64; 8]
             ScalarLongConditionKind::LessThanOrEqual => lhs <= rhs,
         };
         if condition {
-            evaluate_operations(shared_end, true_end, &mut temporaries)?;
+            evaluate_scalar_long_operation_range(
+                operations,
+                arguments,
+                &mut temporaries,
+                shared_end,
+                true_end,
+            )?;
             select.when_true
         } else {
-            evaluate_operations(true_end, plan.program.operations.len(), &mut temporaries)?;
+            evaluate_scalar_long_operation_range(
+                operations,
+                arguments,
+                &mut temporaries,
+                true_end,
+                operations.len(),
+            )?;
             select.when_false
         }
     } else {
-        for (index, operation) in plan.program.operations.iter().copied().enumerate() {
-            let lhs = resolve_scalar_function_source(operation.lhs, arguments, &temporaries)?;
-            let rhs = resolve_scalar_function_source(operation.rhs, arguments, &temporaries)?;
-            temporaries[index] = apply_scalar_long_op(operation.kind, lhs, rhs)?;
-        }
+        evaluate_scalar_long_operation_range(
+            operations,
+            arguments,
+            &mut temporaries,
+            0,
+            operations.len(),
+        )?;
         plan.program.outputs[0]
     };
     resolve_scalar_function_source(output, arguments, &temporaries)
@@ -2948,27 +3107,39 @@ unsafe fn resolve_object_array_long(
     }
 }
 
+#[derive(Clone, Copy)]
+struct ResolvedObjectArrayCall {
+    operation: *const ObjectArrayLongCall,
+    receiver: *const Value,
+    target: *const FunctionCommon,
+    callee: *const UserFunction,
+    plan: *const ObjectLongFunctionPlan,
+    declaring_class: Option<*const str>,
+}
+
+#[cfg(feature = "quick-loops")]
+impl ResolvedObjectArrayCall {
+    const EMPTY: Self = Self {
+        operation: std::ptr::null(),
+        receiver: std::ptr::null(),
+        target: std::ptr::null(),
+        callee: std::ptr::null(),
+        plan: std::ptr::null(),
+        declaring_class: None,
+    };
+}
+
+/// Resolve the invariant dispatch contract for one nested object-array call.
+/// The canonical path invokes this for every call; quick virtual regions can
+/// retain the result while their read-only receiver and inline caches remain
+/// guarded at the region boundary.
 #[inline(always)]
-unsafe fn evaluate_object_array_call(
+unsafe fn resolve_object_array_call(
     eg: &ExecutorGlobals,
     owner: &UserFunction,
-    receiver: &Value,
-    outer_arguments: &[ObjectLongArgument; 8],
-    slots: &[std::mem::MaybeUninit<i64>; 64],
-    initialized: u64,
+    call_receiver: *const Value,
     call: &ObjectArrayLongCall,
-) -> Option<(i64, *const FunctionCommon)> {
-    let call_receiver = match resolve_object_array_source(
-        call.receiver,
-        owner,
-        receiver,
-        outer_arguments,
-        slots,
-        initialized,
-    )? {
-        ObjectArrayResolved::Borrowed(pointer) => pointer,
-        ObjectArrayResolved::Long(_) | ObjectArrayResolved::Virtual(_) => return None,
-    };
+) -> Option<ResolvedObjectArrayCall> {
     if call_receiver.is_null()
         || (*call_receiver).is_reference()
         || (*call_receiver).value_type() != ValueType::Object
@@ -3003,7 +3174,42 @@ unsafe fn evaluate_object_array_call(
         return None;
     }
 
-    let declaring_class = eg.declaring_class_of(cache.func);
+    Some(ResolvedObjectArrayCall {
+        operation: call,
+        receiver: call_receiver,
+        target: cache.func,
+        callee,
+        plan,
+        declaring_class: eg
+            .declaring_class_of(cache.func)
+            .map(|class| class as *const str),
+    })
+}
+
+#[inline(always)]
+unsafe fn execute_resolved_object_array_call(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    receiver: &Value,
+    outer_arguments: &[ObjectLongArgument; 8],
+    slots: &[std::mem::MaybeUninit<i64>; 64],
+    initialized: u64,
+    call: &ObjectArrayLongCall,
+    resolved_call: ResolvedObjectArrayCall,
+) -> Option<(i64, *const FunctionCommon)> {
+    if resolved_call.operation != call as *const ObjectArrayLongCall
+        || resolved_call.receiver.is_null()
+        || resolved_call.target.is_null()
+        || resolved_call.callee.is_null()
+        || resolved_call.plan.is_null()
+    {
+        return None;
+    }
+    let common = &*resolved_call.target;
+    let callee = &*resolved_call.callee;
+    let plan = &*resolved_call.plan;
+    let declaring_class = resolved_call.declaring_class.map(|class| &*class);
+
     let mut callee_slots = [const { std::mem::MaybeUninit::<i64>::uninit() }; 64];
     let mut callee_initialized = 0u64;
     let mut object_arguments = [ObjectLongArgument::None; 8];
@@ -3089,7 +3295,7 @@ unsafe fn evaluate_object_array_call(
     }
 
     let result = evaluate_object_long_plan(
-        &*call_receiver,
+        &*resolved_call.receiver,
         &object_arguments,
         &string_arguments,
         &mut callee_slots,
@@ -3097,7 +3303,41 @@ unsafe fn evaluate_object_array_call(
         callee,
         plan,
     )?;
-    Some((result, cache.func))
+    Some((result, resolved_call.target))
+}
+
+#[inline(always)]
+unsafe fn evaluate_object_array_call(
+    eg: &ExecutorGlobals,
+    owner: &UserFunction,
+    receiver: &Value,
+    outer_arguments: &[ObjectLongArgument; 8],
+    slots: &[std::mem::MaybeUninit<i64>; 64],
+    initialized: u64,
+    call: &ObjectArrayLongCall,
+) -> Option<(i64, *const FunctionCommon)> {
+    let call_receiver = match resolve_object_array_source(
+        call.receiver,
+        owner,
+        receiver,
+        outer_arguments,
+        slots,
+        initialized,
+    )? {
+        ObjectArrayResolved::Borrowed(pointer) => pointer,
+        ObjectArrayResolved::Long(_) | ObjectArrayResolved::Virtual(_) => return None,
+    };
+    let resolved_call = resolve_object_array_call(eg, owner, call_receiver, call)?;
+    execute_resolved_object_array_call(
+        eg,
+        owner,
+        receiver,
+        outer_arguments,
+        slots,
+        initialized,
+        call,
+        resolved_call,
+    )
 }
 
 struct ObjectArrayEvaluated {
@@ -3126,6 +3366,7 @@ unsafe fn evaluate_object_array_values(
     arguments: &[ObjectLongArgument; 8],
     owner: &UserFunction,
     plan: &ObjectArrayFunctionPlan,
+    resolved_calls: &[ResolvedObjectArrayCall],
 ) -> Option<ObjectArrayEvaluated> {
     if plan.slot_count as usize > 64
         || plan.operations.len() > 64
@@ -3203,15 +3444,32 @@ unsafe fn evaluate_object_array_values(
                 (*destination, lhs.checked_div(rhs)?)
             }
             ObjectArrayLongOp::Call(call) => {
-                let (value, target) = evaluate_object_array_call(
-                    eg,
-                    owner,
-                    receiver,
-                    arguments,
-                    &slots,
-                    initialized,
-                    call,
-                )?;
+                let resolved_call = resolved_calls
+                    .get(called_count)
+                    .copied()
+                    .filter(|resolved| resolved.operation == call as *const ObjectArrayLongCall);
+                let (value, target) = if let Some(resolved_call) = resolved_call {
+                    execute_resolved_object_array_call(
+                        eg,
+                        owner,
+                        receiver,
+                        arguments,
+                        &slots,
+                        initialized,
+                        call,
+                        resolved_call,
+                    )?
+                } else {
+                    evaluate_object_array_call(
+                        eg,
+                        owner,
+                        receiver,
+                        arguments,
+                        &slots,
+                        initialized,
+                        call,
+                    )?
+                };
                 *called.get_mut(called_count)? = target;
                 called_count += 1;
                 (call.destination, value)
@@ -3344,7 +3602,7 @@ pub(crate) unsafe fn try_execute_direct_object_array_call(
 ) -> Option<(Value, *const Instruction)> {
     let (arguments, do_fcall_ptr) =
         direct_object_array_arguments(eg, caller, caller_op_array, receiver, sends, callee, plan)?;
-    let evaluated = evaluate_object_array_values(eg, receiver, &arguments, callee, plan)?;
+    let evaluated = evaluate_object_array_values(eg, receiver, &arguments, callee, plan, &[])?;
     let result = materialize_object_array_values(callee, plan, &evaluated)?;
     evaluated.record_calls();
     Some((result, do_fcall_ptr))
@@ -3561,7 +3819,7 @@ pub(crate) unsafe fn try_execute_direct_object_array_consumers(
         callee,
         plan,
     )?;
-    let evaluated = evaluate_object_array_values(eg, receiver, &arguments, callee, plan)?;
+    let evaluated = evaluate_object_array_values(eg, receiver, &arguments, callee, plan, &[])?;
     commit_object_array_consumers(
         caller,
         caller_op_array,
@@ -3812,6 +4070,7 @@ unsafe fn try_execute_virtual_object_array_pipeline(
         &method_arguments,
         method_user,
         method_plan,
+        &[],
     )?;
     let next = commit_object_array_consumers(
         caller,
@@ -5178,6 +5437,8 @@ include!("execute/quick_kernel_model.rs");
 include!("execute/quick_array_access.rs");
 include!("execute/quick_kernel_plan.rs");
 include!("execute/quick_kernel_common.rs");
+include!("execute/quick_string_runtime.rs");
+include!("execute/quick_array_push_runtime.rs");
 include!("execute/quick_array_runtime.rs");
 include!("execute/quick_conditional_runtime.rs");
 include!("execute/quick_invariant_property_runtime.rs");

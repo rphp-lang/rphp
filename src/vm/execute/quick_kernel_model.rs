@@ -20,6 +20,36 @@ struct QuickLongConditionalKernel {
 
 #[derive(Clone, Copy)]
 #[cfg(feature = "quick-loops")]
+pub(super) struct QuickStringAppendLoopKernel {
+    header_lhs: u16,
+    header_rhs: QuickLongOperand,
+    header_condition_tmp: Option<u16>,
+    destination: u16,
+    source: QuickStringAppendSource,
+    post_value: u16,
+    post_result: Option<u16>,
+    post_resume_ip: usize,
+    body_target: QuickLongTarget,
+    exit_target: QuickLongTarget,
+}
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
+pub(super) struct QuickArrayPushLoopKernel {
+    header_lhs: u16,
+    header_rhs: QuickLongOperand,
+    header_condition_tmp: Option<u16>,
+    array: u16,
+    value: QuickLongOperand,
+    post_value: u16,
+    post_result: Option<u16>,
+    post_resume_ip: usize,
+    body_target: QuickLongTarget,
+    exit_target: QuickLongTarget,
+}
+
+#[derive(Clone, Copy)]
+#[cfg(feature = "quick-loops")]
 enum QuickLongConditionalBody {
     LessThan {
         lhs: u16,

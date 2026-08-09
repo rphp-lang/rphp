@@ -140,6 +140,21 @@ unsafe fn run_quick_long_ops_loop(
         mutable_strings[slot] = string;
     }
 
+    if let Some(kernel) = quick_string_append_loop_kernel(plan) {
+        let destination = mutable_strings[kernel.destination as usize];
+        debug_assert!(!destination.is_null());
+        return run_quick_string_append_loop(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            destination,
+            kernel,
+        );
+    }
+
     let mut mutable_arrays = [std::ptr::null_mut(); 64];
     let mut array_output_mask = plan.array_output_mask;
     while array_output_mask != 0 {
@@ -151,6 +166,21 @@ unsafe fn run_quick_long_ops_loop(
             return Ok(QuickLoopOutcome::GuardFailed);
         };
         mutable_arrays[slot] = array;
+    }
+
+    if let Some(kernel) = quick_array_push_loop_kernel(plan) {
+        let array = mutable_arrays[kernel.array as usize];
+        debug_assert!(!array.is_null());
+        return run_quick_array_push_loop(
+            eg,
+            frame,
+            op_array,
+            plan,
+            slot_base,
+            slots,
+            array,
+            kernel,
+        );
     }
 
     let array_kernel = quick_long_array_loop_kernel(plan);

@@ -1,5 +1,53 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+const QUICK_INDUCTION_CONST_CHUNK: i64 = 32;
+const QUICK_INDUCTION_CONST_TRIANGLE: i64 =
+    (QUICK_INDUCTION_CONST_CHUNK - 1) * QUICK_INDUCTION_CONST_CHUNK / 2;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct QuickInductionConstChunk {
+    induction: i64,
+    accumulator: i64,
+    last_term: i64,
+    last_increment_result: i64,
+}
+
+/// Fold one interrupt-sized arithmetic progression. Returning `None` keeps
+/// the canonical single-iteration path, which preserves the exact PHP
+/// overflow position for edge ranges and sign-crossing progressions.
+#[inline(always)]
+fn quick_induction_const_chunk(
+    induction: i64,
+    accumulator: i64,
+    bound: i64,
+    addend: i64,
+    increment_kind: QuickIncrementKind,
+) -> Option<QuickInductionConstChunk> {
+    let next_induction = induction.checked_add(QUICK_INDUCTION_CONST_CHUNK)?;
+    if next_induction > bound {
+        return None;
+    }
+    let first_term = induction.checked_add(addend)?;
+    let last_term = first_term.checked_add(QUICK_INDUCTION_CONST_CHUNK - 1)?;
+    if first_term < 0 && last_term > 0 {
+        return None;
+    }
+    let term_sum = first_term
+        .checked_mul(QUICK_INDUCTION_CONST_CHUNK)?
+        .checked_add(QUICK_INDUCTION_CONST_TRIANGLE)?;
+    let accumulator = accumulator.checked_add(term_sum)?;
+    let last_increment_result = match increment_kind {
+        QuickIncrementKind::Pre => next_induction,
+        QuickIncrementKind::Post => next_induction - 1,
+    };
+    Some(QuickInductionConstChunk {
+        induction: next_induction,
+        accumulator,
+        last_term,
+        last_increment_result,
+    })
+}
+
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
 unsafe fn run_quick_long_accumulate_loop(
@@ -550,6 +598,45 @@ unsafe fn run_quick_long_accumulate_loop(
             return Ok(QuickLoopOutcome::Completed);
         }
 
+        if plan.tail_guard.is_none()
+            && let QuickLongTerm::InductionPlusConst { addend, .. } = plan.term
+            && let Some(chunk) = quick_induction_const_chunk(
+                induction,
+                accumulator,
+                bound,
+                addend,
+                plan.increment_kind,
+            )
+        {
+            induction = chunk.induction;
+            accumulator = chunk.accumulator;
+            last_term = chunk.last_term;
+            last_increment_result = chunk.last_increment_result;
+            completed_iteration = true;
+            iterations += QUICK_INDUCTION_CONST_CHUNK as u64;
+
+            if eg.vm_interrupt.load(Ordering::Relaxed) {
+                Value::write_long(induction_ptr, induction);
+                Value::write_long(accumulator_ptr, accumulator);
+                if let Some(ptr) = condition_ptr {
+                    Value::write_bool(ptr, true);
+                }
+                if let Some(ptr) = term_ptr {
+                    Value::write_long(ptr, last_term);
+                }
+                if let Some(ptr) = term_destination_ptr {
+                    Value::write_long(ptr, last_term);
+                }
+                Value::write_long(sum_ptr, accumulator);
+                if let Some(ptr) = increment_ptr {
+                    Value::write_long(ptr, last_increment_result);
+                }
+                (*frame).opline = op_array.instructions.as_ptr().add(plan.header_ip);
+                handle_interrupt(eg)?;
+            }
+            continue;
+        }
+
         let term = match &plan.term {
             QuickLongTerm::Induction => induction,
             QuickLongTerm::InductionPlusConst {
@@ -932,5 +1019,46 @@ unsafe fn run_quick_long_accumulate_loop(
             );
             handle_interrupt(eg)?;
         }
+    }
+}
+
+#[cfg(test)]
+mod quick_induction_const_chunk_tests {
+    use super::{
+        QUICK_INDUCTION_CONST_CHUNK, QuickIncrementKind, quick_induction_const_chunk,
+    };
+
+    #[test]
+    fn folds_one_interrupt_sized_positive_progression() {
+        let post = quick_induction_const_chunk(0, 0, 100, 1, QuickIncrementKind::Post)
+            .expect("positive progression");
+        assert_eq!(post.induction, QUICK_INDUCTION_CONST_CHUNK);
+        assert_eq!(post.accumulator, 528);
+        assert_eq!(post.last_term, 32);
+        assert_eq!(post.last_increment_result, 31);
+
+        let pre = quick_induction_const_chunk(0, 0, 100, 1, QuickIncrementKind::Pre)
+            .expect("positive progression");
+        assert_eq!(pre.last_increment_result, 32);
+    }
+
+    #[test]
+    fn leaves_short_sign_crossing_and_overflow_ranges_canonical() {
+        assert!(
+            quick_induction_const_chunk(0, 0, 31, 1, QuickIncrementKind::Post).is_none()
+        );
+        assert!(
+            quick_induction_const_chunk(-16, 0, 100, 0, QuickIncrementKind::Post).is_none()
+        );
+        assert!(
+            quick_induction_const_chunk(
+                i64::MAX - 31,
+                0,
+                i64::MAX,
+                1,
+                QuickIncrementKind::Post,
+            )
+            .is_none()
+        );
     }
 }

@@ -1,5 +1,197 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+/// Select the smallest closed String-append region. The kernel is structural:
+/// it accepts either a literal or an invariant String slot, and deliberately
+/// leaves every loop with additional body operations in the general typed
+/// dispatcher.
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+pub(super) fn quick_string_append_loop_kernel(
+    plan: &QuickLongOpsLoop,
+) -> Option<QuickStringAppendLoopKernel> {
+    if plan.entry_op != 0 || plan.ops.len() != 3 {
+        return None;
+    }
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match plan.ops[0] {
+        QuickLongOp::BranchUnlessLt {
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
+            ..
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    let (destination, source, append_next_target) = match plan.ops[1] {
+        QuickLongOp::StringAppend {
+            destination,
+            source,
+            next_target,
+            ..
+        } => (destination, source, next_target),
+        _ => return None,
+    };
+    let (
+        post_value,
+        post_result,
+        post_condition_lhs,
+        post_condition_rhs,
+        post_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match plan.ops[2] {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+
+    if header_next_target.op_index() != Some(1)
+        || append_next_target.op_index() != Some(2)
+        || body_target.op_index() != Some(1)
+        || header_false_target != exit_target
+        || header_lhs != post_condition_lhs
+        || header_rhs != post_condition_rhs
+        || header_condition_tmp != post_condition_tmp
+        || plan.string_append_mask != 1u64.checked_shl(u32::from(destination))?
+    {
+        return None;
+    }
+
+    Some(QuickStringAppendLoopKernel {
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        destination,
+        source,
+        post_value,
+        post_result,
+        post_resume_ip,
+        body_target,
+        exit_target,
+    })
+}
+
+/// Select a closed loop whose sole body operation appends one Long to an
+/// array. COW uniqueness remains a runtime guard; richer mutation bodies stay
+/// in the general typed dispatcher.
+#[inline(never)]
+#[cfg(feature = "quick-loops")]
+pub(super) fn quick_array_push_loop_kernel(
+    plan: &QuickLongOpsLoop,
+) -> Option<QuickArrayPushLoopKernel> {
+    if plan.entry_op != 0 || plan.ops.len() != 3 {
+        return None;
+    }
+    let (
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        header_false_target,
+        header_next_target,
+    ) = match plan.ops[0] {
+        QuickLongOp::BranchUnlessLt {
+            lhs,
+            rhs,
+            condition_tmp,
+            false_target,
+            next_target,
+            ..
+        } => (lhs, rhs, condition_tmp, false_target, next_target),
+        _ => return None,
+    };
+    let (array, value, push_next_target) = match plan.ops[1] {
+        QuickLongOp::ArrayPushLong {
+            array,
+            value,
+            next_target,
+            ..
+        } => (array, value, next_target),
+        _ => return None,
+    };
+    let (
+        post_value,
+        post_result,
+        post_condition_lhs,
+        post_condition_rhs,
+        post_condition_tmp,
+        body_target,
+        exit_target,
+        post_resume_ip,
+    ) = match plan.ops[2] {
+        QuickLongOp::PostIncLoopLt {
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        } => (
+            value,
+            result,
+            condition_lhs,
+            condition_rhs,
+            condition_tmp,
+            body_target,
+            exit_target,
+            resume_ip,
+        ),
+        _ => return None,
+    };
+
+    if header_next_target.op_index() != Some(1)
+        || push_next_target.op_index() != Some(2)
+        || body_target.op_index() != Some(1)
+        || header_false_target != exit_target
+        || header_lhs != post_condition_lhs
+        || header_rhs != post_condition_rhs
+        || header_condition_tmp != post_condition_tmp
+        || plan.array_output_mask != 1u64.checked_shl(u32::from(array))?
+        || plan.structural_array_output_mask != plan.array_output_mask
+    {
+        return None;
+    }
+
+    Some(QuickArrayPushLoopKernel {
+        header_lhs,
+        header_rhs,
+        header_condition_tmp,
+        array,
+        value,
+        post_value,
+        post_result,
+        post_resume_ip,
+        body_target,
+        exit_target,
+    })
+}
+
 #[cfg(feature = "quick-loops")]
 fn quick_long_array_prefix_op(
     operation: QuickLongOp,

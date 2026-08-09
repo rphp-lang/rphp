@@ -13,6 +13,59 @@ struct QuickResolvedVirtualPipeline {
     method_target: *const FunctionCommon,
     method_user: *const UserFunction,
     method_plan: *const ObjectArrayFunctionPlan,
+    nested_calls: [ResolvedObjectArrayCall; 8],
+    nested_call_count: u8,
+}
+
+/// Pre-resolve nested calls whose receiver belongs to the invariant service
+/// object. ObjectArrayFunctionPlan contains no writes, so these receiver and
+/// dispatch guards remain valid for the lifetime of the active quick region.
+#[cfg(feature = "quick-loops")]
+unsafe fn resolve_quick_object_array_calls(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    owner: &UserFunction,
+    plan: &ObjectArrayFunctionPlan,
+) -> Option<([ResolvedObjectArrayCall; 8], u8)> {
+    let mut resolved = [ResolvedObjectArrayCall::EMPTY; 8];
+    let mut resolved_count = 0usize;
+    let no_arguments = [ObjectLongArgument::None; 8];
+
+    for operation in plan.operations.iter() {
+        let ObjectArrayLongOp::Call(call) = operation else {
+            continue;
+        };
+        let call_receiver = match call.receiver {
+            ObjectArraySource::Receiver => receiver as *const Value,
+            ObjectArraySource::Literal(literal) => {
+                owner.op_array.literals.get(literal as usize)? as *const Value
+            }
+            ObjectArraySource::Property {
+                object: ObjectLongObjectSource::Receiver,
+                cache_ip,
+            } => match object_array_property(
+                owner,
+                receiver,
+                &no_arguments,
+                ObjectLongObjectSource::Receiver,
+                cache_ip,
+            )? {
+                ObjectArrayResolved::Borrowed(pointer) => pointer,
+                ObjectArrayResolved::Long(_) | ObjectArrayResolved::Virtual(_) => return None,
+            },
+            ObjectArraySource::Argument(_)
+            | ObjectArraySource::LongSlot(_)
+            | ObjectArraySource::Property {
+                object: ObjectLongObjectSource::Argument(_),
+                ..
+            } => return None,
+        };
+        *resolved.get_mut(resolved_count)? =
+            resolve_object_array_call(eg, owner, call_receiver, call)?;
+        resolved_count += 1;
+    }
+
+    Some((resolved, resolved_count as u8))
 }
 
 /// Resolve loop-invariant class, signature, method and declared-property
@@ -241,6 +294,8 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
     {
         return None;
     }
+    let (nested_calls, nested_call_count) =
+        resolve_quick_object_array_calls(eg, method_receiver, method_user, method_plan)?;
 
     Some(QuickResolvedVirtualPipeline {
         class_id: new_cache.class_id,
@@ -253,6 +308,8 @@ unsafe fn resolve_quick_virtual_object_array_pipeline(
         method_target: method_cache.func,
         method_user,
         method_plan,
+        nested_calls,
+        nested_call_count,
     })
 }
 
@@ -305,6 +362,7 @@ unsafe fn try_execute_resolved_quick_virtual_pipeline(
         &method_arguments,
         &*resolved.method_user,
         &*resolved.method_plan,
+        &resolved.nested_calls[..resolved.nested_call_count as usize],
     )?;
 
     let mut destinations = [0u16; 4];

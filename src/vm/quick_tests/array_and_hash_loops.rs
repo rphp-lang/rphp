@@ -171,6 +171,32 @@ for ($i = 0; $i < 100; $i++) {
                     | plan.array_input_mask),
             0
         );
+        #[cfg(feature = "quick-loops")]
+        assert!(crate::vm::execute::quick_array_push_loop_kernel(&plan).is_some());
+    }
+
+    #[test]
+    fn leaves_multi_operation_array_push_loops_in_typed_dispatch() {
+        let plan = long_ops_plan(
+            "<?php
+$values = [];
+for ($i = 0; $i < 100; $i++) {
+    $values[] = $i;
+    $values[] = $i;
+}
+",
+        );
+        assert!(matches!(
+            plan.ops.as_slice(),
+            [
+                QuickLongOp::BranchUnlessLt { .. },
+                QuickLongOp::ArrayPushLong { .. },
+                QuickLongOp::ArrayPushLong { .. },
+                QuickLongOp::PostIncLoopLt { .. },
+            ]
+        ));
+        #[cfg(feature = "quick-loops")]
+        assert!(crate::vm::execute::quick_array_push_loop_kernel(&plan).is_none());
     }
 
     #[test]
@@ -275,7 +301,33 @@ for ($i = 0; $i < 100; $i++) {{
             ));
             assert_ne!(plan.string_append_mask, 0);
             assert_eq!(plan.string_append_mask & plan.string_input_mask, 0);
+            #[cfg(feature = "quick-loops")]
+            assert!(crate::vm::execute::quick_string_append_loop_kernel(&plan).is_some());
         }
+    }
+
+    #[test]
+    fn leaves_multi_operation_string_append_loops_in_typed_dispatch() {
+        let plan = long_ops_plan(
+            "<?php
+$value = '';
+for ($i = 0; $i < 100; $i++) {
+    $value .= 'x';
+    $value .= 'y';
+}
+",
+        );
+        assert!(matches!(
+            plan.ops.as_slice(),
+            [
+                QuickLongOp::BranchUnlessLt { .. },
+                QuickLongOp::StringAppend { .. },
+                QuickLongOp::StringAppend { .. },
+                QuickLongOp::PostIncLoopLt { .. },
+            ]
+        ));
+        #[cfg(feature = "quick-loops")]
+        assert!(crate::vm::execute::quick_string_append_loop_kernel(&plan).is_none());
     }
 
     #[test]

@@ -1142,6 +1142,44 @@ and `bccc63469e4967ddf5a37cf6aa37f12399108446fac69d9a788b2e4d2c2dc796`.
 The next stream slices may add `php://temp`, line-oriented reads and metadata,
 but must retain this standard-library-first ownership boundary.
 
+### `php://temp` spill and no-JIT admission checkpoint (2026-08-10)
+
+The generic request-owned registry now supports bounded `php://temp` streams
+using only `std`. A stream starts as `Cursor<Vec<u8>>`, defaults to a 2 MiB
+memory limit and accepts `php://temp/maxmemory:N`. The first write that would
+cross the limit copies the complete logical contents into a unique temporary
+file opened with owner-only permissions, restores the cursor and then applies
+the write. The file is unlinked by `fclose()`, request shutdown or backend
+drop; a stream that stays below its limit never touches disk. Seek, tell, EOF,
+read, write and flush retain one API across both representations.
+
+The performance admission work remains dependency-free. Exact String append
+and packed-array push loop kernels bypass general typed dispatch. A checked
+32-iteration induction-plus-constant fold shares the existing interrupt
+cadence and rejects any range whose overflow behavior cannot be proven.
+Virtual object-array regions retain invariant nested dispatch contracts at
+entry while rechecking varying values, and tiny scalar-plan ranges execute as
+one validated unrolled block. Every uncertain guard still exits before the
+corresponding canonical PHP operation is skipped or replayed.
+
+Against `178ef41`, the final fresh-build runtime gate records
+-95.649%/-18.367%/-57.683%/-1.716%/-1.326% on ARM64 and
+-96.604%/-12.450%/-59.513%/-10.019%/-2.207% on pinned x86-64 for scalar,
+array, String, order and ledger. Coroutine controls remain within +1% at
++0.367%/-0.841%/-0.741% and -1.869%/-0.086%/+0.343% respectively. Both hosts
+pass 174 no-default library tests, 272/297 all-feature library tests, eight
+stream scenarios, four corpus scenarios and all-target compilation. No Cargo
+file or dependency changed. Clean ARM64/x86-64 default release SHA-256 values
+are `859e22b8a1fc8d52a3b495b037d68ee347ffe1c560dd5a391f722d4f08c03e2f`
+and `83043325ba2545a2c6517bdaceb4d7cbc368c26a80b649dcb4e773dafb85dab4`;
+the matching coroutine integration values are
+`40dc251671dca21c978d25cf17978080be51d3cc8f74d6ff2c5d5a6b80a21fac`
+and `8eb5a0592f9c5b1fc888d925fb26cf13717b8a3825929bac8818cd3ffe11c2c1`.
+
+The next stream boundary is line-oriented input and metadata. Final-alias
+backend release before request shutdown remains a separate resource-lifetime
+decision rather than being conflated with stream I/O compatibility.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
