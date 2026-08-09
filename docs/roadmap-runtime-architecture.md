@@ -605,6 +605,21 @@ This checkpoint is the inbound server foundation, not a generic PHP stream
 claim. Non-blocking outbound connect, explicit descriptor lifecycle APIs and
 broader PHP stream adaptation remain later Phase 5 slices.
 
+An attempted explicit `coroutine_stream_close(descriptor)` slice was rejected
+before admission. Its idle-only contract was correct: closing one stream end
+delivered EOF to its peer, listener close allowed immediate rebinding, and a
+descriptor with queued or in-flight readiness waiters was rejected rather than
+falsely waking them. The implementation used only the standard library and
+passed the complete correctness matrices, but adding the handler repeatedly
+perturbed feature-binary layout. Two order-balanced 20-pair ARM64 checks of
+cold-module variants regressed the existing suspend/resume control by 3.99%
+and 6.23%, while channel and readiness controls remained flat or improved.
+The default executable hashes stayed exact and x86-64 did not reproduce the
+suspend loss, but the ARM64 result is sufficient to reject the slice. No close
+API or lifecycle source file remains. A future lifecycle design must first
+stabilize feature API/code placement or combine close with a broader adapter
+whose measured benefit justifies that one-time layout movement.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -6965,6 +6965,19 @@ metadata-normalized SHA-256 remains
 Non-blocking outbound connect, explicit descriptor lifecycle operations and
 generic PHP stream integration remain follow-up Phase 5 work.
 
+The first explicit descriptor-close candidate was deliberately rejected. It
+correctly released idle Unix streams and TCP listeners, propagated peer EOF,
+allowed listener rebinding and refused descriptors with live readiness
+waiters, all without a dependency. Correctness matrices passed and default
+binaries retained their exact hashes. However, two order-balanced 20-pair
+ARM64 gates of separately isolated cold variants moved the existing coroutine
+suspend/resume control by +3.99% and +6.23%; channel and readiness remained
+flat or improved, and x86-64 did not reproduce the suspend loss. The
+architecture cleanup did not remove the ARM64 code-layout sensitivity, so no
+candidate code remains. Explicit close should return only after feature API
+placement is stabilized or as part of a larger adapter with an independently
+measured payoff.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
