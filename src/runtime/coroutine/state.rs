@@ -26,6 +26,10 @@ pub(super) enum WaitReason {
     ChannelSend(u64),
     ChannelReceive(u64),
     Timer,
+    #[cfg(unix)]
+    IoRead(u64),
+    #[cfg(unix)]
+    IoWrite(u64),
 }
 
 pub(super) struct CoroutineStacks {

@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::borrow::Cow;
 use std::time::Duration;
 
 use super::scheduler::CoroutineScheduler;
@@ -237,6 +239,134 @@ fn coroutine_sleep(
     suspend_from_internal_call(caller, SuspendKind::Waiting)
 }
 
+#[cfg(unix)]
+fn coroutine_stream_pair(
+    _execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let scheduler = scheduler_ptr(eg)?;
+    let (first, second) = unsafe { (&mut *scheduler).create_stream_pair()? };
+    let mut streams = crate::value::PhpArray::with_packed_capacity(2);
+    streams.push(Value::long(first as i64));
+    streams.push(Value::long(second as i64));
+    write_result(return_value, Value::array(streams));
+    Ok(())
+}
+
+#[cfg(unix)]
+fn coroutine_wait_readable(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let stream = positive_argument(
+        unsafe { argument(execute_data, 0) },
+        "coroutine_wait_readable",
+        "stream id",
+    )?;
+    let caller = suspension_caller(execute_data)?;
+    let scheduler = scheduler_ptr(eg)?;
+    unsafe { (&mut *scheduler).wait_readable(stream)? };
+    write_result(return_value, Value::null());
+    suspend_from_internal_call(caller, SuspendKind::Waiting)
+}
+
+#[cfg(unix)]
+fn coroutine_wait_writable(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let stream = positive_argument(
+        unsafe { argument(execute_data, 0) },
+        "coroutine_wait_writable",
+        "stream id",
+    )?;
+    let caller = suspension_caller(execute_data)?;
+    let scheduler = scheduler_ptr(eg)?;
+    unsafe { (&mut *scheduler).wait_writable(stream)? };
+    write_result(return_value, Value::null());
+    suspend_from_internal_call(caller, SuspendKind::Waiting)
+}
+
+#[cfg(unix)]
+fn coroutine_stream_read(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    const MAX_READ_LENGTH: u64 = 8 * 1024 * 1024;
+
+    let stream = positive_argument(
+        unsafe { argument(execute_data, 0) },
+        "coroutine_stream_read",
+        "stream id",
+    )?;
+    let length = positive_argument(
+        unsafe { argument(execute_data, 1) },
+        "coroutine_stream_read",
+        "length",
+    )?;
+    if length > MAX_READ_LENGTH {
+        return Err(VmError::Fatal(format!(
+            "coroutine_stream_read length exceeds {} bytes",
+            MAX_READ_LENGTH
+        )));
+    }
+    let length = usize::try_from(length).map_err(|_| {
+        VmError::Fatal("coroutine_stream_read length exceeds the platform limit".into())
+    })?;
+    let scheduler = scheduler_ptr(eg)?;
+    let result = unsafe { (&mut *scheduler).read_stream(stream, length)? };
+    write_result(
+        return_value,
+        result.map_or_else(
+            || Value::bool(false),
+            |bytes| Value::string(bytes_to_php_string(&bytes)),
+        ),
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn coroutine_stream_write(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let stream = positive_argument(
+        unsafe { argument(execute_data, 0) },
+        "coroutine_stream_write",
+        "stream id",
+    )?;
+    let data = unsafe { argument(execute_data, 1) }
+        .as_str()
+        .ok_or_else(|| VmError::Fatal("coroutine_stream_write expects string data".into()))?;
+    let bytes = php_string_to_bytes(data);
+    let scheduler = scheduler_ptr(eg)?;
+    let result = unsafe { (&mut *scheduler).write_stream(stream, bytes.as_ref())? };
+    write_result(
+        return_value,
+        result.map_or_else(|| Value::bool(false), |written| Value::long(written as i64)),
+    );
+    Ok(())
+}
+
+#[cfg(unix)]
+fn bytes_to_php_string(bytes: &[u8]) -> String {
+    bytes.iter().map(|byte| *byte as char).collect()
+}
+
+#[cfg(unix)]
+fn php_string_to_bytes(value: &str) -> Cow<'_, [u8]> {
+    if value.is_ascii() {
+        Cow::Borrowed(value.as_bytes())
+    } else {
+        Cow::Owned(value.chars().map(|character| character as u8).collect())
+    }
+}
+
 fn positive_argument(value: &Value, function: &str, argument: &str) -> Result<u64, VmError> {
     value
         .as_long()
@@ -250,7 +380,15 @@ fn positive_argument(value: &Value, function: &str, argument: &str) -> Result<u6
 /// Registration itself is feature-gated, so a normal build neither links the
 /// runtime nor allocates its internal-function descriptors.
 pub fn register_api(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let definitions: [(&str, InternalFunctionHandler, u32, u32, &[&str]); 9] = [
+    type ApiDefinition = (
+        &'static str,
+        InternalFunctionHandler,
+        u32,
+        u32,
+        &'static [&'static str],
+    );
+
+    let mut definitions: Vec<ApiDefinition> = vec![
         ("coroutine_scope", coroutine_scope, 1, 1, &["callback"]),
         ("coroutine_spawn", coroutine_spawn, 1, 1, &["callback"]),
         ("coroutine_suspend", suspend, 0, 0, &[]),
@@ -267,6 +405,40 @@ pub fn register_api(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ("coroutine_receive", coroutine_receive, 1, 1, &["channel"]),
         ("coroutine_sleep", coroutine_sleep, 1, 1, &["milliseconds"]),
     ];
+    #[cfg(unix)]
+    let io_definitions: [ApiDefinition; 5] = [
+        ("coroutine_stream_pair", coroutine_stream_pair, 0, 0, &[]),
+        (
+            "coroutine_wait_readable",
+            coroutine_wait_readable,
+            1,
+            1,
+            &["stream"],
+        ),
+        (
+            "coroutine_wait_writable",
+            coroutine_wait_writable,
+            1,
+            1,
+            &["stream"],
+        ),
+        (
+            "coroutine_stream_read",
+            coroutine_stream_read,
+            2,
+            2,
+            &["stream", "length"],
+        ),
+        (
+            "coroutine_stream_write",
+            coroutine_stream_write,
+            2,
+            2,
+            &["stream", "data"],
+        ),
+    ];
+    #[cfg(unix)]
+    definitions.extend(io_definitions);
     let mut functions = Vec::with_capacity(definitions.len());
     for (name, handler, max_args, required_args, parameters) in definitions {
         let parameter_names = parameters

@@ -6863,9 +6863,38 @@ SHA-256
 after removing GNU build-id and symbol metadata, the x86-64 executable also
 matches at
 `0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
-Non-blocking OS readiness is the remaining work for this milestone;
-multi-threaded work stealing remains outside it and must not impose
-thread-safety costs on ordinary PHP execution.
+### Non-blocking coroutine I/O readiness checkpoint (2026-08-09)
+
+The second milestone-four slice adds scope-owned non-blocking Unix stream
+pairs and explicit readable/writable waits. Non-blocking reads return data or
+`false` for `WouldBlock`; writes return a possibly partial byte count or
+`false`. The initial adapter keeps descriptor lifetime inside the coroutine
+scope and deliberately does not claim generic PHP stream or TCP compatibility.
+
+The combined progress driver polls I/O only inside the feature-only scheduler,
+only blocks after runnable work is exhausted and uses the nearest logical
+timer as its timeout. Stable stream and FIFO waiter ordering plus a
+single-in-flight readiness guard preserve deterministic fairness. I/O,
+progress-driving and scope cleanup now live in separate scheduler modules.
+The platform call uses a small internal Darwin/Linux `poll(2)` binding, so no
+external library or new Cargo dependency is introduced.
+
+Four new PHP scenarios cover stream progress, ready-queue fairness, timer/I/O
+interaction and scope cancellation; two unit tests cover bytes and
+level-triggered waiter admission. Both complete all-feature/all-target host
+matrices pass. Across five warmed release runs, the ARM64 medians are 53.72 ns
+per suspend/resume cycle, 149.72 ns per bounded-channel value and 2,522.24 ns
+per stream-readiness round trip. Pinned x86-64 records 78.36 ns, 149.46 ns and
+4,357.96 ns respectively.
+
+The ordinary ARM64 binary remains byte-identical at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+The x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes and the
+metadata-normalized executable remains byte-identical at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+This completes the bounded single-threaded coroutine substrate; broader
+stream adapters continue in Phase 5, while multi-threaded work stealing stays
+outside it.
 
 ## Phase 5: compatibility breadth and production use
 

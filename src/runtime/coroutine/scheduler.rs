@@ -1,11 +1,19 @@
 mod channel;
+mod driver;
+#[cfg(unix)]
+mod io;
+mod lifecycle;
 mod readiness;
 
 use std::collections::HashMap;
+#[cfg(unix)]
+use std::collections::VecDeque;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use self::channel::{ChannelSet, ReceiveOutcome, SendOutcome};
+#[cfg(unix)]
+use self::io::{IoDirection, IoReady, IoSet, ReadOutcome, WriteOutcome};
 use self::readiness::Readiness;
 use super::state::{
     CoroutineContext, CoroutineEntry, CoroutineStackPool, CoroutineStatus, WaitReason,
@@ -23,6 +31,10 @@ pub(super) struct CoroutineScheduler {
     pool: CoroutineStackPool,
     channels: ChannelSet,
     readiness: Readiness,
+    #[cfg(unix)]
+    io: IoSet,
+    #[cfg(unix)]
+    io_ready: VecDeque<IoReady>,
 }
 
 impl CoroutineScheduler {
@@ -35,6 +47,10 @@ impl CoroutineScheduler {
             pool: CoroutineStackPool::default(),
             channels: ChannelSet::default(),
             readiness: Readiness::default(),
+            #[cfg(unix)]
+            io: IoSet::default(),
+            #[cfg(unix)]
+            io_ready: VecDeque::new(),
         }
     }
 
@@ -115,6 +131,61 @@ impl CoroutineScheduler {
         self.block_active(WaitReason::Timer)?;
         self.readiness.schedule_timer(task, deadline);
         Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(super) fn create_stream_pair(&mut self) -> Result<(u64, u64), VmError> {
+        self.io.create_pair()
+    }
+
+    #[cfg(unix)]
+    pub(super) fn wait_readable(&mut self, stream: u64) -> Result<(), VmError> {
+        self.wait_stream(stream, IoDirection::Readable)
+    }
+
+    #[cfg(unix)]
+    pub(super) fn wait_writable(&mut self, stream: u64) -> Result<(), VmError> {
+        self.wait_stream(stream, IoDirection::Writable)
+    }
+
+    #[cfg(unix)]
+    fn wait_stream(&mut self, stream: u64, direction: IoDirection) -> Result<(), VmError> {
+        let task = self.active_task(match direction {
+            IoDirection::Readable => "coroutine_wait_readable",
+            IoDirection::Writable => "coroutine_wait_writable",
+        })?;
+        self.io.ensure_stream(stream)?;
+        let reason = match direction {
+            IoDirection::Readable => WaitReason::IoRead(stream),
+            IoDirection::Writable => WaitReason::IoWrite(stream),
+        };
+        self.block_active(reason)?;
+        self.io.enqueue_waiter(stream, task, direction);
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    pub(super) fn read_stream(
+        &mut self,
+        stream: u64,
+        length: usize,
+    ) -> Result<Option<Vec<u8>>, VmError> {
+        match self.io.read(stream, length)? {
+            ReadOutcome::Data(bytes) => Ok(Some(bytes)),
+            ReadOutcome::WouldBlock => Ok(None),
+        }
+    }
+
+    #[cfg(unix)]
+    pub(super) fn write_stream(
+        &mut self,
+        stream: u64,
+        bytes: &[u8],
+    ) -> Result<Option<usize>, VmError> {
+        match self.io.write(stream, bytes)? {
+            WriteOutcome::Written(written) => Ok(Some(written)),
+            WriteOutcome::WouldBlock => Ok(None),
+        }
     }
 
     fn active_task(&self, operation: &str) -> Result<u64, VmError> {
@@ -202,6 +273,10 @@ impl CoroutineScheduler {
 
             if matches!(status, CoroutineStatus::Created | CoroutineStatus::Ready) {
                 scheduler.readiness.remove_ready(id);
+            }
+            #[cfg(unix)]
+            if status == CoroutineStatus::Ready {
+                scheduler.io.acknowledge_ready(id);
             }
 
             if (*context).state.stacks.is_none() {
@@ -328,102 +403,6 @@ impl CoroutineScheduler {
                 }
             }
         }
-    }
-
-    fn next_runnable(&mut self) -> Result<Option<u64>, VmError> {
-        loop {
-            self.promote_due_timers()?;
-            while let Some(task) = self.readiness.pop_ready() {
-                let Some(context) = self.contexts.get(&task) else {
-                    continue;
-                };
-                if matches!(
-                    context.as_ref().get_ref().status,
-                    CoroutineStatus::Created | CoroutineStatus::Ready
-                ) {
-                    return Ok(Some(task));
-                }
-            }
-
-            let Some(deadline) = self.readiness.next_deadline() else {
-                return Ok(None);
-            };
-            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
-        }
-    }
-
-    fn promote_due_timers(&mut self) -> Result<(), VmError> {
-        let mut due = Vec::new();
-        self.readiness.drain_due(Instant::now(), &mut due);
-        for task in due {
-            let is_waiting = self.contexts.get(&task).is_some_and(|context| {
-                let context = context.as_ref().get_ref();
-                context.status == CoroutineStatus::Waiting
-                    && context.wait_reason == Some(WaitReason::Timer)
-            });
-            if is_waiting {
-                self.wake_task(task, WaitReason::Timer)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub(super) fn finish_scope(&mut self, eg: &mut ExecutorGlobals) {
-        assert!(self.active.is_none());
-        for context in self.contexts.values_mut() {
-            let context = unsafe { context.as_mut().get_unchecked_mut() };
-            debug_assert!(context.parent.is_none_or(|parent| parent < context.id));
-            match context.status {
-                CoroutineStatus::Ready | CoroutineStatus::Suspended | CoroutineStatus::Waiting => {
-                    context.state.cleanup_frames();
-                    if let Some(stacks) = context.state.stacks.take() {
-                        self.pool.recycle(stacks);
-                    }
-                    context.wait_reason = None;
-                    context.status = CoroutineStatus::Cancelled;
-                }
-                CoroutineStatus::Created => {
-                    context.status = CoroutineStatus::Cancelled;
-                }
-                _ => {}
-            }
-        }
-
-        if eg.exception.is_none() {
-            let failed_id = self
-                .contexts
-                .iter()
-                .filter_map(|(id, context)| {
-                    let context = context.as_ref().get_ref();
-                    (context.status == CoroutineStatus::Failed && context.failure.is_some())
-                        .then_some(*id)
-                })
-                .min();
-            if let Some(context) = failed_id.and_then(|id| self.contexts.get_mut(&id)) {
-                let context = unsafe { context.as_mut().get_unchecked_mut() };
-                eg.exception = context.failure.take();
-                context.status = CoroutineStatus::Joined;
-            }
-        }
-    }
-}
-
-impl Drop for CoroutineScheduler {
-    fn drop(&mut self) {
-        assert!(
-            self.active.is_none(),
-            "coroutine scheduler dropped while a child is running"
-        );
-        assert!(
-            self.contexts.values().all(|context| !matches!(
-                context.as_ref().get_ref().status,
-                CoroutineStatus::Ready
-                    | CoroutineStatus::Running
-                    | CoroutineStatus::Suspended
-                    | CoroutineStatus::Waiting
-            )),
-            "coroutine scope dropped without cancelling live children"
-        );
     }
 }
 

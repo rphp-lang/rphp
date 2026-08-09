@@ -316,6 +316,109 @@ coroutine_scope(function () {
     assert_eq!(output, "root");
 }
 
+#[cfg(unix)]
+#[test]
+fn non_blocking_stream_read_waits_while_a_writer_task_makes_progress() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $streams = coroutine_stream_pair();
+    $reader = $streams[0];
+    $writer = $streams[1];
+
+    $readTask = coroutine_spawn(function () use ($reader) {
+        echo "A";
+        coroutine_wait_readable($reader);
+        echo coroutine_stream_read($reader, 64);
+        return "R";
+    });
+    $writeTask = coroutine_spawn(function () use ($writer) {
+        echo "B";
+        echo "C" . coroutine_stream_write($writer, "ready");
+    });
+
+    echo coroutine_join($readTask);
+    coroutine_join($writeTask);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "ABC5readyR");
+}
+
+#[cfg(unix)]
+#[test]
+fn writable_readiness_queues_behind_work_that_was_already_runnable() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $streams = coroutine_stream_pair();
+    $writer = $streams[1];
+    $waiter = coroutine_spawn(function () use ($writer) {
+        echo "A";
+        coroutine_wait_writable($writer);
+        echo "B";
+    });
+    $ready = coroutine_spawn(function () {
+        echo "C";
+    });
+
+    coroutine_join($waiter);
+    coroutine_join($ready);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "ACB");
+}
+
+#[cfg(unix)]
+#[test]
+fn timer_and_io_readiness_share_one_progress_loop() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $streams = coroutine_stream_pair();
+    $reader = $streams[0];
+    $writer = $streams[1];
+    $readTask = coroutine_spawn(function () use ($reader) {
+        echo "A";
+        coroutine_wait_readable($reader);
+        echo coroutine_stream_read($reader, 1);
+    });
+    $writeTask = coroutine_spawn(function () use ($writer) {
+        echo "B";
+        coroutine_sleep(5);
+        echo "C";
+        coroutine_stream_write($writer, "D");
+    });
+
+    coroutine_join($readTask);
+    coroutine_join($writeTask);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "ABCD");
+}
+
+#[cfg(unix)]
+#[test]
+fn leaving_scope_cancels_an_unjoined_io_waiter() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $streams = coroutine_stream_pair();
+    $reader = $streams[0];
+    $waiter = coroutine_spawn(function () use ($reader) {
+        coroutine_wait_readable($reader);
+        echo "unreachable";
+    });
+    coroutine_resume($waiter);
+    echo "root";
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "root");
+}
+
 #[test]
 #[ignore = "run explicitly in release mode as the PHP coroutine API benchmark"]
 fn benchmark_one_million_php_suspend_resume_cycles() {
@@ -396,4 +499,58 @@ coroutine_scope(function () {{
     assert_eq!(produced, ITERATIONS.to_string());
     assert_eq!(sum, expected_sum.to_string());
     assert!(ns_per_value < 20_000.0);
+}
+
+#[cfg(unix)]
+#[test]
+#[ignore = "run explicitly in release mode as the non-blocking I/O benchmark"]
+fn benchmark_stream_readiness_ping_pong() {
+    const ITERATIONS: u64 = 100_000;
+
+    let output = run(&format!(
+        r#"<?php
+coroutine_scope(function () {{
+    $streams = coroutine_stream_pair();
+    $pingStream = $streams[0];
+    $pongStream = $streams[1];
+    $ping = coroutine_spawn(function () use ($pingStream) {{
+        coroutine_stream_write($pingStream, "x");
+        for ($i = 0; $i < {ITERATIONS}; $i++) {{
+            coroutine_wait_readable($pingStream);
+            coroutine_stream_read($pingStream, 1);
+            if ($i + 1 < {ITERATIONS}) {{
+                coroutine_stream_write($pingStream, "x");
+            }}
+        }}
+        return {ITERATIONS};
+    }});
+    $pong = coroutine_spawn(function () use ($pongStream) {{
+        for ($i = 0; $i < {ITERATIONS}; $i++) {{
+            coroutine_wait_readable($pongStream);
+            coroutine_stream_read($pongStream, 1);
+            coroutine_stream_write($pongStream, "x");
+        }}
+        return {ITERATIONS};
+    }});
+
+    $started = hrtime(true);
+    $pingResult = coroutine_join($ping);
+    $pongResult = coroutine_join($pong);
+    echo (hrtime(true) - $started) . ":" . $pingResult . ":" . $pongResult;
+}});
+"#
+    ))
+    .unwrap();
+    let mut parts = output.split(':');
+    let elapsed = Duration::from_nanos(parts.next().unwrap().parse().unwrap());
+    let ping = parts.next().unwrap();
+    let pong = parts.next().unwrap();
+    let ns_per_round_trip = elapsed.as_nanos() as f64 / ITERATIONS as f64;
+    eprintln!(
+        "PHP stream readiness: {ITERATIONS} round trips in {elapsed:?} ({ns_per_round_trip:.2} ns/round trip)"
+    );
+
+    assert_eq!(ping, ITERATIONS.to_string());
+    assert_eq!(pong, ITERATIONS.to_string());
+    assert!(ns_per_round_trip < 100_000.0);
 }

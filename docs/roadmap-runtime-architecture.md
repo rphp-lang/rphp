@@ -487,9 +487,52 @@ after removing only GNU build-id and symbol metadata, x86-64 is likewise
 byte-identical at
 `0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
 
-Milestone 4b must connect OS readiness for non-blocking I/O without polling
-the ordinary executor or allowing a blocking syscall to stall runnable
-logical tasks. Multi-threaded scheduling remains outside this branch.
+### Milestone 4b non-blocking I/O readiness checkpoint (2026-08-09)
+
+Milestone four now also has a scope-owned Unix stream-pair foundation. The
+feature-only API adds `coroutine_stream_pair()`, explicit
+`coroutine_wait_readable(stream)` and `coroutine_wait_writable(stream)`
+suspension points, plus non-blocking `coroutine_stream_read(stream, length)`
+and `coroutine_stream_write(stream, data)`. Read and write return `false` for
+`WouldBlock`; writes may report a partial byte count, and reads are capped at
+8 MiB per call. The descriptors never escape as raw file descriptors and are
+closed with their lexical scope. This is intentionally the scheduler
+substrate, not yet a generic PHP stream or TCP compatibility layer.
+
+`scheduler/io.rs` owns descriptors, FIFO direction waiters and reusable poll
+buffers. A small internal Darwin/Linux `poll(2)` binding keeps this slice on
+the standard library and adds no external dependency. The scheduler samples
+OS readiness only inside a coroutine scope. It blocks in `poll` only after
+runnable work is exhausted and passes the nearest timer as its timeout, so an
+I/O wait cannot stall either an already-ready task or a timer. Deterministic
+stream ordering and one in-flight waiter per readiness edge prevent a
+level-triggered descriptor from overtaking earlier work or waking multiple
+readers for one available byte.
+
+The scheduler was split further while adding this policy: `driver.rs` owns the
+combined ready/timer/I/O progress loop and `lifecycle.rs` owns scope teardown,
+leaving the central scheduler focused on task transitions. Four new PHP
+scenarios prove reader/writer progress, runnable-before-I/O fairness, combined
+timer/I/O progress and cancellation of an unjoined I/O waiter. Two lower-level
+tests cover byte preservation and the single-in-flight readiness rule. The
+complete all-feature/all-target matrices pass on ARM64 and x86-64; the focused
+coroutine matrix contains seven unit tests and sixteen PHP scenarios, with
+three release benchmarks kept ignored during normal testing.
+
+Across five warmed release runs, ARM64 medians are 53.72 ns per PHP
+suspend/resume cycle, 149.72 ns per bounded-channel value and 2,522.24 ns per
+stream-readiness round trip. Pinned x86-64 medians are 78.36 ns, 149.46 ns and
+4,357.96 ns respectively. The default ARM64 executable remains byte-identical
+at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+The x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes and its
+metadata-normalized executable remains byte-identical at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+
+This completes the bounded single-threaded milestone-four substrate. Adapters
+for broader PHP streams and TCP belong to the compatibility phase; optional
+multi-threaded scheduling remains a separate decision and must not impose
+thread-safety costs on ordinary PHP execution.
 
 ### Performance gates
 
