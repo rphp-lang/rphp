@@ -6836,9 +6836,36 @@ x86 callback comparison against the intermediate regex commit is +1.70 percent,
 so future opt-in modules must continue treating ELF code layout as an explicit
 gate rather than assuming source-level separation is sufficient.
 
-The bounded branch now advances to channels and a readiness scheduler for
-timers and non-blocking I/O. Multi-threaded work stealing remains outside this
-milestone and must not impose thread-safety costs on ordinary PHP execution.
+### Bounded channels and timer readiness checkpoint (2026-08-09)
+
+The first milestone-four slice adds capacity-bounded FIFO channels and a FIFO
+ready queue with stable timer ordering. New feature-only PHP operations create
+a channel, send or receive a `mixed` value and sleep a logical child for a
+millisecond duration. Full sends and empty receives suspend without copying
+the frame chain; joins drive other ready tasks and wait on the nearest timer
+only after runnable work is exhausted. With no possible channel or timer
+progress, join reports a deterministic deadlock.
+
+PHP handlers were extracted to `runtime/coroutine/api.rs`, while channel state
+and readiness policy are isolated below the scheduler. Delayed channel
+delivery uses one feature-private frame-slot write that maintains heap cleanup
+metadata for dormant strings and arrays. Integration coverage proves
+backpressure, FIFO values, direct heap-value handoff, timer fairness, deadlock
+and cancellation; lower-level tests prove blocked-sender promotion and stable
+queue ordering.
+
+On ARM64, one million capacity-one producer/consumer values take 166.46 ns
+each, while the existing API suspend/resume control remains at 79.06 ns per
+cycle. Pinned x86-64 records 151.54 and 81.63 ns respectively. The default
+ARM64 release executable is still byte-identical to milestone three at
+SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`;
+after removing GNU build-id and symbol metadata, the x86-64 executable also
+matches at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+Non-blocking OS readiness is the remaining work for this milestone;
+multi-threaded work stealing remains outside it and must not impose
+thread-safety costs on ordinary PHP execution.
 
 ## Phase 5: compatibility breadth and production use
 

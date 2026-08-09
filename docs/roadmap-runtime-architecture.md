@@ -444,6 +444,53 @@ timers and non-blocking I/O. It must preserve the current lexical ownership,
 no-poll ordinary executor and single-threaded value contract; work stealing
 remains a separate decision.
 
+### Milestone 4a channel/readiness checkpoint (2026-08-09)
+
+The first half of milestone four adds bounded FIFO channels and timer
+readiness behind the existing non-default `coroutines` feature. The PHP API
+now includes `coroutine_channel(capacity)`, `coroutine_send(channel, value)`,
+`coroutine_receive(channel)` and `coroutine_sleep(milliseconds)`. A full
+channel suspends its sender, an empty channel suspends its receiver, and the
+oldest compatible waiter is resumed. Channel capacity must be positive; the
+scope root remains the scheduler driver, so potentially blocking send,
+receive and sleep calls are child operations.
+
+The source boundary was tightened before adding scheduling policy.
+`runtime/coroutine/api.rs` now owns all PHP handlers and descriptor
+registration, while the scheduler delegates channel queues and readiness to
+`scheduler/channel.rs` and `scheduler/readiness.rs`. `CoroutineContext` records
+an explicit wait reason separately from runnable state. The ready queue is
+FIFO, equal-deadline timers use insertion order, and direct resume removes its
+queued entry so repeated wake/resume cycles cannot accumulate stale work.
+
+A blocked receive retains the dormant caller frame and result slot. Direct
+handoff later writes through one feature-private VM helper that updates the
+canonical heap-slot bitmap, so strings, arrays and other owned values retain
+normal frame-cleanup behavior. Scope teardown cancels channel and timer
+waiters before their frames are released. Joining a waiting task drives other
+runnable work, sleeps the executor thread only when no logical task is ready
+and a timer is pending, and reports a deterministic deadlock when neither a
+ready task nor a future timer can make progress.
+
+Five new PHP integration scenarios cover bounded backpressure/FIFO order,
+heap-value handoff to an already waiting receiver, runnable-before-timer
+ordering, channel deadlock and scope cancellation of a waiter. Dedicated unit
+tests cover sender promotion, ready FIFO behavior, equal-deadline timer order
+and removal of directly resumed work. On the ARM64 reference host, the
+existing million-cycle API benchmark remains at 79.06 ns per suspend/resume;
+the new capacity-one producer/consumer benchmark moves one million values at
+166.46 ns per value. Pinned x86-64 records 81.63 ns per suspend/resume and
+151.54 ns per channel value. The ordinary ARM64 release binary remains
+byte-identical to the milestone-three checkpoint at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`;
+after removing only GNU build-id and symbol metadata, x86-64 is likewise
+byte-identical at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+
+Milestone 4b must connect OS readiness for non-blocking I/O without polling
+the ordinary executor or allowing a blocking syscall to stall runnable
+logical tasks. Multi-threaded scheduling remains outside this branch.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

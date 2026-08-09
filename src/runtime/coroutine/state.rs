@@ -11,12 +11,21 @@ use crate::vm::stack::VmStack;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum CoroutineStatus {
     Created,
+    Ready,
     Running,
     Suspended,
+    Waiting,
     Completed,
     Failed,
     Joined,
     Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum WaitReason {
+    ChannelSend(u64),
+    ChannelReceive(u64),
+    Timer,
 }
 
 pub(super) struct CoroutineStacks {
@@ -218,6 +227,7 @@ pub(super) struct CoroutineContext {
     pub(super) result: Value,
     pub(super) failure: Option<Value>,
     pub(super) boundary_execute_data: *mut ExecuteData,
+    pub(super) wait_reason: Option<WaitReason>,
     _pinned: PhantomPinned,
 }
 
@@ -232,6 +242,7 @@ impl CoroutineContext {
             result: Value::null(),
             failure: None,
             boundary_execute_data: std::ptr::null_mut(),
+            wait_reason: None,
             _pinned: PhantomPinned,
         }
     }
@@ -242,7 +253,10 @@ impl Drop for CoroutineContext {
         assert!(
             !matches!(
                 self.status,
-                CoroutineStatus::Running | CoroutineStatus::Suspended
+                CoroutineStatus::Ready
+                    | CoroutineStatus::Running
+                    | CoroutineStatus::Suspended
+                    | CoroutineStatus::Waiting
             ),
             "a live coroutine must be joined or cancelled by its owning scope"
         );

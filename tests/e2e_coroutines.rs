@@ -205,6 +205,118 @@ coroutine_scope(function () {
 }
 
 #[test]
+fn bounded_channel_applies_backpressure_and_preserves_fifo_values() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $channel = coroutine_channel(1);
+    $producer = coroutine_spawn(function () use ($channel) {
+        echo "P";
+        coroutine_send($channel, "A");
+        echo "1";
+        coroutine_send($channel, "B");
+        echo "2";
+        return "producer";
+    });
+    $consumer = coroutine_spawn(function () use ($channel) {
+        echo coroutine_receive($channel);
+        echo coroutine_receive($channel);
+        return "consumer";
+    });
+
+    echo coroutine_join($producer);
+    echo coroutine_join($consumer);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "P1AB2producerconsumer");
+}
+
+#[test]
+fn channel_can_deliver_a_heap_value_to_an_already_waiting_receiver() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $channel = coroutine_channel(1);
+    $receiver = coroutine_spawn(function () use ($channel) {
+        $value = coroutine_receive($channel);
+        echo $value["message"];
+        return $value["message"];
+    });
+    $sender = coroutine_spawn(function () use ($channel) {
+        coroutine_send($channel, ["message" => "ready"]);
+        echo "S";
+    });
+
+    echo ":" . coroutine_join($receiver);
+    coroutine_join($sender);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "Sready:ready");
+}
+
+#[test]
+fn timer_wait_runs_ready_tasks_before_sleeping_the_executor_thread() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $sleeper = coroutine_spawn(function () {
+        echo "A";
+        coroutine_sleep(5);
+        echo "C";
+    });
+    $ready = coroutine_spawn(function () {
+        echo "B";
+    });
+
+    coroutine_join($sleeper);
+    coroutine_join($ready);
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "ABC");
+}
+
+#[test]
+fn joining_an_unresolvable_channel_wait_reports_deadlock() {
+    let error = run(r#"<?php
+coroutine_scope(function () {
+    $channel = coroutine_channel(1);
+    $receiver = coroutine_spawn(function () use ($channel) {
+        return coroutine_receive($channel);
+    });
+    coroutine_join($receiver);
+});
+"#)
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        execute::VmError::Fatal(message)
+            if message == "coroutine deadlock while joining task 1"
+    ));
+}
+
+#[test]
+fn leaving_scope_cancels_an_unjoined_channel_waiter() {
+    let output = run(r#"<?php
+coroutine_scope(function () {
+    $channel = coroutine_channel(1);
+    $receiver = coroutine_spawn(function () use ($channel) {
+        coroutine_receive($channel);
+        echo "unreachable";
+    });
+    coroutine_resume($receiver);
+    echo "root";
+});
+"#)
+    .unwrap();
+
+    assert_eq!(output, "root");
+}
+
+#[test]
 #[ignore = "run explicitly in release mode as the PHP coroutine API benchmark"]
 fn benchmark_one_million_php_suspend_resume_cycles() {
     const ITERATIONS: u64 = 1_000_000;
@@ -238,4 +350,50 @@ coroutine_scope(function () {{
 
     assert_eq!(result, ITERATIONS.to_string());
     assert!(ns_per_cycle < 5_000.0);
+}
+
+#[test]
+#[ignore = "run explicitly in release mode as the bounded-channel benchmark"]
+fn benchmark_one_million_bounded_channel_values() {
+    const ITERATIONS: u64 = 1_000_000;
+    let expected_sum = ITERATIONS * (ITERATIONS - 1) / 2;
+
+    let output = run(&format!(
+        r#"<?php
+coroutine_scope(function () {{
+    $channel = coroutine_channel(1);
+    $producer = coroutine_spawn(function () use ($channel) {{
+        for ($i = 0; $i < {ITERATIONS}; $i++) {{
+            coroutine_send($channel, $i);
+        }}
+        return {ITERATIONS};
+    }});
+    $consumer = coroutine_spawn(function () use ($channel) {{
+        $sum = 0;
+        for ($i = 0; $i < {ITERATIONS}; $i++) {{
+            $sum += coroutine_receive($channel);
+        }}
+        return $sum;
+    }});
+
+    $started = hrtime(true);
+    $produced = coroutine_join($producer);
+    $sum = coroutine_join($consumer);
+    echo (hrtime(true) - $started) . ":" . $produced . ":" . $sum;
+}});
+"#
+    ))
+    .unwrap();
+    let mut parts = output.split(':');
+    let elapsed = Duration::from_nanos(parts.next().unwrap().parse().unwrap());
+    let produced = parts.next().unwrap();
+    let sum = parts.next().unwrap();
+    let ns_per_value = elapsed.as_nanos() as f64 / ITERATIONS as f64;
+    eprintln!(
+        "PHP bounded channel: {ITERATIONS} values in {elapsed:?} ({ns_per_value:.2} ns/value)"
+    );
+
+    assert_eq!(produced, ITERATIONS.to_string());
+    assert_eq!(sum, expected_sum.to_string());
+    assert!(ns_per_value < 20_000.0);
 }

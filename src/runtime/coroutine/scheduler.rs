@@ -1,12 +1,19 @@
+mod channel;
+mod readiness;
+
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::time::{Duration, Instant};
 
+use self::channel::{ChannelSet, ReceiveOutcome, SendOutcome};
+use self::readiness::Readiness;
 use super::state::{
-    CoroutineContext, CoroutineEntry, CoroutineStackPool, CoroutineStatus, initialize_entry_frame,
+    CoroutineContext, CoroutineEntry, CoroutineStackPool, CoroutineStatus, WaitReason,
+    initialize_entry_frame,
 };
 use crate::runtime::ExecutorGlobals;
 use crate::value::Value;
-use crate::vm::execute::{VmError, execute_coroutine_frame};
+use crate::vm::execute::{VmError, execute_coroutine_frame, write_coroutine_result};
 
 pub(super) struct CoroutineScheduler {
     executor: *mut ExecutorGlobals,
@@ -14,6 +21,8 @@ pub(super) struct CoroutineScheduler {
     pub(super) active: Option<u64>,
     contexts: HashMap<u64, Pin<Box<CoroutineContext>>>,
     pool: CoroutineStackPool,
+    channels: ChannelSet,
+    readiness: Readiness,
 }
 
 impl CoroutineScheduler {
@@ -24,6 +33,8 @@ impl CoroutineScheduler {
             active: None,
             contexts: HashMap::new(),
             pool: CoroutineStackPool::default(),
+            channels: ChannelSet::default(),
+            readiness: Readiness::default(),
         }
     }
 
@@ -51,7 +62,102 @@ impl CoroutineScheduler {
         let parent = self.active;
         self.contexts
             .insert(id, Box::pin(CoroutineContext::new(id, parent, entry)));
+        self.readiness.enqueue(id);
         Ok(id)
+    }
+
+    pub(super) fn create_channel(&mut self, capacity: usize) -> Result<u64, VmError> {
+        self.channels.create(capacity)
+    }
+
+    pub(super) fn send(&mut self, channel: u64, value: Value) -> Result<bool, VmError> {
+        let task = self.active_task("coroutine_send")?;
+        match self.channels.send(channel, task, value)? {
+            SendOutcome::Complete => Ok(false),
+            SendOutcome::Blocked => {
+                self.block_active(WaitReason::ChannelSend(channel))?;
+                Ok(true)
+            }
+            SendOutcome::WakeReceiver { waiter, value } => {
+                unsafe { write_coroutine_result(waiter.frame, waiter.return_value, value) };
+                self.wake_task(waiter.task, WaitReason::ChannelReceive(channel))?;
+                Ok(false)
+            }
+        }
+    }
+
+    pub(super) fn receive(
+        &mut self,
+        channel: u64,
+        frame: *mut crate::vm::frame::ExecuteData,
+        return_value: *mut Value,
+    ) -> Result<Option<Value>, VmError> {
+        let task = self.active_task("coroutine_receive")?;
+        match self.channels.receive(channel, task, frame, return_value)? {
+            ReceiveOutcome::Ready { value, wake_sender } => {
+                if let Some(sender) = wake_sender {
+                    self.wake_task(sender, WaitReason::ChannelSend(channel))?;
+                }
+                Ok(Some(value))
+            }
+            ReceiveOutcome::Blocked => {
+                self.block_active(WaitReason::ChannelReceive(channel))?;
+                Ok(None)
+            }
+        }
+    }
+
+    pub(super) fn sleep(&mut self, duration: Duration) -> Result<(), VmError> {
+        let task = self.active_task("coroutine_sleep")?;
+        let deadline = Instant::now()
+            .checked_add(duration)
+            .ok_or_else(|| VmError::Fatal("coroutine_sleep duration is too large".into()))?;
+        self.block_active(WaitReason::Timer)?;
+        self.readiness.schedule_timer(task, deadline);
+        Ok(())
+    }
+
+    fn active_task(&self, operation: &str) -> Result<u64, VmError> {
+        self.active.ok_or_else(|| {
+            VmError::Fatal(format!(
+                "{} can only be called by a running child",
+                operation
+            ))
+        })
+    }
+
+    fn block_active(&mut self, reason: WaitReason) -> Result<(), VmError> {
+        let task = self.active_task("coroutine wait")?;
+        let context = self.context_ptr(task)?;
+        unsafe {
+            if (*context).status != CoroutineStatus::Running || (*context).wait_reason.is_some() {
+                return Err(VmError::Fatal(format!(
+                    "coroutine {} cannot enter wait state from {:?}",
+                    task,
+                    (*context).status
+                )));
+            }
+            (*context).wait_reason = Some(reason);
+        }
+        Ok(())
+    }
+
+    fn wake_task(&mut self, task: u64, expected: WaitReason) -> Result<(), VmError> {
+        let context = self.context_ptr(task)?;
+        unsafe {
+            if (*context).status != CoroutineStatus::Waiting
+                || (*context).wait_reason != Some(expected)
+            {
+                return Err(VmError::Fatal(format!(
+                    "coroutine {} has inconsistent readiness state",
+                    task
+                )));
+            }
+            (*context).wait_reason = None;
+            (*context).status = CoroutineStatus::Ready;
+        }
+        self.readiness.enqueue(task);
+        Ok(())
     }
 
     fn context_ptr(&mut self, id: u64) -> Result<*mut CoroutineContext, VmError> {
@@ -80,9 +186,10 @@ impl CoroutineScheduler {
             let status = (*context).status;
             if !matches!(
                 status,
-                CoroutineStatus::Created | CoroutineStatus::Suspended
+                CoroutineStatus::Created | CoroutineStatus::Ready | CoroutineStatus::Suspended
             ) {
                 return match status {
+                    CoroutineStatus::Waiting => Ok(true),
                     CoroutineStatus::Completed
                     | CoroutineStatus::Failed
                     | CoroutineStatus::Joined => Ok(false),
@@ -91,6 +198,10 @@ impl CoroutineScheduler {
                         id, status
                     ))),
                 };
+            }
+
+            if matches!(status, CoroutineStatus::Created | CoroutineStatus::Ready) {
+                scheduler.readiness.remove_ready(id);
             }
 
             if (*context).state.stacks.is_none() {
@@ -118,10 +229,21 @@ impl CoroutineScheduler {
             (*context).state.exchange(eg);
             scheduler.active = None;
 
-            if super::take_suspend_request()
-                && matches!(&execution, Err(VmError::Fatal(message)) if message.is_empty())
-            {
-                (*context).status = CoroutineStatus::Suspended;
+            if let Some(kind) = super::take_suspend_request() {
+                assert!(
+                    matches!(&execution, Err(VmError::Fatal(message)) if message.is_empty()),
+                    "coroutine suspend signal must be the empty internal fatal sidecar"
+                );
+                (*context).status = match kind {
+                    super::SuspendKind::Manual => {
+                        assert!((*context).wait_reason.is_none());
+                        CoroutineStatus::Suspended
+                    }
+                    super::SuspendKind::Waiting => {
+                        assert!((*context).wait_reason.is_some());
+                        CoroutineStatus::Waiting
+                    }
+                };
                 return Ok(true);
             }
 
@@ -161,8 +283,18 @@ impl CoroutineScheduler {
         loop {
             let status = unsafe { (*(&mut *scheduler).context_ptr(id)?).status };
             match status {
-                CoroutineStatus::Created | CoroutineStatus::Suspended => {
+                CoroutineStatus::Created | CoroutineStatus::Ready | CoroutineStatus::Suspended => {
                     unsafe { Self::resume(scheduler, id, eg)? };
+                }
+                CoroutineStatus::Waiting => {
+                    let next = unsafe { (&mut *scheduler).next_runnable()? };
+                    let Some(next) = next else {
+                        return Err(VmError::Fatal(format!(
+                            "coroutine deadlock while joining task {}",
+                            id
+                        )));
+                    };
+                    unsafe { Self::resume(scheduler, next, eg)? };
                 }
                 CoroutineStatus::Completed => {
                     let context = unsafe { (&mut *scheduler).context_ptr(id)? };
@@ -198,17 +330,56 @@ impl CoroutineScheduler {
         }
     }
 
+    fn next_runnable(&mut self) -> Result<Option<u64>, VmError> {
+        loop {
+            self.promote_due_timers()?;
+            while let Some(task) = self.readiness.pop_ready() {
+                let Some(context) = self.contexts.get(&task) else {
+                    continue;
+                };
+                if matches!(
+                    context.as_ref().get_ref().status,
+                    CoroutineStatus::Created | CoroutineStatus::Ready
+                ) {
+                    return Ok(Some(task));
+                }
+            }
+
+            let Some(deadline) = self.readiness.next_deadline() else {
+                return Ok(None);
+            };
+            std::thread::sleep(deadline.saturating_duration_since(Instant::now()));
+        }
+    }
+
+    fn promote_due_timers(&mut self) -> Result<(), VmError> {
+        let mut due = Vec::new();
+        self.readiness.drain_due(Instant::now(), &mut due);
+        for task in due {
+            let is_waiting = self.contexts.get(&task).is_some_and(|context| {
+                let context = context.as_ref().get_ref();
+                context.status == CoroutineStatus::Waiting
+                    && context.wait_reason == Some(WaitReason::Timer)
+            });
+            if is_waiting {
+                self.wake_task(task, WaitReason::Timer)?;
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn finish_scope(&mut self, eg: &mut ExecutorGlobals) {
         assert!(self.active.is_none());
         for context in self.contexts.values_mut() {
             let context = unsafe { context.as_mut().get_unchecked_mut() };
             debug_assert!(context.parent.is_none_or(|parent| parent < context.id));
             match context.status {
-                CoroutineStatus::Suspended => {
+                CoroutineStatus::Ready | CoroutineStatus::Suspended | CoroutineStatus::Waiting => {
                     context.state.cleanup_frames();
                     if let Some(stacks) = context.state.stacks.take() {
                         self.pool.recycle(stacks);
                     }
+                    context.wait_reason = None;
                     context.status = CoroutineStatus::Cancelled;
                 }
                 CoroutineStatus::Created => {
@@ -246,7 +417,10 @@ impl Drop for CoroutineScheduler {
         assert!(
             self.contexts.values().all(|context| !matches!(
                 context.as_ref().get_ref().status,
-                CoroutineStatus::Running | CoroutineStatus::Suspended
+                CoroutineStatus::Ready
+                    | CoroutineStatus::Running
+                    | CoroutineStatus::Suspended
+                    | CoroutineStatus::Waiting
             )),
             "coroutine scope dropped without cancelling live children"
         );

@@ -678,3 +678,17 @@ pub(crate) fn execute_coroutine_frame(
         }
     }
 }
+
+/// Publish a value into the suspended caller's result slot while preserving
+/// the canonical heap-slot bitmap used by frame cleanup.
+#[cfg(feature = "coroutines")]
+pub(crate) unsafe fn write_coroutine_result(
+    frame: *mut ExecuteData,
+    return_value: *mut Value,
+    value: Value,
+) {
+    if !return_value.is_null() {
+        assert!(!frame.is_null());
+        unsafe { frame_slot_set(frame, return_value, value) };
+    }
+}
