@@ -7252,6 +7252,22 @@ and `1922d968ed64ecb069aa1a23290895644a5daf4b3472f165367d34805a7a0e42` on
 x86-64. Default release hashes remain exact, so the checkpoint is accepted as
 ownership cleanup without a performance claim.
 
+### Scheduler operation include split (rejected)
+
+The next cleanup candidate moved 154 contiguous channel, timer and I/O adapter
+method lines into a macro included and expanded inside the existing
+`CoroutineScheduler` implementation. This preserved inherent method names,
+reduced the root from 506 to 355 lines and changed no behavior, API, state,
+crate or external library. Both hosts passed their complete 255/280 library
+sets and 23/3 coroutine E2E scenarios.
+
+Fresh-source 20-pair deltas were -0.562%/+0.422%/-1.671% on ARM64 and
+-0.097%/+1.470%/+1.099% on pinned x86-64 for
+suspend/channel/readiness. The x86 channel and readiness regressions exceed
+the +1% limit, so the entire candidate was removed and both source trees were
+restored exactly to the core-API checkpoint. Do not retry an ownership-only
+split of these hot methods without a stronger linker/code-placement boundary.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -915,6 +915,23 @@ Clean feature-test SHA-256 values are
 `1922d968ed64ecb069aa1a23290895644a5daf4b3472f165367d34805a7a0e42`.
 Default production releases remain exact at the established host hashes.
 
+### Scheduler operation ownership split rejected (2026-08-09)
+
+A follow-up codegen-stable extraction placed the contiguous channel, timer and
+I/O adapter methods behind a macro expanded inside the existing
+`CoroutineScheduler` implementation. It reduced `scheduler.rs` from 506 to
+355 lines and kept every method inherent on the original type. The candidate
+added no API, state, crate or external library and passed 255/280 library tests
+plus 23/3 coroutine E2E scenarios on both hosts.
+
+The fresh-source 20-pair gate accepted ARM64 at
+-0.562%/+0.422%/-1.671% for suspend/channel/readiness, but pinned x86-64
+recorded -0.097%/+1.470%/+1.099%. Channel and readiness both exceed the
+one-percent ceiling, so the macro, included file and all source changes were
+removed. The scheduler remains a measured hot layout boundary; future cleanup
+should target tests or genuinely cold resources rather than repackage these
+adapter methods.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
