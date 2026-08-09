@@ -6766,6 +6766,32 @@ all-target checks pass on both hosts. The next checkpoint is lazy pooled stack
 segments with cleanup, exception and `finally` proofs before the substrate is
 again considered for production-crate linkage.
 
+### Lazy pooled context checkpoint (2026-08-09)
+
+Milestone two is complete in the standalone executable prototype. Context
+construction is now stack-allocation-free: paired main/pending VM stacks are
+checked out lazily on first activation and returned to a driver pool only after
+completion or explicit discard. Pool instrumentation proves no stack
+construction during hand-off and 63 reuses across 64 sequential contexts.
+
+Discard mirrors the canonical frame ownership boundary. It cleans heap slots
+on main and pending-call frames, removes named variadics, clears exception,
+generator and receiver state, pops the frame chain and then recycles storage.
+Sixty-four repeated suspend/resume/discard cycles verify reference-count
+release, exception isolation and the per-frame pending-finally flag. A separate
+32-iteration real PHP try/catch/finally test produces exact output while using
+one recycled stack pair.
+
+Depth and live-slot independence now have a permanent ignored release
+benchmark. ARM64 records 11.25 ns/switch for depth 1 with zero slots and 11.05
+ns for depth 64 with 32 slots per frame; pinned x86-64 records 12.53 and 12.42
+ns. Ordinary hand-off results are 11.10/13.01 ns on ARM64/x86-64. Both release
+binaries remain bit-identical at the accepted hashes, and every feature,
+integration and all-target gate passes on both hosts. Phase 4.5 can therefore
+move to structured parent ownership and the first minimal PHP-facing API,
+while production linkage remains subject to the same one-percent admission
+rule.
+
 ## Phase 5: compatibility breadth and production use
 
 Once the execution architecture and minimal JIT are proven, broaden support

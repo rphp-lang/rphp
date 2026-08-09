@@ -324,6 +324,49 @@ prove repeated resume/drop cleanup plus exception/`finally` behavior, and only
 then re-evaluate promotion into the production crate under the same binary and
 performance gates.
 
+### Milestone 2 checkpoint (2026-08-09)
+
+The executable prototype now uses lazy pooled stack ownership. A newly created
+`CoroutineContext` contains no `VmStack`; its main 256 KiB page and pending-call
+16 KiB page are checked out together only on first activation. Completion and
+explicit discard return the pair to the driver-owned pool. Two simultaneously
+live contexts construct exactly two pairs, 200 intervening hand-offs construct
+none, and a third context reuses an existing pair. A separate 64-context cycle
+constructs one pair and records 63 pool reuses.
+
+Discard is now an ownership operation rather than a raw storage drop. It walks
+the suspended `ExecuteData` chain, cleans bitmap-tracked heap slots, follows
+and cleans deferred pending calls on the second VM stack, removes named
+variadics, drops exception/generator/receiver state, pops every frame and only
+then recycles storage. A context in `Running` or `Suspended` state cannot be
+silently dropped; it must be completed or explicitly discarded. The repeated
+cleanup test performs 64 suspend/resume/discard cycles with independent
+reference-counted strings in both main and pending frames, a live exception,
+named variadics and `pending_return_after_finally`. Exact pointer preservation
+on the surviving string owners proves cleanup released both frame-owned
+references without forcing a later COW detach.
+
+Canonical PHP behavior is exercised separately rather than inferred only from
+synthetic frame flags. Thirty-two fresh contexts execute a throwing
+try/catch/finally script on one recycled stack pair and produce the exact
+repeated `caught finally` output. Default, no-default and all-feature prototype
+tests, complete release integration matrices and all-target/all-feature checks
+pass on ARM64 and x86-64.
+
+The permanent scaling benchmark also confirms the O(1) contract. On ARM64 a
+one-frame/zero-slot context measures 11.25 ns/switch and a 64-frame context
+with 32 dormant slots per frame measures 11.05 ns/switch. Pinned x86-64 records
+12.53 and 12.42 ns/switch respectively. The ordinary million-hand-off runs are
+11.10 ns on ARM64 and 13.01 ns on x86-64. Production remains untouched and
+bit-identical at the milestone-one SHA-256 hashes, so lazy pooling and cleanup
+still impose zero code-size, allocation or dispatch cost on ordinary PHP.
+
+Milestone three can now begin with a measured production integration of this
+substrate and structured parent ownership, followed by the minimal
+spawn/suspend/resume/join surface. The internal caller and the substrate should
+be admitted together; linking unused coroutine code ahead of that caller has
+already proven capable of perturbing unrelated hot-code placement.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
