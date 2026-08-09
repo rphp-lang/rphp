@@ -14,6 +14,8 @@ use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use self::channel::{ChannelSet, ReceiveOutcome, SendOutcome};
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+use self::io::ConnectOutcome;
 #[cfg(unix)]
 use self::io::{AcceptOutcome, IoDirection, IoReady, IoSet, ReadOutcome, WriteOutcome};
 use self::readiness::Readiness;
@@ -146,6 +148,25 @@ impl CoroutineScheduler {
         address: SocketAddr,
     ) -> Result<(u64, SocketAddr), VmError> {
         self.io.create_tcp_listener(address)
+    }
+
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    pub(super) fn connect_tcp(
+        &mut self,
+        address: SocketAddr,
+        frame: *mut crate::vm::frame::ExecuteData,
+        return_value: *mut Value,
+    ) -> Result<Option<u64>, VmError> {
+        let task = self.active_task("coroutine_tcp_connect")?;
+        match self.io.create_tcp_connection(address)? {
+            ConnectOutcome::Connected(stream) => Ok(Some(stream)),
+            ConnectOutcome::InProgress(stream) => {
+                self.block_active(WaitReason::TcpConnect(stream))?;
+                self.io
+                    .enqueue_tcp_connect(stream, task, frame, return_value);
+                Ok(None)
+            }
+        }
     }
 
     #[cfg(unix)]

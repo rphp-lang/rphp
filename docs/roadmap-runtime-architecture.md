@@ -701,6 +701,45 @@ an internal substrate checkpoint, not a user-visible connect claim: admitting
 the coroutine handler, its cancellation state and a numeric-address PHP
 surface is the next independently gated slice; blocking DNS remains excluded.
 
+### Numeric coroutine TCP connect API checkpoint (2026-08-09)
+
+The internal substrate is now admitted through feature-only
+`coroutine_tcp_connect(address)`. The function accepts an explicit numeric
+IPv4/IPv6 address and port, starts the private non-blocking socket, and returns
+its positive descriptor only after the connection has completed. It remains a
+child-coroutine operation; DNS names are rejected before scheduler admission
+so no blocking resolver work enters the executor.
+
+An in-progress call records one continuation in a separate I/O map and blocks
+the task with `WaitReason::TcpConnect(descriptor)`. The continuation owns the
+task id plus the suspended caller and return-slot pointers needed by the VM's
+canonical heap-slot writer. Writable readiness checks `SO_ERROR` before
+publishing the descriptor and waking the task. A spurious writable edge is
+acknowledged and rearmed without resuming PHP. Refusal remains a fatal connect
+result and removes the private descriptor; scope cancellation drops the queued
+waiter and socket before its suspended frame is cleaned, so no stored pointer
+can outlive the frame it targets.
+
+This adds no crate or Cargo feature. The ABI implementation remains 364 lines,
+while its three descriptor tests moved to a dedicated 102-line
+`io_connect_tests.rs` module. That split preserves the complete ARM64 and
+x86-64 release test executables byte for byte. PHP loopback tests prove that a
+connect can suspend while another logical task runs, then exchange data through
+the returned numeric stream; refusal and DNS rejection are covered separately.
+
+Two order-balanced 20-pair ARM64 gates put the existing
+suspend/channel/readiness controls at +0.37%/-0.70%/+0.82% and
+-0.15%/-3.13%/-1.44%. Pinned x86-64 records -2.85%/-0.19%/+0.14%. Every
+regression result remains below the one-percent ceiling. Complete
+all-feature/all-target matrices pass 253 ARM64 and 278 x86-64 library tests,
+including seven descriptor tests and 22 coroutine E2E scenarios with three
+ignored benchmarks. Both no-default matrices pass 161 library tests. Default
+execution remains exact at ARM64 SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`
+and metadata-normalized x86-64 SHA-256
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`;
+the x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

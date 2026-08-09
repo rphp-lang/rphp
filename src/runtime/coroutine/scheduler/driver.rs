@@ -4,7 +4,11 @@ use super::CoroutineScheduler;
 #[cfg(unix)]
 use super::io::IoDirection;
 use crate::runtime::coroutine::state::{CoroutineStatus, WaitReason};
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+use crate::value::Value;
 use crate::vm::execute::VmError;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+use crate::vm::execute::write_coroutine_result;
 
 impl CoroutineScheduler {
     pub(super) fn next_runnable(&mut self) -> Result<Option<u64>, VmError> {
@@ -45,6 +49,27 @@ impl CoroutineScheduler {
     fn promote_io(&mut self, timeout: Option<Duration>) -> Result<(), VmError> {
         self.io.poll_ready(timeout, &mut self.io_ready)?;
         while let Some(event) = self.io_ready.pop_front() {
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            if event.direction == IoDirection::Writable
+                && self.contexts.get(&event.task).is_some_and(|context| {
+                    context.as_ref().get_ref().wait_reason
+                        == Some(WaitReason::TcpConnect(event.descriptor))
+                })
+            {
+                let Some(waiter) = self.io.complete_tcp_connect(event.descriptor, event.task)?
+                else {
+                    continue;
+                };
+                unsafe {
+                    write_coroutine_result(
+                        waiter.frame,
+                        waiter.return_value,
+                        Value::long(event.descriptor as i64),
+                    );
+                }
+                self.wake_task(event.task, WaitReason::TcpConnect(event.descriptor))?;
+                continue;
+            }
             let expected = match event.direction {
                 IoDirection::Readable => WaitReason::IoRead(event.descriptor),
                 IoDirection::Writable => WaitReason::IoWrite(event.descriptor),

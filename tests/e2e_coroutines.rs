@@ -494,6 +494,81 @@ coroutine_scope(function () {{
     assert_eq!(&response, b"pong");
 }
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[test]
+fn tcp_connect_completes_without_blocking_other_logical_tasks() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let server = thread::spawn(move || {
+        let (mut stream, peer) = listener.accept().unwrap();
+        assert!(peer.ip().is_loopback());
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut request = [0; 4];
+        stream.read_exact(&mut request).unwrap();
+        assert_eq!(&request, b"ping");
+        stream.write_all(b"pong").unwrap();
+    });
+    let output = run(&format!(
+        r#"<?php
+coroutine_scope(function () {{
+    $client = coroutine_spawn(function () {{
+        $stream = coroutine_tcp_connect("{address}");
+        echo $stream . ":";
+        coroutine_stream_write($stream, "ping");
+        coroutine_wait_readable($stream);
+        echo coroutine_stream_read($stream, 4) . ":";
+        return "done";
+    }});
+    coroutine_resume($client);
+    $ready = coroutine_spawn(function () {{
+        echo "R";
+    }});
+    echo coroutine_join($client);
+    coroutine_join($ready);
+}});
+"#
+    ));
+    server.join().unwrap();
+
+    assert_eq!(output.unwrap(), "R1:pong:done");
+}
+
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[test]
+fn tcp_connect_reports_refusal_and_rejects_dns_names() {
+    let address = reserve_loopback_address();
+    let refused = run(&format!(
+        r#"<?php
+coroutine_scope(function () {{
+    $client = coroutine_spawn(function () {{
+        coroutine_tcp_connect("{address}");
+    }});
+    coroutine_join($client);
+}});
+"#
+    ))
+    .unwrap_err();
+    assert!(matches!(
+        refused,
+        execute::VmError::Fatal(message)
+            if message.contains("connect coroutine TCP stream")
+    ));
+
+    let address_error = run(r#"<?php
+coroutine_scope(function () {
+    coroutine_tcp_connect("localhost:8080");
+});
+"#)
+    .unwrap_err();
+    assert!(matches!(
+        address_error,
+        execute::VmError::Fatal(message)
+            if message.starts_with("coroutine_tcp_connect expects a numeric IP address")
+    ));
+}
+
 #[cfg(unix)]
 #[test]
 fn tcp_accept_reports_would_block_before_a_connection_arrives() {

@@ -30,6 +30,8 @@ pub(super) enum WaitReason {
     IoRead(u64),
     #[cfg(unix)]
     IoWrite(u64),
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    TcpConnect(u64),
 }
 
 pub(super) struct CoroutineStacks {

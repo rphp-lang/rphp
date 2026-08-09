@@ -43,6 +43,35 @@ pub(super) fn coroutine_tcp_listen(
     Ok(())
 }
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+pub(super) fn coroutine_tcp_connect(
+    execute_data: *mut ExecuteData,
+    return_value: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let address = unsafe { argument(execute_data, 0) }
+        .as_str()
+        .ok_or_else(|| VmError::Fatal("coroutine_tcp_connect expects a string address".into()))?;
+    let address = address.parse::<SocketAddr>().map_err(|_| {
+        VmError::Fatal(
+            "coroutine_tcp_connect expects a numeric IP address and port (for example 127.0.0.1:8080)"
+                .into(),
+        )
+    })?;
+    let caller = suspension_caller(execute_data)?;
+    let scheduler = scheduler_ptr(eg)?;
+    match unsafe { (&mut *scheduler).connect_tcp(address, caller, return_value)? } {
+        Some(stream) => {
+            write_result(return_value, Value::long(stream as i64));
+            Ok(())
+        }
+        None => {
+            write_result(return_value, Value::null());
+            suspend_from_internal_call(caller, SuspendKind::Waiting)
+        }
+    }
+}
+
 pub(super) fn coroutine_tcp_accept(
     execute_data: *mut ExecuteData,
     return_value: *mut Value,

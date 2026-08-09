@@ -7036,6 +7036,40 @@ the established default release hashes remain exact. A PHP-visible numeric
 connect handler, cancellation ownership and API admission remain a separate
 measured checkpoint; this source does not claim DNS or generic streams.
 
+### Numeric non-blocking TCP connect API checkpoint
+
+Phase 5 now exposes the accepted substrate as feature-only
+`coroutine_tcp_connect(address)`. Only numeric IPv4/IPv6 socket addresses are
+accepted. A completed connect returns a positive scope-owned stream descriptor;
+an in-progress connect suspends the child without exposing the descriptor, and
+blocking DNS resolution is still deliberately excluded.
+
+The suspension continuation is isolated in its own I/O map rather than
+widening `ByteStream` or every descriptor. It retains the task, caller frame
+and return slot, while `WaitReason::TcpConnect` distinguishes completion from
+an ordinary writable wait. The driver validates `SO_ERROR`, writes through the
+VM's heap-aware result helper and only then wakes PHP. Spurious readiness is
+rearmed. Refusal removes the private socket and returns the established fatal
+connect error; scope cancellation removes the continuation before frame
+cleanup. No dependency or new Cargo feature was introduced.
+
+The existing controls pass two independent order-balanced 20-pair ARM64 gates:
+suspend/channel/readiness are +0.37%/-0.70%/+0.82% in the first and
+-0.15%/-3.13%/-1.44% in the repeat. Pinned x86-64 records
+-2.85%/-0.19%/+0.14%. Full all-feature/all-target matrices pass 253 and 278
+host library tests, seven descriptor tests and 22/3 coroutine E2E scenarios;
+both no-default matrices pass 161 library tests. The default ARM64 SHA-256
+remains `f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`.
+The metadata-normalized x86-64 SHA-256 remains
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`
+with unchanged text/data/BSS sizes 2,931,803/49,784/2,504 bytes.
+
+Implementation tests were split from the ABI source into
+`io_connect_tests.rs`; both architecture-specific release test executables are
+bit-for-bit identical before and after that refactor. This checkpoint claims a
+numeric connect primitive only. Explicit close, timeouts, DNS and a generic PHP
+stream adapter remain separate measured slices.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -11,6 +11,8 @@ use crate::vm::execute::VmError;
 #[cfg(any(target_vendor = "apple", target_os = "linux"))]
 #[path = "io_connect.rs"]
 mod connect;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+pub(super) use connect::ConnectOutcome;
 
 // POSIX pollfd layout and event bits are identical on the supported Darwin
 // and Linux targets. Keeping this tiny binding local avoids a dependency for
@@ -170,6 +172,8 @@ impl DescriptorState {
 pub(super) struct IoSet {
     next_id: u64,
     descriptors: BTreeMap<u64, DescriptorState>,
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    connect_waiters: BTreeMap<u64, connect::ConnectWaiter>,
     poll_fds: Vec<PollFd>,
     poll_streams: Vec<u64>,
     in_flight: BTreeMap<u64, (u64, IoDirection)>,
@@ -180,6 +184,8 @@ impl Default for IoSet {
         Self {
             next_id: 1,
             descriptors: BTreeMap::new(),
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            connect_waiters: BTreeMap::new(),
             poll_fds: Vec::new(),
             poll_streams: Vec::new(),
             in_flight: BTreeMap::new(),

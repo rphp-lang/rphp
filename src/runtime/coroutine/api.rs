@@ -1,5 +1,7 @@
 #[cfg(unix)]
 mod io;
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+use self::io::coroutine_tcp_connect;
 #[cfg(unix)]
 use self::io::{
     coroutine_stream_pair, coroutine_stream_read, coroutine_stream_write, coroutine_tcp_accept,
@@ -294,6 +296,14 @@ const PLATFORM_API_DEFINITIONS: &[ApiDefinition] = &[
         1,
         1,
         &["listener"],
+    ),
+    #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+    (
+        "coroutine_tcp_connect",
+        coroutine_tcp_connect,
+        1,
+        1,
+        &["address"],
     ),
     (
         "coroutine_wait_readable",

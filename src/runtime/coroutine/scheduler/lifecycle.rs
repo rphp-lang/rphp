@@ -1,6 +1,6 @@
 use super::CoroutineScheduler;
 use crate::runtime::ExecutorGlobals;
-use crate::runtime::coroutine::state::CoroutineStatus;
+use crate::runtime::coroutine::state::{CoroutineStatus, WaitReason};
 
 impl CoroutineScheduler {
     pub(in crate::runtime::coroutine) fn finish_scope(&mut self, eg: &mut ExecutorGlobals) {
@@ -8,6 +8,10 @@ impl CoroutineScheduler {
         for context in self.contexts.values_mut() {
             let context = unsafe { context.as_mut().get_unchecked_mut() };
             debug_assert!(context.parent.is_none_or(|parent| parent < context.id));
+            #[cfg(any(target_vendor = "apple", target_os = "linux"))]
+            if let Some(WaitReason::TcpConnect(descriptor)) = context.wait_reason {
+                self.io.cancel_tcp_connect(descriptor, context.id);
+            }
             match context.status {
                 CoroutineStatus::Ready | CoroutineStatus::Suspended | CoroutineStatus::Waiting => {
                     context.state.cleanup_frames();
