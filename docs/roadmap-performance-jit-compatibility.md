@@ -7142,13 +7142,16 @@ polling, connect continuations and lifecycle bookkeeping stay in
 the enclosing scheduler. No handler, public API, Cargo feature, crate or other
 external library is added.
 
-The explicit module boundary changes ARM64 feature-test code layout, so it was
-measured against the accepted timeout executable. An order-balanced 20-pair
-gate records +0.39%/+0.04%/+0.11% for suspend/channel/readiness, all below the
-one-percent regression ceiling. On x86-64 the feature-test executable remains
-byte-identical at SHA-256
-`275b9d6c9031f2ab234056d9e51e8055ccdc427c8adb9dd926f28676035669d5`;
-no speedup is inferred from either result.
+The explicit module boundary changes feature-test code layout on both hosts,
+so it was measured against the accepted timeout executables. An order-balanced
+20-pair gate records +0.45%/+0.00%/-0.61% for suspend/channel/readiness on
+ARM64 and +0.21%/-0.15%/-0.78% on pinned x86-64. All results remain below the
+one-percent regression ceiling; no speedup is inferred. Clean feature-test
+SHA-256 values are
+`ba47663ee205fbcae00518bc4d8b38fe10ae37796d03b5a2850b2f7da6cc5569`
+on ARM64 and
+`f77d83f30063f5d582302279c3dd9f23033d1cc31c184e7e227dd46eaaf55a3d`
+on x86-64.
 
 Seven descriptor/connect tests and 23/3 coroutine E2E scenarios pass on both
 hosts. Complete all-feature/all-target and no-default matrices are green with
@@ -7157,6 +7160,14 @@ Ackermann debug test. Default ARM64 and metadata-normalized x86-64 release
 hashes remain exact, and x86-64 text/data/BSS sizes stay
 2,931,803/49,784/2,504 bytes. The split is accepted solely as a clearer
 ownership boundary with measured neutral runtime behavior.
+
+This checkpoint also tightens benchmark hygiene. `cargo build --release` does
+not rebuild an ignored integration-test executable, so every future coroutine
+gate must first run the release-test no-run build (`cargo test --release
+--features coroutines --test e2e_coroutines --no-run`) in a fresh target
+directory. A clean rebuild exposed one stale intermediate image during this
+checkpoint; the recorded hashes and deltas above are the corrected comparison
+of actual source states.
 
 ## Phase 6: optional numerical computing and accelerator platform
 

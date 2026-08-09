@@ -804,12 +804,16 @@ poll driver, connect integration and lifecycle bookkeeping remain in
 only to the enclosing coroutine scheduler; no public API, Cargo feature or
 dependency changes.
 
-This real-module split changes the ARM64 feature-test executable layout, so it
-was admitted as a production refactor rather than assumed to be cosmetic. An
-order-balanced 20-pair ARM64 gate records +0.39% suspend/resume, +0.04% channel
-and +0.11% readiness. All remain below the one-percent regression ceiling. The
-x86-64 feature-test executable is byte-identical before and after at SHA-256
-`275b9d6c9031f2ab234056d9e51e8055ccdc427c8adb9dd926f28676035669d5`.
+This real-module split changes feature-test executable layout on both hosts, so
+it was admitted as a production refactor rather than assumed to be cosmetic.
+An order-balanced 20-pair ARM64 gate records +0.45% suspend/resume, +0.00%
+channel and -0.61% readiness. Pinned x86-64 records +0.21%/-0.15%/-0.78%.
+All remain below the one-percent regression ceiling. The clean feature-test
+executables have SHA-256
+`ba47663ee205fbcae00518bc4d8b38fe10ae37796d03b5a2850b2f7da6cc5569`
+on ARM64 and
+`f77d83f30063f5d582302279c3dd9f23033d1cc31c184e7e227dd46eaaf55a3d`
+on x86-64.
 
 Both hosts pass the seven descriptor/connect tests, 23/3 coroutine E2E
 scenarios, complete all-feature/all-target matrices and complete no-default
@@ -818,6 +822,14 @@ pre-existing recursive Ackermann debug test; no product stack setting changes.
 Default releases remain exact at the established ARM64 and metadata-normalized
 x86-64 hashes, with unchanged x86-64 text/data/BSS sizes. This checkpoint is
 source-ownership cleanup only and makes no runtime speedup claim.
+
+The gate also closes a benchmark-process hole: `cargo build --release` does
+not refresh an ignored release test executable. Benchmark admission now
+requires the release-test no-run build (`cargo test --release --features
+coroutines --test e2e_coroutines --no-run`) in a fresh target directory before
+hashing or timing. Rebuilding this checkpoint that way exposed and replaced
+one stale intermediate artifact; the figures and hashes above are from the
+corrected clean two-host comparison.
 
 ### Performance gates
 
