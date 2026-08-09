@@ -658,6 +658,49 @@ variable, so the remaining sensitivity comes from linking the new handler and
 descriptor path itself. The retry was rejected at the ARM64 gate without an
 unnecessary x86 run, and again leaves no source or API behind.
 
+### Internal outbound TCP connect checkpoint (2026-08-09)
+
+The non-blocking outbound socket foundation is accepted below the PHP API
+boundary. A private `scheduler/io_connect.rs` module creates numeric IPv4 or
+IPv6 sockets directly through the supported Darwin/Linux ABI, immediately
+wraps each raw descriptor in a standard-library `TcpStream` for RAII, and
+starts `connect` only after enabling non-blocking mode. Linux creates the
+descriptor atomically with `SOCK_CLOEXEC`; Darwin applies `FD_CLOEXEC` and
+`SO_NOSIGPIPE`, matching the safety contract of Rust's own TCP constructor.
+Interrupted connects retry, `EISCONN` completes, and `EINPROGRESS` or
+`EALREADY` enters writable-readiness progress. No crate dependency was added.
+
+The native IPv4/IPv6 layouts remain local and have compile-time 16/28-byte
+size checks. Their platform family constants and Darwin length bytes are
+selected with `cfg`; ports use network byte order, while IPv6 flow and scope
+fields follow the standard-library ABI conversion. Completion inspects
+`SO_ERROR` through `take_error` and then `peer_addr`. The socket is represented
+by the existing TCP descriptor from creation onward, so the kernel remains the
+only pending-state authority. A successful finish is idempotent, refusal is a
+fatal connect result, and the descriptor is not exposed to PHP while pending.
+
+This state-free design is the important performance result. An initial third
+`ByteStream` variant and a later descriptor-state boolean were both correct,
+but their order-balanced gates moved at least one existing control above the
+one-percent ceiling: observed holdouts included +1.84%/+2.09% ARM64
+suspend/resume and +1.42% x86-64 readiness. Neither form remains. In the final
+shape, the accepted baseline and candidate have identical release `.text`
+bytes on both hosts: ARM64 SHA-256
+`f8fb9858de9b6f011d8e13483774a8de7a65cfd6cccde7516f5dd998da9261d7`
+and x86-64 SHA-256
+`f96f0ea3f953d2e0292984d16ecf77b967d8bcc57e6cceb2c8a65cbe69b4e5f1`.
+Section sizes are also exact; only feature-build metadata differs.
+
+Successful loopback progress and refused completion pass on Apple ARM64 and
+Linux x86-64. Complete all-feature/all-target matrices pass 252 and 277 host
+library tests respectively, including six descriptor/connect tests, and all
+20 coroutine scenarios with three ignored release benchmarks. Complete
+no-default matrices remain green. The default release stays byte-identical on
+ARM64 and metadata-normalized x86-64 at the established hashes. This is
+an internal substrate checkpoint, not a user-visible connect claim: admitting
+the coroutine handler, its cancellation state and a numeric-address PHP
+surface is the next independently gated slice; blocking DNS remains excluded.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

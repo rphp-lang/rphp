@@ -7003,6 +7003,39 @@ layout rather than the removed temporary vector. The retry was rejected at
 the ARM64 gate; no close source or API remains and no external dependency was
 introduced.
 
+### Internal non-blocking outbound TCP connect checkpoint
+
+The next Phase 5 substrate is accepted below the PHP surface. A private
+Darwin/Linux adapter creates numeric IPv4/IPv6 sockets with local POSIX FFI,
+wraps ownership immediately in `TcpStream`, applies non-blocking and
+close-on-exec semantics, and disables Darwin `SIGPIPE`. Native socket-address
+layouts are compile-time checked at 16 and 28 bytes. Connect interruption,
+already-connected, in-progress and already-progressing outcomes are handled
+explicitly; completion uses `SO_ERROR` plus `peer_addr`. No external library
+or Cargo feature was added, and DNS resolution remains outside the scheduler.
+
+The final representation deliberately adds no pending enum variant, flag or
+branch to the existing stream path. The socket occupies an ordinary TCP
+descriptor while the private connect operation retains its progress outcome;
+the kernel socket state is authoritative until writable readiness and finish.
+Two earlier stateful layouts passed functional tests but were rejected after
+order-balanced controls exceeded one percent, including +1.84%/+2.09% ARM64
+suspend/resume and +1.42% x86-64 readiness holdouts. Those candidates leave no
+source behind.
+
+The state-free candidate and the static-registration baseline have identical
+release machine code. ARM64 `.text` SHA-256 is
+`f8fb9858de9b6f011d8e13483774a8de7a65cfd6cccde7516f5dd998da9261d7` in
+both builds; x86-64 is
+`f96f0ea3f953d2e0292984d16ecf77b967d8bcc57e6cceb2c8a65cbe69b4e5f1`.
+Section sizes also match exactly, so timing noise cannot represent a changed
+existing execution path. Loopback success and refusal tests pass on both
+architectures. Full all-feature matrices now contain 252 ARM64 and 277 x86-64
+library tests and keep the 20/3 coroutine E2E result; no-default matrices and
+the established default release hashes remain exact. A PHP-visible numeric
+connect handler, cancellation ownership and API admission remain a separate
+measured checkpoint; this source does not claim DNS or generic streams.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

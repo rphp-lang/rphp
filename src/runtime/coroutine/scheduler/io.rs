@@ -8,6 +8,10 @@ use std::time::Duration;
 
 use crate::vm::execute::VmError;
 
+#[cfg(any(target_vendor = "apple", target_os = "linux"))]
+#[path = "io_connect.rs"]
+mod connect;
+
 // POSIX pollfd layout and event bits are identical on the supported Darwin
 // and Linux targets. Keeping this tiny binding local avoids a dependency for
 // one system call; both ABIs are exercised in the two-host test matrix.
