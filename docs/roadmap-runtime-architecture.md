@@ -793,6 +793,32 @@ rebuilt bit-identically at the accepted timeout hashes. This rules out another
 standalone placement retry; explicit close should be reconsidered only within
 a broader stream-adapter checkpoint.
 
+### Coroutine stream-policy module checkpoint (2026-08-09)
+
+The accepted post-timeout cleanup gives stream and listener operations an
+explicit internal ownership boundary. Pair creation, TCP listener creation,
+accept, readiness admission/queueing and byte reads/writes now live in the
+155-line `scheduler/io_stream.rs` submodule. The shared descriptor registry,
+poll driver, connect integration and lifecycle bookkeeping remain in
+`scheduler/io.rs`, which falls from 489 to 366 lines. The methods are visible
+only to the enclosing coroutine scheduler; no public API, Cargo feature or
+dependency changes.
+
+This real-module split changes the ARM64 feature-test executable layout, so it
+was admitted as a production refactor rather than assumed to be cosmetic. An
+order-balanced 20-pair ARM64 gate records +0.39% suspend/resume, +0.04% channel
+and +0.11% readiness. All remain below the one-percent regression ceiling. The
+x86-64 feature-test executable is byte-identical before and after at SHA-256
+`275b9d6c9031f2ab234056d9e51e8055ccdc427c8adb9dd926f28676035669d5`.
+
+Both hosts pass the seven descriptor/connect tests, 23/3 coroutine E2E
+scenarios, complete all-feature/all-target matrices and complete no-default
+matrices. The established 16 MiB test-thread stack is used only for the
+pre-existing recursive Ackermann debug test; no product stack setting changes.
+Default releases remain exact at the established ARM64 and metadata-normalized
+x86-64 hashes, with unchanged x86-64 text/data/BSS sizes. This checkpoint is
+source-ownership cleanup only and makes no runtime speedup claim.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

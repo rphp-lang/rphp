@@ -7132,6 +7132,32 @@ timeout hashes. A future explicit lifecycle surface should therefore arrive as
 part of a broader stream adapter with its own measured payoff, not as another
 handler-placement retry.
 
+### Coroutine stream-policy module checkpoint
+
+The first accepted post-timeout production split moves pair/listener creation,
+accept, readiness admission and queueing, and stream reads/writes into the
+155-line internal `scheduler/io_stream.rs` module. Descriptor registration,
+polling, connect continuations and lifecycle bookkeeping stay in
+`scheduler/io.rs`, which falls from 489 to 366 lines. Visibility is limited to
+the enclosing scheduler. No handler, public API, Cargo feature, crate or other
+external library is added.
+
+The explicit module boundary changes ARM64 feature-test code layout, so it was
+measured against the accepted timeout executable. An order-balanced 20-pair
+gate records +0.39%/+0.04%/+0.11% for suspend/channel/readiness, all below the
+one-percent regression ceiling. On x86-64 the feature-test executable remains
+byte-identical at SHA-256
+`275b9d6c9031f2ab234056d9e51e8055ccdc427c8adb9dd926f28676035669d5`;
+no speedup is inferred from either result.
+
+Seven descriptor/connect tests and 23/3 coroutine E2E scenarios pass on both
+hosts. Complete all-feature/all-target and no-default matrices are green with
+the established 16 MiB test-thread stack used only by the pre-existing
+Ackermann debug test. Default ARM64 and metadata-normalized x86-64 release
+hashes remain exact, and x86-64 text/data/BSS sizes stay
+2,931,803/49,784/2,504 bytes. The split is accepted solely as a clearer
+ownership boundary with measured neutral runtime behavior.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
