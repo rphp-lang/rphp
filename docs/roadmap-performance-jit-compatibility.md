@@ -7360,6 +7360,26 @@ fresh x86-64 candidate and exact baseline default releases are identical at
 Generic PHP stream resources remain the next independent compatibility
 boundary.
 
+### Resolver transport ownership split (rejected)
+
+The immediate cleanup candidate moved the fixed worker pool and transport out
+of the 376-line resolver continuation into a 203-line submodule, leaving the
+scheduler-facing file at 181 lines. The 73-line wake adapter also moved from
+`io.rs`, reducing that hot ownership root from 435 to 380 lines. No behavior,
+API, crate, Cargo feature or external library changed, and both hosts passed
+168 no-default tests, 255/280 all-feature library tests, 24/3 coroutine E2E
+scenarios and complete all-target compilation.
+
+The split is nevertheless rejected by the same codegen gate used for the DNS
+feature. A preliminary ten-pair ARM64 check reported
+-2.500%/+0.162%/+0.969% for suspend/channel/readiness. The final 20-pair run
+reported -5.228%/-0.866%/+1.244%, putting readiness above the +1% ceiling.
+Pinned x86-64 remained admissible at +0.845%/-0.118%/-0.657%, which does not
+override the ARM64 failure. Both source trees were restored exactly to
+`4cf4abb`; none of the split modules or lifecycle changes remains. Further
+ownership-only movement of this resolver path requires a stronger linker or
+code-placement boundary rather than another module reshuffle.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -1028,6 +1028,26 @@ the fresh x86-64 candidate and exact baseline are byte-identical at
 `1b42d96b831bc0d717e28f46bbb49896f56891aac4385917a7dea07941f7070d`.
 Generic PHP stream-resource integration remains a separate Phase 5 slice.
 
+### Resolver ownership split rejected (2026-08-09)
+
+A post-checkpoint cleanup separated the 376-line resolver into a 181-line
+scheduler continuation and 203-line worker transport module, and moved 73
+lines of resolver wake policy out of `io.rs`, reducing that root from 435 to
+380 lines. The API, algorithm, queue dimensions and dependency graph were
+unchanged. Both hosts passed 168 no-default tests, their complete 255/280
+all-feature library sets, 24/3 coroutine E2E scenarios and every all-target
+compile.
+
+Code layout still failed the admission rule. A preliminary ten-pair ARM64 gate
+was inside the ceiling at -2.500%/+0.162%/+0.969% for
+suspend/channel/readiness, but the required 20-pair run measured
+-5.228%/-0.866%/+1.244%. Pinned x86-64 passed at
++0.845%/-0.118%/-0.657%; the ARM64 readiness result alone rejects the split.
+All module and lifecycle changes were removed locally and on the server, which
+are restored exactly to `4cf4abb`. The accepted combined resolver and wake
+ownership remains in place until a stronger code-placement boundary can make
+this cleanup neutral on both architectures.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
