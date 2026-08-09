@@ -6720,6 +6720,23 @@ with recovery (146). All 45 tests retain their original target names and pass
 in both feature configurations on ARM64 and x86-64. Complete integration and
 all-target checks pass on both hosts, with bit-identical release binaries.
 
+Range-proof unit coverage is also moved behind a safe test-only boundary.
+`jit/straight_range.rs` drops from 1,724 to 877 production lines, while its 831
+test lines move to `jit/straight_range_tests.rs` under the same module name.
+Thirteen focused ARM64 tests and nine x86-64 tests pass; the complete host
+library/all-target gates and x86 integration matrix remain green. The release
+executables remain bit-identical at ARM64 SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`
+and metadata-normalized x86-64 SHA-256
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+
+A proposed 863-line production extraction from `stdlib.rs` did not pass the
+same admission gate. Although code sizes and text-symbol addresses stayed
+identical, pinned x86-64 callback workloads regressed by 6.95 to 7.78 percent
+after constant layout changed; ARM64 had remained within -0.78 to +0.38
+percent. The extraction was fully reverted. This keeps two-host measurement,
+not source equivalence, as the acceptance condition for production refactors.
+
 ## Phase 4.5: bounded coroutine architecture branch
 
 After the minimal typed-region JIT is stable, pause feature expansion briefly

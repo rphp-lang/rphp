@@ -213,6 +213,27 @@ to +0.09 percent in the JIT build. The complete x86 matrix passes 232 library,
 113 quick-loop and 32 JIT tests plus every end-to-end suite, and the
 no-default-feature all-target check remains green.
 
+Eleventh checkpoint (2026-08-09): the range-proof test boundary is split
+without touching production code. `jit/straight_range.rs` falls from 1,724 to
+877 lines and retains only the interval analysis plus one test-only module
+declaration; its 831-line test implementation now lives in
+`jit/straight_range_tests.rs`. The module path and private test access remain
+unchanged. All thirteen ARM64 and nine x86-64 focused tests pass, as do the
+248/273-test host library suites, complete x86 integration matrix and
+all-feature/all-target compilation on both hosts. The ordinary ARM64 release
+remains byte-identical at SHA-256
+`f0129c6de8fdf33c2b12e7ef6d738c535787cb360bc36d183bb29f93594472b3`;
+the metadata-normalized x86-64 release remains byte-identical at
+`0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
+
+An attempted production split of the 863-line standard-library registration
+block was deliberately rejected. It preserved executable sizes and every
+text-symbol address, and the ARM64 1,003-pair regex gate ranged from -0.78 to
++0.38 percent, but two pinned x86-64 callback workloads regressed by 6.95 and
+7.78 percent after diagnostic-string layout changed. None of that candidate
+remains. Future production splits must therefore keep the two-host performance
+gate even when source, symbol sizes and function addresses appear equivalent.
+
 ## Post-JIT coroutine branch
 
 After the minimal typed-region JIT is stable and before broad compatibility
