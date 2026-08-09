@@ -872,6 +872,25 @@ hand-off and 11.30/11.98 ns for shallow/deep-wide scaling; x86-64
 records 12.77 ns and 12.89/12.73 ns. The default and coroutine feature release
 hashes remain exactly at their accepted baselines on both hosts.
 
+### Coroutine integration-test ownership checkpoint (2026-08-09)
+
+The coroutine integration target now retains only its shared process and
+loopback harness in the 78-line root. Core structured-concurrency/channel
+scenarios live in the 281-line `e2e_coroutines/core.rs`, non-blocking stream
+and TCP scenarios in the 293-line `e2e_coroutines/io.rs`, and the three
+release gates in the 135-line `e2e_coroutines/benchmarks.rs`. Direct
+`include!` boundaries preserve all 26 root test names and the existing exact
+benchmark filters; no product source, Cargo feature, crate or external library
+changes.
+
+Both ARM64 and x86-64 pass 23 scenarios with the same three ignored
+benchmarks. The fresh-source, order-balanced 20-pair gate compares this split
+against the archived one-file target. ARM64 records -0.056% suspend/resume,
++0.242% bounded channel and -0.253% readiness; pinned x86-64 records
+-0.382%/-0.162%/+0.616%. Every result remains below the one-percent regression
+ceiling. The split is accepted as test ownership cleanup only and makes no
+runtime speedup claim.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -7211,6 +7211,23 @@ hand-off and 11.30/11.98 ns for depth=1/slots=0 versus depth=64/slots=32;
 x86-64 records 12.77 ns and 12.89/12.73 ns. The accepted default and
 coroutine feature executables retain their exact hashes on ARM64 and x86-64.
 
+### Coroutine integration-target test split
+
+The 787-line coroutine integration target now has an explicit test-only
+ownership boundary. Its 78-line root contains the shared process and loopback
+harness and directly includes 281 lines of structured-concurrency/channel
+tests, 293 lines of non-blocking stream/TCP tests and 135 lines of release
+benchmarks. Using `include!` rather than nested modules preserves all 26 root
+test names and the exact benchmark command filters. Production source, Cargo
+configuration, crates and external libraries remain unchanged.
+
+ARM64 and x86-64 each pass 23 scenarios with three ignored benchmarks. The
+permanent fresh-target runner measured 20 order-alternated pairs against an
+archived one-file baseline. Suspend/channel/readiness deltas are
+-0.056%/+0.242%/-0.253% on ARM64 and -0.382%/-0.162%/+0.616% on pinned x86-64.
+All remain below the +1% admission limit; the measurements establish neutral
+runtime behavior rather than a speedup.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
