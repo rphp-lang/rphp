@@ -650,6 +650,14 @@ metadata-normalized SHA-256
 This checkpoint stabilizes registration allocation and construction shape; a
 new API still requires its own two-host layout gate.
 
+That distinction is now measured directly. Repeating the idle-only close
+candidate on top of this static-registration checkpoint still moved the
+order-balanced ARM64 suspend/resume control by +3.96%, while channel was
+-0.59% and readiness +0.25%. The registration construction was no longer the
+variable, so the remaining sensitivity comes from linking the new handler and
+descriptor path itself. The retry was rejected at the ARM64 gate without an
+unnecessary x86 run, and again leaves no source or API behind.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

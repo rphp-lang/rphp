@@ -6995,6 +6995,14 @@ ARM64 plus metadata-normalized x86-64 executables remain byte-identical at
 and `0031f562a9fefb7771d3d9d14da44d1aa7f763c2079a617898ceed0759db5b70`.
 The x86-64 text/data/BSS sizes remain 2,931,803/49,784/2,504 bytes.
 
+A controlled close retry on this new static baseline isolates the remaining
+cause. The order-balanced ARM64 suspend/resume delta was still +3.96%, while
+channel/readiness were -0.59%/+0.25%. Because registration construction was
+already stable, the regression belongs to the newly linked handler/descriptor
+layout rather than the removed temporary vector. The retry was rejected at
+the ARM64 gate; no close source or API remains and no external dependency was
+introduced.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
