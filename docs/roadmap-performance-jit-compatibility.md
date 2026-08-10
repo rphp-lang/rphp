@@ -7976,9 +7976,8 @@ Cargo feature or lockfile change is involved.
 The refactoring interlude reduces `src/vm/execute.rs` from 6,917 to 1,877
 physical lines without introducing a second executor or a Rust module ABI
 boundary. Five contiguous implementation domains now live in
-`frame_slots_and_property_calls.rs`, `direct_scalar_calls.rs`,
-`direct_object_calls.rs`, `composed_scalar_calls.rs` and
-`baseline_call_frames.rs`. Private `include!` expansion keeps their exact item
+`frame_runtime.rs`, `scalar_calls.rs`, `object_calls.rs`, `composed_calls.rs`
+and `call_frames.rs`. Private `include!` expansion keeps their exact item
 order, parent-module visibility and existing symbol identities. The original
 5,045-line sequence is mechanically unchanged apart from ownership comments.
 
@@ -8064,6 +8063,19 @@ Library matrices pass 195/186/300 on ARM64 and 195/186/325 on x86-64. The
 feature-only/all-feature stream targets pass 17/29 scenarios, file coverage
 remains 11, and all-feature/all-target compilation passes on both hosts. No
 feature, crate or lockfile change is involved.
+
+The historical String follow-up was bisected to the executor ownership split.
+Five new source-location identities add 192 read-only bytes and move the
+unchanged x86-64 text body by `0xc0`; a 100-pair pre/post comparison reports
++4.806% only for the short String activation workload, while long append runs
+show no steady-state kernel loss. Linker anchoring, read-only-section movement
+and bounded pre-reservation were all rejected because their full gates moved
+packed-array or order controls beyond one percent. The admitted cleanup only
+shortens the five ownership filenames; it keeps their content and include order
+unchanged, restores the accepted default section totals and symbol addresses,
+and adds no allocator shortcut, linker policy or dependency. Its 40-pair gate
+passes at +0.051%/+0.203%/-5.654%/-1.156%/-0.073%; a separate 100-pair String
+confirmation measures -5.526%.
 
 ## Phase 6: optional numerical computing and accelerator platform
 

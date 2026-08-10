@@ -1563,8 +1563,19 @@ addresses and 0x988-byte `.rphp_cold`; its `.text` SHA-256 matches `7ec3224` at
 The build-free CPU-pinned 20-pair gate against that immediate checkpoint passes
 at +0.078%/-0.036%/-1.033%/-0.144%/+0.691%. A separate historical `f5d4e68`
 String comparison now reproduces a pre-existing +5.077% cumulative drift in
-both identical checkpoint binaries; it is tracked as follow-up performance
-work, not attributed to this feature-only slice.
+both identical checkpoint binaries; it is not attributed to this feature-only
+slice.
+
+The follow-up bisection places that short-workload signal at the executor
+ownership split: five new source-location identities add 192 read-only bytes
+and move otherwise unchanged x86-64 code by `0xc0`. Long append runs show no
+steady-state loss. Linker anchoring and bounded String pre-reservation improve
+the isolated workload but fail packed-array or order controls, so none is
+admitted. Only the five ownership filenames are shortened; contents, include
+order, accepted section totals and monitored symbol addresses stay unchanged.
+The final 40-pair x86-64 gate is
++0.051%/+0.203%/-5.654%/-1.156%/-0.073%, and an isolated 100-pair String run
+confirms -5.526%.
 
 Library matrices remain 195/186/300 on ARM64 and 195/186/325 on x86-64.
 Feature-only stream coverage grows from 16 to 17 scenarios and all-feature

@@ -427,11 +427,11 @@ pub enum VmError {
     Exit(i32),
 }
 
-include!("execute/frame_slots_and_property_calls.rs");
-include!("execute/direct_scalar_calls.rs");
-include!("execute/direct_object_calls.rs");
-include!("execute/composed_scalar_calls.rs");
-include!("execute/baseline_call_frames.rs");
+include!("execute/frame_runtime.rs");
+include!("execute/scalar_calls.rs");
+include!("execute/object_calls.rs");
+include!("execute/composed_calls.rs");
+include!("execute/call_frames.rs");
 include!("execute/baseline_entry.rs");
 include!("execute/callback_array_pipeline.rs");
 include!("execute/baseline_control_ops.rs");

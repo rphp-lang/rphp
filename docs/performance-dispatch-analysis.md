@@ -2180,3 +2180,36 @@ feature-only setters. The functional matrices remain 195/186/300 on ARM64 and
 195/186/325 on x86-64, with 17 feature-only and 29 all-feature stream scenarios
 plus 11 file scenarios. No external library, Cargo feature or lockfile change
 is introduced.
+
+### Executor split layout investigation
+
+A clean x86-64 bisection places the historical short-String change between
+`10d612a` and the executor ownership split `64515cd`. A build-free, CPU-pinned
+100-pair comparison measured +4.806% for `bench_string.php`. The actual quick
+String loop, String commit helper and adjacent kernels retain identical sizes;
+their group moved uniformly by `0xc0`. ELF inspection explains that displacement:
+the five additional source-location identities grow `.rodata` by exactly 192
+bytes while `.text` itself keeps the same size. Long 200-million-append runs do
+not reproduce a steady-state regression, so the signal is short-process
+activation/layout sensitivity rather than a slower append kernel.
+
+Several technically correct mitigations were measured and rejected. Page and
+64 KiB linker anchoring removed the isolated String delta but moved other code
+or read-only data; packed-array and order controls then regressed by roughly
+2-7%. Pinning `.text` ahead of read-only data preserved function addresses but
+still failed the order corpus. A bounded one-time String reservation improved
+the short workload by roughly 13%, yet every safe variant changed relocation,
+unwind or later-section placement enough to move packed-array controls by
+1.769-4.982%. A custom raw allocator version was also discarded before
+admission because its maintenance and allocator-contract cost was not justified
+by a microbenchmark result.
+
+No linker rule, allocator shortcut or new dependency is retained. The useful
+structural follow-up is limited to shorter executor ownership names:
+`frame_runtime.rs`, `scalar_calls.rs`, `object_calls.rs`, `composed_calls.rs`
+and `call_frames.rs`. Their contents and `include!` order are unchanged; the
+default x86-64 text/data/bss totals and monitored symbol addresses remain exact.
+The resulting 40-pair gate passes at
++0.051%/+0.203%/-5.654%/-1.156%/-0.073% for scalar, packed array, String,
+order and ledger. A separate 100-pair String confirmation measures -5.526%,
+closing the cumulative drift without changing the append algorithm.
