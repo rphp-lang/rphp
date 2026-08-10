@@ -303,6 +303,66 @@ echo (new VariadicChild())->collect(6, 7);
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn parametric_lsp_alpha_renames_method_generic_parameters() {
+    let output = common::run_php(
+        r#"<?php
+interface Mapper<T> {
+    public function map<U, V : T>(U $left): U;
+}
+class IntMapper implements Mapper<int> {
+    public function map<A, B : int>(A $left): A { return $left; }
+}
+interface PlainMapper {
+    public function choose<L, R>(L $left, R $right): R;
+}
+class RenamedMapper implements PlainMapper {
+    public function choose<X, Y>(X $left, Y $right): Y { return $right; }
+}
+$intMapper = new IntMapper();
+$renamedMapper = new RenamedMapper();
+echo $intMapper->map::<string, int>("alpha");
+echo ":" . $renamedMapper->choose::<int, string>(2, "beta");
+"#,
+    );
+    assert_eq!(output, "alpha:beta");
+
+    for (source, expected) in [
+        (
+            "<?php interface Mapper { public function map<A, B>(A $value): B; } class Bad implements Mapper { public function map<X, Y>(Y $value): X { return $value; } }",
+            "parameter 1",
+        ),
+        (
+            "<?php interface Mapper { public function map<A : int>(A $value): A; } class Bad implements Mapper { public function map<X : string>(X $value): X { return $value; } }",
+            "bound of generic parameter 1",
+        ),
+        (
+            "<?php interface Mapper { public function map<A>(A $value): A; } class Bad implements Mapper { public function map<X, Y>(X $value): X { return $value; } }",
+            "declares 2 generic parameters",
+        ),
+        (
+            "<?php interface Mapper { public function map<+A>(): A; } class Bad implements Mapper { public function map<-X>(): mixed { return null; } }",
+            "incompatible variance",
+        ),
+        (
+            "<?php interface Mapper { public function map<A : int = int>(A $value): A; } class Bad implements Mapper { public function map<X : int>(X $value): X { return $value; } }",
+            "default of generic parameter 1",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("Parametric LSP violation"),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {
     let statements =
         parse("<?php function id<T : int>(T $value): T { return $value; } echo id::<int>(1);")
@@ -511,6 +571,34 @@ echo ":" . (new IntReader())->read(5);
             "{rendered:?}"
         );
     }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn concrete_descendants_erase_method_parameters_after_linking_class_bounds() {
+    let output = common::run_php(
+        r#"<?php
+class ParentBox<T> {
+    public function id<U : T>(U $value): U { return $value; }
+}
+class IntBox extends ParentBox<int> {}
+echo (new IntBox())->id::<int>(7);
+"#,
+    );
+    assert_eq!(output, "7");
+
+    let error = common::run_php_expect_error(
+        "<?php class ParentBox<T> { public function id<U : T>(U $value): U { return $value; } } class IntBox extends ParentBox<int> {} $box = new IntBox(); $box->id('bad');",
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to IntBox::id()"),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered.contains("linked generic class type"),
+        "{rendered:?}"
+    );
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -738,6 +826,20 @@ echo $step->step(12);
         );
         assert!(rendered.contains("reified class type"), "{rendered:?}");
     }
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_instances_erase_method_parameters_to_substituted_class_bounds() {
+    let error = common::run_php_expect_error(
+        "<?php class Box<T> { public function id<U : T>(U $value): U { return $value; } } $box = new Box::<int>(); $box->id('bad');",
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to Box::id()"),
+        "{rendered:?}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered:?}");
 }
 
 #[cfg(feature = "php-generics-reified")]

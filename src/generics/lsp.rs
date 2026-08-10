@@ -111,6 +111,82 @@ impl GenericMetadata {
         let child_name = self.symbol(child.owner).unwrap_or("?");
         let ancestor_name = self.symbol(ancestor.owner).unwrap_or("?");
         let method_name = self.symbol(prototype.name).unwrap_or("?");
+        if implementation.parameters.len() != prototype.parameters.len() {
+            return Err(format!(
+                "Parametric LSP violation: {}::{}() declares {} generic parameters, substituted {}::{}() declares {}",
+                child_name,
+                method_name,
+                implementation.parameters.len(),
+                ancestor_name,
+                method_name,
+                prototype.parameters.len()
+            ));
+        }
+        for (index, (implementation_parameter, prototype_parameter)) in implementation
+            .parameters
+            .iter()
+            .zip(&prototype.parameters)
+            .enumerate()
+        {
+            if implementation_parameter.variance != prototype_parameter.variance {
+                return Err(format!(
+                    "Parametric LSP violation: generic parameter {} of {}::{}() has incompatible variance with substituted {}::{}()",
+                    index + 1,
+                    child_name,
+                    method_name,
+                    ancestor_name,
+                    method_name
+                ));
+            }
+
+            let implementation_bound = implementation_parameter
+                .bound
+                .clone()
+                .unwrap_or(GenericType::Mixed);
+            let prototype_bound = prototype_parameter
+                .bound
+                .as_ref()
+                .map(|bound| substitute_generic_parameters(bound, arguments))
+                .unwrap_or(GenericType::Mixed);
+            if !self.generic_types_are_equivalent(
+                &implementation_bound,
+                &prototype_bound,
+                class_is_a,
+            ) {
+                return Err(format!(
+                    "Parametric LSP violation: bound of generic parameter {} in {}::{}() is incompatible with substituted {}::{}()",
+                    index + 1,
+                    child_name,
+                    method_name,
+                    ancestor_name,
+                    method_name
+                ));
+            }
+
+            let implementation_default = implementation_parameter.default.as_ref();
+            let prototype_default = prototype_parameter
+                .default
+                .as_ref()
+                .map(|default| substitute_generic_parameters(default, arguments));
+            let compatible_default = match (implementation_default, prototype_default.as_ref()) {
+                (None, None) => true,
+                (Some(implementation), Some(prototype)) => {
+                    self.generic_types_are_equivalent(implementation, prototype, class_is_a)
+                }
+                _ => false,
+            };
+            if !compatible_default {
+                return Err(format!(
+                    "Parametric LSP violation: default of generic parameter {} in {}::{}() is incompatible with substituted {}::{}()",
+                    index + 1,
+                    child_name,
+                    method_name,
+                    ancestor_name,
+                    method_name
+                ));
+            }
+        }
+
         if implementation.is_static != prototype.is_static {
             return Err(format!(
                 "Parametric LSP violation: {}::{}() staticness is incompatible with {}::{}()",
@@ -360,6 +436,19 @@ impl GenericMetadata {
             }
             _ => false,
         }
+    }
+
+    fn generic_types_are_equivalent<F>(
+        &self,
+        left: &GenericType,
+        right: &GenericType,
+        class_is_a: &F,
+    ) -> bool
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        self.generic_type_is_subtype(left, right, class_is_a)
+            && self.generic_type_is_subtype(right, left, class_is_a)
     }
 }
 

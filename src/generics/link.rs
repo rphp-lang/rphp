@@ -1,4 +1,7 @@
-use super::{GenericDeclaration, GenericDeclarationKind, GenericMetadata, GenericType};
+use super::{
+    GenericDeclaration, GenericDeclarationKind, GenericMetadata, GenericMethodMetadata,
+    GenericType, method_parameter_index,
+};
 
 impl GenericMetadata {
     /// Validate the direct generic bindings declared by one class-like. This
@@ -107,6 +110,7 @@ pub(super) fn substitute_generic_parameters(
     arguments: &[GenericType],
 ) -> GenericType {
     match value {
+        GenericType::Parameter(index) if method_parameter_index(*index).is_some() => value.clone(),
         GenericType::Parameter(index) => arguments
             .get(*index as usize)
             .cloned()
@@ -136,11 +140,109 @@ pub(super) fn substitute_generic_parameters(
     }
 }
 
-pub(super) fn erase_declaration_parameters(
+/// Erase both class-like and method-local parameters after the class binding
+/// has been selected. Method parameter indices use the spare high bit of the
+/// RFC's bounded `u8` representation, so both scopes remain positional and
+/// alpha-renaming is free at runtime.
+pub(super) fn erase_method_signature(
     value: &GenericType,
-    declaration: &GenericDeclaration,
+    erasure_declaration: &GenericDeclaration,
+    method: &GenericMethodMetadata,
+    owner_arguments: &[GenericType],
 ) -> GenericType {
-    erase_forwarded_parameters(value, Some(declaration), declaration.parameters.len() + 1)
+    erase_method_parameters(
+        value,
+        erasure_declaration,
+        method,
+        owner_arguments,
+        erasure_declaration.parameters.len() + method.parameters.len() + 1,
+    )
+}
+
+fn erase_method_parameters(
+    value: &GenericType,
+    erasure_declaration: &GenericDeclaration,
+    method: &GenericMethodMetadata,
+    owner_arguments: &[GenericType],
+    remaining: usize,
+) -> GenericType {
+    if remaining == 0 {
+        return GenericType::Mixed;
+    }
+    match value {
+        GenericType::Parameter(index) => {
+            if let Some(index) = method_parameter_index(*index) {
+                return method
+                    .parameters
+                    .get(index)
+                    .and_then(|parameter| parameter.bound.as_ref())
+                    .map(|bound| substitute_generic_parameters(bound, owner_arguments))
+                    .map(|bound| {
+                        erase_method_parameters(
+                            &bound,
+                            erasure_declaration,
+                            method,
+                            owner_arguments,
+                            remaining - 1,
+                        )
+                    })
+                    .unwrap_or(GenericType::Mixed);
+            }
+            erasure_declaration
+                .parameters
+                .get(*index as usize)
+                .and_then(|parameter| parameter.bound.as_ref())
+                .map(|bound| {
+                    erase_method_parameters(
+                        bound,
+                        erasure_declaration,
+                        method,
+                        owner_arguments,
+                        remaining - 1,
+                    )
+                })
+                .unwrap_or(GenericType::Mixed)
+        }
+        GenericType::Named { name, arguments } => GenericType::Named {
+            name: *name,
+            arguments: arguments
+                .iter()
+                .map(|argument| {
+                    erase_method_parameters(
+                        argument,
+                        erasure_declaration,
+                        method,
+                        owner_arguments,
+                        remaining,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        },
+        GenericType::Nullable(inner) => GenericType::Nullable(Box::new(erase_method_parameters(
+            inner,
+            erasure_declaration,
+            method,
+            owner_arguments,
+            remaining,
+        ))),
+        GenericType::Union(parts) => GenericType::Union(
+            parts
+                .iter()
+                .map(|part| {
+                    erase_method_parameters(
+                        part,
+                        erasure_declaration,
+                        method,
+                        owner_arguments,
+                        remaining,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        concrete => concrete.clone(),
+    }
 }
 
 fn erase_forwarded_parameters(

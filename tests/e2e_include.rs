@@ -217,6 +217,45 @@ fn test_include_links_inherited_generic_method_and_constructor_contracts() {
     }
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn test_include_alpha_links_generic_method_parameters_and_bounds() {
+    let (_dir, path) = write_temp_php(
+        "generic_method_parameter_child.php",
+        "<?php class IncludedMethodChild extends IncludedMethodParent<int> {}",
+    );
+    let source = format!(
+        "<?php class IncludedMethodParent<T> {{ public function id<U : T>(U $value): U {{ return $value; }} }} include '{}'; $box = new IncludedMethodChild(); $box->id('bad');",
+        path
+    );
+    let error = common::run_php_expect_error(&source);
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to IncludedMethodChild::id()"),
+        "{rendered:?}"
+    );
+    assert!(
+        rendered.contains("linked generic class type"),
+        "{rendered:?}"
+    );
+
+    let (_dir, path) = write_temp_php(
+        "generic_method_alpha_child.php",
+        "<?php class IncludedBadMapper implements IncludedMapper { public function map<X, Y>(Y $value): X { return $value; } }",
+    );
+    let source = format!(
+        "<?php interface IncludedMapper {{ public function map<A, B>(A $value): B; }} include '{}';",
+        path
+    );
+    let error = common::run_php_expect_error(&source);
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Parametric LSP violation"),
+        "{rendered:?}"
+    );
+    assert!(rendered.contains("parameter 1"), "{rendered:?}");
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

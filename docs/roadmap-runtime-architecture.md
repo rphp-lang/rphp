@@ -1912,14 +1912,33 @@ The method/constructor half now materializes a sparse linked contract only when
 the child's substituted erased boundary is stricter than the executable parent
 ABI. Concrete and transitive children, concrete traits, forwarded child bounds,
 returns, constructors and cross-unit declarations share the same resolver and
-pending/active call sidecar as reified methods. The permanent concrete
-`int -> int` benchmark remains within +0.382% of a manually typed method on
-ARM64 and +0.566% on x86-64 across both feature builds. Method-generic
-alpha-renaming and deterministic diamond contract merging remain explicit
-follow-up link/runtime steps. Generics-aware JIT specialization is deliberately
-last: it starts only after these semantics and both runtimes are closed, and
-must consume the canonical metadata with exact guards and deoptimization back
-to the established erased/reified paths.
+pending/active call sidecar as reified methods. At that preceding checkpoint,
+the permanent concrete `int -> int` benchmark remained within +0.382% of a
+manually typed method on ARM64 and +0.566% on x86-64 across both feature
+builds. Method-generic alpha-renaming is now implemented with a second
+positional scope in the same
+cold interned signature. The spare high bit of the RFC-bounded `u8` index marks
+method-local parameters, keeping class and method identities distinct without a
+new type node or a hot-layout change. Registration validates alpha-equivalent
+arity, variance, substituted bounds/defaults and complete signature
+relationships; names do not affect compatibility. Included units relocate the
+same graph, and non-generic owners with generic methods now participate as
+well.
+
+Runtime signature materialization substitutes class bindings before erasing a
+method parameter through its own bound. This makes `U : T` depend on a reified
+receiver or linked concrete child while a pure `U` remains receiver-neutral.
+ARM64 balanced order-paired controls are +0.271%/-0.031% for erased/reified own
+methods (51 pairs) and +0.636%/+0.399% for concrete linked methods (21 pairs).
+CPU-2-pinned x86-64 records +0.026%/+0.023% and +0.045%/-0.118%, respectively.
+All four full `--all-targets` matrices pass on both architectures, including
+cross-unit LSP and runtime-bound scenarios. No JIT/native lowering changed.
+
+Deterministic diamond contract merging remains the next explicit linker step.
+Generics-aware JIT specialization is deliberately last: it starts only after
+these semantics and both runtimes are closed, and must consume the canonical
+metadata with exact guards and deoptimization back to the established
+erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

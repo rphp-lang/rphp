@@ -1,4 +1,4 @@
-use super::link::{erase_declaration_parameters, substitute_generic_parameters};
+use super::link::{erase_method_signature, substitute_generic_parameters};
 use super::lsp::effective_inheritance_arguments;
 use super::{
     GenericDeclaration, GenericMetadata, GenericMethodContract, GenericMethodMetadata,
@@ -103,22 +103,28 @@ impl GenericMetadata {
             let Some(prototype) = self.find_method(ancestor, method) else {
                 continue;
             };
+            let parent_identity = (0..ancestor.parameters.len())
+                .map(|index| GenericType::Parameter(index as u8))
+                .collect::<Vec<_>>();
             let value_parameters = prototype
                 .value_parameters
                 .iter()
                 .map(|value| {
                     let value = value.as_ref()?;
-                    let parent_abi = erase_declaration_parameters(value, ancestor);
+                    let parent_abi =
+                        erase_method_signature(value, ancestor, prototype, &parent_identity);
                     let substituted = substitute_generic_parameters(value, &arguments);
-                    let child_abi = erase_declaration_parameters(&substituted, child);
+                    let child_abi =
+                        erase_method_signature(&substituted, child, prototype, &arguments);
                     (child_abi != parent_abi).then_some(child_abi)
                 })
                 .collect::<Vec<_>>()
                 .into_boxed_slice();
             let return_type = prototype.return_type.as_ref().and_then(|value| {
-                let parent_abi = erase_declaration_parameters(value, ancestor);
+                let parent_abi =
+                    erase_method_signature(value, ancestor, prototype, &parent_identity);
                 let substituted = substitute_generic_parameters(value, &arguments);
-                let child_abi = erase_declaration_parameters(&substituted, child);
+                let child_abi = erase_method_signature(&substituted, child, prototype, &arguments);
                 (child_abi != parent_abi).then_some(child_abi)
             });
             if value_parameters.iter().all(Option::is_none) && return_type.is_none() {
@@ -166,13 +172,15 @@ impl GenericMetadata {
                     value
                         .as_ref()
                         .map(|value| substitute_generic_parameters(value, arguments))
+                        .map(|value| erase_method_signature(&value, declaration, method, arguments))
                 })
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
             return_type: method
                 .return_type
                 .as_ref()
-                .map(|value| substitute_generic_parameters(value, arguments)),
+                .map(|value| substitute_generic_parameters(value, arguments))
+                .map(|value| erase_method_signature(&value, declaration, method, arguments)),
             is_variadic: method.is_variadic,
             runtime_mode: GenericRuntimeMode::Reified,
         })
@@ -184,20 +192,36 @@ fn method_depends_on_parameters(method: &GenericMethodMetadata) -> bool {
         .value_parameters
         .iter()
         .flatten()
-        .any(type_contains_parameter)
-        || method
-            .return_type
-            .as_ref()
-            .is_some_and(type_contains_parameter)
+        .any(|value| type_depends_on_class_parameter(value, method, method.parameters.len() + 1))
+        || method.return_type.as_ref().is_some_and(|value| {
+            type_depends_on_class_parameter(value, method, method.parameters.len() + 1)
+        })
 }
 
-fn type_contains_parameter(value: &GenericType) -> bool {
+fn type_depends_on_class_parameter(
+    value: &GenericType,
+    method: &GenericMethodMetadata,
+    remaining: usize,
+) -> bool {
+    if remaining == 0 {
+        return false;
+    }
     match value {
-        GenericType::Parameter(_) => true,
-        GenericType::Named { arguments, .. } | GenericType::Union(arguments) => {
-            arguments.iter().any(type_contains_parameter)
+        GenericType::Parameter(index) => {
+            super::method_parameter_index(*index).map_or(true, |index| {
+                method
+                    .parameters
+                    .get(index)
+                    .and_then(|parameter| parameter.bound.as_ref())
+                    .is_some_and(|bound| {
+                        type_depends_on_class_parameter(bound, method, remaining - 1)
+                    })
+            })
         }
-        GenericType::Nullable(inner) => type_contains_parameter(inner),
+        GenericType::Named { arguments, .. } | GenericType::Union(arguments) => arguments
+            .iter()
+            .any(|value| type_depends_on_class_parameter(value, method, remaining)),
+        GenericType::Nullable(inner) => type_depends_on_class_parameter(inner, method, remaining),
         GenericType::Int
         | GenericType::Float
         | GenericType::String

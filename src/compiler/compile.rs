@@ -1290,6 +1290,7 @@ impl Compiler {
                 .iter()
                 .map(|method| PendingGenericMethodMetadata {
                     name: method.name.clone(),
+                    parameters: method.generic_params.clone(),
                     value_parameters: method
                         .params
                         .iter()

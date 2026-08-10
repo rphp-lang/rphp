@@ -23,6 +23,21 @@ mod properties;
 mod variance;
 
 pub type GenericSymbol = u32;
+pub(super) const METHOD_PARAMETER_FLAG: u8 = 1 << 7;
+
+#[inline]
+pub(super) const fn method_parameter(index: u8) -> u8 {
+    METHOD_PARAMETER_FLAG | index
+}
+
+#[inline]
+pub(super) const fn method_parameter_index(index: u8) -> Option<usize> {
+    if index & METHOD_PARAMETER_FLAG == 0 {
+        None
+    } else {
+        Some((index & !METHOD_PARAMETER_FLAG) as usize)
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GenericRuntimeCapabilities {
@@ -138,6 +153,7 @@ pub struct GenericVarianceUse {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenericMethodMetadata {
     pub name: GenericSymbol,
+    pub parameters: Box<[GenericParameterMetadata]>,
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,
     pub required_parameters: u16,
@@ -212,6 +228,7 @@ pub struct GenericDeclaration {
 #[derive(Debug, Clone)]
 pub struct PendingGenericMethodMetadata {
     pub name: String,
+    pub parameters: Vec<GenericParameter>,
     pub value_parameters: Vec<Option<TypeHint>>,
     pub return_type: Option<TypeHint>,
     pub required_parameters: u16,
@@ -364,6 +381,15 @@ impl GenericMetadata {
             }
             for method in &mut declaration.methods {
                 method.name = symbol_relocation[method.name as usize];
+                for parameter in &mut method.parameters {
+                    parameter.name = symbol_relocation[parameter.name as usize];
+                    if let Some(bound) = &mut parameter.bound {
+                        remap_type_symbols(bound, &symbol_relocation);
+                    }
+                    if let Some(default) = &mut parameter.default {
+                        remap_type_symbols(default, &symbol_relocation);
+                    }
+                }
                 for parameter in method.value_parameters.iter_mut().flatten() {
                     remap_type_symbols(parameter, &symbol_relocation);
                 }
@@ -1031,24 +1057,62 @@ impl GenericMetadataBuilder {
         let methods = declaration
             .methods
             .iter()
-            .map(|method| GenericMethodMetadata {
-                name: self.intern(&method.name),
-                value_parameters: method
-                    .value_parameters
+            .map(|method| {
+                let method_parameter_names = method
+                    .parameters
                     .iter()
-                    .map(|hint| {
-                        hint.as_ref()
-                            .map(|hint| self.compile_type(hint, &parameter_names))
-                    })
-                    .collect::<Vec<_>>()
-                    .into_boxed_slice(),
-                return_type: method
-                    .return_type
-                    .as_ref()
-                    .map(|hint| self.compile_type(hint, &parameter_names)),
-                required_parameters: method.required_parameters,
-                is_variadic: method.is_variadic,
-                is_static: method.is_static,
+                    .map(|parameter| parameter.name.as_str())
+                    .collect::<Vec<_>>();
+                GenericMethodMetadata {
+                    name: self.intern(&method.name),
+                    parameters: method
+                        .parameters
+                        .iter()
+                        .map(|parameter| GenericParameterMetadata {
+                            name: self.intern(&parameter.name),
+                            variance: match parameter.variance {
+                                AstVariance::Invariant => GenericVariance::Invariant,
+                                AstVariance::Covariant => GenericVariance::Covariant,
+                                AstVariance::Contravariant => GenericVariance::Contravariant,
+                            },
+                            bound: parameter.bound.as_ref().map(|hint| {
+                                self.compile_method_type(
+                                    hint,
+                                    &parameter_names,
+                                    &method_parameter_names,
+                                )
+                            }),
+                            default: parameter.default.as_ref().map(|hint| {
+                                self.compile_method_type(
+                                    hint,
+                                    &parameter_names,
+                                    &method_parameter_names,
+                                )
+                            }),
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    value_parameters: method
+                        .value_parameters
+                        .iter()
+                        .map(|hint| {
+                            hint.as_ref().map(|hint| {
+                                self.compile_method_type(
+                                    hint,
+                                    &parameter_names,
+                                    &method_parameter_names,
+                                )
+                            })
+                        })
+                        .collect::<Vec<_>>()
+                        .into_boxed_slice(),
+                    return_type: method.return_type.as_ref().map(|hint| {
+                        self.compile_method_type(hint, &parameter_names, &method_parameter_names)
+                    }),
+                    required_parameters: method.required_parameters,
+                    is_variadic: method.is_variadic,
+                    is_static: method.is_static,
+                }
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
@@ -1097,6 +1161,24 @@ impl GenericMetadataBuilder {
     }
 
     fn compile_type(&mut self, hint: &TypeHint, parameters: &[&str]) -> GenericType {
+        self.compile_type_in_scopes(hint, parameters, &[])
+    }
+
+    fn compile_method_type(
+        &mut self,
+        hint: &TypeHint,
+        class_parameters: &[&str],
+        method_parameters: &[&str],
+    ) -> GenericType {
+        self.compile_type_in_scopes(hint, class_parameters, method_parameters)
+    }
+
+    fn compile_type_in_scopes(
+        &mut self,
+        hint: &TypeHint,
+        class_parameters: &[&str],
+        method_parameters: &[&str],
+    ) -> GenericType {
         match hint {
             TypeHint::Int => GenericType::Int,
             TypeHint::Float => GenericType::Float,
@@ -1108,39 +1190,57 @@ impl GenericMetadataBuilder {
             TypeHint::Void => GenericType::Void,
             TypeHint::Mixed => GenericType::Mixed,
             TypeHint::Never => GenericType::Never,
-            TypeHint::ClassName(name) => parameters
+            TypeHint::ClassName(name) => method_parameters
                 .iter()
                 .position(|candidate| *candidate == name)
-                .map(|index| GenericType::Parameter(index as u8))
+                .map(|index| GenericType::Parameter(method_parameter(index as u8)))
+                .or_else(|| {
+                    class_parameters
+                        .iter()
+                        .position(|candidate| *candidate == name)
+                        .map(|index| GenericType::Parameter(index as u8))
+                })
                 .unwrap_or_else(|| GenericType::Named {
                     name: self.intern(name),
                     arguments: Box::new([]),
                 }),
             TypeHint::GenericParameter { name, erased } => {
-                // A method-level parameter may use a class parameter in its
-                // bound. Bound erasure intentionally records the class
-                // parameter's erased runtime contract here.
-                parameters
+                // Preserve the pre-erasure identity when the parameter belongs
+                // to either active scope. The parser's erased hint remains the
+                // fallback for an already-lowered or external type.
+                method_parameters
                     .iter()
                     .position(|candidate| *candidate == name)
-                    .map(|index| GenericType::Parameter(index as u8))
-                    .unwrap_or_else(|| self.compile_type(erased, parameters))
+                    .map(|index| GenericType::Parameter(method_parameter(index as u8)))
+                    .or_else(|| {
+                        class_parameters
+                            .iter()
+                            .position(|candidate| *candidate == name)
+                            .map(|index| GenericType::Parameter(index as u8))
+                    })
+                    .unwrap_or_else(|| {
+                        self.compile_type_in_scopes(erased, class_parameters, method_parameters)
+                    })
             }
             TypeHint::GenericApplication { base, arguments } => GenericType::Named {
                 name: self.intern(base),
                 arguments: arguments
                     .iter()
-                    .map(|argument| self.compile_type(argument, parameters))
+                    .map(|argument| {
+                        self.compile_type_in_scopes(argument, class_parameters, method_parameters)
+                    })
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             },
-            TypeHint::Nullable(inner) => {
-                GenericType::Nullable(Box::new(self.compile_type(inner, parameters)))
-            }
+            TypeHint::Nullable(inner) => GenericType::Nullable(Box::new(
+                self.compile_type_in_scopes(inner, class_parameters, method_parameters),
+            )),
             TypeHint::Union(parts) => GenericType::Union(
                 parts
                     .iter()
-                    .map(|part| self.compile_type(part, parameters))
+                    .map(|part| {
+                        self.compile_type_in_scopes(part, class_parameters, method_parameters)
+                    })
                     .collect::<Vec<_>>()
                     .into_boxed_slice(),
             ),

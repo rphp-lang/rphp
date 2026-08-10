@@ -923,7 +923,10 @@ impl Compiler {
                     && (!generic_params.is_empty()
                         || parent.is_some()
                         || !implements.is_empty()
-                        || !uses.is_empty())
+                        || !uses.is_empty()
+                        || methods
+                            .iter()
+                            .any(|method| !method.generic_params.is_empty()))
                 {
                     self.record_generic_class_declaration(
                         crate::generics::GenericDeclarationKind::Class,
@@ -1130,7 +1133,11 @@ impl Compiler {
             } => {
                 let resolved_iface = self.resolve_name(name);
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
-                    && (!generic_params.is_empty() || !extends.is_empty())
+                    && (!generic_params.is_empty()
+                        || !extends.is_empty()
+                        || methods
+                            .iter()
+                            .any(|method| !method.generic_params.is_empty()))
                 {
                     self.record_generic_class_declaration(
                         crate::generics::GenericDeclarationKind::Interface,
@@ -1257,7 +1264,11 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_trait = self.resolve_name(name);
-                if !generic_params.is_empty() {
+                if !generic_params.is_empty()
+                    || methods
+                        .iter()
+                        .any(|method| !method.generic_params.is_empty())
+                {
                     self.record_generic_class_declaration(
                         crate::generics::GenericDeclarationKind::Trait,
                         resolved_trait.clone(),

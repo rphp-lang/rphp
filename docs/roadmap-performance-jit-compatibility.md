@@ -8489,8 +8489,8 @@ Variadic prototypes remain variadic and their substituted tail contract is
 checked against added optional parameters as well as the implementation tail.
 The same validation runs after include metadata is merged. It adds no runtime
 method lookup, frame field or ordinary-call branch. Method-generic
-alpha-renaming and deterministic diamond contract merging remain later
-link-layer slices.
+alpha-renaming is now closed below; deterministic diamond contract merging
+remains the next link-layer slice.
 
 The receiver-specific runtime-signature slice is now executable in both
 branches. A free bit in the existing method inline cache marks only methods
@@ -8523,6 +8523,51 @@ pairs, the permanent method benchmarks report:
 The synchronized x86-64 host independently passes the same 21-pair gate:
 erased generic/manual is -0.055% (0.065765/0.065790 seconds) and reified
 generic/manual is +0.042% (0.066356/0.066457 seconds).
+
+Method-generic identity is now preserved independently from the owning
+class-like scope. The RFC's 127-parameter ceiling leaves the high bit of each
+`u8` index free, so cold class-like method metadata uses that bit to distinguish
+`<U, V>` positions from class `<T>` positions without adding another enum
+variant or widening any hot representation. Names are diagnostic only:
+registration compares method-generic arity, variance, substituted bounds,
+defaults and complete positional parameter/return relationships by index. Thus
+`<U, V>(U): V` and `<A, B>(A): B` are identical, while a swapped `<X, Y>(Y):
+X` implementation fails Parametric LSP. Non-generic classes, interfaces and
+traits with generic methods now retain the same metadata, and symbol relocation
+keeps it exact across `include` units.
+
+Runtime materialization deliberately orders the two scopes. It first
+substitutes the ancestor/receiver class binding while preserving method-local
+indices, then erases each method parameter through its own bound. Consequently
+`Parent<T>::id<U : T>(U): U` linked by `IntChild extends Parent<int>` enforces
+`int` in both runtime branches, and a reified `Parent<int>` gets the same
+receiver-specific boundary. A pure method-local `U` does not create a receiver
+contract; only a parameter whose bound actually reaches a class parameter does.
+This work remains in the cold linker and existing sidecar/cache path: no
+object, frame, `Value`, function, opcode or inline-cache layout changes, and no
+JIT/native lowering changes.
+
+Complete default, erased, reified and dual-feature `--all-targets` matrices pass
+on ARM64 and x86-64. Library counts remain 197 in each single/default build,
+while dual-feature coverage is 309 on ARM64 and 334 on x86-64; focused coverage
+is 23 generics plus 19 include scenarios in reified/dual builds and 18 plus 18
+in erased-only. Release order-paired method controls remain inside the one
+percent gate. Balanced order-specific median ratios are:
+
+- ARM64, 51 pairs: erased own/manual +0.271% (0.049802/0.049702 seconds) and
+  reified own/manual -0.031% (0.049820/0.049772 seconds);
+- ARM64, 21 pairs: erased concrete/manual +0.636% (0.049825/0.049503 seconds)
+  and reified concrete/manual +0.399% (0.049717/0.049453 seconds);
+- CPU-2-pinned x86-64, 51 pairs: erased own/manual +0.026%
+  (0.066177/0.066153 seconds) and reified own/manual +0.023%
+  (0.065513/0.065540 seconds);
+- CPU-2-pinned x86-64, 21 pairs: erased concrete/manual +0.045%
+  (0.066043/0.066001 seconds) and reified concrete/manual -0.118%
+  (0.065054/0.065177 seconds).
+
+Deterministic diamond contract merging is the next semantic linker checkpoint.
+Generics-aware JIT specialization remains deliberately last, after both runtime
+models and their fallback/deoptimization contracts are complete.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked
