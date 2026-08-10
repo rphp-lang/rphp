@@ -10,8 +10,8 @@ static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use super::OpArray;
 use crate::generics::{
-    GenericDeclarationKind, GenericInheritanceKind, GenericMetadata, PendingGenericDeclaration,
-    PendingGenericInheritance, PendingGenericUseSite,
+    GenericDeclarationKind, GenericInheritanceKind, GenericMetadata, GenericTypePosition,
+    PendingGenericDeclaration, PendingGenericInheritance, PendingGenericUseSite,
 };
 use crate::parser::{
     BinOp, CallArg, CastType, Expr, GenericAncestor, ListTarget, Param, Stmt, TypeHint, Visibility,
@@ -1154,6 +1154,24 @@ impl Compiler {
         if parameters.is_empty() {
             return;
         }
+        let is_constructor = kind == GenericDeclarationKind::Method
+            && owner
+                .rsplit_once("::")
+                .is_some_and(|(_, method)| method.eq_ignore_ascii_case("__construct"));
+        let mut variance_uses = Vec::new();
+        if !is_constructor {
+            variance_uses.extend(value_parameters.unwrap_or_default().iter().filter_map(
+                |parameter| {
+                    parameter
+                        .type_hint
+                        .clone()
+                        .map(|hint| (hint, GenericTypePosition::Contravariant, false))
+                },
+            ));
+            if let Some(return_type) = return_type {
+                variance_uses.push((return_type.clone(), GenericTypePosition::Covariant, false));
+            }
+        }
         self.generic_declarations.push(PendingGenericDeclaration {
             kind,
             owner,
@@ -1165,6 +1183,7 @@ impl Compiler {
                 .collect(),
             return_type: return_type.cloned(),
             properties: Vec::new(),
+            variance_uses,
         });
     }
 
@@ -1202,6 +1221,64 @@ impl Compiler {
                     .map(|hint| (parameter.name.clone(), hint, false))
             }));
         }
+        let mut variance_uses = properties
+            .iter()
+            .filter_map(|property| {
+                property.type_hint.clone().map(|hint| {
+                    (
+                        hint,
+                        if property.is_readonly {
+                            GenericTypePosition::Covariant
+                        } else {
+                            GenericTypePosition::Invariant
+                        },
+                        property.is_static,
+                    )
+                })
+            })
+            .collect::<Vec<_>>();
+        for method in methods {
+            for parameter in &method.generic_params {
+                variance_uses.extend(
+                    parameter
+                        .bound
+                        .iter()
+                        .chain(parameter.default.iter())
+                        .cloned()
+                        .map(|hint| (hint, GenericTypePosition::Invariant, method.is_static)),
+                );
+            }
+            if method.name.eq_ignore_ascii_case("__construct") {
+                variance_uses.extend(method.params.iter().filter_map(|parameter| {
+                    let (_, is_readonly) = parameter.promotion?;
+                    parameter.type_hint.clone().map(|hint| {
+                        (
+                            hint,
+                            if is_readonly {
+                                GenericTypePosition::Covariant
+                            } else {
+                                GenericTypePosition::Invariant
+                            },
+                            false,
+                        )
+                    })
+                }));
+                continue;
+            }
+            variance_uses.extend(method.params.iter().filter_map(|parameter| {
+                parameter
+                    .type_hint
+                    .clone()
+                    .map(|hint| (hint, GenericTypePosition::Contravariant, method.is_static))
+            }));
+            if let Some(return_type) = &method.return_type {
+                variance_uses.push((
+                    return_type.clone(),
+                    GenericTypePosition::Covariant,
+                    method.is_static,
+                ));
+            }
+        }
         self.generic_declarations.push(PendingGenericDeclaration {
             kind,
             owner,
@@ -1209,6 +1286,7 @@ impl Compiler {
             value_parameters: Vec::new(),
             return_type: None,
             properties: property_types,
+            variance_uses,
         });
     }
 
@@ -1624,6 +1702,7 @@ impl Compiler {
             self.generic_inheritances,
             generic_use_sites,
         );
+        generic_metadata.validate_variance()?;
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,

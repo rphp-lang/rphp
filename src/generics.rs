@@ -11,6 +11,11 @@ use std::collections::HashMap;
 use crate::parser::{GenericParameter, GenericVariance as AstVariance, TypeHint};
 use crate::value::{Value, ValueType};
 
+#[path = "generics/link.rs"]
+mod link;
+#[path = "generics/variance.rs"]
+mod variance;
+
 pub type GenericSymbol = u32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -73,6 +78,14 @@ pub enum GenericInheritanceKind {
     Uses,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericTypePosition {
+    Covariant,
+    Contravariant,
+    Invariant,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum GenericType {
     Int,
@@ -110,6 +123,13 @@ pub struct GenericPropertyMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct GenericVarianceUse {
+    pub value_type: GenericType,
+    pub position: GenericTypePosition,
+    pub in_static_context: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct GenericDeclaration {
     pub kind: GenericDeclarationKind,
     pub owner: GenericSymbol,
@@ -117,6 +137,7 @@ pub struct GenericDeclaration {
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,
     pub properties: Box<[GenericPropertyMetadata]>,
+    pub variance_uses: Box<[GenericVarianceUse]>,
 }
 
 #[derive(Debug, Clone)]
@@ -127,6 +148,7 @@ pub struct PendingGenericDeclaration {
     pub value_parameters: Vec<Option<TypeHint>>,
     pub return_type: Option<TypeHint>,
     pub properties: Vec<(String, TypeHint, bool)>,
+    pub variance_uses: Vec<(TypeHint, GenericTypePosition, bool)>,
 }
 
 #[derive(Debug, Clone)]
@@ -257,6 +279,9 @@ impl GenericMetadata {
                 property.name = symbol_relocation[property.name as usize];
                 remap_type_symbols(&mut property.value_type, &symbol_relocation);
             }
+            for variance_use in &mut declaration.variance_uses {
+                remap_type_symbols(&mut variance_use.value_type, &symbol_relocation);
+            }
             declarations.push(declaration);
         }
 
@@ -326,98 +351,6 @@ impl GenericMetadata {
                         .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
             })
             .map(|index| index as u32)
-    }
-
-    /// Validate the direct generic bindings declared by one class-like. This
-    /// runs when the class is linked, after metadata from its compilation unit
-    /// has joined the executor-wide table.
-    pub fn validate_inheritance<F>(&self, owner: &str, class_is_a: F) -> Result<(), String>
-    where
-        F: Fn(&str, &str) -> bool,
-    {
-        let owner_declaration = self.find_class_like(owner);
-        for inheritance in self.inheritances.iter().filter(|inheritance| {
-            self.symbol(inheritance.owner)
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
-        }) {
-            let ancestor = self.symbol(inheritance.ancestor).unwrap_or("?");
-            let Some(ancestor_declaration) = self.find_class_like(ancestor) else {
-                if inheritance.arguments.is_empty() {
-                    continue;
-                }
-                return Err(format!(
-                    "Cannot supply generic arguments to non-generic ancestor {}",
-                    ancestor
-                ));
-            };
-
-            let required = ancestor_declaration
-                .parameters
-                .iter()
-                .take_while(|parameter| parameter.default.is_none())
-                .count();
-            let supplied = inheritance.arguments.len();
-            if supplied < required || supplied > ancestor_declaration.parameters.len() {
-                return Err(format!(
-                    "Generic ancestor {} expects {} to {} type arguments, {} given",
-                    ancestor,
-                    required,
-                    ancestor_declaration.parameters.len(),
-                    supplied
-                ));
-            }
-
-            let mut effective = inheritance.arguments.to_vec();
-            for parameter in ancestor_declaration.parameters.iter().skip(effective.len()) {
-                let default = parameter
-                    .default
-                    .as_ref()
-                    .expect("optional generic ancestor parameter must have a default");
-                effective.push(substitute_generic_parameters(default, &effective));
-            }
-            for (index, parameter) in ancestor_declaration.parameters.iter().enumerate() {
-                let Some(bound) = parameter.bound.as_ref() else {
-                    continue;
-                };
-                // Ancestor bounds use ancestor parameter indices. Substitute
-                // those first, then erase any forwarded owner parameter to its
-                // own bound (the RFC's bound-on-bound rule).
-                let bound = substitute_generic_parameters(bound, &effective);
-                let actual = erase_forwarded_parameters(
-                    &effective[index],
-                    owner_declaration,
-                    owner_declaration.map_or(1, |declaration| declaration.parameters.len() + 1),
-                );
-                let bound = erase_forwarded_parameters(
-                    &bound,
-                    owner_declaration,
-                    owner_declaration.map_or(1, |declaration| declaration.parameters.len() + 1),
-                );
-                if !self.type_satisfies(&actual, &bound, &[], &class_is_a) {
-                    let parameter_name = self.symbol(parameter.name).unwrap_or("?");
-                    return Err(format!(
-                        "Type argument {} for generic ancestor {} does not satisfy bound of {}",
-                        index + 1,
-                        ancestor,
-                        parameter_name
-                    ));
-                }
-            }
-        }
-        Ok(())
-    }
-
-    fn find_class_like(&self, owner: &str) -> Option<&GenericDeclaration> {
-        self.declarations.iter().find(|declaration| {
-            matches!(
-                declaration.kind,
-                GenericDeclarationKind::Class
-                    | GenericDeclarationKind::Interface
-                    | GenericDeclarationKind::Trait
-            ) && self
-                .symbol(declaration.owner)
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
-        })
     }
 
     /// Validate one explicit `::<...>` use without constructing runtime values.
@@ -903,73 +836,6 @@ impl GenericMetadata {
     }
 }
 
-fn substitute_generic_parameters(value: &GenericType, arguments: &[GenericType]) -> GenericType {
-    match value {
-        GenericType::Parameter(index) => arguments
-            .get(*index as usize)
-            .cloned()
-            .unwrap_or(GenericType::Mixed),
-        GenericType::Named {
-            name,
-            arguments: inner,
-        } => GenericType::Named {
-            name: *name,
-            arguments: inner
-                .iter()
-                .map(|argument| substitute_generic_parameters(argument, arguments))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        },
-        GenericType::Nullable(inner) => {
-            GenericType::Nullable(Box::new(substitute_generic_parameters(inner, arguments)))
-        }
-        GenericType::Union(parts) => GenericType::Union(
-            parts
-                .iter()
-                .map(|part| substitute_generic_parameters(part, arguments))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
-        concrete => concrete.clone(),
-    }
-}
-
-fn erase_forwarded_parameters(
-    value: &GenericType,
-    owner: Option<&GenericDeclaration>,
-    remaining: usize,
-) -> GenericType {
-    if remaining == 0 {
-        return GenericType::Mixed;
-    }
-    match value {
-        GenericType::Parameter(index) => owner
-            .and_then(|declaration| declaration.parameters.get(*index as usize))
-            .and_then(|parameter| parameter.bound.as_ref())
-            .map(|bound| erase_forwarded_parameters(bound, owner, remaining - 1))
-            .unwrap_or(GenericType::Mixed),
-        GenericType::Named { name, arguments } => GenericType::Named {
-            name: *name,
-            arguments: arguments
-                .iter()
-                .map(|argument| erase_forwarded_parameters(argument, owner, remaining))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        },
-        GenericType::Nullable(inner) => GenericType::Nullable(Box::new(
-            erase_forwarded_parameters(inner, owner, remaining),
-        )),
-        GenericType::Union(parts) => GenericType::Union(
-            parts
-                .iter()
-                .map(|part| erase_forwarded_parameters(part, owner, remaining))
-                .collect::<Vec<_>>()
-                .into_boxed_slice(),
-        ),
-        concrete => concrete.clone(),
-    }
-}
-
 fn remap_type_symbols(value: &mut GenericType, relocation: &[GenericSymbol]) {
     match value {
         GenericType::Named { name, arguments } => {
@@ -1099,6 +965,16 @@ impl GenericMetadataBuilder {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let variance_uses = declaration
+            .variance_uses
+            .iter()
+            .map(|(hint, position, in_static_context)| GenericVarianceUse {
+                value_type: self.compile_type(hint, &parameter_names),
+                position: *position,
+                in_static_context: *in_static_context,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         self.declarations.push(GenericDeclaration {
             kind: declaration.kind,
             owner,
@@ -1106,6 +982,7 @@ impl GenericMetadataBuilder {
             value_parameters,
             return_type,
             properties,
+            variance_uses,
         });
     }
 

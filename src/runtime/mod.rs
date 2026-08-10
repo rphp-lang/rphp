@@ -385,6 +385,7 @@ impl ExecutorGlobals {
             .validate_inheritance(&class_name, |actual, bound| {
                 class_is_a_in_table(class_table, actual, bound)
             })?;
+        self.generic_metadata.validate_variance_for(&class_name)?;
         // Assign stable class ID
         let id = self.next_class_id;
         self.next_class_id += 1;

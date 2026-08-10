@@ -1836,9 +1836,12 @@ Inheritance clauses now preserve their generic arguments in the same cold
 graph. Registration validates `extends`, `implements` and trait `use` arity,
 defaults, bounds and forwarded bound-on-bound conformance, including metadata
 merged from separately compiled units. Runtime class lookup and inheritance
-layout still consume only the erased ancestor name. Variance polarity,
-signature substitution, parametric LSP and diamond contract merging remain
-explicit follow-up link steps.
+layout still consume only the erased ancestor name. Declaration-site variance
+now composes through nested generic arguments and inheritance slots, checks
+function/method/property polarity and rejects class parameters in static
+context; cross-unit targets are revalidated after merge. Signature
+substitution, parametric LSP and diamond contract merging remain explicit
+follow-up link steps.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

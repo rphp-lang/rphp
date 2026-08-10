@@ -404,7 +404,7 @@ interface Source<+T> {}
 trait Holder<T : object> {}
 class Box<T : object = stdClass> {
     public T $value;
-    public function pair<-L, +R : Box<T>>(L $left, R $right): Box<R> { return $right; }
+    public function pair<-L, +R : Box<stdClass>>(L $left): R { return $left; }
 }
 function id<T : Box<Box<int>>>(T $value): T { return $value; }
 "#,
@@ -468,7 +468,7 @@ fn shared_reflection_exposes_interned_declarations_and_runtime_capabilities() {
         r#"<?php
 function id<T : int>(T $value): T { return $value; }
 class Box<T : object = stdClass> {
-    public function map<+U : string>(U $value): U { return $value; }
+    public function map<+U : string>(): U { return "value"; }
 }
 $function = new ReflectionFunction("id");
 $functionParameters = $function->getGenericParameters();
@@ -531,6 +531,81 @@ fn parser_enforces_declaration_invariants() {
 
     // A concrete class default is not mistaken for a forward type parameter.
     parse("<?php class Box<T = User> {}").unwrap();
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn declaration_variance_composes_and_rejects_wrong_polarity() {
+    let valid = parse(
+        r#"<?php
+interface Producer<+T> { public function get(): T; }
+interface Consumer<-T> { public function put(T $value); }
+interface Contra<-T> {}
+interface ProducerChild<+T> extends Producer<T> {}
+interface ConsumerChild<-T> extends Consumer<T> {}
+class CovariantBox<+T> {
+    public readonly T $value;
+    public function __construct(T $value) {}
+    public function get(): T { return $this->value; }
+    public function nested(): Contra<Contra<T>> { return null; }
+}
+class ReadonlyPromoted<+T> {
+    public function __construct(public readonly T $value) {}
+}
+function transform<-I, +O>(I $input): O { return $input; }
+"#,
+    )
+    .unwrap();
+    Compiler::new().compile(&valid).unwrap();
+
+    for (source, expected) in [
+        (
+            "<?php class Bad<+T> { public function take(T $value) {} }",
+            "Covariant generic parameter T",
+        ),
+        (
+            "<?php class Bad<-T> { public function get(): T { return null; } }",
+            "Contravariant generic parameter T",
+        ),
+        (
+            "<?php class Bad<+T> { public T $value; }",
+            "in invariant position",
+        ),
+        (
+            "<?php class Bad<+T> { public function __construct(public T $value) {} }",
+            "in invariant position",
+        ),
+        (
+            "<?php interface Consumer<-T> {} class Bad<+T> { public function get(): Consumer<T> { return null; } }",
+            "in contravariant position",
+        ),
+        (
+            "<?php interface Consumer<-T> {} interface Bad<+T> extends Consumer<T> {}",
+            "in contravariant position",
+        ),
+        (
+            "<?php class Wrap<T> {} class Bad<+T : Wrap<T>> {}",
+            "in invariant position",
+        ),
+        (
+            "<?php class Bad<T> { public static function take(T $value) {} }",
+            "cannot be used in static context",
+        ),
+        (
+            "<?php function bad<+T>(T $value): T { return $value; }",
+            "in contravariant position",
+        ),
+    ] {
+        let statements = parse(source).unwrap();
+        let error = match Compiler::new().compile(&statements) {
+            Ok(_) => panic!("expected variance error for {source:?}"),
+            Err(error) => error,
+        };
+        assert!(
+            error.contains(expected),
+            "{error:?} did not contain {expected:?}"
+        );
+    }
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

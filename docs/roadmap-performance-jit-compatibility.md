@@ -8474,8 +8474,13 @@ declarations. Class registration validates omitted arguments as arity zero,
 defaults, concrete bounds and forwarded parameters by comparing the forwarding
 parameter's own erased bound (bound-on-bound). This is cold registration work:
 no field was added to an object, frame, `Value`, instruction or inline cache.
-Declaration-site polarity, substituted inherited members, diamond merging and
-the resulting parametric-LSP checks remain the next link-layer slices.
+Declaration-site variance is also validated from the interned graph. Parameter
+and return positions, read/write versus readonly/promoted properties,
+bounds/defaults, static class context, inheritance forwarding and nested
+generic variance composition all share one polarity walk; merged include units
+re-run it when an ancestor was previously unresolved. Substituted inherited
+members, diamond merging and the resulting parametric-LSP checks remain the
+next link-layer slices.
 
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,

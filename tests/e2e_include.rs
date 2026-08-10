@@ -124,6 +124,21 @@ echo ":" . $box->value;
     assert_eq!(run_php(&source), "1ss:yes:T:string:linked:2");
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn test_include_revalidates_cross_unit_inheritance_variance() {
+    let (_dir, path) = write_temp_php(
+        "generic_variance.php",
+        "<?php interface Bad<+T> extends Consumer<T> {}",
+    );
+    let source = format!("<?php interface Consumer<-T> {{}} include '{}';", path);
+    let error = common::run_php_expect_error(&source);
+    assert!(
+        format!("{error:?}").contains("in contravariant position"),
+        "{error:?}"
+    );
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

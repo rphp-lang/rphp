@@ -1122,12 +1122,12 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_iface = self.resolve_name(name);
-                self.record_generic_declaration(
+                self.record_generic_class_declaration(
                     crate::generics::GenericDeclarationKind::Interface,
                     resolved_iface.clone(),
                     generic_params,
-                    None,
-                    None,
+                    &[],
+                    methods,
                 );
                 self.record_generic_inheritances(
                     &resolved_iface,
