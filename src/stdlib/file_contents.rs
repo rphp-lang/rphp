@@ -61,6 +61,8 @@ pub(super) fn fn_file_get_contents(
         );
         return Ok(());
     }
+    #[cfg(feature = "include-path")]
+    let use_include_path = optional_argument(execute_data, 1).is_some_and(Value::is_truthy);
 
     #[cfg(not(feature = "stream-context"))]
     if let Some(context) = optional_argument(execute_data, 2)
@@ -159,6 +161,8 @@ pub(super) fn fn_file_get_contents(
         return Ok(());
     }
 
+    #[cfg(feature = "include-path")]
+    let filename = super::include_path::resolve_for_open(eg, &filename, use_include_path);
     let mut stream = match PhpStream::open(&filename, "r") {
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),

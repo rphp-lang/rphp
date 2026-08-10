@@ -8077,6 +8077,43 @@ and adds no allocator shortcut, linker policy or dependency. Its 40-pair gate
 passes at +0.051%/+0.203%/-5.654%/-1.156%/-0.073%; a separate 100-pair String
 confirmation measures -5.526%.
 
+### Opt-in configurable include-path checkpoint (2026-08-10)
+
+Phase 5 now turns the previously validation-only include-path flags into one
+request-local filesystem policy behind `include-path`. The feature composes the
+already independent Stream Context and bounded file features, registers
+`get_include_path()` and `set_include_path()`, and applies the same ordered
+resolver to `fopen()`, `file_get_contents()`, `file_put_contents()`, `file()`
+and include/require opcodes. The RPHP default is `.`; a successful setter
+returns the preceding value, while an empty weak string returns `false` without
+mutation and embedded NUL bytes raise PHP's exact `ValueError`.
+
+PHP 8.4.24 differential probes define the path contract. Absolute paths,
+wrapper URLs and explicit `./` or `../` paths bypass the search. Other paths
+select the first existing entry, so readers and existing-file writers use the
+configured directory in order; a new write falls back to the originally
+requested path. Empty list entries retain current-directory behavior and a
+resolved regular-file stream reports the selected URI. The resolver uses only
+`std::path` and `std::fs`. Its current value lives under a private namespace in
+the existing request-owned state map, avoiding an
+`ExecutorGlobals` layout change or a second global/TLS registry.
+
+Default ARM64 and x86-64 `.text` are byte-identical to `c026124` at SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and `12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+ARM64 keeps the exact 2,818,048-byte `__TEXT` and monitored addresses; x86-64
+keeps 3,388,067/51,816/3,048 text/data/bss, the 0x988-byte `.rphp_cold` and
+monitored addresses. Its pinned 20-pair gate passes at
+-0.012%/+0.175%/+0.364%/-0.401%/+0.088%. A thermally unstable ARM64 batch had
+one noisy ledger result despite identical code; 40-pair isolated array and
+ledger repeats pass at -0.003% and +0.129%.
+
+Library matrices pass 195/186/301 on ARM64 and 195/186/326 on x86-64. Two new
+E2E scenarios cover every integrated path surface, include-once lookup, URI
+identity, weak values and exact errors; the existing 11 file, 29 stream and 12
+include scenarios remain green, and all-feature/all-target linking passes on
+x86-64. The slice adds no crate, external library or lockfile change.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

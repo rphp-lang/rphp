@@ -2213,3 +2213,23 @@ The resulting 40-pair gate passes at
 +0.051%/+0.203%/-5.654%/-1.156%/-0.073% for scalar, packed array, String,
 order and ledger. A separate 100-pair String confirmation measures -5.526%,
 closing the cumulative drift without changing the append algorithm.
+
+### Include-path default-code admission
+
+The opt-in configurable include-path slice initially shortened the default
+ARM64 `op_include` by `0xd0`: a compile-time `None` branch let LLVM simplify a
+syntactically shared feature/default expression, moving every later hot symbol.
+Splitting the two expressions at `cfg` time restores the original default MIR
+shape. Final ARM64 `.text` has the exact 0x244700-byte body and SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`;
+x86-64 `.text` remains exact at
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+Section totals, `.rphp_cold` and all monitored addresses match `c026124` on
+both hosts.
+
+The CPU-pinned x86-64 20-pair gate records
+-0.012%/+0.175%/+0.364%/-0.401%/+0.088%. One unpinned ARM64 batch developed
+wide thermal outliers and reported a spurious +3.534% ledger delta between the
+byte-identical binaries. Required build-free 40-pair repeats settle packed
+array at -0.003% and ledger at +0.129%. The result admits the feature without
+claiming a default-path speedup.

@@ -131,6 +131,8 @@ pub(super) fn fn_fopen(
         );
         return Ok(());
     }
+    #[cfg(feature = "include-path")]
+    let use_include_path = optional_argument(execute_data, 2).is_some_and(Value::is_truthy);
     let context_id = match optional_context_resource(execute_data, 3, eg, "fopen", 4) {
         Ok(context) => context,
         Err(()) => return Ok(()),
@@ -142,7 +144,14 @@ pub(super) fn fn_fopen(
         return Ok(());
     }
 
-    let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
+    #[cfg(feature = "include-path")]
+    let resolved_path =
+        super::super::include_path::resolve_for_open(eg, path.as_ref(), use_include_path);
+    #[cfg(feature = "include-path")]
+    let open_path = resolved_path.as_str();
+    #[cfg(not(feature = "include-path"))]
+    let open_path = path.as_ref();
+    let value = match PhpStream::open(open_path, mode.as_ref()) {
         Ok(stream) => {
             #[cfg(feature = "resource-lifetime")]
             let value = insert_stream(eg, stream);

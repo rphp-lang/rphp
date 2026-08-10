@@ -11,6 +11,8 @@ use super::{argument, optional_argument, return_value, string_argument};
 
 const FILE_APPEND: i64 = 8;
 const LOCK_EX: i64 = 2;
+#[cfg(feature = "include-path")]
+const FILE_USE_INCLUDE_PATH: i64 = 1;
 const WRITE_CHUNK_SIZE: usize = 8 * 1024;
 
 #[cold]
@@ -116,6 +118,12 @@ pub(in crate::stdlib) fn fn_file_put_contents(
         return Ok(());
     }
 
+    #[cfg(feature = "include-path")]
+    let filename = super::super::include_path::resolve_for_open(
+        eg,
+        &filename,
+        flags & FILE_USE_INCLUDE_PATH != 0,
+    );
     let append = flags & FILE_APPEND != 0;
     let locked = flags & LOCK_EX != 0;
     let mode = if append {

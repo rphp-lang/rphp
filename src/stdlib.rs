@@ -30,6 +30,8 @@ use crate::vm::function::{FunctionCommon, FunctionType};
 use crate::vm::instruction::InlineCache;
 use crate::vm::opcode::OpCode;
 
+#[cfg(feature = "include-path")]
+pub(crate) mod include_path;
 mod json_decode;
 mod regex_callback;
 
@@ -635,6 +637,16 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("die", fn_exit, 1, 0, "status");
 
     // --- Filesystem ---
+    #[cfg(feature = "include-path")]
+    reg!("get_include_path", include_path::fn_get_include_path, 0, 0);
+    #[cfg(feature = "include-path")]
+    reg!(
+        "set_include_path",
+        include_path::fn_set_include_path,
+        1,
+        1,
+        "include_path"
+    );
     streams::register(eg, &mut funcs);
     #[cfg(not(feature = "file-contents"))]
     reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");

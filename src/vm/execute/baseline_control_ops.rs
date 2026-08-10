@@ -17,7 +17,25 @@ fn op_include(
     let is_require = (opline.extended_value & 1) != 0;
     let is_once = (opline.extended_value & 2) != 0;
 
+    #[cfg(not(feature = "include-path"))]
     let resolved_path = if std::path::Path::new(&path_str).is_absolute() {
+        path_str.clone()
+    } else {
+        let base_dir = {
+            let op_name = &op_array.name;
+            let p = std::path::Path::new(op_name);
+            if p.is_file() {
+                p.parent().map(|d| d.to_path_buf())
+            } else {
+                None
+            }
+        }.unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
+        base_dir.join(&path_str).to_string_lossy().to_string()
+    };
+    #[cfg(feature = "include-path")]
+    let resolved_path = if let Some(path) = crate::stdlib::include_path::resolve_existing(eg, &path_str) {
+        path
+    } else if std::path::Path::new(&path_str).is_absolute() {
         path_str.clone()
     } else {
         let base_dir = {

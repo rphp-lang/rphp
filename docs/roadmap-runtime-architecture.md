@@ -1582,6 +1582,30 @@ Feature-only stream coverage grows from 16 to 17 scenarios and all-feature
 coverage from 28 to 29; 11 file scenarios and all-feature/all-target compilation
 pass on both hosts. No feature, crate or lockfile change is involved.
 
+### Configurable include-path checkpoint (2026-08-10)
+
+The opt-in `include-path` feature composes the accepted Stream Context and
+bounded file surfaces and gives them one request-local resolver. It registers
+`get_include_path()`/`set_include_path()` and consumes the same ordered path in
+`fopen()`, `file_get_contents()`, `file_put_contents()`, `file()` and
+include/require. Absolute paths, wrapper URLs and explicit `./`/`../` requests
+bypass lookup; the first existing entry wins, while a new write falls back to
+its original path. PHP 8.4.24 probes also lock empty-entry behavior, weak scalar
+setters, the non-mutating empty result and the embedded-NUL `ValueError`.
+
+The implementation stores the current `.`-default value under a private
+namespace in the executor's existing request-owned state map. It therefore
+needs neither an `ExecutorGlobals` field nor a second TLS registry. Resolution
+uses only `std::path` and `std::fs`; no crate or lockfile change is involved.
+Default ARM64/x86-64 `.text` is byte-identical to `c026124`, with exact section
+sizes and monitored addresses. The pinned x86-64 gate is
+-0.012%/+0.175%/+0.364%/-0.401%/+0.088%; isolated 40-pair ARM64 array/ledger
+controls pass at -0.003%/+0.129% after a thermally noisy full batch.
+
+Library matrices pass 195/186/301 on ARM64 and 195/186/326 on x86-64. Two
+focused E2E scenarios join the unchanged 11 file, 29 stream and 12 include
+scenarios, and x86-64 all-feature/all-target linking passes.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

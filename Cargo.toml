@@ -19,6 +19,7 @@ stream-context = ["value-errors"]
 file-contents = ["value-errors"]
 file-write = ["value-errors"]
 file-lines = ["value-errors"]
+include-path = ["stream-context", "file-contents", "file-write", "file-lines"]
 
 [dependencies]
 serde = "1.0.228"
