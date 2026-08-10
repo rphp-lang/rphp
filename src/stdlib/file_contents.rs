@@ -1,14 +1,24 @@
+#[cfg(feature = "file-contents")]
 use std::io::SeekFrom;
 
+#[cfg(feature = "file-contents")]
 use crate::runtime::ExecutorGlobals;
 use crate::value::{Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
+#[cfg(feature = "file-contents")]
 use super::stream::PhpStream;
+#[cfg(feature = "file-contents")]
 use super::streams::checked_args::{argument_error, given_type_name, weak_long_argument};
 
+#[cfg(feature = "file-write")]
+mod write;
+#[cfg(feature = "file-write")]
+pub(super) use write::fn_file_put_contents;
+
 #[cold]
+#[cfg(feature = "file-contents")]
 pub(super) fn fn_file_get_contents(
     execute_data: *mut ExecuteData,
     return_pointer: *mut Value,

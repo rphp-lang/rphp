@@ -1354,6 +1354,42 @@ three expanded scenarios; 26 stream scenarios and all-feature/all-target builds
 also pass. The implementation uses only `std` and leaves `Cargo.lock`
 byte-identical.
 
+### Opt-in file-write bridge checkpoint (2026-08-10)
+
+The existing two-argument `file_put_contents()` remains the complete default
+handler. The independent `file-write` feature selects a four-argument handler
+and publishes `FILE_USE_INCLUDE_PATH`, `LOCK_EX` and `FILE_APPEND`. PHP 8.5.9
+differential probes define weak flag conversion, append/replacement behavior,
+ordered scalar arrays, readable stream data, `file://`, named arguments and
+the observable validation order for flags, context resources, source streams
+and empty paths.
+
+The write policy is isolated in `stdlib/file_contents/write.rs`; the sibling
+parent retains the read handler and small shared frame helpers. An open source
+stream is read through alternating request-registry borrows and one fixed 8 KiB
+stack buffer. Strings and array fields are also emitted incrementally, so the
+handler does not allocate a combined payload. Non-stringable object/closure
+warning behavior remains conservative (`false`), valid stream-context
+resources do not yet exist, and `FILE_USE_INCLUDE_PATH` uses the ordinary path
+resolver until configurable include paths land.
+
+`LOCK_EX` uses `std::fs::File::lock`. Replacement under a lock opens in
+non-truncating create mode, acquires the lock first and only then truncates and
+rewinds; append keeps the same lock across all writes. Memory and temporary
+wrappers reject the regular-file lock flag. A permanent test holds the lock
+against a competing file descriptor and verifies that truncation occurs inside
+the exclusion interval.
+
+ARM64 default codegen remains the exact 2,818,048-byte `f5d4e68` `__TEXT`, hot
+addresses and lockfile. X86-64 retains text/data/bss
+3384879/51792/2112 and hot addresses `0xce550`/`0xd1c40`; its pinned 20-pair
+gate passes at +0.001%/-0.126%/+0.446%/+0.500%/-0.618%. Library matrices pass
+195/186/196/300 on ARM64 and 195/186/196/325 on x86-64 for
+default/no-default/file-write/all features. File E2E passes 2 default, 5
+write-only and 7 combined read/write scenarios; the 26 stream scenarios and
+all-feature/all-target builds pass on both hosts. No crate was added and
+`Cargo.lock` remains byte-identical.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

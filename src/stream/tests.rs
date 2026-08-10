@@ -52,6 +52,35 @@ fn memory_stream_preserves_position_eof_and_append_policy() {
 }
 
 #[test]
+#[cfg(feature = "file-write")]
+fn regular_file_lock_precedes_truncation_and_blocks_competing_locks() {
+    let path = std::env::temp_dir().join(format!(
+        "rphp-stream-lock-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    std::fs::write(&path, b"before").unwrap();
+    let mut stream = PhpStream::open(path.to_str().unwrap(), "c").unwrap();
+    stream.lock_exclusive().unwrap();
+
+    let competitor = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+    assert!(matches!(
+        competitor.try_lock(),
+        Err(std::fs::TryLockError::WouldBlock)
+    ));
+
+    stream.truncate_file().unwrap();
+    stream.write(b"after").unwrap();
+    drop(stream);
+    competitor.try_lock().unwrap();
+    assert_eq!(std::fs::read(&path).unwrap(), b"after");
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
 fn temporary_stream_spills_preserves_position_and_removes_its_file() {
     let mut in_memory = PhpStream::open("php://temp", "w+").unwrap();
     assert_eq!(in_memory.write(b"small").unwrap(), 5);

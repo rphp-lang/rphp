@@ -2045,3 +2045,24 @@ gate passes at -0.489%/-0.414%/-0.400%/-0.084%/+0.431% for scalar, packed
 array, String, order and ledger. Expanded file reads still use the 8 KiB stack
 chunk with fallible incremental result growth; no external filesystem,
 buffering dependency or lockfile change is involved.
+
+The complementary `file-write` slice keeps the original two-argument
+`file_put_contents()` body and registration in default builds. Its expanded
+four-argument policy lives in `stdlib/file_contents/write.rs`, while the
+existing read handler and shared frame helpers remain in the 204-line parent
+module. Feature-only constants and `PhpStream` lock/truncate methods compile
+out with the handler, so the default filesystem surface and hot runtime have
+no new call edge.
+
+Regular-file `LOCK_EX` uses the standard library's native `File::lock`. A
+non-append replacement opens without truncating, acquires the lock, then
+truncates and seeks to zero, preserving the required exclusion interval.
+Strings and scalar-array fields are written incrementally; readable resource
+data is copied through one 8 KiB stack buffer. This avoids constructing one
+combined payload or adding a buffering, locking or filesystem crate.
+
+ARM64 retains the exact 2,818,048-byte `f5d4e68` `__TEXT` size and monitored
+addresses. X86-64 text/data/bss and addresses are exact as well. Its fresh
+pinned 20-pair gate passes at +0.001%/-0.126%/+0.446%/+0.500%/-0.618% for
+scalar, packed array, String, order and ledger. The manifest adds only the
+opt-in feature; `Cargo.lock` remains byte-identical.

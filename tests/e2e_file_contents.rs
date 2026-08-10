@@ -50,6 +50,23 @@ fn file_get_contents_reads_complete_ascii_files() {
 }
 
 #[test]
+fn file_put_contents_writes_complete_ascii_files() {
+    let path = TemporaryPath::unique("file-contents-default-write");
+    let source = format!(
+        "<?php
+        $payload = str_repeat('x', 20000);
+        echo file_put_contents('{}', $payload); echo ':';
+        $contents = file_get_contents('{}');
+        echo strlen($contents); echo ':';
+        echo substr($contents, 8188, 8);
+        ",
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(run_php(&source), "20000:20000:xxxxxxxx");
+}
+
+#[test]
 #[cfg(feature = "file-contents")]
 fn extended_file_contents_matches_php_offsets_lengths_and_file_urls() {
     let path = TemporaryPath::unique("file-contents-offsets");
@@ -137,6 +154,111 @@ fn extended_file_contents_argument_errors_match_php_classes_and_messages() {
             "|TypeError:file_get_contents(): Argument #4 ($offset) must be of type int, array given",
             "|TypeError:file_get_contents(): Argument #5 ($length) must be of type ?int, array given",
             "|ValueError:file_get_contents(): Argument #5 ($length) must be greater than or equal to 0"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "file-write")]
+fn extended_file_writes_match_php_flags_arrays_urls_and_named_arguments() {
+    let path = TemporaryPath::unique("file-contents-extended-write");
+    let source = format!(
+        "<?php
+        echo FILE_USE_INCLUDE_PATH; echo ':'; echo LOCK_EX; echo ':'; echo FILE_APPEND; echo '|';
+        echo file_put_contents('{}', 'abc'); echo ':'; echo file_get_contents('{}'); echo '|';
+        echo file_put_contents('{}', 'de', FILE_APPEND); echo ':'; echo file_get_contents('{}'); echo '|';
+        echo file_put_contents('{}', 'xy', LOCK_EX); echo ':'; echo file_get_contents('{}'); echo '|';
+        echo file_put_contents('{}', 'z', FILE_APPEND | LOCK_EX); echo ':'; echo file_get_contents('{}'); echo '|';
+        echo file_put_contents('{}', ['a', 2, true, null, 3.5]); echo ':'; echo file_get_contents('{}'); echo '|';
+        echo file_put_contents(filename: '{}', data: 'q', flags: '8'); echo ':'; echo file_get_contents('{}'); echo '|';
+        echo file_put_contents('file://{}', 'uv', 4); echo ':'; echo file_get_contents('{}'); echo '|';
+        if (file_put_contents('php://memory', 'x', LOCK_EX) === false) {{ echo 'wrapper-lock'; }}
+        ",
+        path.php_literal(), path.php_literal(),
+        path.php_literal(), path.php_literal(),
+        path.php_literal(), path.php_literal(),
+        path.php_literal(), path.php_literal(),
+        path.php_literal(), path.php_literal(),
+        path.php_literal(), path.php_literal(),
+        path.php_literal(), path.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        "1:2:8|3:abc|2:abcde|2:xy|1:xyz|6:a213.5|1:a213.5q|2:uv|wrapper-lock"
+    );
+}
+
+#[test]
+#[cfg(feature = "file-write")]
+fn extended_file_writes_copy_stream_data_in_fixed_size_chunks() {
+    let path = TemporaryPath::unique("file-contents-stream-write");
+    let source = format!(
+        "<?php
+        $stream = fopen('php://memory', 'w+');
+        fwrite($stream, str_repeat('x', 20000));
+        fseek($stream, 8188);
+        echo file_put_contents('{}', $stream); echo ':';
+        echo strlen(file_get_contents('{}')); echo ':';
+        echo ftell($stream); echo ':';
+        if (feof($stream)) {{ echo 'eof'; }}
+        ",
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(run_php(&source), "11812:11812:20000:eof");
+}
+
+#[test]
+#[cfg(feature = "file-write")]
+fn extended_file_write_argument_errors_and_validation_order_match_php() {
+    let path = TemporaryPath::unique("file-contents-write-errors");
+    let source = format!(
+        "<?php
+        try {{ file_put_contents([], 'x'); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file_put_contents('', 'x', []); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file_put_contents('{}', 'x', 0, false); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        $context = fopen('php://memory', 'r');
+        try {{ file_put_contents('{}', 'x', 0, $context); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        $closed = fopen('php://memory', 'r'); fclose($closed);
+        try {{ file_put_contents('{}', $closed); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file_put_contents('', $closed); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file_put_contents('', 'x'); }}
+        catch (ValueError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        file_put_contents('{}', 'keep');
+        if (file_put_contents('{}', new stdClass()) === false) {{ echo 'false:'; }}
+        echo '['; echo file_get_contents('{}'); echo ']';
+        ",
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "TypeError:file_put_contents(): Argument #1 ($filename) must be of type string, array given",
+            "|TypeError:file_put_contents(): Argument #3 ($flags) must be of type int, array given",
+            "|TypeError:file_put_contents(): Argument #4 ($context) must be of type resource or null, false given",
+            "|TypeError:file_put_contents(): supplied resource is not a valid Stream-Context resource",
+            "|TypeError:file_put_contents(): supplied resource is not a valid stream resource",
+            "|TypeError:file_put_contents(): supplied resource is not a valid stream resource",
+            "|ValueError:Path must not be empty",
+            "|false:[]"
         )
     );
 }

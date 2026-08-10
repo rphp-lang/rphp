@@ -18,7 +18,8 @@ use super::stream::PhpStream;
     feature = "csv-errors",
     feature = "stream-contents",
     feature = "stream-copy",
-    feature = "file-contents"
+    feature = "file-contents",
+    feature = "file-write"
 ))]
 pub(super) mod checked_args;
 #[cfg(feature = "stream-contents")]
@@ -262,7 +263,7 @@ fn insert_stream(eg: &mut ExecutorGlobals, stream: PhpStream) -> i64 {
 }
 
 #[cold]
-fn with_stream<R>(
+pub(super) fn with_stream<R>(
     eg: &mut ExecutorGlobals,
     id: i64,
     operation: impl FnOnce(&mut PhpStream) -> R,

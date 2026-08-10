@@ -7852,6 +7852,51 @@ expanded scenarios, including a 20,000-byte multi-chunk file. The 26 combined
 stream scenarios and all-feature/all-target compilation pass on both hosts.
 No crate was added and `Cargo.lock` remains byte-identical.
 
+### Opt-in bounded `file_put_contents()` bridge (2026-08-10)
+
+Phase 5 now complements bounded file reads with the `file-write` feature. The
+old two-argument `std::fs::write` handler remains the default; the feature
+selects a four-argument handler in the dedicated
+`stdlib/file_contents/write.rs` child module and exposes the standard
+`FILE_USE_INCLUDE_PATH`, `LOCK_EX` and `FILE_APPEND` constants. The parent
+file-content module is reduced to 204 lines of read policy and shared frame
+helpers, while the write domain owns its 232-line validation and transfer
+policy.
+
+PHP 8.5.9 differential probes cover replacement, append, exclusive locking,
+unknown flag bits, weak scalar flags, ordered scalar arrays, readable stream
+sources, named arguments, `file://` and exact errors for filename, flags,
+context and invalid/closed stream data. Typed flags and contexts validate
+before the path; an invalid stream source also precedes the empty-path error.
+Valid Stream-Context resources and configurable include-path search remain
+future substrate. Non-stringable object/closure warning details are not yet a
+complete PHP error surface and conservatively return `false` after the file is
+opened.
+
+The dependency-free transfer path never creates one combined record. ASCII
+strings write directly, non-ASCII byte mapping uses an 8 KiB stack chunk,
+array fields stream in insertion order and resource data advances through the
+same fixed-size buffer. Every short write is completed or reported as
+`false`, and byte-count overflow is checked. A source read failure preserves
+already-written destination bytes and an already-advanced source cursor.
+
+Exclusive locking uses stable `std::fs::File::lock`, not a locking crate. A
+replacement opens with non-truncating create semantics, blocks for the lock,
+then truncates and rewinds inside the protected interval. Append acquires the
+same lock without truncation. Non-file wrappers reject `LOCK_EX`, matching the
+covered PHP result. A direct backend test proves a competing descriptor cannot
+take the lock until the writing stream drops.
+
+Default ARM64 remains the exact 2,818,048-byte `f5d4e68` `__TEXT` image with
+identical monitored addresses. X86-64 text/data/bss and addresses are exact,
+and its fresh pinned 20-pair gate passes at
++0.001%/-0.126%/+0.446%/+0.500%/-0.618% for scalar, packed array, String,
+order and ledger. ARM64 passes 195 default, 186 no-default, 196 `file-write`
+and 300 all-feature library tests; x86-64 passes 195/186/196/325. Filesystem
+E2E passes 2 default, 5 writer and 7 combined scenarios; 26 stream scenarios
+and complete all-feature/all-target compilation pass on both hosts. The slice
+adds no crate, and `Cargo.lock` remains byte-identical.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

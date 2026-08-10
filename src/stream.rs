@@ -385,6 +385,37 @@ impl PhpStream {
         }
     }
 
+    /// Lock a regular file for the duration of the owning stream. PHP's
+    /// `LOCK_EX` flag rejects memory and temporary wrappers.
+    #[cfg(feature = "file-write")]
+    pub fn lock_exclusive(&self) -> io::Result<()> {
+        match &self.backend {
+            StreamBackend::File(file) => file.lock(),
+            StreamBackend::Memory(_) | StreamBackend::Temp(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "exclusive locks require a regular file",
+            )),
+        }
+    }
+
+    /// Truncate a regular file after acquiring `LOCK_EX`, avoiding the race
+    /// caused by opening it in truncating mode before the lock is held.
+    #[cfg(feature = "file-write")]
+    pub fn truncate_file(&mut self) -> io::Result<()> {
+        match &mut self.backend {
+            StreamBackend::File(file) => {
+                file.set_len(0)?;
+                file.seek(SeekFrom::Start(0))?;
+                self.eof = false;
+                Ok(())
+            }
+            StreamBackend::Memory(_) | StreamBackend::Temp(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "truncate after locking requires a regular file",
+            )),
+        }
+    }
+
     pub fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         let position = self.seek_backend(position)?;
         self.eof = false;

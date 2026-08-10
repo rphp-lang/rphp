@@ -94,6 +94,12 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "SEEK_SET" => Some(value::Value::long(0)),
         "SEEK_CUR" => Some(value::Value::long(1)),
         "SEEK_END" => Some(value::Value::long(2)),
+        #[cfg(feature = "file-write")]
+        "FILE_USE_INCLUDE_PATH" => Some(value::Value::long(1)),
+        #[cfg(feature = "file-write")]
+        "LOCK_EX" => Some(value::Value::long(2)),
+        #[cfg(feature = "file-write")]
+        "FILE_APPEND" => Some(value::Value::long(8)),
 
         _ => None,
     }

@@ -650,6 +650,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "offset",
         "length"
     );
+    #[cfg(not(feature = "file-write"))]
     reg!(
         "file_put_contents",
         fn_file_put_contents,
@@ -657,6 +658,17 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         "filename",
         "data"
+    );
+    #[cfg(feature = "file-write")]
+    reg!(
+        "file_put_contents",
+        file_contents::fn_file_put_contents,
+        4,
+        2,
+        "filename",
+        "data",
+        "flags",
+        "context"
     );
     reg!("file_exists", fn_file_exists, 1, 1, "filename");
     reg!("is_file", fn_is_file, 1, 1, "filename");
@@ -4386,6 +4398,7 @@ fn php_string_to_bytes(s: &str) -> Vec<u8> {
 
 /// file_put_contents($filename, $data): int|false
 /// Writes using Latin-1 byte mapping to preserve binary data round-trip.
+#[cfg(not(feature = "file-write"))]
 fn fn_file_put_contents(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -6791,7 +6804,7 @@ fn fn_preg_replace_callback(
     ret!(rv, Value::string(result));
 }
 
-#[cfg(feature = "file-contents")]
+#[cfg(any(feature = "file-contents", feature = "file-write"))]
 mod file_contents;
 #[path = "resource.rs"]
 pub(crate) mod resource;
