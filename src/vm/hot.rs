@@ -101,6 +101,31 @@ use super::stats;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{Value, ValueType};
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+struct HotGenericLongContractProof {
+    site: *const Instruction,
+    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+impl HotGenericLongContractProof {
+    #[inline(always)]
+    fn matches(&self, site: *const Instruction, value: &Value) -> bool {
+        let Some(object) = value.as_object_rc() else {
+            return false;
+        };
+        self.site == site && self.object.as_ptr() == std::rc::Rc::as_ptr(&object)
+    }
+
+    fn new(site: *const Instruction, value: &Value) -> Option<Self> {
+        let object = value.as_object_rc()?;
+        Some(Self {
+            site,
+            object: std::rc::Rc::downgrade(&object),
+        })
+    }
+}
+
 // ── Public types ──────────────────────────────────────────────────────
 
 /// Result of hot executor: either completed successfully or bailed out.
@@ -332,6 +357,11 @@ pub fn execute_hot_frame(
     // For fib: always false → Fast DoFcall globals check is a single bool read.
     let caller_has_globals =
         !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty();
+    // A weak handle prevents allocation-address reuse from validating a
+    // different reified object while keeping repeated calls on one receiver
+    // free of metadata and sidecar lookups.
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    let mut generic_long_contract_proof: Option<HotGenericLongContractProof> = None;
 
     loop {
         let opline = unsafe { &*opline_ptr };
@@ -1264,6 +1294,82 @@ pub fn execute_hot_frame(
                 }
                 let num_args = opline.extended_value;
                 let mut scalar_plan_eligible = false;
+
+                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                if ic.method_has_generic_contract() {
+                    let contract_admits_long = if ic.method_has_linked_generic_long_contract() {
+                        true
+                    } else if generic_long_contract_proof
+                        .as_ref()
+                        .is_some_and(|proof| proof.matches(opline_ptr, obj_val))
+                    {
+                        true
+                    } else {
+                        let method = op_array
+                            .literals()
+                            .get(opline.op2 as usize)
+                            .and_then(Value::as_str)
+                            .unwrap_or("");
+                        let admits = eg
+                            .generic_instance_method_contract(obj_val, method)
+                            .as_deref()
+                            .is_some_and(|contract| contract.admits_exact_long_call(num_args));
+                        if admits {
+                            generic_long_contract_proof =
+                                HotGenericLongContractProof::new(opline_ptr, obj_val);
+                        }
+                        admits
+                    };
+                    if !contract_admits_long
+                        || func_common.fn_type != FunctionType::User
+                        || num_args != func_common.sig.public_arity()
+                    {
+                        return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
+                    }
+                    let user = unsafe { &*(func_ptr as *const UserFunction) };
+                    let Some(plan) = user.scalar_long_plan.as_deref() else {
+                        return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
+                    };
+                    let evaluated = if plan.select.is_none() && plan.program.operations.len() == 1 {
+                        unsafe {
+                            super::execute::try_execute_direct_single_scalar_long_op(
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                func_common,
+                                plan,
+                            )
+                        }
+                    } else {
+                        unsafe {
+                            super::execute::try_execute_direct_scalar_long_call(
+                                frame,
+                                op_array,
+                                opline_ptr.add(1),
+                                func_common,
+                                plan,
+                            )
+                        }
+                    };
+                    let Some((result, do_fcall_ptr)) = evaluated else {
+                        return bailout(frame, opline_ptr, HotBailReason::ObjCacheMiss);
+                    };
+                    stats::inc_do_fcall_fast();
+                    stats::inc_return_fast();
+                    let count = func_common.call_count.get();
+                    if count < u32::MAX {
+                        func_common.call_count.set(count + 1);
+                    }
+                    unsafe {
+                        super::execute::complete_direct_scalar_long_call(
+                            frame,
+                            do_fcall_ptr,
+                            result,
+                        );
+                    }
+                    opline_ptr = unsafe { do_fcall_ptr.add(1) };
+                    continue;
+                }
 
                 if func_common.fn_type == FunctionType::User
                     && num_args == func_common.sig.public_arity()

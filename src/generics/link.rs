@@ -136,6 +136,13 @@ pub(super) fn substitute_generic_parameters(
     }
 }
 
+pub(super) fn erase_declaration_parameters(
+    value: &GenericType,
+    declaration: &GenericDeclaration,
+) -> GenericType {
+    erase_forwarded_parameters(value, Some(declaration), declaration.parameters.len() + 1)
+}
+
 fn erase_forwarded_parameters(
     value: &GenericType,
     owner: Option<&GenericDeclaration>,

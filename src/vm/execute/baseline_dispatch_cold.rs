@@ -257,13 +257,14 @@ fn op_check_reified_return(
     }
 }
 
-#[cfg(feature = "php-generics-reified")]
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[inline(never)]
-fn validate_reified_member_arguments(
+fn validate_generic_member_arguments(
     eg: &ExecutorGlobals,
     call: *mut ExecuteData,
-    contract: &crate::generics::ReifiedMethodContract,
+    contract: &crate::generics::GenericMethodContract,
 ) -> Result<(), VmError> {
+    let contract_kind = generic_method_contract_kind(contract.runtime_mode);
     let common = unsafe { &*(*call).func };
     let fixed = contract
         .value_parameters
@@ -287,10 +288,11 @@ fn validate_reified_member_arguments(
             |actual, bound| eg.class_is_a(actual, bound),
         ) {
             return Err(VmError::Fatal(format!(
-                "Argument #{} passed to {}::{}() does not match its reified class type",
+                "Argument #{} passed to {}::{}() does not match its {}",
                 index + 1,
                 contract.owner,
-                contract.method
+                contract.method,
+                contract_kind
             )));
         }
     }
@@ -311,10 +313,11 @@ fn validate_reified_member_arguments(
                     |actual, bound| eg.class_is_a(actual, bound),
                 ) {
                     return Err(VmError::Fatal(format!(
-                        "Variadic argument #{} passed to {}::{}() does not match its reified class type",
+                        "Variadic argument #{} passed to {}::{}() does not match its {}",
                         fixed + index as usize + 1,
                         contract.owner,
-                        contract.method
+                        contract.method,
+                        contract_kind
                     )));
                 }
             }
@@ -326,8 +329,8 @@ fn validate_reified_member_arguments(
                         |actual, bound| eg.class_is_a(actual, bound),
                     ) {
                         return Err(VmError::Fatal(format!(
-                            "Named variadic argument ${} passed to {}::{}() does not match its reified class type",
-                            name, contract.owner, contract.method
+                            "Named variadic argument ${} passed to {}::{}() does not match its {}",
+                            name, contract.owner, contract.method, contract_kind
                         )));
                     }
                 }
@@ -337,14 +340,14 @@ fn validate_reified_member_arguments(
     Ok(())
 }
 
-#[cfg(feature = "php-generics-reified")]
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[inline(never)]
-fn validate_reified_member_return(
+fn validate_generic_member_return(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-    contract: &crate::generics::ReifiedMethodContract,
+    contract: &crate::generics::GenericMethodContract,
 ) -> Result<(), VmError> {
     let Some(expected) = contract.return_type.as_ref() else {
         return Ok(());
@@ -364,9 +367,20 @@ fn validate_reified_member_return(
         return Ok(());
     }
     Err(VmError::Fatal(format!(
-        "Return value of {}::{}() does not match its reified class type",
-        contract.owner, contract.method
+        "Return value of {}::{}() does not match its {}",
+        contract.owner,
+        contract.method,
+        generic_method_contract_kind(contract.runtime_mode)
     )))
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[inline(always)]
+fn generic_method_contract_kind(mode: crate::generics::GenericRuntimeMode) -> &'static str {
+    match mode {
+        crate::generics::GenericRuntimeMode::BoundErased => "linked generic class type",
+        crate::generics::GenericRuntimeMode::Reified => "reified class type",
+    }
 }
 
 #[inline(never)]

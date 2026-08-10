@@ -1530,7 +1530,7 @@ fn execute_full_call<'a>(
     opline: &Instruction,
     opline_ptr: *const Instruction,
     call: *mut ExecuteData,
-    reified_member_contract: Option<std::rc::Rc<crate::generics::ReifiedMethodContract>>,
+    generic_member_contract: Option<std::rc::Rc<crate::generics::GenericMethodContract>>,
 ) -> Result<ColdResult<'a>, VmError> {
     stats::inc_do_fcall_full();
 
@@ -1712,12 +1712,15 @@ fn execute_full_call<'a>(
                 eg.vm_stack.pop_call_frame(call);
                 Ok(ColdResult::Done)
             } else {
-                #[cfg(feature = "php-generics-reified")]
-                if let Some(contract) = reified_member_contract {
-                    eg.activate_reified_member_call(call as usize, contract);
+                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                if let Some(contract) = generic_member_contract {
+                    eg.activate_generic_member_call(call as usize, contract);
                 }
-                #[cfg(not(feature = "php-generics-reified"))]
-                let _ = reified_member_contract;
+                #[cfg(not(any(
+                    feature = "php-generics-erased",
+                    feature = "php-generics-reified"
+                )))]
+                let _ = generic_member_contract;
                 if user.op_array.may_access_globals {
                     let vars_to_sync = if !op_array.main_scope_vars.is_empty() {
                         &op_array.main_scope_vars

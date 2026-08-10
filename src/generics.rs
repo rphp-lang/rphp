@@ -145,19 +145,21 @@ pub struct GenericMethodMetadata {
     pub is_static: bool,
 }
 
-/// Fully substituted, cold runtime view of an instance method whose contract
-/// depends on the receiver's reified class arguments. It lives only in an
-/// executor sidecar while that call is active; no function or frame grows.
+/// Cold runtime view of the generic boundaries that are stricter than the
+/// executable method ABI. Reified receivers carry a full substitution;
+/// bound-erased descendants carry only link-time-narrowed inherited slots.
+/// The view lives in an executor sidecar, so no function or frame grows.
 #[derive(Debug, Clone, PartialEq)]
-pub struct ReifiedMethodContract {
+pub struct GenericMethodContract {
     pub owner: Box<str>,
     pub method: Box<str>,
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,
     pub is_variadic: bool,
+    pub runtime_mode: GenericRuntimeMode,
 }
 
-impl ReifiedMethodContract {
+impl GenericMethodContract {
     /// A direct Long method plan validates every argument representation and
     /// produces a Long or side-exits. It can therefore discharge this
     /// substituted contract without allocating a frame or sidecar entry when

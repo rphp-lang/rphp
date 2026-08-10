@@ -8488,23 +8488,23 @@ incompatible staticness, arity, parameter contravariance or return covariance.
 Variadic prototypes remain variadic and their substituted tail contract is
 checked against added optional parameters as well as the implementation tail.
 The same validation runs after include metadata is merged. It adds no runtime
-method lookup, frame field or ordinary-call branch. A general linked runtime
-signature for erased or non-reified concrete descendants, method-generic
-alpha-renaming and deterministic diamond contract merging remain the next
+method lookup, frame field or ordinary-call branch. Method-generic
+alpha-renaming and deterministic diamond contract merging remain later
 link-layer slices.
 
-The first receiver-specific runtime-signature slice is now executable in the
-reified branch. A free bit in the existing method inline cache marks only
-methods whose effective own or inherited signature depends on class
-parameters. Object-binding and binding-plus-method L0 caches produce one fully
-substituted contract for direct or transitive inheritance; feature-only LIFO
+The receiver-specific runtime-signature slice is now executable in both
+branches. A free bit in the existing method inline cache marks only methods
+with a reified substitution or a stricter inherited link-time boundary.
+Object-binding and declaration/use-site-plus-method L0 caches produce either a
+fully substituted reified contract or a sparse bound-erased contract containing
+only slots that differ from the executable parent ABI. Feature-only LIFO
 sidecars carry it across the canonical call frame and validate fixed,
 positional-variadic, named-variadic and return boundaries. An own override with
 a widened non-parametric signature deliberately stops ancestor lookup. Nested
-calls, caught exceptions and cross-unit inherited methods have permanent
-coverage. Bound-erased methods remain erased and take the pre-existing path;
-no object, `Value`, `FunctionCommon`, frame, instruction or inline-cache layout
-grows.
+calls, caught exceptions, concrete/transitive descendants, concrete traits and
+cross-unit inherited methods have permanent coverage. An explicit turbofish
+alone still does not tighten an erased callee. No object, `Value`,
+`FunctionCommon`, frame, instruction or inline-cache layout grows.
 
 The initial correct reified method implementation took roughly 0.388 seconds
 for five million `GenericMethodBox<int>::step(int): int` calls because every
@@ -8512,23 +8512,24 @@ call required a full frame. The final path proves that a scalar Long plan
 guards every substituted argument and produces a checked Long result. A
 successful proof executes frame-free and allocates no pending/active contract;
 argument mismatch, non-Long return and overflow return to the canonical
-reified checks. In 21 order-alternated ARM64 release pairs, the permanent
-method benchmarks report:
+generic checks. A second free IC bit records a stable linked Long-to-Long proof
+for non-reifiable descendants, so their warmed success path does not even
+materialize or clone the sparse contract. In 21 order-alternated ARM64 release
+pairs, the permanent method benchmarks report:
 
-- erased generic/manual paired median: +0.544% (0.050232/0.050015 seconds);
-- reified generic/manual paired median: +0.408% (0.049945/0.049647 seconds);
-- reified/erased generic paired median: -0.474%.
+- erased generic/manual paired median: -0.556% (0.048983/0.049162 seconds);
+- reified generic/manual paired median: +0.463% (0.049852/0.049589 seconds).
 
 The synchronized x86-64 host independently passes the same 21-pair gate:
-erased generic/manual is -0.042% (0.065722/0.065784 seconds), reified
-generic/manual is -0.168% (0.065847/0.065974 seconds), and reified/erased
-generic is +0.032%.
+erased generic/manual is -0.055% (0.065765/0.065790 seconds) and reified
+generic/manual is +0.042% (0.066356/0.066457 seconds).
 
-Reified constructors now consume the same effective own/inherited method
-contract. The ordinary path validates the substituted arguments before the
-body; the property-initializer fast path proves both those arguments and every
-generic destination property, then skips the frame while retaining the
-existing class-binding completion check. Binding lifetime is explicit as well:
+Generic constructors now consume the same effective own/inherited method
+contract in both runtime modes. The ordinary path validates reified or linked
+arguments before the body; the property-initializer fast path proves both
+those arguments and every generic destination property, then skips the frame
+while retaining the existing class-binding completion check. Reified binding
+lifetime is explicit as well:
 caller-owned pending scopes become call-owned active scopes, and success,
 abandoned argument calls plus exception unwinding remove the exact tuple. A
 permanent caught-constructor regression verifies that a later ordinary `new`
@@ -8598,9 +8599,23 @@ of the new erased own-bound guard against checkpoint `d2ad952` is -4.986%
 (0.101582 versus 0.106627 seconds), so generalizing the L0 did not tax the
 existing checked path.
 
-The general linked method/constructor view for non-reified concrete
-descendants, method-generic alpha-renaming and deterministic diamond merging
-remain follow-ups rather than weakening either exact fast-path proof.
+The linked method/constructor view now covers concrete and transitive
+descendants, forwarded child bounds in bound-erased builds, concrete traits,
+return boundaries, constructor property-init fallback and separately compiled
+children. Warm-cache argument and overflow regressions prove that the exact
+Long path side-exits to the full linked contract. The hot interpreter also
+keeps a weak per-frame receiver proof: it cannot confuse two reified objects
+of the same class or a recycled allocation, yet repeated calls avoid metadata
+lookups. In 21 order-alternated ARM64 pairs, the permanent concrete-method
+benchmark is -0.159% in the erased build and +0.382% in the reified build
+versus an ordinary `int -> int` method. The CPU-pinned x86-64 gate reports
++0.566% and -0.235%, respectively. Thus linked
+inheritance is at parity on both architectures without relying on JIT
+specialization. ARM64 passes 197 default, 197 erased-only, 197 reified-only and
+309 all-feature library tests plus every all-feature target; x86-64 passes the
+same first three sets, 334 all-feature library tests and every target.
+Method-generic alpha-renaming and deterministic diamond merging remain
+follow-ups rather than weakening either exact fast-path proof.
 
 Generics-aware JIT work is the final milestone of this interphase, not a
 concurrent semantic shortcut. It begins only after parser/link/runtime/

@@ -1845,35 +1845,43 @@ types. The cold registration linker composes direct and transitive ancestor
 bindings, substitutes those prototypes and checks staticness, arity,
 contravariant parameters and covariant returns for class, interface and trait
 overrides, including declarations merged from an included unit. Executable
-method bodies and ordinary dispatch remain erased and untouched.
+method bodies remain erased; a separate runtime view supplies only stricter
+linked or reified call boundaries.
 
-Reified instance dispatch now adds a receiver-specific runtime view without
+Generic instance dispatch now adds a receiver-specific runtime view without
 changing those executable signatures. The existing method inline cache uses
-one previously free bit to identify methods whose effective own or inherited
-contract depends on class parameters. A weak object-binding L0 and a
-binding-plus-method L0 resolve direct and transitive ancestor signatures once;
-fixed, variadic and named arguments plus return values are then checked against
-the fully substituted contract. Pending and active contracts use feature-only
-LIFO sidecars keyed by the existing frame identity, so nested calls and
-exception unwinding remain exact without widening `Value`, `PhpObject`,
-`ExecuteData`, `FunctionCommon`, an instruction or its 16-byte inline cache.
-Bound-erased calls retain the original erased dispatch with no instance-method
-probe.
+one previously free bit to identify methods with a reified substitution or a
+stricter inherited link-time boundary. A weak object-binding L0 and a
+declaration/use-site-plus-method L0 resolve direct and transitive ancestor
+signatures once. Reified calls carry the full substitution; bound-erased calls
+carry only slots whose linked child boundary differs from the executable
+parent ABI. Fixed, variadic and named arguments plus return values are checked
+against that contract. Pending and active contracts use feature-only LIFO
+sidecars keyed by the existing frame identity, so nested calls and exception
+unwinding remain exact without widening `Value`, `PhpObject`, `ExecuteData`,
+`FunctionCommon`, an instruction or its 16-byte inline cache. A turbofish alone
+still retains the original erased method dispatch.
 
-For the common reified `int -> int` method shape, an exact scalar-plan proof
-checks that every substituted boundary admits `int`. The already-guarded
-frame-free Long plan may then discharge the contract without pending/active
-sidecar state; a mismatched argument, non-Long result or arithmetic overflow
-side-exits to the canonical reified call and its full checks.
+For the common reified or linked `int -> int` method shape, an exact
+scalar-plan proof checks that every substituted boundary admits `int`. The
+already-guarded frame-free Long plan may then discharge the contract without
+pending/active sidecar state; a mismatched argument, non-Long result or
+arithmetic overflow side-exits to the canonical generic call and its full
+checks. A second free IC bit records this proof for a non-reifiable concrete
+child, avoiding contract materialization on its warmed success path. The hot
+interpreter retains a weak per-frame proof for one reified receiver; changing
+objects invalidates it without allowing allocation-address reuse, and returns
+to the canonical contract before another specialized call.
 
-Explicit reified construction now resolves the effective own or inherited
-`__construct` signature through the same substituted-method cache. Canonical
-calls validate fixed and variadic constructor arguments before entering the
-body. A proven property-initializer constructor can instead validate both the
-substituted parameter and every generic destination property, skip its frame,
-and resume at the existing class-binding return check. Explicit generic
-bindings now also move through caller-owned pending and call-owned active scope
-sidecars; successful completion, abandoned argument evaluation and exception
+Generic construction now resolves the effective own or inherited
+`__construct` signature through the same method-contract cache. Canonical
+calls validate fixed and variadic reified or linked constructor arguments
+before entering the body. A proven property-initializer constructor can
+instead validate both the substituted parameter and every generic destination
+property, skip its frame, and resume at the existing class-binding return
+check. Explicit generic bindings now also move through caller-owned pending and
+call-owned active scope sidecars; successful completion, abandoned argument
+evaluation and exception
 unwinding remove the exact binding, preventing a caught generic call from
 reifying a later ordinary call through stale LIFO state.
 
@@ -1898,15 +1906,20 @@ and concrete trait bindings behave identically. The shared L0 distinguishes an
 erased child declaration from a reified declaration/use-site pair. Cached
 zero-parameter children skip the weak reified-object lookup because such a
 declaration cannot carry an explicit binding. This closes the property half of
-the RFC's general substituted signature; non-overridden inherited methods and
-constructors remain the next half.
+the RFC's general substituted signature.
 
-Materializing inherited method and constructor signatures for non-reified
-concrete descendants, method-generic alpha-renaming and deterministic diamond
-contract merging remain explicit follow-up link/runtime steps. Generics-aware JIT
-specialization is deliberately last: it starts only after these semantics and
-both runtimes are closed, and must consume the canonical metadata with exact
-guards and deoptimization back to the established erased/reified paths.
+The method/constructor half now materializes a sparse linked contract only when
+the child's substituted erased boundary is stricter than the executable parent
+ABI. Concrete and transitive children, concrete traits, forwarded child bounds,
+returns, constructors and cross-unit declarations share the same resolver and
+pending/active call sidecar as reified methods. The permanent concrete
+`int -> int` benchmark remains within +0.382% of a manually typed method on
+ARM64 and +0.566% on x86-64 across both feature builds. Method-generic
+alpha-renaming and deterministic diamond contract merging remain explicit
+follow-up link/runtime steps. Generics-aware JIT specialization is deliberately
+last: it starts only after these semantics and both runtimes are closed, and
+must consume the canonical metadata with exact guards and deoptimization back
+to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

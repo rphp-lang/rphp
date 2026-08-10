@@ -436,6 +436,83 @@ $box->value = "not an int";
     }
 }
 
+#[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+#[test]
+fn erased_linker_materializes_forwarded_method_and_constructor_bounds() {
+    for source in [
+        "<?php class ParentBox<T> { public function id(T $value): T { return $value; } } class ForwardedBox<U : int> extends ParentBox<U> {} $box = new ForwardedBox::<int>(); $box->id('bad');",
+        "<?php class ParentBox<T> { public function __construct(T $value) {} } class ForwardedBox<U : int> extends ParentBox<U> {} new ForwardedBox::<int>('bad');",
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("linked generic class type"),
+            "{rendered:?}"
+        );
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn concrete_descendants_enforce_linked_method_and_constructor_contracts() {
+    let output = common::run_php(
+        r#"<?php
+class ParentBox<T> {
+    public function __construct(T $value) { echo $value; }
+    public function id(T $value): T { return $value; }
+}
+class IntBox extends ParentBox<int> {}
+class IntGrandchild extends IntBox {}
+trait Reads<T> { public function read(T $value): T { return $value; } }
+class IntReader { use Reads<int>; }
+$box = new IntBox(1);
+echo ":" . $box->id(2);
+$grandchild = new IntGrandchild(3);
+echo ":" . $grandchild->id(4);
+echo ":" . (new IntReader())->read(5);
+"#,
+    );
+    assert_eq!(output, "1:23:4:5");
+
+    for (source, expected) in [
+        (
+            "<?php class ParentBox<T> { public function id(T $value): T { return $value; } } class IntBox extends ParentBox<int> {} $box = new IntBox(); $box->id(1); $box->id('bad');",
+            "Argument #1 passed to IntBox::id()",
+        ),
+        (
+            "<?php class ParentBox<T> { public function id(T $value): T { return $value; } } class IntBox extends ParentBox<int> {} class IntGrandchild extends IntBox {} $box = new IntGrandchild(); $box->id('bad');",
+            "Argument #1 passed to IntGrandchild::id()",
+        ),
+        (
+            "<?php trait Reads<T> { public function read(T $value): T { return $value; } } class IntReader { use Reads<int>; } $reader = new IntReader(); $reader->read('bad');",
+            "Argument #1 passed to IntReader::read()",
+        ),
+        (
+            "<?php class ParentBox<T> { public function __construct(T $value) {} } class IntBox extends ParentBox<int> {} new IntBox('bad');",
+            "Argument #1 passed to IntBox::__construct()",
+        ),
+        (
+            "<?php class ParentBox<T> { public function wrong(): T { return 'bad'; } } class IntBox extends ParentBox<int> {} $box = new IntBox(); $box->wrong();",
+            "Return value of IntBox::wrong()",
+        ),
+        (
+            "<?php class ParentBox<T> { public function step(T $value): T { return $value + 1; } } class IntBox extends ParentBox<int> {} $box = new IntBox(); $box->step(1); $box->step(9223372036854775807);",
+            "Return value of IntBox::step()",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+        assert!(
+            rendered.contains("linked generic class type"),
+            "{rendered:?}"
+        );
+    }
+}
+
 #[cfg(feature = "php-generics-reified")]
 #[test]
 fn reified_runtime_enforces_substituted_argument_and_return_contracts() {
@@ -661,6 +738,33 @@ echo $step->step(12);
         );
         assert!(rendered.contains("reified class type"), "{rendered:?}");
     }
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn hot_method_dispatch_rechecks_a_new_receivers_reified_contract() {
+    let error = common::run_php_expect_error(
+        r#"<?php
+class StepBox<T> {
+    public function step(T $value): T { return $value + 1; }
+}
+function runSteps($box) {
+    $value = 0;
+    for ($i = 0; $i < 100; $i++) {
+        $value = $box->step($value);
+    }
+    return $value;
+}
+runSteps(new StepBox());
+runSteps(new StepBox::<string>());
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to StepBox::step()"),
+        "{rendered:?}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered:?}");
 }
 
 #[cfg(feature = "php-generics-reified")]

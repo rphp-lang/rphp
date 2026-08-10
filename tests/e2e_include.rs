@@ -193,6 +193,30 @@ fn test_include_links_inherited_generic_property_contracts() {
     assert!(rendered.contains("bound-erased property"), "{rendered:?}");
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn test_include_links_inherited_generic_method_and_constructor_contracts() {
+    let (_dir, path) = write_temp_php(
+        "generic_method_child.php",
+        "<?php class IncludedMethodChild extends IncludedMethodParent<int> {}",
+    );
+    for operation in [
+        "$box = new IncludedMethodChild(1); $box->id('bad');",
+        "new IncludedMethodChild('bad');",
+    ] {
+        let source = format!(
+            "<?php class IncludedMethodParent<T> {{ public function __construct(T $value) {{}} public function id(T $value): T {{ return $value; }} }} include '{}'; {}",
+            path, operation
+        );
+        let error = common::run_php_expect_error(&source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("linked generic class type"),
+            "{rendered:?}"
+        );
+    }
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

@@ -188,8 +188,8 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
         let next = (*call).call;
         let call_key = call as usize;
         eg.pending_named_variadic.remove(&call_key);
-        #[cfg(feature = "php-generics-reified")]
-        eg.discard_reified_member_call(call_key);
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        eg.discard_generic_member_call(call_key);
         let _ = take_pending_invoke_this(eg, call_key);
         cleanup_frame_slots(call);
         pop_call_storage(eg, call);
@@ -213,9 +213,10 @@ unsafe fn cleanup_call_and_throw<'a>(
 ) -> ThrowResult<'a> {
     let call_key = call as usize;
     eg.pending_named_variadic.remove(&call_key);
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    eg.discard_generic_member_call(call_key);
     #[cfg(feature = "php-generics-reified")]
     {
-        eg.discard_reified_member_call(call_key);
         eg.discard_pending_reified_binding_scopes(frame as usize);
     }
     let _ = take_pending_invoke_this(eg, call_key);
@@ -339,9 +340,10 @@ fn throw_in_frame<'a>(
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
+                    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                    eg.discard_generic_member_call(frame as usize);
                     #[cfg(feature = "php-generics-reified")]
                     {
-                        eg.discard_reified_member_call(frame as usize);
                         eg.discard_active_reified_binding_scope(frame as usize);
                     }
                     unsafe {
@@ -363,9 +365,10 @@ fn throw_in_frame<'a>(
                 while frame != search_frame {
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
+                    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                    eg.discard_generic_member_call(frame as usize);
                     #[cfg(feature = "php-generics-reified")]
                     {
-                        eg.discard_reified_member_call(frame as usize);
                         eg.discard_active_reified_binding_scope(frame as usize);
                     }
                     unsafe {

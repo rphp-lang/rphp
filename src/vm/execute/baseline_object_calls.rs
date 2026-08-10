@@ -8,7 +8,7 @@ unsafe fn try_execute_property_init_constructor(
     object: &Value,
     callee: &UserFunction,
     plan: &PropertyInitMethodPlan,
-    reified_contract: Option<&crate::generics::ReifiedMethodContract>,
+    generic_contract: Option<&crate::generics::GenericMethodContract>,
     reified_protocol: bool,
 ) -> Option<*const Instruction> {
     let common = &callee.common;
@@ -60,8 +60,8 @@ unsafe fn try_execute_property_init_constructor(
         ) {
             return None;
         }
-        #[cfg(feature = "php-generics-reified")]
-        if let Some(expected) = reified_contract
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(expected) = generic_contract
             .and_then(|contract| contract.value_parameters.get(index))
             .and_then(Option::as_ref)
             && !eg.generic_metadata.value_matches_resolved_type(
@@ -72,8 +72,8 @@ unsafe fn try_execute_property_init_constructor(
         {
             return None;
         }
-        #[cfg(not(feature = "php-generics-reified"))]
-        let _ = reified_contract;
+        #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+        let _ = generic_contract;
         arguments[index] = value as *const Value;
     }
 
@@ -271,12 +271,12 @@ fn op_new_obj<'a>(
         }
         resolved
     };
-    #[cfg(feature = "php-generics-reified")]
-    let reified_constructor_contract = if func_ptr.is_null() {
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    let generic_constructor_contract = if func_ptr.is_null() {
         None
     } else {
         let object = unsafe { &*result_ptr };
-        eg.reified_instance_method_contract(object, "__construct")
+        eg.generic_instance_method_contract(object, "__construct")
     };
     #[cfg(feature = "php-generics-reified")]
     let reified_construction = {
@@ -300,9 +300,9 @@ fn op_new_obj<'a>(
                         object,
                         user,
                         plan,
-                        #[cfg(feature = "php-generics-reified")]
-                        reified_constructor_contract.as_deref(),
-                        #[cfg(not(feature = "php-generics-reified"))]
+                        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                        generic_constructor_contract.as_deref(),
+                        #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
                         None,
                         reified_construction,
                     )
@@ -328,9 +328,9 @@ fn op_new_obj<'a>(
             let obj_ref = &*result_ptr;
             frame_set_this(call, obj_ref.clone());
         }
-        #[cfg(feature = "php-generics-reified")]
-        if let Some(contract) = reified_constructor_contract {
-            eg.push_pending_reified_member_call(call as usize, contract);
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(contract) = generic_constructor_contract {
+            eg.push_pending_generic_member_call(call as usize, contract);
         }
     } else {
         // No constructor — skip the call protocol through DoFcall. Explicit
@@ -748,14 +748,15 @@ fn op_init_method_call<'a>(
         // — avoids class_name.clone() and full method resolution on cache hit.
         let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
         let ic = &op_array.cache[ip];
-        let (func_ptr, has_reified_contract) = if !ic.func.is_null()
+        let (func_ptr, has_generic_contract) = if !ic.func.is_null()
             && ic.class_id == obj_class_id
             && obj_class_id != 0
         {
             drop(obj); // release borrow — class_name not needed on cache hit
             (
                 ic.func,
-                cfg!(feature = "php-generics-reified") && ic.method_has_reified_contract(),
+                cfg!(any(feature = "php-generics-erased", feature = "php-generics-reified"))
+                    && ic.method_has_generic_contract(),
             )
         } else {
             let target_class_name = obj.class_name.clone();
@@ -791,10 +792,24 @@ fn op_init_method_call<'a>(
                     }
                 }
             };
-            let resolved_has_reified_contract = cfg!(feature = "php-generics-reified")
+            let resolved_has_generic_contract = cfg!(any(
+                feature = "php-generics-erased",
+                feature = "php-generics-reified"
+            ))
                 && eg
                     .generic_metadata
-                    .has_reified_instance_method_contract(&target_class_name, method);
+                    .has_instance_method_contract(&target_class_name, method);
+            let linked_generic_long_contract = cfg!(any(
+                feature = "php-generics-erased",
+                feature = "php-generics-reified"
+            ))
+                && eg
+                    .generic_metadata
+                    .linked_instance_method_contract_admits_exact_long(
+                        &target_class_name,
+                        method,
+                        opline.extended_value,
+                    );
 
             // Visibility check
             if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
@@ -836,37 +851,38 @@ fn op_init_method_call<'a>(
                     fusion_eligible,
                     long_property_plan,
                     property_getter_plan,
-                    resolved_has_reified_contract,
+                    resolved_has_generic_contract,
+                    linked_generic_long_contract,
                 );
             }
-            (resolved, resolved_has_reified_contract)
+            (resolved, resolved_has_generic_contract)
         };
-        #[cfg(not(feature = "php-generics-reified"))]
-        let _ = has_reified_contract;
+        #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+        let _ = has_generic_contract;
 
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
         let common = unsafe { &*func_ptr };
-        #[cfg(feature = "php-generics-reified")]
-        let reified_contract = if has_reified_contract {
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        let generic_contract = if has_generic_contract {
             let method_name = unsafe {
                 &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
             };
-            eg.reified_instance_method_contract(obj_val, method_name.as_str().unwrap_or(""))
+            eg.generic_instance_method_contract(obj_val, method_name.as_str().unwrap_or(""))
         } else {
             None
         };
-        #[cfg(feature = "php-generics-reified")]
-        let has_active_reified_contract = reified_contract.is_some();
-        #[cfg(not(feature = "php-generics-reified"))]
-        let has_active_reified_contract = false;
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        let has_active_generic_contract = generic_contract.is_some();
+        #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+        let has_active_generic_contract = false;
         if !method_return_dispatch_contract_matches(opline, common) {
             return Err(VmError::Fatal(
                 "Resolved method signature is incompatible with the statically declared receiver contract"
                     .into(),
             ));
         }
-        let scalar_plan_eligible = !has_active_reified_contract
+        let scalar_plan_eligible = !has_active_generic_contract
             && common.fn_type == FunctionType::User
             && num_args == common.sig.public_arity()
             && {
@@ -904,9 +920,9 @@ fn op_init_method_call<'a>(
                 frame_set_this(call, obj_val.clone());
             }
         }
-        #[cfg(feature = "php-generics-reified")]
-        if let Some(contract) = reified_contract {
-            eg.push_pending_reified_member_call(call as usize, contract);
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(contract) = generic_contract {
+            eg.push_pending_generic_member_call(call as usize, contract);
         }
     } else {
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };

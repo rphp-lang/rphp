@@ -197,7 +197,8 @@ impl InlineCache {
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
     const METHOD_PROPERTY_GETTER_PLAN: u32 = 4;
-    const METHOD_REIFIED_CONTRACT: u32 = 8;
+    const METHOD_GENERIC_CONTRACT: u32 = 8;
+    const METHOD_LINKED_GENERIC_LONG_CONTRACT: u32 = 16;
     const CALLBACK_PIPELINE_METADATA_ARMED: u32 = 1 << 31;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
@@ -338,7 +339,8 @@ impl InlineCache {
         fusion_eligible: bool,
         long_property_plan: bool,
         property_getter_plan: bool,
-        reified_contract: bool,
+        generic_contract: bool,
+        linked_generic_long_contract: bool,
     ) {
         self.func = func;
         self.class_id = class_id;
@@ -354,8 +356,12 @@ impl InlineCache {
             Self::METHOD_PROPERTY_GETTER_PLAN
         } else {
             0
-        }) | (if reified_contract {
-            Self::METHOD_REIFIED_CONTRACT
+        }) | (if generic_contract {
+            Self::METHOD_GENERIC_CONTRACT
+        } else {
+            0
+        }) | (if linked_generic_long_contract {
+            Self::METHOD_LINKED_GENERIC_LONG_CONTRACT
         } else {
             0
         });
@@ -377,8 +383,13 @@ impl InlineCache {
     }
 
     #[inline(always)]
-    pub fn method_has_reified_contract(&self) -> bool {
-        self.prop_info & Self::METHOD_REIFIED_CONTRACT != 0
+    pub fn method_has_generic_contract(&self) -> bool {
+        self.prop_info & Self::METHOD_GENERIC_CONTRACT != 0
+    }
+
+    #[inline(always)]
+    pub fn method_has_linked_generic_long_contract(&self) -> bool {
+        self.prop_info & Self::METHOD_LINKED_GENERIC_LONG_CONTRACT != 0
     }
 
     /// InitFcall does not otherwise consume `prop_info`; callback-pipeline
@@ -465,5 +476,18 @@ mod inline_cache_tests {
 
         cache.set_property(7, 3, 1);
         assert_eq!(cache.generic_property_declaration(), None);
+    }
+
+    #[test]
+    fn method_cache_keeps_generic_contract_proofs_in_free_bits() {
+        let mut cache = InlineCache::empty();
+        cache.set_method(std::ptr::null(), 7, false, false, false, true, true);
+        assert!(cache.method_has_generic_contract());
+        assert!(cache.method_has_linked_generic_long_contract());
+        assert_eq!(std::mem::size_of::<InlineCache>(), 16);
+
+        cache.set_method(std::ptr::null(), 7, false, false, false, false, false);
+        assert!(!cache.method_has_generic_contract());
+        assert!(!cache.method_has_linked_generic_long_contract());
     }
 }
