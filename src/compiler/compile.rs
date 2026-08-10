@@ -39,6 +39,38 @@ pub struct CompileResult {
     pub generic_metadata: GenericMetadata,
 }
 
+impl CompileResult {
+    /// Relocate generic use-site operands after this separately compiled unit
+    /// is linked into an executor-wide metadata table.
+    pub fn relocate_generic_use_sites(&mut self, base: u32) -> Result<(), String> {
+        if base == 0 {
+            return Ok(());
+        }
+        relocate_op_array_generic_use_sites(&mut self.main, base)?;
+        for (_, function) in &mut self.functions {
+            relocate_op_array_generic_use_sites(&mut function.op_array, base)?;
+        }
+        for class in &mut self.class_defs {
+            for (_, _, _, _, method) in &mut class.methods {
+                relocate_op_array_generic_use_sites(&mut method.op_array, base)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+fn relocate_op_array_generic_use_sites(op_array: &mut OpArray, base: u32) -> Result<(), String> {
+    for instruction in &mut op_array.instructions {
+        if instruction.opcode == OpCode::CheckGenericArgs {
+            instruction.extended_value = instruction
+                .extended_value
+                .checked_add(base)
+                .ok_or_else(|| "Generic use-site metadata index overflow".to_string())?;
+        }
+    }
+    Ok(())
+}
+
 enum ArrayLiteralStorageHint {
     Packed,
     Hash,

@@ -86,8 +86,18 @@ fn op_include(
         .map_err(|e| VmError::Fatal(format!("Syntax error in {}: {}", resolved_path, e)))?;
     let stmts = crate::parser::Parser::new(tokens).parse()
         .map_err(|e| VmError::Fatal(format!("Parse error in {}: {}", resolved_path, e)))?;
-    let compile_result = crate::compiler::compile::Compiler::new().compile(&stmts)
+    let mut compile_result = crate::compiler::compile::Compiler::new().compile(&stmts)
         .map_err(|e| VmError::Fatal(format!("Compile error in {}: {}", resolved_path, e)))?;
+
+    // Includes are separate compilation units, but both generic runtimes and
+    // Reflection consume one executor-wide interned metadata graph. Merge the
+    // cold graph and relocate only this unit's explicit use-site operands.
+    let generic_use_site_base = eg
+        .generic_metadata
+        .merge(std::mem::take(&mut compile_result.generic_metadata));
+    compile_result
+        .relocate_generic_use_sites(generic_use_site_base)
+        .map_err(VmError::Fatal)?;
 
     for (name, func) in compile_result.functions {
         let boxed = Box::new(func);

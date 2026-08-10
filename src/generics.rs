@@ -153,6 +153,77 @@ impl GenericMetadata {
         builder.finish()
     }
 
+    /// Merge metadata produced by a separately compiled unit into the one
+    /// executor-wide intern pool. The returned base relocates only that
+    /// unit's `CheckGenericArgs` use-site operands; declaration bindings are
+    /// resolved against this combined table and therefore need no opcode
+    /// relocation.
+    pub fn merge(&mut self, incoming: Self) -> u32 {
+        let current = std::mem::take(self);
+        let use_site_base = current.use_sites.len() as u32;
+        if incoming.symbols.is_empty()
+            && incoming.declarations.is_empty()
+            && incoming.use_sites.is_empty()
+        {
+            *self = current;
+            return use_site_base;
+        }
+
+        let mut symbols = current.symbols.into_vec();
+        let mut symbol_ids = symbols
+            .iter()
+            .enumerate()
+            .map(|(index, symbol)| (symbol.to_string(), index as GenericSymbol))
+            .collect::<HashMap<_, _>>();
+        let mut symbol_relocation = Vec::with_capacity(incoming.symbols.len());
+        for symbol in incoming.symbols {
+            let relocated = if let Some(existing) = symbol_ids.get(symbol.as_ref()) {
+                *existing
+            } else {
+                let index = symbols.len() as GenericSymbol;
+                symbol_ids.insert(symbol.to_string(), index);
+                symbols.push(symbol);
+                index
+            };
+            symbol_relocation.push(relocated);
+        }
+
+        let mut declarations = current.declarations.into_vec();
+        for mut declaration in incoming.declarations {
+            declaration.owner = symbol_relocation[declaration.owner as usize];
+            for parameter in &mut declaration.parameters {
+                parameter.name = symbol_relocation[parameter.name as usize];
+                if let Some(bound) = &mut parameter.bound {
+                    remap_type_symbols(bound, &symbol_relocation);
+                }
+                if let Some(default) = &mut parameter.default {
+                    remap_type_symbols(default, &symbol_relocation);
+                }
+            }
+            for value_parameter in declaration.value_parameters.iter_mut().flatten() {
+                remap_type_symbols(value_parameter, &symbol_relocation);
+            }
+            if let Some(return_type) = &mut declaration.return_type {
+                remap_type_symbols(return_type, &symbol_relocation);
+            }
+            declarations.push(declaration);
+        }
+
+        let mut use_sites = current.use_sites.into_vec();
+        for mut use_site in incoming.use_sites {
+            for argument in &mut use_site.arguments {
+                remap_type_symbols(argument, &symbol_relocation);
+            }
+            use_sites.push(use_site);
+        }
+        *self = Self {
+            symbols: symbols.into_boxed_slice(),
+            declarations: declarations.into_boxed_slice(),
+            use_sites: use_sites.into_boxed_slice(),
+        };
+        use_site_base
+    }
+
     #[inline]
     pub fn is_empty(&self) -> bool {
         self.declarations.is_empty()
@@ -483,6 +554,34 @@ impl GenericMetadata {
             }
         }
         current
+    }
+}
+
+fn remap_type_symbols(value: &mut GenericType, relocation: &[GenericSymbol]) {
+    match value {
+        GenericType::Named { name, arguments } => {
+            *name = relocation[*name as usize];
+            for argument in arguments {
+                remap_type_symbols(argument, relocation);
+            }
+        }
+        GenericType::Nullable(inner) => remap_type_symbols(inner, relocation),
+        GenericType::Union(parts) => {
+            for part in parts {
+                remap_type_symbols(part, relocation);
+            }
+        }
+        GenericType::Int
+        | GenericType::Float
+        | GenericType::String
+        | GenericType::Bool
+        | GenericType::Array
+        | GenericType::Callable
+        | GenericType::Null
+        | GenericType::Void
+        | GenericType::Mixed
+        | GenericType::Never
+        | GenericType::Parameter(_) => {}
     }
 }
 

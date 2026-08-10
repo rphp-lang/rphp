@@ -8416,6 +8416,18 @@ the genuinely stricter case such as unbounded `T` reified as `int`, plus dynamic
 and cross-unit sites; those may not use the zero-opcode proof and must reach the
 warm-site gate through compact checked dispatch.
 
+Cross-file linking is also executable rather than a metadata placeholder.
+Runtime-compiled `include` units merge symbols, declarations and use sites into
+the executor's canonical intern table, then relocate only their cold generic
+validation operands. A permanent collision scenario uses local use-site zero
+in both the root and included units with different bounds; erased-only and
+reified-only runs validate the correct tuple and Reflection observes the
+included declaration. Feature-off ARM64 fat-LTO code grows by 16 bytes. In 31
+order-alternated pairs, the unrelated manual-erasure control moves -9.099%; the
+large favorable movement is recorded as code-layout noise rather than an
+optimization claim, while establishing that this cold linker caused no hot
+path regression.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

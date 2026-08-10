@@ -80,6 +80,43 @@ fn test_include_function_declaration() {
     assert_eq!(output, "Hello World");
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn test_include_merges_and_relocates_generic_metadata() {
+    let (_dir, path) = write_temp_php(
+        "generic.php",
+        r#"<?php
+function included_id<T : string>(T $value): T { return $value; }
+function included_call() {
+    $includedCallable = "included_id";
+    return ($includedCallable)::<string>("s");
+}
+class IncludedCaller {
+    public function call() {
+        $includedCallable = "included_id";
+        return ($includedCallable)::<string>("s");
+    }
+}
+echo included_call();
+echo (new IncludedCaller())->call();
+$reflection = new ReflectionFunction("included_id");
+$parameters = $reflection->getGenericParameters();
+echo $reflection->isGeneric() ? ":yes:" : ":no:";
+echo $parameters[0]["name"] . ":" . $parameters[0]["bound"];
+"#,
+    );
+    let source = format!(
+        r#"<?php
+function main_id<T : int>(T $value): T {{ return $value; }}
+$mainCallable = "main_id";
+echo ($mainCallable)::<int>(1);
+include '{}';
+"#,
+        path
+    );
+    assert_eq!(run_php(&source), "1ss:yes:T:string");
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

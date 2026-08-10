@@ -1808,6 +1808,16 @@ post-return checks. `ReflectionFunction`, `ReflectionClass` and
 runtime capabilities even though the default parser keeps generic syntax
 disabled.
 
+Separately compiled `include` units now link into the same executor-wide
+metadata graph. Existing strings are reused from the intern pool, incoming
+symbol references are remapped once, and only `CheckGenericArgs` use-site
+operands in the incoming op arrays receive a base relocation. Declarations,
+reified bindings and Reflection consequently share one stable index space
+across files without adding metadata to a frame, object, `Value` or ordinary
+call. A collision test deliberately gives the main and included units local
+use-site index zero with different bounds and verifies both runtimes plus
+Reflection after linking.
+
 Ordinary calls continue through the existing call-frame path with no generic
 flag test. Only `::<...>` sites emit a validation operation; its
 inline cache stores the canonical argument tuple, resolved callee identity and
