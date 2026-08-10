@@ -144,7 +144,7 @@ impl GenericMetadata {
             GenericType::Nullable(inner) => {
                 self.validate_type_position(declaration, inner, position)?;
             }
-            GenericType::Union(parts) => {
+            GenericType::Union(parts) | GenericType::Intersection(parts) => {
                 for part in parts {
                     self.validate_type_position(declaration, part, position)?;
                 }
@@ -197,7 +197,9 @@ fn type_contains_parameter(value: &GenericType) -> bool {
         GenericType::Parameter(_) => true,
         GenericType::Named { arguments, .. } => arguments.iter().any(type_contains_parameter),
         GenericType::Nullable(inner) => type_contains_parameter(inner),
-        GenericType::Union(parts) => parts.iter().any(type_contains_parameter),
+        GenericType::Union(parts) | GenericType::Intersection(parts) => {
+            parts.iter().any(type_contains_parameter)
+        }
         GenericType::Int
         | GenericType::Float
         | GenericType::String

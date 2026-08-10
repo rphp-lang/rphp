@@ -959,63 +959,69 @@ impl ExecutorGlobals {
                     }
                     // Check parameter type compatibility (contravariance):
                     // Interface param A => implementation must accept A or a supertype of A.
-                    // For simplicity, we require exact match or widening (impl accepts more).
+                    // Parametric signatures were already checked against every substituted
+                    // path. Their erased raw hints are not a second, authoritative contract.
                     use crate::vm::function::ParamTypeHint;
-                    let check_count = iface_param_hints
-                        .len()
-                        .max(impl_common.sig.param_type_hints.len());
-                    for i in 0..check_count {
-                        let iface_param = iface_param_hints.get(i);
-                        let impl_param = impl_common.sig.param_type_hints.get(i);
-                        match (impl_param, iface_param) {
-                            // Both untyped or both absent — ok
-                            (
-                                None | Some(ParamTypeHint::None),
-                                None | Some(ParamTypeHint::None),
-                            ) => {}
-                            // Impl has no type / mixed — always compatible
-                            (
-                                None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed),
-                                Some(_),
-                            ) => {}
-                            // Interface has no type but impl adds a type — narrowing, rejected
-                            (Some(impl_p), None | Some(ParamTypeHint::None)) => {
-                                if !matches!(impl_p, ParamTypeHint::Mixed) {
-                                    errors.push((declaring_iface.clone(), format!(
+                    let parametric = self
+                        .generic_metadata
+                        .method_has_parametric_signature(&declaring_iface, &method);
+                    if !parametric {
+                        let check_count = iface_param_hints
+                            .len()
+                            .max(impl_common.sig.param_type_hints.len());
+                        for i in 0..check_count {
+                            let iface_param = iface_param_hints.get(i);
+                            let impl_param = impl_common.sig.param_type_hints.get(i);
+                            match (impl_param, iface_param) {
+                                // Both untyped or both absent — ok
+                                (
+                                    None | Some(ParamTypeHint::None),
+                                    None | Some(ParamTypeHint::None),
+                                ) => {}
+                                // Impl has no type / mixed — always compatible
+                                (
+                                    None | Some(ParamTypeHint::None) | Some(ParamTypeHint::Mixed),
+                                    Some(_),
+                                ) => {}
+                                // Interface has no type but impl adds a type — narrowing, rejected
+                                (Some(impl_p), None | Some(ParamTypeHint::None)) => {
+                                    if !matches!(impl_p, ParamTypeHint::Mixed) {
+                                        errors.push((declaring_iface.clone(), format!(
                                         "{} (parameter {} must not add type {}, interface has no type)",
                                         method, i + 1,
                                         impl_p.display_name()
                                     )));
+                                    }
                                 }
-                            }
-                            // Both have types — check contravariance
-                            (Some(impl_p), Some(iface_p)) => {
-                                if !self.is_param_type_compatible(impl_p, iface_p) {
-                                    errors.push((declaring_iface.clone(), format!(
+                                // Both have types — check contravariance
+                                (Some(impl_p), Some(iface_p)) => {
+                                    if !self.is_param_type_compatible(impl_p, iface_p) {
+                                        errors.push((declaring_iface.clone(), format!(
                                         "{} (parameter {} type must be compatible with {}, got {})",
                                         method, i + 1,
                                         iface_p.display_name(),
                                         impl_p.display_name()
                                     )));
+                                    }
                                 }
                             }
                         }
-                    }
 
-                    // Check return type compatibility: if the interface declares a return type,
-                    // the implementation must declare the same or a covariant return type.
-                    if !matches!(iface_return_hint, ParamTypeHint::None) {
-                        let impl_return = &impl_common.sig.return_type_hint;
-                        if !self.is_return_type_compatible(impl_return, &iface_return_hint) {
-                            errors.push((
-                                declaring_iface.clone(),
-                                format!(
-                                    "{} (return type must be compatible with {}, got {})",
-                                    method,
-                                    iface_return_hint.display_name(),
-                                    impl_return.display_name()
-                                ),
-                            ));
+                        // Check return type compatibility: if the interface declares a return type,
+                        // the implementation must declare the same or a covariant return type.
+                        if !matches!(iface_return_hint, ParamTypeHint::None) {
+                            let impl_return = &impl_common.sig.return_type_hint;
+                            if !self.is_return_type_compatible(impl_return, &iface_return_hint) {
+                                errors.push((
+                                    declaring_iface.clone(),
+                                    format!(
+                                        "{} (return type must be compatible with {}, got {})",
+                                        method,
+                                        iface_return_hint.display_name(),
+                                        impl_return.display_name()
+                                    ),
+                                ));
+                            }
                         }
                     }
                 }
@@ -1226,34 +1232,33 @@ impl ExecutorGlobals {
             _ => {}
         }
 
+        // Covariant return compatibility is ordinary subtype checking over
+        // union/intersection nodes.
+        if let ParamTypeHint::Intersection(iface_parts) = iface_hint {
+            return iface_parts
+                .iter()
+                .all(|part| self.is_return_type_compatible(impl_hint, part));
+        }
+        if let ParamTypeHint::Union(impl_parts) = impl_hint {
+            return impl_parts
+                .iter()
+                .all(|part| self.is_return_type_compatible(part, iface_hint));
+        }
+        if let ParamTypeHint::Union(iface_parts) = iface_hint {
+            return iface_parts
+                .iter()
+                .any(|part| self.is_return_type_compatible(impl_hint, part));
+        }
+        if let ParamTypeHint::Intersection(impl_parts) = impl_hint {
+            return impl_parts
+                .iter()
+                .any(|part| self.is_return_type_compatible(part, iface_hint));
+        }
+
         // Class name covariance
         match (impl_hint, iface_hint) {
             (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
                 return self.class_is_a(impl_class, iface_class);
-            }
-            _ => {}
-        }
-
-        // Union narrowing (covariance): impl returns int, iface returns int|float
-        // The impl type must be a member of (or compatible with) at least one union member
-        match iface_hint {
-            ParamTypeHint::Union(iface_parts) => {
-                match impl_hint {
-                    ParamTypeHint::Union(impl_parts) => {
-                        // Every impl union member must be compatible with at least one iface member
-                        return impl_parts.iter().all(|ip| {
-                            iface_parts
-                                .iter()
-                                .any(|ifp| self.is_return_type_compatible(ip, ifp))
-                        });
-                    }
-                    _ => {
-                        // Single impl type must be compatible with at least one iface union member
-                        return iface_parts
-                            .iter()
-                            .any(|ifp| self.is_return_type_compatible(impl_hint, ifp));
-                    }
-                }
             }
             _ => {}
         }
@@ -1303,36 +1308,34 @@ impl ExecutorGlobals {
             _ => {}
         }
 
+        // Parameter compatibility reverses the subtype relation: the
+        // implementation must accept every value admitted by the interface.
+        if let ParamTypeHint::Intersection(impl_parts) = impl_hint {
+            return impl_parts
+                .iter()
+                .all(|part| self.is_param_type_compatible(part, iface_hint));
+        }
+        if let ParamTypeHint::Union(iface_parts) = iface_hint {
+            return iface_parts
+                .iter()
+                .all(|part| self.is_param_type_compatible(impl_hint, part));
+        }
+        if let ParamTypeHint::Union(impl_parts) = impl_hint {
+            return impl_parts
+                .iter()
+                .any(|part| self.is_param_type_compatible(part, iface_hint));
+        }
+        if let ParamTypeHint::Intersection(iface_parts) = iface_hint {
+            return iface_parts
+                .iter()
+                .any(|part| self.is_param_type_compatible(impl_hint, part));
+        }
+
         // Class name contravariance: iface declares A, impl declares B
         // Compatible if A is_a B (A is a subtype of B, so impl accepts wider)
         match (impl_hint, iface_hint) {
             (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
                 return self.class_is_a(iface_class, impl_class);
-            }
-            _ => {}
-        }
-
-        // Union widening: impl int|float vs iface int → ok if iface type is subset of impl union
-        match impl_hint {
-            ParamTypeHint::Union(impl_parts) => {
-                // Check if the interface type is one of the union members
-                // (impl accepts at least everything iface declares)
-                match iface_hint {
-                    ParamTypeHint::Union(iface_parts) => {
-                        // Every iface union member must be compatible with at least one impl member
-                        return iface_parts.iter().all(|ip| {
-                            impl_parts
-                                .iter()
-                                .any(|imp| self.is_param_type_compatible(imp, ip))
-                        });
-                    }
-                    _ => {
-                        // Single iface type must match at least one impl union member
-                        return impl_parts
-                            .iter()
-                            .any(|imp| self.is_param_type_compatible(imp, iface_hint));
-                    }
-                }
             }
             _ => {}
         }

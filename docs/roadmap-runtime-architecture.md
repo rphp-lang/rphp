@@ -1934,11 +1934,28 @@ CPU-2-pinned x86-64 records +0.026%/+0.023% and +0.045%/-0.118%, respectively.
 All four full `--all-targets` matrices pass on both architectures, including
 cross-unit LSP and runtime-bound scenarios. No JIT/native lowering changed.
 
-Deterministic diamond contract merging remains the next explicit linker step.
-Generics-aware JIT specialization is deliberately last: it starts only after
-these semantics and both runtimes are closed, and must consume the canonical
-metadata with exact guards and deoptimization back to the established
-erased/reified paths.
+Deterministic diamond contract merging is now part of that cold linker. Every
+matching inherited method prototype participates: argument/write positions
+merge as a flattened union and return positions as a flattened intersection;
+inherited property storage uses the same write-safe union. Stable
+case-insensitive sort keys canonicalize both compounds before interning, so
+ancestor and trait traversal order cannot change the executable contract. Full
+intersection hints now flow through parsing, substitution, executable type
+hints, runtime checks and Parametric LSP. The RFC's
+`Pipeline<Renderable>`/`Pipeline<Cacheable>` diamond, reversed trait order,
+properties and cross-unit declarations have permanent coverage in both runtime
+models.
+
+This remains sidecar/IC work: calls consume one already-merged contract and do
+not traverse ancestors. ARM64 and CPU-pinned x86-64 31-pair production-feature
+controls keep diamond versus an explicitly premerged contract, concrete versus
+manual methods and the default-build manual control within one percent. No hot
+layout, dependency, JIT or native lowering changed. The next semantic step is
+the Reflection inheritance view, including plural bindings for repeated
+generic ancestors. Generics-aware JIT specialization is deliberately last: it
+starts only after these semantics, Reflection and both runtimes are closed, and
+must consume the canonical metadata with exact guards and deoptimization back
+to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

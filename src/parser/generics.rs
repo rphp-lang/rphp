@@ -184,7 +184,7 @@ impl Parser {
 
     fn parse_generic_type_expression(&mut self) -> Result<TypeHint, String> {
         let first = self.parse_base_type_hint()?;
-        self.maybe_parse_union_type(first)
+        self.maybe_parse_compound_type(first)
     }
 
     fn parse_generic_type_arguments(&mut self) -> Result<Vec<TypeHint>, String> {
@@ -318,6 +318,12 @@ impl Parser {
                     .map(|part| self.erase_generic_type(part, visiting))
                     .collect(),
             ),
+            TypeHint::Intersection(types) => TypeHint::Intersection(
+                types
+                    .iter()
+                    .map(|part| self.erase_generic_type(part, visiting))
+                    .collect(),
+            ),
             TypeHint::GenericParameter { erased, .. } => self.erase_generic_type(erased, visiting),
             TypeHint::GenericApplication { base, .. } => TypeHint::ClassName(base.clone()),
             other => other.clone(),
@@ -338,7 +344,7 @@ impl Parser {
         match hint {
             TypeHint::ClassName(name) => names.push(name.clone()),
             TypeHint::Nullable(inner) => Self::collect_generic_names(inner, names),
-            TypeHint::Union(parts) => {
+            TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
                 for part in parts {
                     Self::collect_generic_names(part, names);
                 }
@@ -361,6 +367,9 @@ impl Parser {
             TypeHint::Union(parts) => parts
                 .iter()
                 .any(|part| Self::generic_default_satisfies_bound(default, part)),
+            TypeHint::Intersection(parts) => parts
+                .iter()
+                .all(|part| Self::generic_default_satisfies_bound(default, part)),
             // Class hierarchy conformance belongs to the link phase. Do not
             // reject unresolved named types while parsing the source unit.
             TypeHint::ClassName(_) | TypeHint::GenericApplication { .. } => true,

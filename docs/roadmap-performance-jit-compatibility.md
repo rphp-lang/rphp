@@ -8489,8 +8489,8 @@ Variadic prototypes remain variadic and their substituted tail contract is
 checked against added optional parameters as well as the implementation tail.
 The same validation runs after include metadata is merged. It adds no runtime
 method lookup, frame field or ordinary-call branch. Method-generic
-alpha-renaming is now closed below; deterministic diamond contract merging
-remains the next link-layer slice.
+alpha-renaming and deterministic diamond contract merging are now closed
+below.
 
 The receiver-specific runtime-signature slice is now executable in both
 branches. A free bit in the existing method inline cache marks only methods
@@ -8549,10 +8549,11 @@ JIT/native lowering changes.
 
 Complete default, erased, reified and dual-feature `--all-targets` matrices pass
 on ARM64 and x86-64. Library counts remain 197 in each single/default build,
-while dual-feature coverage is 309 on ARM64 and 334 on x86-64; focused coverage
-is 23 generics plus 19 include scenarios in reified/dual builds and 18 plus 18
-in erased-only. Release order-paired method controls remain inside the one
-percent gate. Balanced order-specific median ratios are:
+while dual-feature coverage is 309 on ARM64 and 334 on x86-64; at this
+checkpoint focused coverage is 25 generics plus 20 include scenarios in
+reified/dual builds, 20 plus 19 in erased-only and 2 plus 12 in the default
+build. Release order-paired method controls remain inside the one percent gate.
+Balanced order-specific median ratios are:
 
 - ARM64, 51 pairs: erased own/manual +0.271% (0.049802/0.049702 seconds) and
   reified own/manual -0.031% (0.049820/0.049772 seconds);
@@ -8565,9 +8566,42 @@ percent gate. Balanced order-specific median ratios are:
   (0.066043/0.066001 seconds) and reified concrete/manual -0.118%
   (0.065054/0.065177 seconds).
 
-Deterministic diamond contract merging is the next semantic linker checkpoint.
-Generics-aware JIT specialization remains deliberately last, after both runtime
-models and their fallback/deoptimization contracts are complete.
+Diamond inheritance now follows the RFC v0.22 merge rule rather than selecting
+the first traversal path. All inherited generic method prototypes are
+materialized together: parameter/write positions form a flattened union and
+return positions form a flattened intersection. Inherited property storage
+uses the same write-safe union. Compound members receive stable,
+case-insensitive sort keys before interning and duplicate removal, so reversing
+trait or interface order produces byte-for-byte identical method and property
+contract shapes. `mixed` and `never` are handled as the corresponding absorbing
+or identity elements. The ordinary type system now carries intersection hints
+from parsing through generic substitution, executable hints, runtime checks and
+LSP; the `&`/typed-reference ambiguity retains its existing parse boundary.
+
+The canonical RFC shape is permanent coverage: two `Pipeline<T: object>`
+parents bound as `Pipeline<Renderable>` and `Pipeline<Cacheable>` accept an
+implementation parameter `Renderable|Cacheable` and require return
+`Renderable&Cacheable`. The same merge is exercised through traits, properties,
+reverse declaration order and separately compiled include units. Runtime
+method checks consume one merged sidecar contract through the existing L0/IC
+path; they do not walk ancestors per call. No object, frame, `Value`, function,
+opcode or inline-cache layout changed, no dependency was added and no
+JIT/native lowering changed.
+
+Production-feature 31-pair order-alternated controls remain inside one percent
+on both hosts:
+
+- ARM64 erased diamond/premerged is -0.325% balanced and erased
+  concrete/manual +0.259%; reified diamond/premerged is +0.246% and reified
+  concrete/manual -0.132%; the reified/default manual control is -0.728%;
+- CPU-2-pinned x86-64 erased diamond/premerged is -0.014% balanced and erased
+  concrete/manual +0.258%; reified diamond/premerged is -0.079% and reified
+  concrete/manual +0.067%; the reified/default manual control is -0.103%.
+
+The next semantic checkpoint is the Reflection inheritance view, including the
+plural bindings created by a diamond. Generics-aware JIT specialization remains
+deliberately last, after both runtime models, Reflection and their
+fallback/deoptimization contracts are complete.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked
@@ -8659,8 +8693,10 @@ inheritance is at parity on both architectures without relying on JIT
 specialization. ARM64 passes 197 default, 197 erased-only, 197 reified-only and
 309 all-feature library tests plus every all-feature target; x86-64 passes the
 same first three sets, 334 all-feature library tests and every target.
-Method-generic alpha-renaming and deterministic diamond merging remain
-follow-ups rather than weakening either exact fast-path proof.
+Method-generic alpha-renaming and deterministic diamond merging are now closed
+in the cold interned graph without weakening either exact fast-path proof. The
+remaining semantic follow-up is the Reflection inheritance view, including
+plural bindings for repeated generic ancestors.
 
 Generics-aware JIT work is the final milestone of this interphase, not a
 concurrent semantic shortcut. It begins only after parser/link/runtime/

@@ -297,6 +297,34 @@ show(new Doc());
     );
 }
 
+#[test]
+fn test_intersection_parameter_return_and_typed_reference() {
+    compile_types(
+        "<?php interface ReferenceContract {} function replace(ReferenceContract &$value): void {}",
+    );
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface LeftContract {}
+interface RightContract {}
+class BothContracts implements LeftContract, RightContract {}
+class LeftOnly implements LeftContract {}
+function acceptBoth(LeftContract&RightContract $value): LeftContract&RightContract {
+    return $value;
+}
+function badReturn(): LeftContract&RightContract { return new LeftOnly(); }
+$both = new BothContracts();
+echo (acceptBoth($both) instanceof RightContract) ? "both:" : "missing:";
+try { acceptBoth(new LeftOnly()); } catch (TypeError $error) { echo "parameter:"; }
+try {
+    badReturn();
+} catch (TypeError $error) { echo "return:"; }
+"#,
+        ),
+        "both:parameter:return:"
+    );
+}
+
 // ── Type hints with defaults ──
 
 #[test]

@@ -256,6 +256,30 @@ fn test_include_alpha_links_generic_method_parameters_and_bounds() {
     assert!(rendered.contains("parameter 1"), "{rendered:?}");
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn test_include_merges_cross_unit_generic_diamond_contracts() {
+    let (_dir, path) = write_temp_php(
+        "generic_diamond_child.php",
+        "<?php class IncludedDiamond { use IncludedPipeline<Renderable>, IncludedPipeline<Cacheable>; }",
+    );
+    let prefix = format!(
+        "<?php interface Renderable {{}} interface Cacheable {{}} class Article implements Renderable, Cacheable {{}} class RenderOnly implements Renderable {{}} trait IncludedPipeline<T : object> {{ public T $value; public function process(T $value): T {{ return new Article(); }} }} include '{}';",
+        path
+    );
+    let output = run_php(&format!(
+        "{} $diamond = new IncludedDiamond(); $diamond->value = new RenderOnly(); echo ($diamond->process(new RenderOnly()) instanceof Cacheable) ? 'merged' : 'missing';",
+        prefix
+    ));
+    assert_eq!(output, "merged");
+
+    let error = common::run_php_expect_error(&format!(
+        "{} $diamond = new IncludedDiamond(); $diamond->value = new stdClass();",
+        prefix
+    ));
+    assert!(format!("{error:?}").contains("property"), "{error:?}");
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

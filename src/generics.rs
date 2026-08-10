@@ -126,6 +126,7 @@ pub enum GenericType {
     Parameter(u8),
     Nullable(Box<GenericType>),
     Union(Box<[GenericType]>),
+    Intersection(Box<[GenericType]>),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -200,6 +201,7 @@ fn generic_type_admits_long(value: &GenericType) -> bool {
         GenericType::Int | GenericType::Mixed => true,
         GenericType::Nullable(inner) => generic_type_admits_long(inner),
         GenericType::Union(parts) => parts.iter().any(generic_type_admits_long),
+        GenericType::Intersection(parts) => parts.iter().all(generic_type_admits_long),
         GenericType::Float
         | GenericType::String
         | GenericType::Bool
@@ -642,6 +644,9 @@ impl GenericMetadata {
             GenericType::Union(parts) => parts
                 .iter()
                 .any(|part| self.value_matches_resolved_type_inner(value, part, class_is_a)),
+            GenericType::Intersection(parts) => parts
+                .iter()
+                .all(|part| self.value_matches_resolved_type_inner(value, part, class_is_a)),
         }
     }
 
@@ -685,6 +690,11 @@ impl GenericMetadata {
                 .map(|part| self.format_type(declaration, part))
                 .collect::<Vec<_>>()
                 .join("|"),
+            GenericType::Intersection(parts) => parts
+                .iter()
+                .map(|part| self.format_type(declaration, part))
+                .collect::<Vec<_>>()
+                .join("&"),
         }
     }
 
@@ -766,6 +776,9 @@ impl GenericMetadata {
             GenericType::Union(parts) => parts.iter().any(|part| {
                 self.value_matches_type(value, part, declaration, site, class_is_a, depth)
             }),
+            GenericType::Intersection(parts) => parts.iter().all(|part| {
+                self.value_matches_type(value, part, declaration, site, class_is_a, depth)
+            }),
         }
     }
 
@@ -820,6 +833,9 @@ impl GenericMetadata {
             GenericType::Union(parts) => parts.iter().any(|part| {
                 self.value_matches_erased_type(value, part, declaration, class_is_a, depth)
             }),
+            GenericType::Intersection(parts) => parts.iter().all(|part| {
+                self.value_matches_erased_type(value, part, declaration, class_is_a, depth)
+            }),
         }
     }
 
@@ -842,6 +858,9 @@ impl GenericMetadata {
             GenericType::Union(parts) => parts
                 .iter()
                 .any(|part| Self::type_erases_to_mixed(part, declaration, depth)),
+            GenericType::Intersection(parts) => parts
+                .iter()
+                .all(|part| Self::type_erases_to_mixed(part, declaration, depth)),
             _ => false,
         }
     }
@@ -865,9 +884,15 @@ impl GenericMetadata {
             (GenericType::Union(parts), bound) => parts
                 .iter()
                 .all(|part| self.type_satisfies(part, bound, arguments, class_is_a)),
+            (actual, GenericType::Intersection(parts)) => parts
+                .iter()
+                .all(|part| self.type_satisfies(actual, part, arguments, class_is_a)),
             (actual, GenericType::Union(parts)) => parts
                 .iter()
                 .any(|part| self.type_satisfies(actual, part, arguments, class_is_a)),
+            (GenericType::Intersection(parts), bound) => parts
+                .iter()
+                .any(|part| self.type_satisfies(part, bound, arguments, class_is_a)),
             (GenericType::Null, GenericType::Nullable(_)) => true,
             (GenericType::Nullable(actual), GenericType::Nullable(bound)) => {
                 self.type_satisfies(actual, bound, arguments, class_is_a)
@@ -927,7 +952,7 @@ fn remap_type_symbols(value: &mut GenericType, relocation: &[GenericSymbol]) {
             }
         }
         GenericType::Nullable(inner) => remap_type_symbols(inner, relocation),
-        GenericType::Union(parts) => {
+        GenericType::Union(parts) | GenericType::Intersection(parts) => {
             for part in parts {
                 remap_type_symbols(part, relocation);
             }
@@ -1236,6 +1261,15 @@ impl GenericMetadataBuilder {
                 self.compile_type_in_scopes(inner, class_parameters, method_parameters),
             )),
             TypeHint::Union(parts) => GenericType::Union(
+                parts
+                    .iter()
+                    .map(|part| {
+                        self.compile_type_in_scopes(part, class_parameters, method_parameters)
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+            ),
+            TypeHint::Intersection(parts) => GenericType::Intersection(
                 parts
                     .iter()
                     .map(|part| {

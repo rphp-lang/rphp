@@ -103,6 +103,104 @@ impl GenericMetadata {
         self.find_class_like_index(owner)
             .and_then(|index| self.declarations.get(index as usize))
     }
+
+    /// Build a deterministic least-upper-bound node for contravariant merge
+    /// positions. This is cold link/runtime-sidecar work; flattening and
+    /// sorting here keeps the resulting contract independent of graph order.
+    pub(super) fn merge_generic_union<I>(&self, values: I) -> GenericType
+    where
+        I: IntoIterator<Item = GenericType>,
+    {
+        let mut parts = Vec::new();
+        for value in values {
+            match value {
+                GenericType::Mixed => return GenericType::Mixed,
+                GenericType::Never => {}
+                GenericType::Union(nested) => parts.extend(nested),
+                value => parts.push(value),
+            }
+        }
+        self.finish_generic_merge(parts, false)
+    }
+
+    /// Build the matching greatest-lower-bound node for covariant merge
+    /// positions. `mixed` is the identity and `never` is absorbing.
+    pub(super) fn merge_generic_intersection<I>(&self, values: I) -> GenericType
+    where
+        I: IntoIterator<Item = GenericType>,
+    {
+        let mut parts = Vec::new();
+        for value in values {
+            match value {
+                GenericType::Never => return GenericType::Never,
+                GenericType::Mixed => {}
+                GenericType::Intersection(nested) => parts.extend(nested),
+                value => parts.push(value),
+            }
+        }
+        self.finish_generic_merge(parts, true)
+    }
+
+    fn finish_generic_merge(&self, mut parts: Vec<GenericType>, intersection: bool) -> GenericType {
+        let mut keyed = parts
+            .drain(..)
+            .map(|part| (self.generic_type_sort_key(&part), part))
+            .collect::<Vec<_>>();
+        keyed.sort_by(|left, right| left.0.cmp(&right.0));
+        keyed.dedup_by(|left, right| left.0 == right.0);
+        parts.extend(keyed.into_iter().map(|(_, part)| part));
+        match parts.len() {
+            0 if intersection => GenericType::Mixed,
+            0 => GenericType::Never,
+            1 => parts.pop().expect("one merged generic type"),
+            _ if intersection => GenericType::Intersection(parts.into_boxed_slice()),
+            _ => GenericType::Union(parts.into_boxed_slice()),
+        }
+    }
+
+    fn generic_type_sort_key(&self, value: &GenericType) -> String {
+        match value {
+            GenericType::Int => "01:int".into(),
+            GenericType::Float => "02:float".into(),
+            GenericType::String => "03:string".into(),
+            GenericType::Bool => "04:bool".into(),
+            GenericType::Array => "05:array".into(),
+            GenericType::Callable => "06:callable".into(),
+            GenericType::Null => "07:null".into(),
+            GenericType::Void => "08:void".into(),
+            GenericType::Mixed => "09:mixed".into(),
+            GenericType::Never => "10:never".into(),
+            GenericType::Named { name, arguments } => format!(
+                "11:{}<{}>",
+                self.symbol(*name).unwrap_or("?").to_ascii_lowercase(),
+                arguments
+                    .iter()
+                    .map(|argument| self.generic_type_sort_key(argument))
+                    .collect::<Vec<_>>()
+                    .join(",")
+            ),
+            GenericType::Parameter(index) => format!("12:{index:03}"),
+            GenericType::Nullable(inner) => {
+                format!("13:?{}", self.generic_type_sort_key(inner))
+            }
+            GenericType::Union(parts) => {
+                let mut keys = parts
+                    .iter()
+                    .map(|part| self.generic_type_sort_key(part))
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                format!("14:{}", keys.join("|"))
+            }
+            GenericType::Intersection(parts) => {
+                let mut keys = parts
+                    .iter()
+                    .map(|part| self.generic_type_sort_key(part))
+                    .collect::<Vec<_>>();
+                keys.sort_unstable();
+                format!("15:{}", keys.join("&"))
+            }
+        }
+    }
 }
 
 pub(super) fn substitute_generic_parameters(
@@ -130,6 +228,13 @@ pub(super) fn substitute_generic_parameters(
             GenericType::Nullable(Box::new(substitute_generic_parameters(inner, arguments)))
         }
         GenericType::Union(parts) => GenericType::Union(
+            parts
+                .iter()
+                .map(|part| substitute_generic_parameters(part, arguments))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        GenericType::Intersection(parts) => GenericType::Intersection(
             parts
                 .iter()
                 .map(|part| substitute_generic_parameters(part, arguments))
@@ -241,6 +346,21 @@ fn erase_method_parameters(
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         ),
+        GenericType::Intersection(parts) => GenericType::Intersection(
+            parts
+                .iter()
+                .map(|part| {
+                    erase_method_parameters(
+                        part,
+                        erasure_declaration,
+                        method,
+                        owner_arguments,
+                        remaining,
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
         concrete => concrete.clone(),
     }
 }
@@ -271,6 +391,13 @@ fn erase_forwarded_parameters(
             erase_forwarded_parameters(inner, owner, remaining),
         )),
         GenericType::Union(parts) => GenericType::Union(
+            parts
+                .iter()
+                .map(|part| erase_forwarded_parameters(part, owner, remaining))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        GenericType::Intersection(parts) => GenericType::Intersection(
             parts
                 .iter()
                 .map(|part| erase_forwarded_parameters(part, owner, remaining))

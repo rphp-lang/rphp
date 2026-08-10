@@ -955,6 +955,7 @@ pub enum ParamTypeHint {
     ClassName(std::string::String),
     Nullable(Box<ParamTypeHint>),
     Union(Vec<ParamTypeHint>),
+    Intersection(Vec<ParamTypeHint>),
 }
 
 impl ParamTypeHint {
@@ -978,6 +979,11 @@ impl ParamTypeHint {
                 .map(|p| p.display_name())
                 .collect::<Vec<_>>()
                 .join("|"),
+            ParamTypeHint::Intersection(parts) => parts
+                .iter()
+                .map(|p| p.display_name())
+                .collect::<Vec<_>>()
+                .join("&"),
         }
     }
 }

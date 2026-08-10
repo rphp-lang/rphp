@@ -225,15 +225,18 @@ impl Parser {
                 return Ok(Some(TypeHint::Nullable(Box::new(inner))));
             }
             let hint = self.parse_base_type_hint()?;
-            let hint = self.maybe_parse_union_type(hint)?;
+            let hint = self.maybe_parse_compound_type(hint)?;
             Ok(Some(hint))
         } else {
             Ok(None)
         }
     }
 
-    /// If the next token is `|`, parse remaining types to form a union type.
-    fn maybe_parse_union_type(&mut self, first: TypeHint) -> Result<TypeHint, String> {
+    /// Parse intersections before unions so `A&B|C` follows PHP's type
+    /// precedence. An ampersand immediately followed by a variable remains a
+    /// by-reference marker and is not consumed here.
+    fn maybe_parse_compound_type(&mut self, first: TypeHint) -> Result<TypeHint, String> {
+        let first = self.maybe_parse_intersection_type(first)?;
         if self.peek() != Token::Pipe {
             return Ok(first);
         }
@@ -241,9 +244,27 @@ impl Parser {
         while self.peek() == Token::Pipe {
             self.advance(); // consume '|'
             let t = self.parse_base_type_hint()?;
-            types.push(t);
+            types.push(self.maybe_parse_intersection_type(t)?);
         }
         Ok(TypeHint::Union(types))
+    }
+
+    fn maybe_parse_intersection_type(&mut self, first: TypeHint) -> Result<TypeHint, String> {
+        let mut types = vec![first];
+        while self.peek() == Token::Ampersand
+            && matches!(
+                self.tokens.get(self.pos + 1),
+                Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
+            )
+        {
+            self.advance();
+            types.push(self.parse_base_type_hint()?);
+        }
+        if types.len() == 1 {
+            Ok(types.pop().expect("one parsed type"))
+        } else {
+            Ok(TypeHint::Intersection(types))
+        }
     }
 
     /// Check if the current token could be the start of a type hint (without consuming tokens).
@@ -261,13 +282,13 @@ impl Parser {
                 }
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_)) | Some(Token::Pipe)
+                    Some(Token::Variable(_)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
             Token::ArrayKw | Token::Null => {
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Variable(_)) | Some(Token::Pipe)
+                    Some(Token::Variable(_)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
             _ => false,
@@ -309,7 +330,7 @@ impl Parser {
                 let is_type_context = is_type_context || matches!(next, Some(Token::Less));
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
-                    let hint = self.maybe_parse_union_type(hint)?;
+                    let hint = self.maybe_parse_compound_type(hint)?;
                     return Ok(Some(hint));
                 }
                 Ok(None)
@@ -325,7 +346,7 @@ impl Parser {
                 );
                 if is_type_context {
                     self.advance(); // consume 'array'
-                    let hint = self.maybe_parse_union_type(TypeHint::Array)?;
+                    let hint = self.maybe_parse_compound_type(TypeHint::Array)?;
                     return Ok(Some(hint));
                 }
                 Ok(None)

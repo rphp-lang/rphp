@@ -363,6 +363,131 @@ echo ":" . $renamedMapper->choose::<int, string>(2, "beta");
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn generic_diamond_contracts_merge_by_use_site_polarity() {
+    let output = common::run_php(
+        r#"<?php
+interface Renderable {}
+interface Cacheable {}
+class Article implements Renderable, Cacheable {}
+interface Pipeline<T : object> {
+    public function process(T $value): T;
+}
+interface RenderingPipeline extends Pipeline<Renderable> {}
+interface CachingPipeline extends Pipeline<Cacheable> {}
+class ArticlePipeline implements
+    RenderingPipeline,
+    CachingPipeline,
+    Pipeline<Renderable&Cacheable>
+{
+    public function process(Renderable|Cacheable $value): Renderable&Cacheable {
+        return new Article();
+    }
+}
+$pipeline = new ArticlePipeline();
+$result = $pipeline->process(new Article());
+echo ($result instanceof Renderable) ? "renderable:" : "missing:";
+echo ($result instanceof Cacheable) ? "cacheable" : "missing";
+"#,
+    );
+    assert_eq!(output, "renderable:cacheable");
+
+    let statements = parse(
+        "<?php interface A {} interface B {} function both<T>(A&B $value): A&B { return $value; }",
+    )
+    .unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let declaration = result
+        .generic_metadata
+        .find(GenericDeclarationKind::Function, "both")
+        .expect("intersection-bearing declaration metadata");
+    assert!(matches!(
+        declaration.value_parameters[0],
+        Some(GenericType::Intersection(_))
+    ));
+    assert!(matches!(
+        declaration.return_type,
+        Some(GenericType::Intersection(_))
+    ));
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn inherited_trait_diamonds_enforce_merged_runtime_contracts() {
+    let output = common::run_php(
+        r#"<?php
+interface Renderable {}
+interface Cacheable {}
+class Article implements Renderable, Cacheable {}
+class RenderOnly implements Renderable {}
+trait Pipeline<T : object> {
+    public T $value;
+    public function process(T $value): T { return new Article(); }
+}
+class ForwardDiamond { use Pipeline<Renderable>, Pipeline<Cacheable>; }
+class ReverseDiamond { use Pipeline<Cacheable>, Pipeline<Renderable>; }
+$forward = new ForwardDiamond();
+$reverse = new ReverseDiamond();
+$forward->value = new RenderOnly();
+$reverse->value = new RenderOnly();
+echo ($forward->process(new RenderOnly()) instanceof Cacheable) ? "forward:" : "missing:";
+echo ($reverse->process(new RenderOnly()) instanceof Cacheable) ? "reverse" : "missing";
+"#,
+    );
+    assert_eq!(output, "forward:reverse");
+
+    for source in [
+        "<?php interface Renderable {} interface Cacheable {} trait Pipeline<T : object> { public function process(T $value): T { return $value; } } class Diamond { use Pipeline<Renderable>, Pipeline<Cacheable>; } $value = new stdClass(); $diamond = new Diamond(); $diamond->process($value);",
+        "<?php interface Renderable {} interface Cacheable {} class RenderOnly implements Renderable {} trait Pipeline<T : object> { public function process(T $value): T { return $value; } } class Diamond { use Pipeline<Renderable>, Pipeline<Cacheable>; } $value = new RenderOnly(); $diamond = new Diamond(); $diamond->process($value);",
+        "<?php interface Renderable {} interface Cacheable {} trait Slot<T : object> { public T $value; } class Diamond { use Slot<Cacheable>, Slot<Renderable>; } $diamond = new Diamond(); $diamond->value = new stdClass();",
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("generic") || rendered.contains("property"),
+            "{rendered:?}"
+        );
+    }
+
+    let statements = parse(
+        r#"<?php
+interface Renderable {}
+interface Cacheable {}
+trait Pipeline<T : object> {
+    public T $value;
+    public function process(T $value): T { return $value; }
+}
+class ForwardDiamond { use Pipeline<Renderable>, Pipeline<Cacheable>; }
+class ReverseDiamond { use Pipeline<Cacheable>, Pipeline<Renderable>; }
+"#,
+    )
+    .unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let metadata = &result.generic_metadata;
+    let forward = metadata
+        .find_class_like_index("ForwardDiamond")
+        .expect("forward diamond metadata");
+    let reverse = metadata
+        .find_class_like_index("ReverseDiamond")
+        .expect("reverse diamond metadata");
+    let forward_method = metadata
+        .linked_instance_method_contract(forward, "process")
+        .expect("forward method contract");
+    let reverse_method = metadata
+        .linked_instance_method_contract(reverse, "process")
+        .expect("reverse method contract");
+    assert_eq!(
+        forward_method.value_parameters,
+        reverse_method.value_parameters
+    );
+    assert_eq!(forward_method.return_type, reverse_method.return_type);
+    assert_eq!(
+        metadata.linked_instance_property_type(forward, "value"),
+        metadata.linked_instance_property_type(reverse, "value")
+    );
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {
     let statements =
         parse("<?php function id<T : int>(T $value): T { return $value; } echo id::<int>(1);")

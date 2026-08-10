@@ -76,16 +76,18 @@ impl GenericMetadata {
                 effective,
             ));
         }
-        for (ancestor, arguments) in self.ancestor_bindings_from(child, effective) {
-            let Some(property) = self.find_instance_property(ancestor, name) else {
-                continue;
-            };
-            return Some(substitute_generic_parameters(
-                &property.value_type,
-                &arguments,
-            ));
-        }
-        None
+        let inherited = self
+            .ancestor_bindings_from(child, effective)
+            .into_iter()
+            .filter_map(|(ancestor, arguments)| {
+                let property = self.find_instance_property(ancestor, name)?;
+                Some(substitute_generic_parameters(
+                    &property.value_type,
+                    &arguments,
+                ))
+            })
+            .collect::<Vec<_>>();
+        (!inherited.is_empty()).then(|| self.merge_generic_union(inherited))
     }
 
     fn find_instance_property<'a>(

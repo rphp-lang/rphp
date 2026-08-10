@@ -510,6 +510,9 @@ fn known_argument_satisfies_hint(
         ParamTypeHint::Union(types) => types
             .iter()
             .any(|member| known_argument_satisfies_hint(known, receiver_class, member, strict)),
+        ParamTypeHint::Intersection(types) => types
+            .iter()
+            .all(|member| known_argument_satisfies_hint(known, receiver_class, member, strict)),
         _ => false,
     }
 }
@@ -1364,6 +1367,12 @@ impl Compiler {
                     .map(|part| self.resolve_generic_type_names(part))
                     .collect(),
             ),
+            TypeHint::Intersection(parts) => TypeHint::Intersection(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_generic_type_names(part))
+                    .collect(),
+            ),
             concrete => concrete.clone(),
         }
     }
@@ -1498,6 +1507,12 @@ impl Compiler {
                 self.substitute_generic_hint(inner, parameters, arguments),
             )),
             TypeHint::Union(parts) => TypeHint::Union(
+                parts
+                    .iter()
+                    .map(|part| self.substitute_generic_hint(part, parameters, arguments))
+                    .collect(),
+            ),
+            TypeHint::Intersection(parts) => TypeHint::Intersection(
                 parts
                     .iter()
                     .map(|part| self.substitute_generic_hint(part, parameters, arguments))
@@ -1932,6 +1947,13 @@ impl Compiler {
                     .map(|t| self.convert_type_hint(&Some(t.clone())))
                     .collect();
                 ParamTypeHint::Union(converted)
+            }
+            Some(TypeHint::Intersection(types)) => {
+                let converted: Vec<ParamTypeHint> = types
+                    .iter()
+                    .map(|t| self.convert_type_hint(&Some(t.clone())))
+                    .collect();
+                ParamTypeHint::Intersection(converted)
             }
             Some(TypeHint::GenericParameter { erased, .. }) => {
                 self.convert_type_hint(&Some(*erased.clone()))

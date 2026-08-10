@@ -227,6 +227,9 @@ fn check_type_hint(
         }
         ParamTypeHint::ClassName(class_name) => {
             if let Some(obj) = val.as_object() {
+                if class_name.eq_ignore_ascii_case("object") {
+                    return true;
+                }
                 // Resolve `self`, `parent`, `static` pseudo-types using callee's declaring class
                 let resolved = match class_name.as_str() {
                     "self" | "static" => callee_class.unwrap_or(class_name.as_str()),
@@ -261,6 +264,9 @@ fn check_type_hint(
         ParamTypeHint::Union(types) => types
             .iter()
             .any(|t| check_type_hint(val, t, eg, strict, callee_class)),
+        ParamTypeHint::Intersection(types) => types
+            .iter()
+            .all(|t| check_type_hint(val, t, eg, strict, callee_class)),
     }
 }
 
@@ -308,6 +314,9 @@ pub(crate) fn known_scalar_satisfies_type_hint(
         ParamTypeHint::Union(types) => types
             .iter()
             .any(|member| known_scalar_satisfies_type_hint(known, member, strict)),
+        ParamTypeHint::Intersection(types) => types
+            .iter()
+            .all(|member| known_scalar_satisfies_type_hint(known, member, strict)),
         _ => false,
     }
 }

@@ -6,6 +6,35 @@ use super::{
 };
 
 impl GenericMetadata {
+    /// Raw PHP signatures expose only erased bounds. Once a method carries a
+    /// type-parameter relationship, Parametric LSP is the authoritative link
+    /// check and the legacy interface validator must not re-check that erased
+    /// approximation against the substituted implementation.
+    pub fn method_has_parametric_signature(&self, owner: &str, method: &str) -> bool {
+        self.find_class_like(owner)
+            .and_then(|declaration| self.find_method(declaration, method))
+            .is_some_and(|method| {
+                method.parameters.iter().any(|parameter| {
+                    parameter
+                        .bound
+                        .as_ref()
+                        .is_some_and(type_contains_any_parameter)
+                        || parameter
+                            .default
+                            .as_ref()
+                            .is_some_and(type_contains_any_parameter)
+                }) || method
+                    .value_parameters
+                    .iter()
+                    .flatten()
+                    .any(type_contains_any_parameter)
+                    || method
+                        .return_type
+                        .as_ref()
+                        .is_some_and(type_contains_any_parameter)
+            })
+    }
+
     /// Whether a monomorphic method cache needs a receiver-specific generic
     /// contract. Own methods need one only for an explicitly reified receiver;
     /// inherited methods may also need a linked bound-erased child view.
@@ -50,13 +79,69 @@ impl GenericMetadata {
         if let Some(implementation) = self.find_method(child, method) {
             return self.substituted_reified_method_contract(child, implementation, &effective);
         }
-        for (ancestor, arguments) in self.ancestor_bindings_from(child, &effective) {
-            let Some(prototype) = self.find_method(ancestor, method) else {
-                continue;
-            };
-            return self.substituted_reified_method_contract(ancestor, prototype, &arguments);
+        let candidates = self
+            .ancestor_bindings_from(child, &effective)
+            .into_iter()
+            .filter_map(|(ancestor, arguments)| {
+                self.find_method(ancestor, method)
+                    .map(|prototype| (ancestor, prototype, arguments))
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty()
+            || !candidates
+                .iter()
+                .any(|(_, prototype, _)| method_depends_on_parameters(prototype))
+        {
+            return None;
         }
-        None
+        let parameter_count = candidates
+            .iter()
+            .map(|(_, prototype, _)| prototype.value_parameters.len())
+            .max()
+            .unwrap_or(0);
+        let value_parameters = (0..parameter_count)
+            .map(|index| {
+                let merged = self.merge_generic_union(candidates.iter().map(
+                    |(ancestor, prototype, arguments)| {
+                        prototype
+                            .value_parameters
+                            .get(index)
+                            .and_then(Option::as_ref)
+                            .map(|value| substitute_generic_parameters(value, arguments))
+                            .map(|value| {
+                                erase_method_signature(&value, ancestor, prototype, arguments)
+                            })
+                            .unwrap_or(GenericType::Mixed)
+                    },
+                ));
+                (!matches!(merged, GenericType::Mixed)).then_some(merged)
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let return_type = self.merge_generic_intersection(candidates.iter().map(
+            |(ancestor, prototype, arguments)| {
+                prototype
+                    .return_type
+                    .as_ref()
+                    .map(|value| substitute_generic_parameters(value, arguments))
+                    .map(|value| erase_method_signature(&value, ancestor, prototype, arguments))
+                    .unwrap_or(GenericType::Mixed)
+            },
+        ));
+        let return_type = (!matches!(return_type, GenericType::Mixed)).then_some(return_type);
+        if value_parameters.iter().all(Option::is_none) && return_type.is_none() {
+            return None;
+        }
+        Some(GenericMethodContract {
+            owner: self.symbol(candidates[0].0.owner).unwrap_or("?").into(),
+            method: self.symbol(candidates[0].1.name).unwrap_or(method).into(),
+            value_parameters,
+            return_type,
+            is_variadic: candidates
+                .iter()
+                .any(|(_, prototype, _)| prototype.is_variadic),
+            runtime_mode: GenericRuntimeMode::Reified,
+        })
     }
 
     /// Materialize only the inherited boundaries whose child-substituted
@@ -99,47 +184,89 @@ impl GenericMetadata {
         if self.find_method(child, method).is_some() {
             return None;
         }
-        for (ancestor, arguments) in self.ancestor_bindings(child) {
-            let Some(prototype) = self.find_method(ancestor, method) else {
-                continue;
-            };
-            let parent_identity = (0..ancestor.parameters.len())
-                .map(|index| GenericType::Parameter(index as u8))
-                .collect::<Vec<_>>();
-            let value_parameters = prototype
-                .value_parameters
-                .iter()
-                .map(|value| {
-                    let value = value.as_ref()?;
-                    let parent_abi =
-                        erase_method_signature(value, ancestor, prototype, &parent_identity);
-                    let substituted = substitute_generic_parameters(value, &arguments);
-                    let child_abi =
-                        erase_method_signature(&substituted, child, prototype, &arguments);
-                    (child_abi != parent_abi).then_some(child_abi)
-                })
-                .collect::<Vec<_>>()
-                .into_boxed_slice();
-            let return_type = prototype.return_type.as_ref().and_then(|value| {
-                let parent_abi =
-                    erase_method_signature(value, ancestor, prototype, &parent_identity);
-                let substituted = substitute_generic_parameters(value, &arguments);
-                let child_abi = erase_method_signature(&substituted, child, prototype, &arguments);
-                (child_abi != parent_abi).then_some(child_abi)
-            });
-            if value_parameters.iter().all(Option::is_none) && return_type.is_none() {
-                return None;
-            }
-            return Some(GenericMethodContract {
-                owner: self.symbol(child.owner).unwrap_or("?").into(),
-                method: self.symbol(prototype.name).unwrap_or("?").into(),
-                value_parameters,
-                return_type,
-                is_variadic: prototype.is_variadic,
-                runtime_mode: GenericRuntimeMode::BoundErased,
-            });
+        let candidates = self
+            .ancestor_bindings(child)
+            .into_iter()
+            .filter_map(|(ancestor, arguments)| {
+                self.find_method(ancestor, method)
+                    .map(|prototype| (ancestor, prototype, arguments))
+            })
+            .collect::<Vec<_>>();
+        if candidates.is_empty() {
+            return None;
         }
-        None
+        let parameter_count = candidates
+            .iter()
+            .map(|(_, prototype, _)| prototype.value_parameters.len())
+            .max()
+            .unwrap_or(0);
+        let value_parameters = (0..parameter_count)
+            .map(|index| {
+                let child_abi = self.merge_generic_union(candidates.iter().map(
+                    |(_ancestor, prototype, arguments)| {
+                        prototype
+                            .value_parameters
+                            .get(index)
+                            .and_then(Option::as_ref)
+                            .map(|value| substitute_generic_parameters(value, arguments))
+                            .map(|value| {
+                                erase_method_signature(&value, child, prototype, arguments)
+                            })
+                            .unwrap_or(GenericType::Mixed)
+                    },
+                ));
+                let parent_abi =
+                    self.merge_generic_union(candidates.iter().map(|(ancestor, prototype, _)| {
+                        let identity = (0..ancestor.parameters.len())
+                            .map(|parameter| GenericType::Parameter(parameter as u8))
+                            .collect::<Vec<_>>();
+                        prototype
+                            .value_parameters
+                            .get(index)
+                            .and_then(Option::as_ref)
+                            .map(|value| {
+                                erase_method_signature(value, ancestor, prototype, &identity)
+                            })
+                            .unwrap_or(GenericType::Mixed)
+                    }));
+                (child_abi != parent_abi).then_some(child_abi)
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        let child_return =
+            self.merge_generic_intersection(candidates.iter().map(|(_, prototype, arguments)| {
+                prototype
+                    .return_type
+                    .as_ref()
+                    .map(|value| substitute_generic_parameters(value, arguments))
+                    .map(|value| erase_method_signature(&value, child, prototype, arguments))
+                    .unwrap_or(GenericType::Mixed)
+            }));
+        let parent_return =
+            self.merge_generic_intersection(candidates.iter().map(|(ancestor, prototype, _)| {
+                let identity = (0..ancestor.parameters.len())
+                    .map(|parameter| GenericType::Parameter(parameter as u8))
+                    .collect::<Vec<_>>();
+                prototype
+                    .return_type
+                    .as_ref()
+                    .map(|value| erase_method_signature(value, ancestor, prototype, &identity))
+                    .unwrap_or(GenericType::Mixed)
+            }));
+        let return_type = (child_return != parent_return).then_some(child_return);
+        if value_parameters.iter().all(Option::is_none) && return_type.is_none() {
+            return None;
+        }
+        Some(GenericMethodContract {
+            owner: self.symbol(child.owner).unwrap_or("?").into(),
+            method: method.into(),
+            value_parameters,
+            return_type,
+            is_variadic: candidates
+                .iter()
+                .any(|(_, prototype, _)| prototype.is_variadic),
+            runtime_mode: GenericRuntimeMode::BoundErased,
+        })
     }
 
     fn find_method<'a>(
@@ -187,6 +314,26 @@ impl GenericMetadata {
     }
 }
 
+fn type_contains_any_parameter(value: &GenericType) -> bool {
+    match value {
+        GenericType::Parameter(_) => true,
+        GenericType::Named { arguments, .. }
+        | GenericType::Union(arguments)
+        | GenericType::Intersection(arguments) => arguments.iter().any(type_contains_any_parameter),
+        GenericType::Nullable(inner) => type_contains_any_parameter(inner),
+        GenericType::Int
+        | GenericType::Float
+        | GenericType::String
+        | GenericType::Bool
+        | GenericType::Array
+        | GenericType::Callable
+        | GenericType::Null
+        | GenericType::Void
+        | GenericType::Mixed
+        | GenericType::Never => false,
+    }
+}
+
 fn method_depends_on_parameters(method: &GenericMethodMetadata) -> bool {
     method
         .value_parameters
@@ -218,7 +365,9 @@ fn type_depends_on_class_parameter(
                     })
             })
         }
-        GenericType::Named { arguments, .. } | GenericType::Union(arguments) => arguments
+        GenericType::Named { arguments, .. }
+        | GenericType::Union(arguments)
+        | GenericType::Intersection(arguments) => arguments
             .iter()
             .any(|value| type_depends_on_class_parameter(value, method, remaining)),
         GenericType::Nullable(inner) => type_depends_on_class_parameter(inner, method, remaining),

@@ -209,6 +209,7 @@ pub enum TypeHint {
     ClassName(std::string::String), // includes "self", "parent", "static"
     Nullable(Box<TypeHint>),        // ?int, ?string, ?ClassName, etc.
     Union(Vec<TypeHint>),           // int|string, Foo|Bar, etc.
+    Intersection(Vec<TypeHint>),    // Foo&Bar, etc.
     GenericParameter {
         name: std::string::String,
         erased: Box<TypeHint>,

@@ -347,9 +347,15 @@ impl GenericMetadata {
             (GenericType::Union(parts), supertype) => parts
                 .iter()
                 .all(|part| self.generic_type_is_subtype(part, supertype, class_is_a)),
+            (subtype, GenericType::Intersection(parts)) => parts
+                .iter()
+                .all(|part| self.generic_type_is_subtype(subtype, part, class_is_a)),
             (subtype, GenericType::Union(parts)) => parts
                 .iter()
                 .any(|part| self.generic_type_is_subtype(subtype, part, class_is_a)),
+            (GenericType::Intersection(parts), supertype) => parts
+                .iter()
+                .any(|part| self.generic_type_is_subtype(part, supertype, class_is_a)),
             (GenericType::Null, GenericType::Nullable(_)) => true,
             (GenericType::Nullable(subtype), GenericType::Nullable(supertype)) => {
                 self.generic_type_is_subtype(subtype, supertype, class_is_a)
