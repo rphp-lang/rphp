@@ -1461,6 +1461,32 @@ the quick loop and array kernel addresses remain exact. X86-64 text/data/bss is
 3387875/51816/3240 and its pinned gate passes at
 +0.092%/+0.291%/-0.753%/-0.192%/-0.209%. No crate, feature or lockfile changes.
 
+### Executor call-path ownership split (2026-08-10)
+
+The baseline/quick composition root no longer owns five unrelated call-path
+implementations inline. `src/vm/execute.rs` falls from 6,917 to 1,877 lines;
+the original 5,045-line sequence is retained in place through private
+`include!` boundaries for frame-slot/property helpers, direct scalar calls,
+direct object calls, composed scalar calls and call-frame/exception lifecycle.
+The split does not create Rust submodules, change visibility, reorder an item
+or introduce a second execution abstraction. It makes the ownership boundary
+visible while preserving the established monomorphization and call identities.
+
+The moved source is mechanically identical apart from one file-ownership
+comment per child. Default, no-default and all-feature library matrices pass
+195/186/300 tests on ARM64 and 195/186/325 on x86-64. Forty-nine named-call
+scenarios, six active coroutine-context scenarios and complete all-feature/
+all-target compilation also pass on both hosts.
+
+ARM64 retains the exact 2,818,048-byte `__TEXT` size and monitored quick-loop
+and String-commit addresses. Its fresh 20-pair default runtime gate records
++0.302%/-0.190%/-0.454%/-1.697%/+0.156% for scalar, packed array, String,
+order and ledger. On x86-64 GNU `size` moves 192 bytes from bss accounting to
+text accounting while preserving the exact 3,442,931-byte total; the monitored
+hot group shifts uniformly by `0xc0`. The pinned gate nevertheless passes at
+-0.290%/+0.285%/-0.822%/-0.204%/-0.252%. No manifest, lockfile, feature, crate
+or external library changes.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

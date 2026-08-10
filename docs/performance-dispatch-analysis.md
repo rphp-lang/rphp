@@ -2107,3 +2107,20 @@ kernel addresses. The final ARM64 gate is
 +0.092%/+0.291%/-0.753%/-0.192%/-0.209%. Forty-nine named-argument E2E cases
 cover frame reuse, nested fixed calls and nested/mixed invokable objects. No
 external dependency or lockfile change is introduced.
+
+The following ownership-only checkpoint removes 5,045 inline lines from the
+`execute.rs` composition root without moving them into Rust submodules. Five
+private `include!` files retain the original item order and visibility for
+frame-slot/property handling, direct scalar calls, direct object calls,
+composed calls and call-frame/exception lifecycle. The root falls from 6,917
+to 1,877 lines while the executed code and dispatch graph remain unchanged.
+
+ARM64 preserves the exact 2,818,048-byte `__TEXT`, quick-loop address and
+String-commit address; its balanced 20-pair gate is
++0.302%/-0.190%/-0.454%/-1.697%/+0.156% for scalar, packed array, String,
+order and ledger. The x86 linker shifts the monitored group uniformly by
+`0xc0` and reports 192 bytes moving from bss to text with the total unchanged.
+Its pinned gate passes at -0.290%/+0.285%/-0.822%/-0.204%/-0.252%, so the
+source-ownership improvement is admitted by behavior and measured runtime
+rather than an unsupported claim of byte-identical executables. No Cargo or
+dependency change is involved.

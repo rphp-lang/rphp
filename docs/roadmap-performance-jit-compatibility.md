@@ -7971,6 +7971,33 @@ Library matrices pass 195/186/300 on ARM64 and 195/186/325 on x86-64; file,
 stream, coroutine-context and all-target checks are clean. No external crate,
 Cargo feature or lockfile change is involved.
 
+### Executor call-path ownership split (2026-08-10)
+
+The refactoring interlude reduces `src/vm/execute.rs` from 6,917 to 1,877
+physical lines without introducing a second executor or a Rust module ABI
+boundary. Five contiguous implementation domains now live in
+`frame_slots_and_property_calls.rs`, `direct_scalar_calls.rs`,
+`direct_object_calls.rs`, `composed_scalar_calls.rs` and
+`baseline_call_frames.rs`. Private `include!` expansion keeps their exact item
+order, parent-module visibility and existing symbol identities. The original
+5,045-line sequence is mechanically unchanged apart from ownership comments.
+
+This split specifically separates frame writes and cleanup from typed scalar,
+object and composed call evaluation. A future call or frame change can now be
+reviewed against one ownership domain instead of crossing the quick-loop
+composition root. It adds no indirection, allocation, dispatch or dependency.
+
+Default/no-default/all-feature library matrices pass 195/186/300 on ARM64 and
+195/186/325 on x86-64. Named-call coverage remains 49 scenarios, coroutine
+context coverage remains six active scenarios, and all-feature/all-target
+compilation passes on both hosts. ARM64 retains the exact 2,818,048-byte
+`__TEXT` and monitored addresses; its 20-pair gate is
++0.302%/-0.190%/-0.454%/-1.697%/+0.156%. X86-64 keeps the exact total reported
+binary section size while GNU `size` trades 192 bss bytes for 192 text bytes
+and the monitored group moves uniformly by `0xc0`; the pinned gate passes at
+-0.290%/+0.285%/-0.822%/-0.204%/-0.252%. Cargo files and external libraries
+remain unchanged.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
