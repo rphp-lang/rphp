@@ -8550,6 +8550,31 @@ The remaining reified delta is approximately 65 ns per ARM64 object and 69 ns
 per x86-64 object; it includes the required weak identity insertion plus real
 constructor/property guards and is recorded separately from method dispatch,
 which is at parity.
+
+Generic instance properties now resolve through the same composed inheritance
+graph as methods. An own declaration wins; otherwise direct and transitive
+class ancestors plus generic traits are searched with their effective type
+arguments. Reified writes validate the fully substituted property type, while
+bound-erased writes validate the defining declaration's erased bound and keep
+an unbounded parameter as `mixed`. The property IC remains keyed by the
+receiver's concrete child declaration, so included child metadata and cached
+writes use the same resolver without changing its 16-byte layout.
+
+The first correct reified implementation recomposed and cloned the inherited
+type on every write and took about 1.31 seconds for five million writes. The
+final path stores one owned, fully substituted property contract in a
+feature-only binding-plus-name L0. Cold lookup may walk an arbitrary ancestor
+chain; a warm write performs no substitution or allocation. In 31
+order-alternated ARM64 release sets, bound-erased own/manual is +0.299% and
+inherited/own is -0.345%; reified own/manual is +81.212% and inherited/own is
+-0.226% (0.094672 versus 0.095341 seconds). On the CPU-pinned x86-64 host, 101
+separate bound-erased pairs report +0.082% own/manual and +0.135%
+inherited/own. Sixty-one reified pairs report +87.013% own/manual and only
++0.758% inherited/own (0.106651 versus 0.105806 seconds). Thus reification
+retains the real property guard, but inheritance itself adds less than one
+percent on both architectures. No object, `Value`, frame, function,
+instruction or property-IC layout grows.
+
 The general non-scalar substituted signature view, method-generic
 alpha-renaming and deterministic diamond merging remain follow-ups rather than
 weakening either exact fast-path proof.

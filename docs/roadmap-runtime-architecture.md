@@ -1877,6 +1877,19 @@ sidecars; successful completion, abandoned argument evaluation and exception
 unwinding remove the exact binding, preventing a caught generic call from
 reifying a later ordinary call through stale LIFO state.
 
+Generic property lookup now composes the same direct/transitive class and trait
+bindings. Own properties take precedence; inherited reified properties receive
+the fully substituted child binding, while bound-erased properties retain the
+defining ancestor's bound and unbounded parameters remain `mixed`. This covers
+ordinary writes, the constructor property-initializer proof, trait properties,
+cache invalidation between distinct bindings and child metadata merged from an
+included unit. The cold metadata walk lives in `generics/properties.rs`; the
+runtime checks and one-entry binding-plus-name L0 live in
+`runtime/generic_properties.rs`. The L0 owns its substituted type, so warm
+writes allocate nothing and metadata merges cannot invalidate a borrow. The
+existing property IC still stores the concrete child declaration and no
+object, `Value`, frame, function, instruction or IC layout changes.
+
 Materializing a general substituted signature for non-reified concrete
 descendants, method-generic alpha-renaming and deterministic diamond contract
 merging remain explicit follow-up link/runtime steps. Generics-aware JIT

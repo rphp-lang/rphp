@@ -17,6 +17,8 @@ mod link;
 mod lsp;
 #[path = "generics/methods.rs"]
 mod methods;
+#[path = "generics/properties.rs"]
+mod properties;
 #[path = "generics/variance.rs"]
 mod variance;
 
@@ -527,102 +529,6 @@ impl GenericMetadata {
     #[inline]
     pub fn declaration(&self, binding: ReifiedBinding) -> Option<&GenericDeclaration> {
         self.declarations.get(binding.declaration as usize)
-    }
-
-    pub fn property_type(
-        &self,
-        binding: ReifiedBinding,
-        name: &str,
-        is_static: bool,
-    ) -> Option<&GenericType> {
-        self.declaration(binding)?
-            .properties
-            .iter()
-            .find(|property| {
-                property.is_static == is_static
-                    && self
-                        .symbol(property.name)
-                        .is_some_and(|candidate| candidate == name)
-            })
-            .map(|property| &property.value_type)
-    }
-
-    pub fn value_matches_property_binding<F>(
-        &self,
-        value: &Value,
-        name: &str,
-        binding: ReifiedBinding,
-        class_is_a: F,
-    ) -> Option<bool>
-    where
-        F: Fn(&str, &str) -> bool,
-    {
-        let expected = self.property_type(binding, name, false)?;
-        Some(self.value_matches_binding(value, expected, binding, class_is_a))
-    }
-
-    pub fn value_matches_erased_property<F>(
-        &self,
-        kind: GenericDeclarationKind,
-        owner: &str,
-        name: &str,
-        value: &Value,
-        class_is_a: F,
-    ) -> Option<bool>
-    where
-        F: Fn(&str, &str) -> bool,
-    {
-        let declaration = self.find_index(kind, owner)?;
-        self.value_matches_erased_property_declaration(declaration, name, value, class_is_a)
-    }
-
-    pub fn value_matches_erased_property_declaration<F>(
-        &self,
-        declaration: u32,
-        name: &str,
-        value: &Value,
-        class_is_a: F,
-    ) -> Option<bool>
-    where
-        F: Fn(&str, &str) -> bool,
-    {
-        let declaration = self.declarations.get(declaration as usize)?;
-        let property = declaration.properties.iter().find(|property| {
-            !property.is_static
-                && self
-                    .symbol(property.name)
-                    .is_some_and(|candidate| candidate == name)
-        })?;
-        let value = if value.is_reference() {
-            unsafe { &*value.as_ref_ptr() }
-        } else {
-            value
-        };
-        Some(self.value_matches_erased_type(
-            value,
-            &property.value_type,
-            declaration,
-            &class_is_a,
-            0,
-        ))
-    }
-
-    pub fn property_erases_to_mixed(&self, declaration: u32, name: &str) -> bool {
-        let Some(declaration) = self.declarations.get(declaration as usize) else {
-            return false;
-        };
-        declaration
-            .properties
-            .iter()
-            .find(|property| {
-                !property.is_static
-                    && self
-                        .symbol(property.name)
-                        .is_some_and(|candidate| candidate == name)
-            })
-            .is_some_and(|property| {
-                Self::type_erases_to_mixed(&property.value_type, declaration, 0)
-            })
     }
 
     pub fn value_matches_binding<F>(

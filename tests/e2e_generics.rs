@@ -367,15 +367,23 @@ fn erased_generic_properties_keep_the_erased_storage_contract() {
     let output = common::run_php(
         r#"<?php
 class Box<T> { public T $value; }
+class ParentBox<T> { public T $value; }
+class ChildBox<U> extends ParentBox<U> {}
 $box = new Box::<int>();
 $box->value = "accepted by mixed erasure";
 echo $box->value;
+$child = new ChildBox::<int>();
+$child->value = " through inherited mixed erasure";
+echo $child->value;
 $reflection = new ReflectionObject($box);
 echo ":" . count($reflection->getGenericArguments());
 echo ":" . count($reflection->getGenericParameters());
 "#,
     );
-    assert_eq!(output, "accepted by mixed erasure:0:1");
+    assert_eq!(
+        output,
+        "accepted by mixed erasure through inherited mixed erasure:0:1"
+    );
 
     let error = common::run_php_expect_error(
         r#"<?php
@@ -385,6 +393,32 @@ $box->value = "not an int";
 "#,
     );
     assert!(format!("{error:?}").contains("bound-erased property IntBox::$value"));
+
+    let inherited_error = common::run_php_expect_error(
+        r#"<?php
+class IntParent<T : int> { public T $value; }
+class IntChild<U : int> extends IntParent<U> {}
+$box = new IntChild::<int>();
+$box->value = "not an int";
+"#,
+    );
+    assert!(
+        format!("{inherited_error:?}").contains("bound-erased property IntChild::$value"),
+        "{inherited_error:?}"
+    );
+
+    let trait_error = common::run_php_expect_error(
+        r#"<?php
+trait IntCarries<T : int> { public T $value; }
+class IntCarrier<U : int> { use IntCarries<U>; }
+$box = new IntCarrier::<int>();
+$box->value = "not an int";
+"#,
+    );
+    assert!(
+        format!("{trait_error:?}").contains("bound-erased property IntCarrier::$value"),
+        "{trait_error:?}"
+    );
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -492,6 +526,42 @@ assignBox($ints, "not an int");
         assert!(
             format!("{error:?}").contains("reified property Box::$value"),
             "{error:?}"
+        );
+    }
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_instances_substitute_inherited_property_bindings() {
+    let output = common::run_php(
+        r#"<?php
+class ParentBox<T> {
+    public T $value;
+    public function __construct(mixed $value) { $this->value = $value; }
+}
+class ChildBox<U> extends ParentBox<U> {}
+class GrandchildBox<V> extends ChildBox<V> {}
+$child = new ChildBox::<int>(1);
+$child->value = 2;
+$grandchild = new GrandchildBox::<string>("three");
+$grandchild->value = "four";
+echo $child->value . ":" . $grandchild->value;
+"#,
+    );
+    assert_eq!(output, "2:four");
+
+    for source in [
+        "<?php class ParentBox<T> { public T $value; } class ChildBox<U> extends ParentBox<U> {} $box = new ChildBox::<int>(); $box->value = 'bad';",
+        "<?php class ParentBox<T> { public T $value; public function __construct(mixed $value) { $this->value = $value; } } class ChildBox<U> extends ParentBox<U> {} new ChildBox::<int>(1); new ChildBox::<int>('bad');",
+        "<?php class ParentBox<T> { public T $value; } class ChildBox<U> extends ParentBox<U> {} class GrandchildBox<V> extends ChildBox<V> {} $box = new GrandchildBox::<int>(); $box->value = 'bad';",
+        "<?php trait Carries<T> { public T $value; } class Carrier<U> { use Carries<U>; } $box = new Carrier::<int>(); $box->value = 'bad';",
+        "<?php class ParentBox<T> { public T $value; } class ChildBox<U> extends ParentBox<U> {} function assign($box, $value) { $box->value = $value; } $strings = new ChildBox::<string>(); $ints = new ChildBox::<int>(); assign($strings, 'valid'); assign($ints, 'bad');",
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("reified property") && rendered.contains("::$value"),
+            "{rendered:?}"
         );
     }
 }

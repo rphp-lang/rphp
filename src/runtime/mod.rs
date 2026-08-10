@@ -4,6 +4,8 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::ClassDef;
+#[cfg(feature = "php-generics-reified")]
+use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, ReifiedBinding, ReifiedMethodContract};
 use crate::parser::Visibility;
 use crate::value::ObjectLayout;
@@ -12,6 +14,9 @@ use crate::vm::function::FunctionCommon;
 use crate::vm::stack::VmStack;
 use crate::vm::stats;
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[path = "generic_properties.rs"]
+mod generic_properties;
 #[cfg(feature = "php-generics-reified")]
 #[path = "generic_scopes.rs"]
 mod generic_scopes;
@@ -31,6 +36,13 @@ struct ReifiedObjectBinding {
 struct ReifiedMethodContractBinding {
     binding: ReifiedBinding,
     contract: std::rc::Rc<ReifiedMethodContract>,
+}
+
+#[cfg(feature = "php-generics-reified")]
+struct ReifiedPropertyContractBinding {
+    binding: ReifiedBinding,
+    property: Box<str>,
+    expected: GenericType,
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -171,6 +183,11 @@ pub struct ExecutorGlobals {
     /// monomorphic generic receiver allocation-free after warmup.
     #[cfg(feature = "php-generics-reified")]
     reified_method_contract_cache: std::cell::RefCell<Option<ReifiedMethodContractBinding>>,
+    /// One-entry fully substituted property contract. Cold resolution may
+    /// compose an arbitrary inheritance chain; warm writes only compare the
+    /// receiver binding/name and validate against this owned type.
+    #[cfg(feature = "php-generics-reified")]
+    reified_property_contract_cache: std::cell::RefCell<Option<ReifiedPropertyContractBinding>>,
 }
 
 impl ExecutorGlobals {
@@ -202,6 +219,8 @@ impl ExecutorGlobals {
             active_reified_member_calls: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_method_contract_cache: std::cell::RefCell::new(None),
+            #[cfg(feature = "php-generics-reified")]
+            reified_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -250,6 +269,8 @@ impl ExecutorGlobals {
             active_reified_member_calls: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_method_contract_cache: std::cell::RefCell::new(None),
+            #[cfg(feature = "php-generics-reified")]
+            reified_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -382,121 +403,6 @@ impl ExecutorGlobals {
     pub(crate) fn discard_reified_member_call(&mut self, call: usize) {
         let _ = take_reified_member_call(&mut self.pending_reified_member_calls, call);
         let _ = take_reified_member_call(&mut self.active_reified_member_calls, call);
-    }
-
-    /// Returns the declaration index when this is a generic property and its
-    /// erased or reified contract was checked, or `None` for ordinary
-    /// properties. The caller stores that index in the existing property IC.
-    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-    pub(crate) fn check_generic_property_value(
-        &self,
-        object: &crate::value::Value,
-        owner: &str,
-        name: &str,
-        value: &crate::value::Value,
-    ) -> Result<Option<u32>, String> {
-        #[cfg(not(feature = "php-generics-reified"))]
-        let _ = object;
-        #[cfg(feature = "php-generics-reified")]
-        if let Some(binding) = self.reified_object_binding(object) {
-            if let Some(matches) = self.generic_metadata.value_matches_property_binding(
-                value,
-                name,
-                binding,
-                |actual, bound| self.class_is_a(actual, bound),
-            ) {
-                if matches {
-                    return Ok(Some(binding.declaration));
-                }
-                let declaration_owner = self
-                    .generic_metadata
-                    .declaration(binding)
-                    .and_then(|declaration| self.generic_metadata.symbol(declaration.owner))
-                    .unwrap_or("?");
-                return Err(format!(
-                    "Value does not match reified property {}::${}",
-                    declaration_owner, name
-                ));
-            }
-        }
-        let Some(declaration) = self
-            .generic_metadata
-            .find_index(crate::generics::GenericDeclarationKind::Class, owner)
-        else {
-            return Ok(None);
-        };
-        let Some(matches) = self
-            .generic_metadata
-            .value_matches_erased_property_declaration(
-                declaration,
-                name,
-                value,
-                |actual, bound| self.class_is_a(actual, bound),
-            )
-        else {
-            return Ok(None);
-        };
-        if matches {
-            return Ok(Some(declaration));
-        }
-        Err(format!(
-            "Value does not match bound-erased property {}::${}",
-            owner, name
-        ))
-    }
-
-    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-    pub(crate) fn check_cached_generic_property_value(
-        &self,
-        object: &crate::value::Value,
-        name: &str,
-        value: &crate::value::Value,
-        declaration: u32,
-    ) -> Result<(), String> {
-        #[cfg(not(feature = "php-generics-reified"))]
-        let _ = object;
-        #[cfg(feature = "php-generics-reified")]
-        if let Some(binding) = self.reified_object_binding(object) {
-            if binding.declaration == declaration {
-                let matches = self
-                    .generic_metadata
-                    .value_matches_property_binding(value, name, binding, |actual, bound| {
-                        self.class_is_a(actual, bound)
-                    })
-                    .ok_or_else(|| "Invalid cached reified property metadata".to_string())?;
-                if matches {
-                    return Ok(());
-                }
-                let owner = self
-                    .generic_metadata
-                    .declaration(binding)
-                    .and_then(|declaration| self.generic_metadata.symbol(declaration.owner))
-                    .unwrap_or("?");
-                return Err(format!(
-                    "Value does not match reified property {}::${}",
-                    owner, name
-                ));
-            }
-        }
-        let matches = self
-            .generic_metadata
-            .value_matches_erased_property_declaration(declaration, name, value, |actual, bound| {
-                self.class_is_a(actual, bound)
-            })
-            .ok_or_else(|| "Invalid cached bound-erased property metadata".to_string())?;
-        if matches {
-            return Ok(());
-        }
-        let owner = self
-            .generic_metadata
-            .declarations()
-            .get(declaration as usize)
-            .and_then(|declaration| self.generic_metadata.symbol(declaration.owner))
-            .unwrap_or("?");
-        Err(format!(
-            "Value does not match bound-erased property {}::${}",
-            owner, name
-        ))
     }
 
     /// Register a class definition and its methods in the function table.
