@@ -8227,6 +8227,39 @@ feature passes 196 library and 16 stream scenarios; all-feature stream coverage
 grows from 31 to 33, and all-feature/all-target compilation passes on both
 hosts. The feature adds no crate, external library or `Cargo.lock` change.
 
+### Arbitrary stream-line checkpoint (2026-08-10)
+
+Phase 5 now exposes `stream_get_line()` behind the independent `stream-line`
+feature. PHP 8.4.24 probes establish that length zero means unbounded reading,
+a positive limit counts all consumed bytes including a matched ending, and a
+matched ending is consumed but excluded from the returned string. Empty,
+multi-byte, overlapping and NUL endings, exact cursor position, EOF identity,
+weak scalar conversion, Stringable objects, closed streams and write-only
+failure are covered.
+
+The stream backend implementation lives in the 116-line
+`stream/get_line.rs` child and performs fixed 8 KiB reads. A dependency-free
+KMP prefix table keeps self-overlapping and long endings linear and carries
+partial matches across chunk boundaries. Surplus bytes are returned to the
+seekable backend, preserving `ftell()`, later reads and writes without a hidden
+buffer. The 121-line `streams/line.rs` child owns PHP-visible validation,
+conversion and exact covered errors; its object conversion delegates to the
+existing magic-method executor.
+
+Feature-off ARM64/x86-64 text stays byte-identical to `c026124` at
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and `12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`,
+with exact 2,818,048-byte ARM64 `__TEXT` and 3,388,067/51,816/3,048 x86-64
+section totals. ARM64's 20-pair gate passes at
+-1.958%/-0.448%/+0.038%/+0.982%/-0.886%; a 40-pair repeat of its noisy order
+control settles at -0.511%. CPU-pinned x86-64 passes at
++0.603%/-0.105%/-0.967%/-0.740%/+0.181%.
+
+ARM64/x86-64 library matrices pass 195/186/305 and 195/186/330. The focused
+feature passes 197 library and 16 stream scenarios, all-feature stream coverage
+reaches 35, and all-feature/all-target compilation passes on both hosts. The
+feature adds no crate, external library or `Cargo.lock` change.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

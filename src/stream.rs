@@ -15,6 +15,9 @@ mod contents;
 #[cfg(not(target_vendor = "apple"))]
 #[path = "stream/csv.rs"]
 mod csv;
+#[cfg(feature = "stream-line")]
+#[path = "stream/get_line.rs"]
+mod get_line;
 #[path = "stream/temp.rs"]
 mod temp;
 

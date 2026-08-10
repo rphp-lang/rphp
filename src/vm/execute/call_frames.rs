@@ -279,7 +279,7 @@ fn call_magic_method(
 }
 
 /// Reuse PHP object string conversion from feature-only internal handlers.
-#[cfg(feature = "stream-registry")]
+#[cfg(any(feature = "stream-line", feature = "stream-registry"))]
 pub(crate) fn call_object_string_conversion(
     eg: &mut ExecutorGlobals,
     object: &Value,

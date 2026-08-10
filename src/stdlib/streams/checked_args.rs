@@ -7,6 +7,7 @@ use crate::vm::frame::ExecuteData;
     feature = "csv-errors",
     feature = "stream-contents",
     feature = "stream-copy",
+    feature = "stream-line",
     feature = "file-contents",
     feature = "file-write",
     feature = "file-lines"

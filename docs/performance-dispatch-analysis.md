@@ -2292,3 +2292,24 @@ order and ledger. CPU-pinned x86-64 records
 aggregate is not claimed as a gain. Every positive delta remains below the
 one-percent admission ceiling, and no dependency or default runtime work is
 added.
+
+### Arbitrary stream-line default-code admission
+
+The independent `stream-line` boundary removes the `stream_get_line()`
+handler, its arbitrary-ending matcher and its object-string bridge from a
+feature-off build. The backend reads fixed stack chunks without a hidden
+userspace buffer and uses a locally implemented KMP prefix table only when the
+feature is enabled. ARM64 therefore retains the exact 0x244700-byte `c026124`
+`.text` body at SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and the 2,818,048-byte `__TEXT`. X86-64 remains exact at
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+
+The ARM64 20-pair gate records
+-1.958%/-0.448%/+0.038%/+0.982%/-0.886% for scalar, packed array, String,
+order and ledger. A build-free 40-pair repeat of the noisy order control settles
+at -0.511%. CPU-pinned x86-64 records
++0.603%/-0.105%/-0.967%/-0.740%/+0.181%. Negative values are not claimed as
+feature gains; every positive delta remains within the one-percent ceiling.
+No crate, external library or lockfile change is introduced.

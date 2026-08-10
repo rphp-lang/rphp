@@ -163,6 +163,61 @@ fn line_reads_cross_stack_chunks_without_hiding_cursor_bytes() {
 }
 
 #[test]
+#[cfg(feature = "stream-line")]
+fn arbitrary_line_endings_preserve_limits_cursor_and_eof() {
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(b"ab--cd--ef").unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut line = Vec::new();
+
+    assert_eq!(stream.read_until(&mut line, None, b"--").unwrap(), Some(2));
+    assert_eq!(line, b"ab");
+    assert_eq!(stream.position().unwrap(), 4);
+    assert!(!stream.is_eof());
+
+    assert_eq!(
+        stream.read_until(&mut line, Some(4), b"--").unwrap(),
+        Some(2)
+    );
+    assert_eq!(line, b"cd");
+    assert_eq!(stream.position().unwrap(), 8);
+
+    assert_eq!(
+        stream.read_until(&mut line, Some(99), b"--").unwrap(),
+        Some(2)
+    );
+    assert_eq!(line, b"ef");
+    assert!(stream.is_eof());
+    assert_eq!(stream.read_until(&mut line, None, b"--").unwrap(), None);
+}
+
+#[test]
+#[cfg(feature = "stream-line")]
+fn arbitrary_line_endings_match_across_chunks_and_overlap() {
+    let mut contents = vec![b'x'; 8_191];
+    contents.extend_from_slice(b"abababaca-tail");
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(&contents).unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let mut line = Vec::new();
+
+    assert_eq!(
+        stream.read_until(&mut line, None, b"ababaca").unwrap(),
+        Some(8_193)
+    );
+    let mut expected = vec![b'x'; 8_191];
+    expected.extend_from_slice(b"ab");
+    assert_eq!(line, expected);
+    assert_eq!(stream.position().unwrap(), 8_200);
+    assert_eq!(
+        stream.read_until(&mut line, None, b"ababaca").unwrap(),
+        Some(5)
+    );
+    assert_eq!(line, b"-tail");
+    assert!(stream.is_eof());
+}
+
+#[test]
 fn csv_length_boundary_and_open_enclosure_follow_php_cursor_rules() {
     let mut stream = PhpStream::open("php://memory", "w+").unwrap();
     stream.write(b"\"abcdef\",x\nnext,row\n").unwrap();

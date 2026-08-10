@@ -304,6 +304,92 @@ fn stream_locality_matches_php_wrappers_resources_and_string_conversion() {
 }
 
 #[test]
+#[cfg(feature = "stream-line")]
+fn stream_line_preserves_endings_limits_cursor_and_eof() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $stream = fopen('php://memory', 'w+');
+            fwrite($stream, 'ab--cd--ef'); rewind($stream);
+            echo '['; echo stream_get_line($stream, 99, '--'); echo ']';
+            echo ':'; echo ftell($stream); echo ':';
+            echo '['; echo stream_get_line($stream, 4, '--'); echo ']';
+            echo ':'; echo ftell($stream); echo ':';
+            echo '['; echo stream_get_line($stream, 99, '--'); echo ']';
+            echo ':'; echo feof($stream); echo ':';
+            if (stream_get_line($stream, 99, '--') === false) { echo 'false'; }
+
+            $unlimited = fopen('php://memory', 'w+');
+            fwrite($unlimited, 'abcdef'); rewind($unlimited);
+            echo ':['; echo stream_get_line($unlimited, 0); echo ']';
+            echo ':'; echo feof($unlimited);
+
+            $overlap = fopen('php://memory', 'w+');
+            fwrite($overlap, 'ababaX'); rewind($overlap);
+            echo ':['; echo stream_get_line($overlap, 99, 'aba'); echo ']';
+            echo ':'; echo ftell($overlap);
+
+            $nul = fopen('php://memory', 'w+');
+            fwrite($nul, 'abc' . chr(0) . 'def'); rewind($nul);
+            echo ':['; echo stream_get_line($nul, 99, chr(0)); echo ']';
+            echo ':'; echo ftell($nul);
+            "
+        ),
+        "[ab]:4:[cd]:8:[ef]:1:false:[abcdef]:1:[]:3:[abc]:4"
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-line")]
+fn stream_line_matches_php_argument_conversion_and_errors() {
+    assert_eq!(
+        run_php(
+            "<?php
+            try { stream_get_line(false, 1); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+
+            $stream = fopen('php://memory', 'w+');
+            fwrite($stream, 'abcdef'); rewind($stream);
+            try { stream_get_line($stream, -1); }
+            catch (ValueError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_get_line($stream, []); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_get_line($stream, 1, []); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_get_line($stream, 1, new stdClass()); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+
+            class Ending {
+                public function __toString(): string { return 'bc'; }
+            }
+            rewind($stream); echo '['; echo stream_get_line($stream, 99, new Ending()); echo ']';
+            echo ':'; echo ftell($stream); echo '|';
+            fclose($stream);
+            try { stream_get_line($stream, 1); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            $writeOnly = fopen('php://memory', 'w');
+            if (stream_get_line($writeOnly, 2) === false) { echo 'false'; }
+            "
+        ),
+        concat!(
+            "TypeError:stream_get_line(): Argument #1 ($stream) must be of type resource, false given|",
+            "ValueError:stream_get_line(): Argument #2 ($length) must be greater than or equal to 0|",
+            "TypeError:stream_get_line(): Argument #2 ($length) must be of type int, array given|",
+            "TypeError:stream_get_line(): Argument #3 ($ending) must be of type string, array given|",
+            "TypeError:stream_get_line(): Argument #3 ($ending) must be of type string, stdClass given|",
+            "[a]:3|",
+            "TypeError:stream_get_line(): supplied resource is not a valid stream resource|false"
+        )
+    );
+}
+
+#[test]
 #[cfg(feature = "stream-context")]
 fn stream_context_mutators_merge_context_and_stream_state() {
     assert_eq!(

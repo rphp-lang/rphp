@@ -19,6 +19,7 @@ use super::stream::PhpStream;
     feature = "stream-contents",
     feature = "stream-copy",
     feature = "stream-context",
+    feature = "stream-line",
     feature = "stream-registry",
     feature = "file-contents",
     feature = "file-write",
@@ -37,6 +38,8 @@ mod csv_errors;
 mod csv_write;
 #[cfg(feature = "stream-registry")]
 mod info;
+#[cfg(feature = "stream-line")]
+mod line;
 
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
@@ -163,6 +166,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             4,
             2,
             &["from", "to", "length", "offset"],
+        ),
+        #[cfg(feature = "stream-line")]
+        (
+            "stream_get_line",
+            line::fn_stream_get_line,
+            3,
+            2,
+            &["stream", "length", "ending"],
         ),
         ("fgets", fn_fgets, 2, 1, &["stream", "length"]),
         #[cfg(all(not(target_vendor = "apple"), not(feature = "csv-errors")))]

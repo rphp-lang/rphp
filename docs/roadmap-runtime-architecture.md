@@ -1720,6 +1720,32 @@ stream scenarios, while all-feature stream coverage reaches 33. Complete
 all-feature/all-target compilation passes on both hosts. One opt-in Cargo
 feature is added, but no crate, external library or lockfile change.
 
+### Bounded arbitrary-ending stream reads (2026-08-10)
+
+The independent `stream-line` feature adds `stream_get_line()` without growing
+the default stream path. PHP 8.4.24 compatibility probes define zero length as
+unbounded, positive length as a consumed-byte ceiling, and an ending as a byte
+sequence that is consumed but omitted from the result. The contract includes
+empty, overlapping, multi-byte and NUL endings, EOF/cursor behavior, weak
+scalar and Stringable conversion, exact covered argument errors, closed
+resources and unreadable streams.
+
+Backend mechanics and PHP argument policy are deliberately separated. The
+116-line `stream/get_line.rs` child owns fixed-chunk reading and a local linear
+KMP matcher whose partial state crosses chunk boundaries; bytes beyond a match
+are rewound so there is no persistent read-ahead buffer. The 121-line
+`streams/line.rs` child owns registration, type conversion and return/error
+mapping. Stringable conversion reuses the feature-only bridge to the existing
+magic-method executor rather than introducing another call path.
+
+Feature-off executable text remains byte-identical to `c026124` on both
+architectures, including exact ARM64/x86-64 section totals. Build-free gates
+pass at -1.958%/-0.448%/+0.038%/+0.982%/-0.886% on ARM64, with a noisy order
+repeat at -0.511%, and +0.603%/-0.105%/-0.967%/-0.740%/+0.181% on pinned
+x86-64. Library matrices pass 195/186/305 and 195/186/330; focused/all-feature
+stream coverage is 16/35 scenarios and complete all-feature/all-target linking
+passes on both hosts. No crate, external library or lockfile change is added.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
