@@ -7920,8 +7920,8 @@ resource is then rejected as a non-Context resource, followed by the empty-path
 check. Current, absolute and `file://` paths are covered; true include-path
 search and valid Stream-Context resources still require shared substrate. A
 separate pre-existing VM issue with adjacent named arguments inside nested
-calls surfaced during testing and remains an independent call-dispatch
-checkpoint rather than being mixed into this filesystem slice.
+calls surfaced during testing and was deferred to the following independent
+call-dispatch checkpoint rather than being mixed into this filesystem slice.
 
 Default ARM64 codegen remains the exact 2,818,048-byte `f5d4e68` `__TEXT` and
 monitored addresses. X86-64 text/data/bss and addresses are exact, and its
@@ -7932,6 +7932,44 @@ and 300 all-feature library tests; x86-64 passes 195/186/195/325. File E2E
 passes 3 default, 5 line-feature and 10 combined scenarios; 26 stream scenarios
 and all-feature/all-target compilation pass on both hosts. No dependency was
 added and `Cargo.lock` remains byte-identical.
+
+### Named argument frame initialization and nested `__invoke` (2026-08-10)
+
+The deferred VM issue was stale call-frame storage, not `file()`. Positional
+sends overwrite their complete prefix, so frame allocation deliberately does
+not clear it. A first named send can instead leave holes and previously read
+those stale values during duplicate and required-argument checks. Both ordinary
+and precompiled call emission now store the source argument position in
+`SendNamed.extended_value`; one outlined cold helper keeps the positional
+prefix and initializes the rest of the declared public signature to `Undef`.
+The common positional frame and send paths remain unchanged.
+
+Dynamic object calls had a second coupling: one global pending `$this` could be
+consumed by a nested argument call, while all named destinations already used
+the method signature's hidden receiver offset and were shifted again at
+`DoFcall`. The existing `Option<Value>` side-state now contains a private packed
+stack of call-frame/receiver pairs without changing `ExecutorGlobals` layout.
+The first named send binds `$this` and shifts only preceding positional values;
+an `Undef` receiver marker keeps dynamic calls on the canonical full-call path
+until completion. Error cleanup and coroutine context exchange own the same
+single side-state value.
+
+The first direct map implementation was rejected after ARM64 ledger measured
++1.195% and pinned x86 order measured +2.003%. A smaller vector revision was
+also rejected. The admitted representation restores exact ARM64 `__TEXT`,
+quick-loop and string-commit addresses. On Linux the named helpers, bitmap-mark
+slow path, interrupt handler and post-loop object recorder occupy a dedicated
+0x988-byte executable cold section; this restores the exact x86 quick-loop,
+array-push, region-entry and array-kernel addresses that the first build moved
+by 0x990.
+
+The final 20-pair ARM64 gate is
+-0.088%/-0.045%/-0.386%/-2.942%/-0.382%; pinned x86-64 is
++0.092%/+0.291%/-0.753%/-0.192%/-0.209% for scalar, packed array, String,
+order and ledger. The named E2E target passes 49 scenarios on both hosts.
+Library matrices pass 195/186/300 on ARM64 and 195/186/325 on x86-64; file,
+stream, coroutine-context and all-target checks are clean. No external crate,
+Cargo feature or lockfile change is involved.
 
 ## Phase 6: optional numerical computing and accelerator platform
 

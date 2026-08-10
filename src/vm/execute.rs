@@ -517,6 +517,7 @@ unsafe fn bitmap_drop_scalar(frame: *mut ExecuteData, ptr: *mut Value) {
 /// Bitmap slow path: mark a slot as heap (first heap write in frame).
 #[inline(never)]
 #[cold]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 unsafe fn bitmap_mark_heap(frame: *mut ExecuteData, ptr: *const Value) {
     let total = (*frame).num_cvs + (*frame).num_temps;
     if total <= 64 {
@@ -5198,6 +5199,90 @@ unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
     }
 }
 
+/// Append one dynamically resolved `__invoke` receiver to the packed internal
+/// stack stored in the pre-existing ExecutorGlobals side-state slot.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn push_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize, receiver: Value) {
+    let pending = eg
+        .pending_invoke_this
+        .get_or_insert_with(|| Value::array(PhpArray::with_packed_capacity(4)));
+    let stack = pending
+        .as_array_mut()
+        .expect("pending invoke state must remain a packed array");
+    stack.push(Value::long(call_key as i64));
+    stack.push(receiver);
+}
+
+/// Pop the current dynamically resolved `__invoke` receiver without
+/// disturbing an outer call whose argument expression is executing.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn take_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize) -> Option<Value> {
+    let matches_current = {
+        let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
+        let key_index = stack.len().checked_sub(2)?;
+        stack.get_value_at(key_index)?.as_long()? as usize == call_key
+    };
+    if !matches_current {
+        return None;
+    }
+
+    let (receiver, empty) = {
+        let stack = eg.pending_invoke_this.as_mut()?.as_array_mut()?;
+        let receiver = stack.pop()?;
+        let key = stack.pop()?;
+        debug_assert_eq!(key.as_long().map(|key| key as usize), Some(call_key));
+        (receiver, stack.is_empty())
+    };
+    if empty {
+        eg.pending_invoke_this = None;
+    }
+    Some(receiver)
+}
+
+/// Initialize the sparse argument ABI on the first named send. Keeping this
+/// work out of `op_send_named` prevents a correctness-only cold path from
+/// displacing the quick-dispatch working set.
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn prepare_named_call_frame(
+    eg: &mut ExecutorGlobals,
+    call: *mut ExecuteData,
+    func_common: &FunctionCommon,
+    positional: u32,
+) {
+    // Dynamic object calls are compiled before the runtime knows that the
+    // target is `__invoke`, so their positional prefix initially starts at CV
+    // 0. Shift only that prefix; named destinations already include `$this`.
+    let call_key = call as usize;
+    if let Some(this_val) = take_pending_invoke_this(eg, call_key) {
+        for index in (0..positional).rev() {
+            let value = unsafe { (*call).cv(index).clone() };
+            let destination = unsafe { (*call).cv_mut(index + 1) } as *mut Value;
+            unsafe { frame_slot_set(call, destination, value) };
+        }
+        let this_slot = unsafe { (*call).cv_mut(0) } as *mut Value;
+        unsafe { frame_slot_set(call, this_slot, this_val) };
+        // Keep the call on the full DoFcall path. Undef records that `$this`
+        // has already been installed and the positional prefix already moved.
+        push_pending_invoke_this(eg, call_key, Value::undef());
+    }
+
+    // `push_call_frame` leaves the source argument prefix uninitialized because
+    // ordinary SendVal writes every slot. Named sends can leave holes, so keep
+    // preceding positional values and make every remaining parameter readable.
+    for public_index in positional..func_common.sig.public_arity() {
+        let cv_index = func_common.sig.param_cv_index(public_index);
+        let slot = unsafe { (*call).cv_mut(cv_index) } as *mut Value;
+        unsafe { slot.write(Value::undef()) };
+    }
+    unsafe { (*call).named_args_used = true };
+}
+
 /// Abandon every not-yet-executed call owned by `frame`. This is required when
 /// an argument expression throws: Init has already linked the outer call, while
 /// DoFcall will never consume it. The helper also fixes the same lifetime hole
@@ -5207,7 +5292,9 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
     (*frame).call = std::ptr::null_mut();
     while !call.is_null() {
         let next = (*call).call;
-        eg.pending_named_variadic.remove(&(call as usize));
+        let call_key = call as usize;
+        eg.pending_named_variadic.remove(&call_key);
+        let _ = take_pending_invoke_this(eg, call_key);
         cleanup_frame_slots(call);
         pop_call_storage(eg, call);
         call = next;
@@ -5215,8 +5302,8 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
 }
 
 /// Clean up a pending call frame and throw a catchable exception.
-/// Removes pending_named_variadic entries, unlinks the call from the call chain,
-/// cleans up CV/TMP slots, pops the call frame, and delegates to throw_in_frame.
+/// Removes per-call side state, unlinks the call from the call chain, cleans up
+/// CV/TMP slots, pops the call frame, and delegates to throw_in_frame.
 ///
 /// SAFETY: `frame` and `call` must be valid ExecuteData pointers.
 ///         `call` must be the current pending call on `frame` (i.e. `(*frame).call == call`).
@@ -5228,6 +5315,7 @@ unsafe fn cleanup_call_and_throw<'a>(
 ) -> ThrowResult<'a> {
     let call_key = call as usize;
     eg.pending_named_variadic.remove(&call_key);
+    let _ = take_pending_invoke_this(eg, call_key);
     (*frame).call = (*call).call;
     cleanup_frame_slots(call);
     pop_call_storage(eg, call);
@@ -6498,15 +6586,21 @@ fn execute_full_call<'a>(
 
     // SendVal filled CV 0..N-1 for a dynamically resolved invokable object.
     // Make room for the hidden method receiver before validating arguments.
-    if let Some(this_val) = eg.pending_invoke_this.take() {
-        let num = unsafe { (*call).num_args };
-        for i in (0..num).rev() {
-            let val = unsafe { (*call).cv(i).clone() };
-            let dst = unsafe { (*call).cv_mut(i + 1) };
-            unsafe { frame_slot_set(call, dst as *mut Value, val) };
+    if let Some(this_val) = take_pending_invoke_this(eg, call_key) {
+        // A named send binds the receiver and shifts its positional prefix
+        // eagerly. Undef is the internal marker for that already-bound state.
+        if this_val.is_undef() {
+            // Nothing left to move.
+        } else {
+            let num = unsafe { (*call).num_args };
+            for i in (0..num).rev() {
+                let val = unsafe { (*call).cv(i).clone() };
+                let dst = unsafe { (*call).cv_mut(i + 1) };
+                unsafe { frame_slot_set(call, dst as *mut Value, val) };
+            }
+            let this_slot = unsafe { (*call).cv_mut(0) };
+            unsafe { frame_slot_set(call, this_slot as *mut Value, this_val) };
         }
-        let this_slot = unsafe { (*call).cv_mut(0) };
-        unsafe { frame_slot_set(call, this_slot as *mut Value, this_val) };
     }
 
     let func_common = unsafe { &*(*call).func };
@@ -6810,6 +6904,7 @@ fn values_identical(a: &Value, b: &Value) -> bool {
     }
 }
 
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 pub(super) fn handle_interrupt(eg: &ExecutorGlobals) -> Result<(), VmError> {
     eg.vm_interrupt.store(false, Ordering::Relaxed);
 

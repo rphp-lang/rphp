@@ -117,6 +117,7 @@ impl QuickObjectCallRecorder<'_> {
         self.counts[op_index] += 1;
     }
 
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn flush(&mut self) {
         for (resolved, count) in self.resolved.iter().zip(self.counts.iter_mut()) {
             if *count == 0 {

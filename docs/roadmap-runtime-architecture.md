@@ -1411,8 +1411,8 @@ empty path is checked last.
 The feature supports bare/current/absolute paths and `file://`. Configurable
 include-path search and valid Stream-Context resources remain absent. A
 pre-existing general nested-call bug with adjacent named arguments was exposed
-during testing and is deliberately left for its own codegen-gated fix; this
-checkpoint does not alter VM call dispatch to hide it.
+during testing and deferred to the following codegen-gated call-frame
+checkpoint rather than being hidden in the filesystem handler.
 
 Default ARM64 remains the exact 2,818,048-byte `f5d4e68` `__TEXT` and hot
 addresses. X86-64 remains exact at 3384879/51792/2112 text/data/bss and
@@ -1423,6 +1423,43 @@ default/no-default/file-lines/all features. File E2E passes 3 default, 5
 line-feature and 10 combined scenarios; 26 stream scenarios and full
 all-feature/all-target compilation pass on both hosts. The implementation adds
 no crate and leaves `Cargo.lock` byte-identical.
+
+### Reused named-call frame safety checkpoint (2026-08-10)
+
+Named sends can target declared parameters out of order, but `push_call_frame`
+intentionally leaves the supplied argument prefix uninitialized for the common
+positional `SendVal` path. Reusing that stack region therefore let duplicate
+and required-hole checks inspect stale bytes. The compiler now records each
+named send's source position in `extended_value`; the first named send preserves
+the preceding positional prefix and writes `Undef` to every remaining declared
+parameter before any check reads it. The work is outlined in the cold
+`prepare_named_call_frame` helper, so ordinary positional sends and frame
+allocation gain no loop or initialization.
+
+Dynamically resolved invokable objects also require a hidden `$this` slot.
+Their pending receivers now form packed `(call frame, receiver)` pairs inside
+the existing `pending_invoke_this: Option<Value>` side-state slot. This keeps
+the established `ExecutorGlobals` layout and one cheap `is_none()` hot check,
+while nested argument calls can no longer consume an outer receiver. On the
+first named send only the already-written positional prefix moves right; named
+destinations already include the method offset. Cleanup and coroutine exchange
+retain the same single owned side-state value.
+
+Regression coverage grows to 49 named-argument E2E cases and includes reused
+internal functions, nested calls, user functions, methods, static methods,
+constructors and nested `__invoke` calls with mixed arguments. File E2E now
+keeps its original nested `file(filename: ..., flags: 6)` form. Default,
+no-default and all-feature library matrices pass 195/186/300 on ARM64 and
+195/186/325 on x86-64; 10 file, 26 stream and 6 active coroutine-context tests
+plus all-feature/all-target compilation pass on both hosts.
+
+ARM64 keeps the exact 2,818,048-byte `__TEXT` and monitored quick-loop/string
+addresses. Its fresh 20-pair gate is
+-0.088%/-0.045%/-0.386%/-2.942%/-0.382%. Linux places the new named helpers and
+three established cold/post-loop helpers in a 0x988-byte `.rphp_cold` section;
+the quick loop and array kernel addresses remain exact. X86-64 text/data/bss is
+3387875/51816/3240 and its pinned gate passes at
++0.092%/+0.291%/-0.753%/-0.192%/-0.209%. No crate, feature or lockfile changes.
 
 ### Performance gates
 

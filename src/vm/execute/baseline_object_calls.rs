@@ -1058,11 +1058,11 @@ fn op_init_dynamic_call(
             pending_call,
         );
         unsafe {
-            (*call).num_cvs = num_args + 1; // track total CVs needed
             (*frame).call = call;
         }
-        // Stash $this object for injection in DoFcall
-        eg.pending_invoke_this = Some(callable.clone());
+        // Keep the receiver attached to its pending call. Argument expressions
+        // may execute nested calls before this frame reaches DoFcall.
+        push_pending_invoke_this(eg, call as usize, callable.clone());
     } else {
         return Err(VmError::Fatal(format!("Value of type {:?} is not callable", callable.value_type())));
     }

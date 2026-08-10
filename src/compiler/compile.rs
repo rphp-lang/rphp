@@ -2905,6 +2905,10 @@ impl Compiler {
                     send.op1_type = op_type;
                     send.op2 = name_idx;
                     send.op2_type = OpType::Const;
+                    // The first named send uses this source position to
+                    // initialize only the argument slots that no preceding
+                    // positional send could have written.
+                    send.extended_value = i as u32;
                     self.instructions.push(send);
                 }
             }
@@ -2944,6 +2948,7 @@ impl Compiler {
                 send.op1_type = *op_type;
                 send.op2 = *name_const;
                 send.op2_type = OpType::Const;
+                send.extended_value = i as u32;
                 self.instructions.push(send);
             } else {
                 let mut send = Instruction::new(OpCode::SendVal);

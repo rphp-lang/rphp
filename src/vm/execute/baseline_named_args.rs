@@ -14,6 +14,11 @@ fn op_send_named<'a>(
     debug_assert!(!call.is_null());
     let func_common = unsafe { &*(*call).func };
 
+    if !unsafe { (*call).named_args_used } {
+        let positional = opline.extended_value.min(func_common.sig.public_arity());
+        prepare_named_call_frame(eg, call, func_common, positional);
+    }
+
     // Find the parameter position by name
     let mut resolved_idx: Option<u32> = None;
     for (idx, pname) in func_common.sig.param_names.iter().enumerate() {
@@ -71,8 +76,6 @@ fn op_send_named<'a>(
             }
         }
     } else {
-        // Mark frame as having named args — FastScalar uses this to skip holes check.
-        unsafe { (*call).named_args_used = true; }
         match resolved_idx {
             Some(idx) => {
                 let cv_idx = func_common.sig.param_cv_index(idx);
@@ -134,4 +137,3 @@ fn op_send_named<'a>(
     }
     Ok(ColdResult::Done)
 }
-

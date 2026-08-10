@@ -293,7 +293,7 @@ fn extended_file_lines_match_php_newline_and_empty_line_flags() {
         echo json_encode(file('{}')); echo '|';
         echo json_encode(file('{}', FILE_IGNORE_NEW_LINES)); echo '|';
         echo json_encode(file('{}', FILE_SKIP_EMPTY_LINES)); echo '|';
-        echo json_encode(file('{}', 6)); echo '|';
+        echo json_encode(file(filename: '{}', flags: 6)); echo '|';
         echo json_encode(file('file://{}', '2'));
         ",
         path.php_literal(),

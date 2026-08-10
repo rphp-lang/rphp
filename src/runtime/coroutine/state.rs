@@ -132,6 +132,7 @@ impl CoroutineExecutionState {
                 &mut stacks.vm_stack,
                 &mut stacks.pending_call_stack,
                 &mut self.pending_named_variadic,
+                &mut self.pending_invoke_this,
                 self.current_execute_data,
             );
         }
@@ -170,6 +171,7 @@ pub(super) unsafe fn cleanup_frame_chain(
     vm_stack: &mut VmStack,
     pending_call_stack: &mut VmStack,
     pending_named_variadic: &mut HashMap<usize, Vec<(String, Value)>>,
+    pending_invoke_this: &mut Option<Value>,
     mut frame: *mut ExecuteData,
 ) {
     unsafe {
@@ -180,6 +182,7 @@ pub(super) unsafe fn cleanup_frame_chain(
             vm_stack.pop_call_frame(frame);
             frame = previous;
         }
+        *pending_invoke_this = None;
     }
 }
 

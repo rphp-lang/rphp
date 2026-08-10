@@ -84,7 +84,8 @@ pub struct ExecutorGlobals {
     pub dirty_globals: std::collections::HashSet<String>,
     /// Static variables — persisted across function calls: func_name → (var_name → value)
     pub static_vars: HashMap<String, HashMap<String, crate::value::Value>>,
-    /// Pending $this for __invoke calls (set in InitDynamicCall, consumed in DoFcall)
+    /// Packed internal `(call frame, $this)` pairs for dynamically resolved
+    /// `__invoke` calls. The existing Option remains the cheap hot-path marker.
     pub pending_invoke_this: Option<crate::value::Value>,
     /// Set of absolute file paths already included via include_once/require_once
     pub included_files: std::collections::HashSet<String>,

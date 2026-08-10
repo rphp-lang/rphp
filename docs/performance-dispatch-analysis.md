@@ -2081,3 +2081,29 @@ of default builds. ARM64 therefore keeps the exact 2,818,048-byte `f5d4e68`
 addresses. A fresh pinned 20-pair x86 gate passes at
 -0.095%/+0.197%/+0.005%/-1.697%/+0.404% for scalar, packed array, String,
 order and ledger. No line-reader crate or lockfile change is involved.
+
+The named-call follow-up fixes a default-runtime correctness hole without
+adding work to positional sends. `push_call_frame` leaves the supplied prefix
+uninitialized because ordinary `SendVal` overwrites it completely; a named
+send can leave holes and previously let duplicate/required checks observe stale
+stack bytes. `SendNamed.extended_value` now carries the source position. On the
+first named send an outlined cold helper preserves that positional prefix and
+initializes the remainder of the declared signature to `Undef`.
+
+Nested dynamic `__invoke` receivers are isolated as packed `(frame, receiver)`
+pairs inside the existing `Option<Value>` side-state. This preserves the
+`ExecutorGlobals` layout and its ordinary `is_none()` dispatch guard. A named
+dynamic call shifts only its positional prefix before binding `$this`; cleanup
+removes exactly the current pair, so an argument call cannot steal the outer
+receiver.
+
+Code placement was part of admission. Direct HashMap and Vec representations
+failed one-percent controls despite correct semantics. The final ARM64 binary
+returns to the exact 2,818,048-byte `__TEXT` and monitored hot addresses. Linux
+puts the new helpers and three existing cold/post-loop helpers in the dedicated
+0x988-byte `.rphp_cold` section, restoring exact quick-loop and packed-array
+kernel addresses. The final ARM64 gate is
+-0.088%/-0.045%/-0.386%/-2.942%/-0.382%; pinned x86-64 is
++0.092%/+0.291%/-0.753%/-0.192%/-0.209%. Forty-nine named-argument E2E cases
+cover frame reuse, nested fixed calls and nested/mixed invokable objects. No
+external dependency or lockfile change is introduced.

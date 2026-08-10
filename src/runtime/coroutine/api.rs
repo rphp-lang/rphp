@@ -51,6 +51,7 @@ fn invoke_scope_root(eg: &mut ExecutorGlobals, entry: &CoroutineEntry) -> Result
             &mut eg.vm_stack,
             &mut eg.pending_call_stack,
             &mut eg.pending_named_variadic,
+            &mut eg.pending_invoke_this,
             current,
         );
     }
