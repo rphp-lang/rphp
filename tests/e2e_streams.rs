@@ -149,6 +149,90 @@ fn stream_context_resources_round_trip_options_params_and_independent_streams() 
 
 #[test]
 #[cfg(feature = "stream-context")]
+fn default_stream_context_is_stable_and_merges_request_local_options() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $first = stream_context_get_default();
+            $second = stream_context_get_default([
+                'http' => ['method' => 'GET'],
+                'file' => ['probe' => 1],
+            ]);
+            echo get_resource_id($first) === get_resource_id($second) ? 'same:' : 'different:';
+            $options = stream_context_get_options($first);
+            echo $options['http']['method']; echo ':';
+            echo $options['file']['probe']; echo ':';
+
+            $third = stream_context_set_default([
+                'http' => ['timeout' => 2],
+                'ftp' => ['overwrite' => true],
+            ]);
+            echo get_resource_id($first) === get_resource_id($third) ? 'same:' : 'different:';
+            $options = stream_context_get_options($third);
+            echo $options['http']['method']; echo ':';
+            echo $options['http']['timeout']; echo ':';
+            echo $options['ftp']['overwrite']; echo ':';
+
+            stream_context_set_option($first, 'file', 'after', 3);
+            $options = stream_context_get_options(stream_context_get_default());
+            echo $options['file']['after']; echo ':';
+
+            $explicit = stream_context_create();
+            echo get_resource_id($explicit) === get_resource_id($first) ? 'same:' : 'different:';
+            echo count(stream_context_get_options($explicit)); echo ':';
+            $stream = fopen('php://memory', 'w+');
+            echo count(stream_context_get_options($stream)); echo ':';
+
+            $id = get_resource_id($first);
+            unset($first, $second, $third);
+            echo $id === get_resource_id(stream_context_get_default()) ? 'same' : 'different';
+            "
+        ),
+        "same:GET:1:same:GET:2:1:3:different:0:0:same"
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-context")]
+fn default_stream_context_errors_match_php_and_preserve_prior_updates() {
+    assert_eq!(
+        run_php(
+            "<?php
+            try { stream_context_get_default(false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_default(null); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try {
+                stream_context_get_default([
+                    'http' => ['early' => 1],
+                    'broken' => 1,
+                ]);
+            } catch (ValueError $error) { echo get_class($error); }
+            $options = stream_context_get_options(stream_context_get_default());
+            echo ':'; echo $options['http']['early']; echo '|';
+            try {
+                stream_context_set_default([
+                    'file' => [0 => 'ignored', 'set' => 2],
+                    0 => [],
+                ]);
+            } catch (ValueError $error) { echo get_class($error); }
+            $options = stream_context_get_options(stream_context_get_default());
+            echo ':'; echo $options['file']['set']; echo ':';
+            echo count($options['file']);
+            "
+        ),
+        concat!(
+            "TypeError:stream_context_get_default(): Argument #1 ($options) must be of type ?array, false given",
+            "|TypeError:stream_context_set_default(): Argument #1 ($options) must be of type array, null given",
+            "|ValueError:1|ValueError:2:1"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-context")]
 fn stream_context_mutators_merge_context_and_stream_state() {
     assert_eq!(
         run_php(

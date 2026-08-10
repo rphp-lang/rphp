@@ -1606,6 +1606,48 @@ Library matrices pass 195/186/301 on ARM64 and 195/186/326 on x86-64. Two
 focused E2E scenarios join the unchanged 11 file, 29 stream and 12 include
 scenarios, and x86-64 all-feature/all-target linking passes.
 
+### Default Stream Context checkpoint (2026-08-10)
+
+The `stream-context` surface now includes `stream_context_get_default()` and
+`stream_context_set_default()`. One hidden request-owned resource is returned
+for the lifetime of an executor, survives every userland alias being unset and
+remains distinct from explicit Context resources and the independent Context
+state attached to ordinary streams. Both entry points merge wrapper options
+into that stable resource; omitted/null options are accepted only by the
+getter, matching PHP 8.4.24 argument policy.
+
+PHP applies valid outer option entries before validating later entries in the
+same call. The new `context/default.rs` owner therefore publishes those partial
+updates even when a later numeric wrapper key or non-array wrapper value raises
+`ValueError`. This policy is intentionally separate from constructors and
+ordinary mutators, which continue to validate their complete option shape
+before mutation. Numeric inner keys are ignored and an inner array containing
+only numeric keys creates no wrapper state.
+
+The singleton handle is retained under a private namespace in the existing
+request state map, so it also keeps the resource alive when the optional
+`resource-lifetime` feature is enabled. No `ExecutorGlobals` field, secondary
+registry, crate or lockfile change is required. Wrapper-specific consumption
+of default options by future network transports remains separate work; this
+checkpoint establishes the PHP-visible identity, merge, mutation and error
+contract.
+
+Default ARM64 and x86-64 executable text remains byte-identical to `c026124` at
+SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and `12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+ARM64 retains the 2,818,048-byte `__TEXT`; x86-64 retains
+3,388,067/51,816/3,048 text/data/bss. Build-free 20-pair gates record
++0.385%/-0.144%/+0.094%/+0.044%/+0.248% on ARM64 and
++0.035%/-4.891%/-0.838%/+0.280%/+0.348% on pinned x86-64. The large negative
+x86 array value came with visible host noise and is not claimed as a speedup;
+all five admission ceilings pass.
+
+Library matrices remain 195/186/301 on ARM64 and 195/186/326 on x86-64.
+Feature-only/all-feature stream coverage grows to 19/31 scenarios, including
+stable identity, merge order, alias lifetime, independence, exact type errors
+and partial updates. Complete all-feature/all-target linking passes on x86-64.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

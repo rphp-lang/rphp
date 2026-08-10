@@ -9,8 +9,10 @@ use super::{
     argument, argument_string, insert_stream, optional_argument, return_value, with_stream,
 };
 
+mod default;
 mod mutate;
 
+pub(super) use default::{fn_stream_context_get_default, fn_stream_context_set_default};
 pub(super) use mutate::{
     fn_stream_context_set_option, fn_stream_context_set_options, fn_stream_context_set_params,
 };

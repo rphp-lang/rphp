@@ -2233,3 +2233,23 @@ wide thermal outliers and reported a spurious +3.534% ledger delta between the
 byte-identical binaries. Required build-free 40-pair repeats settle packed
 array at -0.003% and ledger at +0.129%. The result admits the feature without
 claiming a default-path speedup.
+
+### Default Stream Context default-code admission
+
+The default-context management API remains entirely below the existing
+`stream-context` compile-time boundary. Its stable request-local resource,
+ordered partial option merge and exact error handling add no registration,
+state field or resource code to a feature-off build. ARM64 therefore preserves
+the exact 0x244700-byte `.text` body and
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+SHA-256 of `c026124`; `__TEXT` remains 2,818,048 bytes. X86-64 keeps exact
+3,388,067/51,816/3,048 section totals and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+
+The build-free ARM64 20-pair gate is
++0.385%/-0.144%/+0.094%/+0.044%/+0.248% for scalar, packed array, String,
+order and ledger. CPU-pinned x86-64 records
++0.035%/-4.891%/-0.838%/+0.280%/+0.348%. The x86 array samples were visibly
+noisy and their negative aggregate is not counted as a speedup. Every positive
+delta is below the one-percent ceiling, so the slice is admitted on exact
+static layout and passing runtime controls without changing a dependency.

@@ -8114,6 +8114,44 @@ identity, weak values and exact errors; the existing 11 file, 29 stream and 12
 include scenarios remain green, and all-feature/all-target linking passes on
 x86-64. The slice adds no crate, external library or lockfile change.
 
+### Default Stream Context API checkpoint (2026-08-10)
+
+The next measured Phase 5 slice completes the management side of PHP's default
+Stream Context behind the existing `stream-context` feature.
+`stream_context_get_default()` and `stream_context_set_default()` return one
+stable request-owned resource and merge options into it. Mutating any alias is
+visible through every later getter; unsetting all userland aliases does not end
+the singleton's lifetime. Explicit contexts and ordinary stream-local context
+state remain independent.
+
+PHP 8.4.24 differential probes lock the less obvious update order. Valid
+wrapper entries are retained even if a later entry has an invalid outer key or
+non-array value, while numeric inner keys are ignored. This partial-publish
+contract lives in the 165-line `context/default.rs` child and does not weaken
+the full-shape validation used by context creation or ordinary setters. The
+resource handle is stored in the executor's existing private request-state
+namespace, including under `resource-lifetime`; no new global registry or
+dependency is introduced. Default-option consumption by future wrapper
+transports remains an independent compatibility slice.
+
+The feature-off binaries remain exact. ARM64 `__text` is the same 0x244700-byte
+body as `c026124` at
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`,
+with a 2,818,048-byte `__TEXT`. X86-64 retains
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+Build-free 20-pair gates report
++0.385%/-0.144%/+0.094%/+0.044%/+0.248% on ARM64 and
++0.035%/-4.891%/-0.838%/+0.280%/+0.348% on CPU-pinned x86-64. All positive
+deltas remain below one percent; the noisy negative x86 array result is treated
+only as gate evidence, not as an optimization claim.
+
+ARM64 and x86-64 library matrices remain 195/186/301 and 195/186/326.
+Stream-context-only coverage passes 19 scenarios and the all-feature surface
+passes 31, with both `resource-lifetime` configurations covered. Complete
+all-feature/all-target compilation passes on x86-64. `Cargo.toml` dependencies
+and `Cargo.lock` are unchanged.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
