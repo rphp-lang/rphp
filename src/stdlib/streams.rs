@@ -10,9 +10,12 @@ use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHand
 
 use super::stream::PhpStream;
 
-// Linking the writer into the default ARM64 binary changes unrelated hot-code
-// placement enough to fail the runtime admission gate. Keep the dependency-free
-// implementation separately selectable until that codegen boundary is solved.
+// Linking either extended CSV path into the default ARM64 binary changes
+// unrelated hot-code placement enough to fail the runtime admission gate. Keep
+// both dependency-free implementations separately selectable until that
+// codegen boundary is solved.
+#[cfg(feature = "csv-errors")]
+mod csv_errors;
 #[cfg(feature = "csv-write")]
 mod csv_write;
 
@@ -28,10 +31,18 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         ),
         ("fread", fn_fread, 2, 2, &["stream", "length"]),
         ("fgets", fn_fgets, 2, 1, &["stream", "length"]),
-        #[cfg(not(target_vendor = "apple"))]
+        #[cfg(all(not(target_vendor = "apple"), not(feature = "csv-errors")))]
         (
             "fgetcsv",
             fn_fgetcsv,
+            5,
+            1,
+            &["stream", "length", "separator", "enclosure", "escape"],
+        ),
+        #[cfg(all(not(target_vendor = "apple"), feature = "csv-errors"))]
+        (
+            "fgetcsv",
+            csv_errors::fn_fgetcsv,
             5,
             1,
             &["stream", "length", "separator", "enclosure", "escape"],
@@ -90,7 +101,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
     }
 }
 
-#[cfg(target_vendor = "apple")]
+#[cfg(all(target_vendor = "apple", not(feature = "csv-errors")))]
 #[cold]
 // Appending the Apple-only registration preserves the measured ordering of
 // the pre-existing handlers while Linux keeps the regular table registration.
@@ -100,6 +111,51 @@ pub(super) fn register_extensions(
 ) {
     let function = Box::new(make_internal_function(
         fn_fgetcsv,
+        5,
+        1,
+        ["stream", "length", "separator", "enclosure", "escape"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    ));
+    let pointer = &function.common as *const FunctionCommon;
+    eg.register_function("fgetcsv", pointer).unwrap();
+    functions.push(function);
+    #[cfg(feature = "csv-write")]
+    {
+        let function = Box::new(make_internal_function(
+            csv_write::fn_fputcsv,
+            6,
+            2,
+            [
+                "stream",
+                "fields",
+                "separator",
+                "enclosure",
+                "escape",
+                "eol",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ));
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("fputcsv", pointer).unwrap();
+        functions.push(function);
+    }
+}
+
+#[cfg(all(target_vendor = "apple", feature = "csv-errors"))]
+#[cold]
+// A separate registrar keeps the accepted default body token-for-token while
+// selecting the checked handler only in extended builds.
+#[allow(clippy::vec_box)]
+pub(super) fn register_extensions(
+    eg: &mut ExecutorGlobals,
+    functions: &mut Vec<Box<InternalFunction>>,
+) {
+    let function = Box::new(make_internal_function(
+        csv_errors::fn_fgetcsv,
         5,
         1,
         ["stream", "length", "separator", "enclosure", "escape"]
@@ -259,6 +315,7 @@ fn fn_fgets(
     }
 }
 
+#[cfg(not(feature = "csv-errors"))]
 #[cold]
 #[inline(never)]
 #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
@@ -308,6 +365,7 @@ fn fn_fgetcsv(
     }
 }
 
+#[cfg(not(feature = "csv-errors"))]
 #[cold]
 #[inline(never)]
 #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
@@ -323,6 +381,7 @@ fn csv_character_argument(execute_data: *mut ExecuteData, index: u32, default: u
     }
 }
 
+#[cfg(not(feature = "csv-errors"))]
 #[cold]
 #[inline(never)]
 #[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]

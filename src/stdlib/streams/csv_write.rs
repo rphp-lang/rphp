@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use std::io;
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::Value;
+use crate::value::{Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
@@ -12,22 +12,70 @@ pub(super) fn fn_fputcsv(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let resource = super::argument(execute_data, 0).as_resource_id();
+    let Some(resource) = super::csv_errors::stream_argument(execute_data, eg, "fputcsv") else {
+        return Ok(());
+    };
     let Some(fields) = super::argument(execute_data, 1).as_array() else {
-        return super::return_value(return_pointer, Value::bool(false));
+        let value = super::argument(execute_data, 1);
+        super::csv_errors::argument_error(
+            eg,
+            "TypeError",
+            format!(
+                "fputcsv(): Argument #2 ($fields) must be of type array, {} given",
+                value.type_name()
+            ),
+        );
+        return Ok(());
     };
-    let Some(separator) = super::csv_character_argument(execute_data, 2, b',') else {
-        return super::return_value(return_pointer, Value::bool(false));
+    let Some(separator) = super::csv_errors::csv_character_argument(
+        execute_data,
+        eg,
+        2,
+        b',',
+        "fputcsv",
+        3,
+        "separator",
+    ) else {
+        return Ok(());
     };
-    let Some(enclosure) = super::csv_character_argument(execute_data, 3, b'"') else {
-        return super::return_value(return_pointer, Value::bool(false));
+    let Some(enclosure) = super::csv_errors::csv_character_argument(
+        execute_data,
+        eg,
+        3,
+        b'"',
+        "fputcsv",
+        4,
+        "enclosure",
+    ) else {
+        return Ok(());
     };
-    let Some(escape) = super::csv_escape_argument(execute_data, 4, Some(b'\\')) else {
-        return super::return_value(return_pointer, Value::bool(false));
+    let Some(escape) =
+        super::csv_errors::csv_escape_argument(execute_data, eg, 4, Some(b'\\'), "fputcsv", 5)
+    else {
+        return Ok(());
     };
-    let eol = super::optional_argument(execute_data, 5)
-        .map(|_| super::argument_string(execute_data, 5))
-        .unwrap_or(Cow::Borrowed("\n"));
+    let eol = match super::optional_argument(execute_data, 5) {
+        Some(value) if value.value_type() == ValueType::Null => Cow::Borrowed("\n"),
+        Some(_) => {
+            let value = super::argument(execute_data, 5);
+            if matches!(
+                value.value_type(),
+                ValueType::Array | ValueType::Object | ValueType::Resource | ValueType::Closure
+            ) {
+                super::csv_errors::argument_error(
+                    eg,
+                    "TypeError",
+                    format!(
+                        "fputcsv(): Argument #6 ($eol) must be of type ?string, {} given",
+                        value.type_name()
+                    ),
+                );
+                return Ok(());
+            }
+            super::argument_string(execute_data, 5)
+        }
+        None => Cow::Borrowed("\n"),
+    };
     let eol = super::super::php_string_to_bytes(eol.as_ref());
 
     let mut encoder = CsvEncoder::new(separator, enclosure, escape);
@@ -51,21 +99,19 @@ pub(super) fn fn_fputcsv(
     };
 
     let record_length = record.len();
-    let result = resource.and_then(|resource| {
-        super::with_stream(eg, resource, |stream| {
-            let mut remaining = record.as_slice();
-            while !remaining.is_empty() {
-                let written = stream.write(remaining)?;
-                if written == 0 {
-                    return Err(io::Error::new(
-                        io::ErrorKind::WriteZero,
-                        "failed to write complete CSV record",
-                    ));
-                }
-                remaining = &remaining[written..];
+    let result = super::with_stream(eg, resource, |stream| {
+        let mut remaining = record.as_slice();
+        while !remaining.is_empty() {
+            let written = stream.write(remaining)?;
+            if written == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "failed to write complete CSV record",
+                ));
             }
-            Ok(record_length)
-        })
+            remaining = &remaining[written..];
+        }
+        Ok(record_length)
     });
     match result {
         Some(Ok(written)) if written <= i64::MAX as usize => {

@@ -341,13 +341,58 @@ fn csv_length_and_custom_controls_preserve_exact_cursor() {
             echo ':'; echo ftell($stream);
 
             rewind($stream);
-            if (fgetcsv($stream, null, '::', '"', '') === false) { echo ':invalid'; }
-            if (fgetcsv($stream, null, ',', 'xx', '') === false) { echo ':enclosure'; }
-            if (fgetcsv($stream, null, ',', '"', 'xx') === false) { echo ':escape'; }
+            try {
+                if (fgetcsv($stream, null, '::', '"', '') === false) { echo ':invalid'; }
+            }
+            catch (ValueError $error) { echo ':invalid'; }
+            try {
+                if (fgetcsv($stream, null, ',', 'xx', '') === false) { echo ':enclosure'; }
+            }
+            catch (ValueError $error) { echo ':enclosure'; }
+            try {
+                if (fgetcsv($stream, null, ',', '"', 'xx') === false) { echo ':escape'; }
+            }
+            catch (ValueError $error) { echo ':escape'; }
             echo ':'; echo ftell($stream);
             "#,
         ),
         "1:abcdef:8:2::x:11:abcdef:x:11:invalid:enclosure:escape:0"
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-errors")]
+fn csv_read_argument_errors_match_php_classes_and_messages() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            try { fgetcsv('not-a-stream'); }
+            catch (TypeError $error) {
+                echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+
+            $stream = fopen('php://memory', 'w+');
+            try { fgetcsv($stream, -1); }
+            catch (Error $error) {
+                echo '|'; echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+            try { fgetcsv($stream, null, []); }
+            catch (TypeError $error) {
+                echo '|'; echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+            fclose($stream);
+            try { fgetcsv($stream); }
+            catch (TypeError $error) {
+                echo '|'; echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+            "#,
+        ),
+        concat!(
+            "TypeError:fgetcsv(): Argument #1 ($stream) must be of type resource, string given",
+            "|ValueError:fgetcsv(): Argument #2 ($length) must be between 0 and 9223372036854775806",
+            "|TypeError:fgetcsv(): Argument #3 ($separator) must be of type string, array given",
+            "|TypeError:fgetcsv(): Argument #1 ($stream) must be an open stream resource"
+        )
     );
 }
 
@@ -415,14 +460,18 @@ fn csv_writes_custom_controls_eol_scalars_and_empty_records() {
             echo ':';
             echo fputcsv($stream, [], ';', '~', '', '');
             echo ':';
-            if (fputcsv($stream, ['x'], '::', '~', '', "\n") === false) { echo 'separator'; }
-            if (fputcsv($stream, ['x'], ';', 'xx', '', "\n") === false) { echo ':enclosure'; }
-            if (fputcsv($stream, ['x'], ';', '~', 'xx', "\n") === false) { echo ':escape'; }
+            try { fputcsv($stream, ['x'], '::', '~', '', "\n"); }
+            catch (ValueError $error) { echo 'separator'; }
+            try { fputcsv($stream, ['x'], ';', 'xx', '', "\n"); }
+            catch (ValueError $error) { echo ':enclosure'; }
+            try { fputcsv($stream, ['x'], ';', '~', 'xx', "\n"); }
+            catch (ValueError $error) { echo ':escape'; }
+            echo ':'; echo fputcsv($stream, ['z'], ';', '~', '', null);
             echo ':'; echo ftell($stream); echo ':';
             rewind($stream); echo fread($stream, 1000);
             "#,
         ),
-        "17:0:separator:enclosure:escape:17:;;1;0;1;1.5;<EOL>"
+        "17:0:separator:enclosure:escape:2:19:;;1;0;1;1.5;<EOL>z\n"
     );
 }
 
@@ -456,9 +505,45 @@ fn csv_writes_use_array_order_and_reject_unwritable_streams() {
 
             $read_only = fopen('php://memory', 'r');
             if (fputcsv($read_only, ['no']) === false) { echo ':readonly'; }
-            if (fputcsv($stream, 'not-an-array') === false) { echo ':fields'; }
+            try { fputcsv($stream, 'not-an-array'); }
+            catch (TypeError $error) { echo ':fields'; }
             "#,
         ),
         "15:two,ten,\"x,y\"\r\n:readonly:fields"
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_write_argument_errors_match_php_classes_and_messages() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            try { fputcsv('not-a-stream', ['x'], ',', '"', ''); }
+            catch (TypeError $error) {
+                echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+
+            $stream = fopen('php://memory', 'w+');
+            try { fputcsv($stream, 'not-an-array', ',', '"', ''); }
+            catch (TypeError $error) {
+                echo '|'; echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+            try { fputcsv($stream, ['x'], ',', '"', 'xx'); }
+            catch (ValueError $error) {
+                echo '|'; echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+            try { fputcsv($stream, ['x'], ',', '"', '', []); }
+            catch (TypeError $error) {
+                echo '|'; echo get_class($error); echo ':'; echo $error->getMessage();
+            }
+            "#,
+        ),
+        concat!(
+            "TypeError:fputcsv(): Argument #1 ($stream) must be of type resource, string given",
+            "|TypeError:fputcsv(): Argument #2 ($fields) must be of type array, string given",
+            "|ValueError:fputcsv(): Argument #5 ($escape) must be empty or a single character",
+            "|TypeError:fputcsv(): Argument #6 ($eol) must be of type ?string, array given"
+        )
     );
 }

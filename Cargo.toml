@@ -9,7 +9,8 @@ quick-loops = []
 vm-stats = []
 jit-prototype = []
 coroutines = []
-csv-write = []
+csv-errors = []
+csv-write = ["csv-errors"]
 
 [dependencies]
 serde = "1.0.228"

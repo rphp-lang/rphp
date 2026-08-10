@@ -1966,3 +1966,15 @@ kept behind the explicit `csv-write` feature while the default build compiles
 it out and retains its admitted hot layout. This is the intended gate behavior:
 compatibility work may land independently, but it does not become production
 default merely because its own handler is cold.
+
+The same rule applies to the exact CSV argument-error surface. A first
+default-linked implementation added `ValueError`, open-resource validation and
+the PHP 8.5 error messages without executing any of those paths in the runtime
+corpora. Nevertheless, the fresh ARM64 gate moved scalar by +3.867 percent and
+ledger by +5.094 percent. Cold annotations and a separately outlined class
+registrar did not restore the accepted dispatcher shape. The admitted design
+therefore compiles the checked reader and `ValueError` registration only with
+`csv-errors`; `csv-write` implies that feature. With both features disabled,
+the established reader handler, `.text` size and monitored hot-symbol
+addresses are identical to the prior checkpoint. No linker/profile workaround
+is retained.

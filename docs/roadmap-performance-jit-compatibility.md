@@ -7668,6 +7668,46 @@ target compilation. No crate or external library was added; `Cargo.lock` is
 unchanged. Resolving the compiler/layout boundary is required before promoting
 the writer into the default function set.
 
+### Opt-in exact CSV argument exceptions (2026-08-10)
+
+The error-surface follow-up adds PHP's `ValueError` as an `Error` subclass with
+the existing throwable constructor and `getMessage()` contract. A separate
+checked CSV module validates the stream before later arguments, distinguishes
+wrong values from closed or non-stream resources, accepts PHP-style weak
+numeric length values and rejects non-numeric strings, and enforces the
+single-byte separator/enclosure, empty-or-single-byte escape and nullable EOL
+contracts.
+`fgetcsv()` and `fputcsv()` now produce the PHP 8.5 exception classes and exact
+messages covered by the differential probes, including the platform Long
+range `0..=9223372036854775806`. Catching a `ValueError` through its `Error`
+parent and calling its inherited method surface are tested directly.
+
+Default-linking this entirely cold behavior changed the ARM64 quick dispatcher
+again: its generated body became 276 bytes smaller, but a fresh 20-pair gate
+regressed scalar by +3.867 percent and ledger by +5.094 percent. Moving helper
+functions and the class registrar out of line did not change that machine
+shape, so neither the smaller body nor the source-level cold designation was
+treated as an optimization result. The failed default-linked version and its
+custom-section experiment were rejected.
+
+The accepted boundary adds an explicit `csv-errors` feature and makes
+`csv-write` depend on it. The original default `fgetcsv()` handler remains
+compiled byte-for-byte when the feature is absent; the checked handler and
+`ValueError` class compile only when requested. The final default image again
+has the exact parser-only `.text` size, surrounding symbols, hot-symbol
+addresses and hot dispatcher size of checkpoint `6dc17b6`. The fresh full
+20-pair gate records -0.198%/-0.579%/+1.961%/+0.709%/+0.160% for scalar,
+packed array, String, order and ledger. The lone noisy String result was then
+rerun independently at -2.450%; the other full-gate controls were already
+within the +1% ceiling. Stream matrices pass 14 default scenarios, 15 with
+`csv-errors` and 20 with `csv-write`. The ARM64 matrices pass 195 default, 186
+no-default and 291 all-feature library tests plus complete all-feature/all-
+target compilation. The implementation remains standard-library-only and
+`Cargo.lock` is unchanged.
+Making either CSV extension a production default still requires a compiler or
+translation-unit boundary that passes the ordinary runtime gate on both
+architectures.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

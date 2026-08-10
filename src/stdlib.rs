@@ -878,6 +878,51 @@ fn fn_throwable_get_message(
     ret!(rv, Value::string(""));
 }
 
+#[cfg(feature = "csv-errors")]
+#[cold]
+fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
+    use crate::compiler::compile::ClassDef;
+
+    eg.register_class(ClassDef {
+        name: "ValueError".to_string(),
+        parent: Some("Error".to_string()),
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+
+    let constructor = Box::new(make_internal_method(
+        fn_throwable_construct,
+        2,
+        0,
+        vec!["message".to_string()],
+    ));
+    let constructor_pointer = &constructor.common as *const FunctionCommon;
+    eg.function_table
+        .insert("valueerror::__construct".to_string(), constructor_pointer);
+    eg.method_declaring_class
+        .insert(constructor_pointer, "ValueError".to_string());
+
+    let get_message = Box::new(make_internal_method(fn_throwable_get_message, 1, 0, vec![]));
+    let get_message_pointer = &get_message.common as *const FunctionCommon;
+    eg.function_table
+        .insert("valueerror::getmessage".to_string(), get_message_pointer);
+    eg.method_declaring_class
+        .insert(get_message_pointer, "ValueError".to_string());
+    [constructor, get_message]
+}
+
 /// Register Throwable, Error, TypeError, Exception classes with
 /// __construct and getMessage methods.
 pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
@@ -1059,6 +1104,9 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
     }
+
+    #[cfg(feature = "csv-errors")]
+    funcs.extend(register_value_error(eg));
 
     // Generator class — implements Iterator
     eg.register_class(ClassDef {
