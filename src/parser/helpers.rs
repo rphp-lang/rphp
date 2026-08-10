@@ -255,7 +255,16 @@ impl Parser {
                     Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
                 )
             }
-            Token::Identifier(_) | Token::ArrayKw | Token::Null => {
+            Token::Identifier(_) => {
+                if self.peek_at(1) == Token::Less {
+                    return true;
+                }
+                matches!(
+                    self.tokens.get(self.pos + 1),
+                    Some(Token::Variable(_)) | Some(Token::Pipe)
+                )
+            }
+            Token::ArrayKw | Token::Null => {
                 matches!(
                     self.tokens.get(self.pos + 1),
                     Some(Token::Variable(_)) | Some(Token::Pipe)
@@ -297,6 +306,7 @@ impl Parser {
                         | Some(Token::DotDotDot)
                         | Some(Token::Pipe)
                 );
+                let is_type_context = is_type_context || matches!(next, Some(Token::Less));
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
                     let hint = self.maybe_parse_union_type(hint)?;
@@ -337,7 +347,28 @@ impl Parser {
                 "void" => Ok(TypeHint::Void),
                 "mixed" => Ok(TypeHint::Mixed),
                 "never" => Ok(TypeHint::Never),
-                _ => Ok(TypeHint::ClassName(name)),
+                _ => {
+                    if self.peek() == Token::Less {
+                        if !cfg!(any(
+                            feature = "php-generics-erased",
+                            feature = "php-generics-reified"
+                        )) {
+                            return Err(
+                                "Generic syntax requires php-generics-erased or php-generics-reified"
+                                    .to_string(),
+                            );
+                        }
+                        let arguments = self.parse_generic_type_arguments()?;
+                        return Ok(TypeHint::GenericApplication {
+                            base: name,
+                            arguments,
+                        });
+                    }
+                    if let Some(hint) = self.generic_parameter_type_hint(&name) {
+                        return Ok(hint);
+                    }
+                    Ok(TypeHint::ClassName(name))
+                }
             },
             Token::ArrayKw => Ok(TypeHint::Array),
             Token::Null => Ok(TypeHint::Null),

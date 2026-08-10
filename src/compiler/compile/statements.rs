@@ -113,11 +113,18 @@ impl Compiler {
                 params,
                 body,
                 return_type,
+                generic_params,
             } => {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
-                func_compiler.current_function_name = self.resolve_name(name);
+                let resolved_name = self.resolve_name(name);
+                self.record_generic_declaration(
+                    crate::generics::GenericDeclarationKind::Function,
+                    resolved_name.clone(),
+                    generic_params,
+                );
+                func_compiler.current_function_name = resolved_name.clone();
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
                 cp.return_type_hint = self.convert_type_hint(return_type);
                 for s in body {
@@ -147,6 +154,8 @@ impl Compiler {
                                 | OpCode::Include
                         )
                     });
+                let nested_generic_declarations =
+                    std::mem::take(&mut func_compiler.generic_declarations);
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -181,7 +190,8 @@ impl Compiler {
 
                 // Collect any nested function declarations
                 self.functions.extend(func_compiler.functions);
-                let resolved_name = self.resolve_name(name);
+                self.generic_declarations
+                    .extend(nested_generic_declarations);
                 self.functions.push((resolved_name, user_func));
             }
             Stmt::Return(expr) => {
@@ -904,13 +914,25 @@ impl Compiler {
                 uses,
                 properties,
                 methods,
+                generic_params,
             } => {
+                let resolved_class = self.resolve_name(name);
+                self.record_generic_declaration(
+                    crate::generics::GenericDeclarationKind::Class,
+                    resolved_class.clone(),
+                    generic_params,
+                );
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
                 // Collect promoted properties from constructor
                 let mut promoted_props: Vec<(String, Visibility, bool)> = Vec::new(); // (name, vis, is_readonly)
                 for method in methods {
+                    self.record_generic_declaration(
+                        crate::generics::GenericDeclarationKind::Method,
+                        format!("{}::{}", resolved_class, method.name),
+                        &method.generic_params,
+                    );
                     let mut func_compiler = Compiler::new();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
@@ -1044,7 +1066,6 @@ impl Compiler {
                 }
 
                 // Store class definition for runtime
-                let resolved_class = self.resolve_name(name);
                 let resolved_parent = parent.as_ref().map(|p| self.resolve_name(p));
                 let resolved_implements: Vec<String> =
                     implements.iter().map(|i| self.resolve_name(i)).collect();
@@ -1072,12 +1093,24 @@ impl Compiler {
                 name,
                 extends,
                 methods,
+                generic_params,
             } => {
+                let resolved_iface = self.resolve_name(name);
+                self.record_generic_declaration(
+                    crate::generics::GenericDeclarationKind::Interface,
+                    resolved_iface.clone(),
+                    generic_params,
+                );
                 // Interface methods have no body — we still create stub UserFunctions
                 // so they appear in the class_def for type checking, but they should
                 // never be called directly (implementing class provides the body).
                 let mut compiled_methods = Vec::new();
                 for method in methods {
+                    self.record_generic_declaration(
+                        crate::generics::GenericDeclarationKind::Method,
+                        format!("{}::{}", resolved_iface, method.name),
+                        &method.generic_params,
+                    );
                     // Create a minimal op_array that just returns null
                     let mut func_compiler = Compiler::new();
                     func_compiler.known_ref_args = self.build_known_ref_args();
@@ -1150,7 +1183,6 @@ impl Compiler {
                 }
 
                 // For interface "extends", all parent interfaces become the implements list
-                let resolved_iface = self.resolve_name(name);
                 let resolved_extends: Vec<String> =
                     extends.iter().map(|e| self.resolve_name(e)).collect();
                 self.class_defs.push(ClassDef {
@@ -1175,11 +1207,23 @@ impl Compiler {
                 name,
                 properties,
                 methods,
+                generic_params,
             } => {
+                let resolved_trait = self.resolve_name(name);
+                self.record_generic_declaration(
+                    crate::generics::GenericDeclarationKind::Trait,
+                    resolved_trait.clone(),
+                    generic_params,
+                );
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.
                 let mut compiled_methods = Vec::new();
                 for method in methods {
+                    self.record_generic_declaration(
+                        crate::generics::GenericDeclarationKind::Method,
+                        format!("{}::{}", resolved_trait, method.name),
+                        &method.generic_params,
+                    );
                     let mut func_compiler = Compiler::new();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
@@ -1273,7 +1317,6 @@ impl Compiler {
                     ));
                 }
 
-                let resolved_trait = self.resolve_name(name);
                 self.class_defs.push(ClassDef {
                     name: resolved_trait,
                     parent: None,
@@ -1298,6 +1341,7 @@ impl Compiler {
                 cases,
                 methods,
             } => {
+                let resolved_enum = self.resolve_name(name);
                 // Compile enum as a class. Each case becomes a static property
                 // holding a singleton object with `name` (and optionally `value`) properties.
                 let is_backed = backing_type.is_some();
@@ -1305,6 +1349,11 @@ impl Compiler {
                 // Compile methods
                 let mut compiled_methods = Vec::new();
                 for method in methods {
+                    self.record_generic_declaration(
+                        crate::generics::GenericDeclarationKind::Method,
+                        format!("{}::{}", resolved_enum, method.name),
+                        &method.generic_params,
+                    );
                     let mut func_compiler = Compiler::new();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
@@ -1411,7 +1460,6 @@ impl Compiler {
                     ));
                 }
 
-                let resolved_enum = self.resolve_name(name);
                 self.class_defs.push(ClassDef {
                     name: resolved_enum,
                     parent: None,

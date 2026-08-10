@@ -4,6 +4,7 @@ impl Parser {
             tokens,
             pos: 0,
             in_class_body: false,
+            generic_scopes: Vec::new(),
         }
     }
 
@@ -427,6 +428,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
+                let generic_params = self.parse_generic_parameters()?;
+                self.push_generic_scope(&generic_params);
                 self.expect(&Token::LParen)?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
@@ -437,11 +440,13 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
+                self.pop_generic_scope();
                 Ok(Stmt::Function {
                     name,
                     params,
                     body,
                     return_type,
+                    generic_params,
                 })
             }
             Token::Return => {

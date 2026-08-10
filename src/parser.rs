@@ -7,8 +7,10 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     in_class_body: bool,
+    generic_scopes: Vec<Vec<GenericParameter>>,
 }
 
+include!("parser/generics.rs");
 include!("parser/statements.rs");
 include!("parser/expressions.rs");
 include!("parser/declarations.rs");

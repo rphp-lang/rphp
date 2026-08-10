@@ -8297,10 +8297,28 @@ feature passes 197 library and 16 stream scenarios, all-feature stream coverage
 reaches 37, and all-feature/all-target compilation passes on both hosts. One
 opt-in feature is added, with no crate, external library or `Cargo.lock` change.
 
-## Interphase 5.5: opt-in bound-erased PHP generics
+## Interphase 5.5: dual-runtime PHP generics
 
-After the current Phase 5 stream slice, add generics behind one independent
-`php-generics` Cargo feature. The semantic baseline is the latest published
+After the current Phase 5 stream slice, add two independently measurable
+generic runtimes: `php-generics-erased` and `php-generics-reified`. Enabling
+either admits the shared generic source syntax; a default build admits neither
+and explicitly rejects generic syntax rather than silently reinterpreting it.
+The AST model, compact interned metadata and Reflection model are permanent
+RPHP internals compiled in every build. Both runtime branches consume this one
+canonical representation:
+
+```text
+interned metadata and Reflection
+              |
+       +------+------+
+       |             |
+ bound-erased     reified
+    runtime        runtime
+```
+
+An all-features build contains both capabilities for differential tests, while
+the individual builds remain the authoritative performance comparison. The
+semantic baseline is the latest published
 [PHP RFC: Bound-Erased Generic Types, version 0.22](https://wiki.php.net/rfc/bound_erased_generic_types)
 and its linked [reference implementation](https://github.com/php/php-src/pull/21969).
 The RFC is marked Declined as of 2026-08-10, so RPHP must describe this as an
@@ -8321,18 +8339,27 @@ Execution follows bound erasure: every parameter becomes its declared bound or
 `mixed`, ordinary calls use the existing call path, and generic arguments do
 not become per-object or per-`Value` payload. Generic declarations without a
 turbofish must compile to the same runtime instruction stream as their erased
-equivalent. Explicit turbofish sites may emit one feature-only validation
+equivalent. Explicit turbofish sites may emit one validation
 instruction before the ordinary call/new/attribute path; canonical argument
 tuples and successful arity/bound results are cached at that site. Quick plans
 and the JIT may consume a proven bound or stable argument tuple as optimization
 metadata, but every specialization needs an exact guard and canonical
 deoptimization path.
 
+The reified branch preserves the canonical type-argument tuple at explicit
+turbofish construction/call sites and can therefore enforce substituted
+parameter, return and property contracts. Its binding lives in a shared
+sidecar keyed by stable object/class or activation identity; it must not widen
+the 16-byte `Value`, `FunctionCommon` or ordinary frame. Reified-only checks
+and storage disappear from erased-only builds.
+
 Performance is an admission requirement, not follow-up polish:
 
-- Feature-off ARM64/x86-64 executable text, hot symbol layout, 16-byte `Value`
-  layout and the runtime corpus must remain exact against the accepted baseline.
-- With `php-generics` enabled, programs that declare or use no generics must
+- Feature-off ARM64/x86-64 builds must reject generic syntax while retaining
+  the generic engine internally. Ordinary-program bytecode, hot runtime symbol
+  layout, 16-byte `Value` layout and runtime results must remain exact; the
+  whole executable-text hash is recorded but is no longer an identity gate.
+- With either generics runtime enabled, programs that declare or use no generics must
   retain bytecode identity, perform no generic side-table lookup in ordinary
   dispatch and stay inside the existing one-percent runtime gate.
 - Generic declarations called without turbofish must add no steady-state heap

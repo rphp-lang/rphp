@@ -75,6 +75,7 @@ fn main() {
     });
     let main_func = make_user_function(result.main);
     let mut eg = ExecutorGlobals::new();
+    eg.generic_metadata = result.generic_metadata;
 
     // Register stdlib
     let _stdlib = stdlib::register_stdlib(&mut eg);

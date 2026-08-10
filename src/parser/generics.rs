@@ -1,0 +1,340 @@
+const MAX_GENERIC_ARITY: usize = 127;
+
+impl Parser {
+    /// Parse an optional RFC v0.22 type-parameter list immediately following
+    /// a declaration name. The two Cargo features select the runtime model;
+    /// without either one the shared engine remains compiled but syntax is rejected.
+    fn parse_generic_parameters(&mut self) -> Result<Vec<GenericParameter>, String> {
+        if self.peek() != Token::Less {
+            return Ok(Vec::new());
+        }
+        if !cfg!(any(
+            feature = "php-generics-erased",
+            feature = "php-generics-reified"
+        )) {
+            return Err(
+                "Generic syntax requires php-generics-erased or php-generics-reified"
+                    .to_string(),
+            );
+        }
+        self.advance();
+
+        if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+            return Err("A generic parameter list cannot be empty".to_string());
+        }
+
+        let mut parameters = Vec::new();
+        let mut seen_default = false;
+        loop {
+            if parameters.len() == MAX_GENERIC_ARITY {
+                return Err(format!(
+                    "A generic declaration may contain at most {} parameters",
+                    MAX_GENERIC_ARITY
+                ));
+            }
+
+            let variance = match self.peek() {
+                Token::Plus => {
+                    self.advance();
+                    GenericVariance::Covariant
+                }
+                Token::Minus => {
+                    self.advance();
+                    GenericVariance::Contravariant
+                }
+                _ => GenericVariance::Invariant,
+            };
+            let name = match self.advance() {
+                Token::Identifier(name) => name,
+                other => {
+                    return Err(format!(
+                        "Expected generic parameter name, got {:?}",
+                        other
+                    ));
+                }
+            };
+
+            if parameters
+                .iter()
+                .any(|parameter: &GenericParameter| parameter.name == name)
+            {
+                return Err(format!("Duplicate generic parameter {}", name));
+            }
+            if self.generic_scopes.iter().rev().any(|scope| {
+                scope
+                    .iter()
+                    .any(|parameter| parameter.name == name)
+            }) {
+                return Err(format!(
+                    "Generic parameter {} shadows an outer generic parameter",
+                    name
+                ));
+            }
+
+            let bound = if self.peek() == Token::Colon {
+                self.advance();
+                Some(self.parse_generic_type_expression()?)
+            } else {
+                None
+            };
+            let default = if self.peek() == Token::Assign {
+                self.advance();
+                seen_default = true;
+                Some(self.parse_generic_type_expression()?)
+            } else {
+                if seen_default {
+                    return Err(format!(
+                        "Required generic parameter {} follows an optional parameter",
+                        name
+                    ));
+                }
+                None
+            };
+
+            if bound
+                .as_ref()
+                .is_some_and(|hint| Self::is_direct_generic_name(hint, &name))
+            {
+                return Err(format!(
+                    "Generic parameter {} cannot use itself as a top-level bound",
+                    name
+                ));
+            }
+            if default
+                .as_ref()
+                .is_some_and(|hint| Self::is_direct_generic_name(hint, &name))
+            {
+                return Err(format!(
+                    "Generic parameter {} cannot use itself as a default",
+                    name
+                ));
+            }
+            if let (Some(bound), Some(default)) = (bound.as_ref(), default.as_ref()) {
+                if !Self::generic_default_satisfies_bound(default, bound) {
+                    return Err(format!(
+                        "Generic default for {} does not satisfy its bound",
+                        name
+                    ));
+                }
+            }
+
+            parameters.push(GenericParameter {
+                name,
+                variance,
+                bound,
+                default,
+            });
+
+            match self.peek() {
+                Token::Comma => {
+                    self.advance();
+                    if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+                        return Err("A generic parameter list cannot end with a comma".into());
+                    }
+                }
+                Token::Greater | Token::ShiftRight => {
+                    self.consume_generic_close()?;
+                    break;
+                }
+                other => {
+                    return Err(format!(
+                        "Expected ',' or '>' in generic parameter list, got {:?}",
+                        other
+                    ));
+                }
+            }
+        }
+
+        for (index, parameter) in parameters.iter().enumerate() {
+            let Some(default) = parameter.default.as_ref() else {
+                continue;
+            };
+            for used in Self::generic_names(default) {
+                if let Some(used_index) = parameters
+                    .iter()
+                    .position(|candidate| candidate.name == used)
+                {
+                    if used_index >= index {
+                        return Err(format!(
+                            "Generic default for {} references {} before it is declared",
+                            parameter.name, used
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(parameters)
+    }
+
+    fn parse_generic_type_expression(&mut self) -> Result<TypeHint, String> {
+        let first = self.parse_base_type_hint()?;
+        self.maybe_parse_union_type(first)
+    }
+
+    fn parse_generic_type_arguments(&mut self) -> Result<Vec<TypeHint>, String> {
+        self.expect(&Token::Less)?;
+        if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+            return Err("A generic type-argument list cannot be empty".to_string());
+        }
+
+        let mut arguments = Vec::new();
+        loop {
+            if arguments.len() == MAX_GENERIC_ARITY {
+                return Err(format!(
+                    "A generic type use may contain at most {} arguments",
+                    MAX_GENERIC_ARITY
+                ));
+            }
+            arguments.push(self.parse_generic_type_expression()?);
+            match self.peek() {
+                Token::Comma => {
+                    self.advance();
+                    if matches!(self.peek(), Token::Greater | Token::ShiftRight) {
+                        return Err("A generic type-argument list cannot end with a comma".into());
+                    }
+                }
+                Token::Greater | Token::ShiftRight => {
+                    self.consume_generic_close()?;
+                    break;
+                }
+                other => {
+                    return Err(format!(
+                        "Expected ',' or '>' in generic type-argument list, got {:?}",
+                        other
+                    ));
+                }
+            }
+        }
+        Ok(arguments)
+    }
+
+    /// The lexer correctly treats `>>` as a shift in expressions. Inside a
+    /// generic list it instead closes two nested lists, so split it lazily at
+    /// the grammar boundary and leave expression tokenization untouched.
+    fn consume_generic_close(&mut self) -> Result<(), String> {
+        match self.peek() {
+            Token::Greater => {
+                self.advance();
+                Ok(())
+            }
+            Token::ShiftRight => {
+                self.tokens[self.pos] = Token::Greater;
+                self.tokens.insert(self.pos + 1, Token::Greater);
+                self.advance();
+                Ok(())
+            }
+            other => Err(format!("Expected '>' in generic type, got {:?}", other)),
+        }
+    }
+
+    fn push_generic_scope(&mut self, parameters: &[GenericParameter]) {
+        self.generic_scopes.push(parameters.to_vec());
+    }
+
+    fn pop_generic_scope(&mut self) {
+        if !self.generic_scopes.is_empty() {
+            self.generic_scopes.pop();
+        }
+    }
+
+    fn active_generic_parameter(&self, name: &str) -> Option<&GenericParameter> {
+        self.generic_scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.iter().find(|parameter| parameter.name == name))
+    }
+
+    fn generic_parameter_type_hint(&self, name: &str) -> Option<TypeHint> {
+        self.active_generic_parameter(name).map(|parameter| {
+            let mut visiting = Vec::new();
+            let erased = self.erase_generic_parameter(parameter, &mut visiting);
+            TypeHint::GenericParameter {
+                name: name.to_string(),
+                erased: Box::new(erased),
+            }
+        })
+    }
+
+    fn erase_generic_parameter(
+        &self,
+        parameter: &GenericParameter,
+        visiting: &mut Vec<String>,
+    ) -> TypeHint {
+        if visiting.iter().any(|name| name == &parameter.name) {
+            return TypeHint::Mixed;
+        }
+        visiting.push(parameter.name.clone());
+        let erased = parameter
+            .bound
+            .as_ref()
+            .map(|bound| self.erase_generic_type(bound, visiting))
+            .unwrap_or(TypeHint::Mixed);
+        visiting.pop();
+        erased
+    }
+
+    fn erase_generic_type(&self, hint: &TypeHint, visiting: &mut Vec<String>) -> TypeHint {
+        match hint {
+            TypeHint::ClassName(name) => self
+                .active_generic_parameter(name)
+                .map(|parameter| self.erase_generic_parameter(parameter, visiting))
+                .unwrap_or_else(|| TypeHint::ClassName(name.clone())),
+            TypeHint::Nullable(inner) => {
+                TypeHint::Nullable(Box::new(self.erase_generic_type(inner, visiting)))
+            }
+            TypeHint::Union(types) => TypeHint::Union(
+                types
+                    .iter()
+                    .map(|part| self.erase_generic_type(part, visiting))
+                    .collect(),
+            ),
+            TypeHint::GenericParameter { erased, .. } => self.erase_generic_type(erased, visiting),
+            TypeHint::GenericApplication { base, .. } => TypeHint::ClassName(base.clone()),
+            other => other.clone(),
+        }
+    }
+
+    fn is_direct_generic_name(hint: &TypeHint, name: &str) -> bool {
+        matches!(hint, TypeHint::ClassName(candidate) if candidate == name)
+    }
+
+    fn generic_names(hint: &TypeHint) -> Vec<String> {
+        let mut names = Vec::new();
+        Self::collect_generic_names(hint, &mut names);
+        names
+    }
+
+    fn collect_generic_names(hint: &TypeHint, names: &mut Vec<String>) {
+        match hint {
+            TypeHint::ClassName(name) => names.push(name.clone()),
+            TypeHint::Nullable(inner) => Self::collect_generic_names(inner, names),
+            TypeHint::Union(parts) => {
+                for part in parts {
+                    Self::collect_generic_names(part, names);
+                }
+            }
+            TypeHint::GenericApplication { arguments, .. } => {
+                for argument in arguments {
+                    Self::collect_generic_names(argument, names);
+                }
+            }
+            TypeHint::GenericParameter { name, .. } => names.push(name.clone()),
+            _ => {}
+        }
+    }
+
+    fn generic_default_satisfies_bound(default: &TypeHint, bound: &TypeHint) -> bool {
+        if matches!(bound, TypeHint::Mixed) || default == bound {
+            return true;
+        }
+        match bound {
+            TypeHint::Union(parts) => parts
+                .iter()
+                .any(|part| Self::generic_default_satisfies_bound(default, part)),
+            // Class hierarchy conformance belongs to the link phase. Do not
+            // reject unresolved named types while parsing the source unit.
+            TypeHint::ClassName(_) | TypeHint::GenericApplication { .. } => true,
+            _ => false,
+        }
+    }
+}

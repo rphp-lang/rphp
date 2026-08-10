@@ -4,6 +4,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::ClassDef;
+use crate::generics::GenericMetadata;
 use crate::parser::Visibility;
 use crate::value::ObjectLayout;
 use crate::vm::frame::ExecuteData;
@@ -59,6 +60,8 @@ pub struct ExecutorGlobals {
     pub function_table: HashMap<String, *const FunctionCommon>,
     /// Class table — name → ClassDef (Boxed for stable pointer addresses)
     pub class_table: HashMap<String, Box<ClassDef>>,
+    /// Cold generic declaration side table. Ordinary dispatch never reads it.
+    pub generic_metadata: GenericMetadata,
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
@@ -108,6 +111,7 @@ impl ExecutorGlobals {
             timed_out: AtomicBool::new(false),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
+            generic_metadata: GenericMetadata::default(),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -137,6 +141,7 @@ impl ExecutorGlobals {
             timed_out: AtomicBool::new(false),
             function_table: HashMap::new(),
             class_table: HashMap::new(),
+            generic_metadata: GenericMetadata::default(),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,

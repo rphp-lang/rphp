@@ -7,6 +7,7 @@ use std::sync::atomic::{AtomicU32, Ordering};
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use super::OpArray;
+use crate::generics::{GenericDeclarationKind, GenericMetadata, PendingGenericDeclaration};
 use crate::parser::{BinOp, CallArg, CastType, Expr, ListTarget, Param, Stmt, Visibility};
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -29,6 +30,7 @@ pub struct CompileResult {
     pub main: OpArray,
     pub functions: Vec<(String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
+    pub generic_metadata: GenericMetadata,
 }
 
 enum ArrayLiteralStorageHint {
@@ -1020,6 +1022,9 @@ pub struct Compiler {
     try_entries: Vec<TryEntry>,
     /// Class definitions
     class_defs: Vec<ClassDef>,
+    /// Cold declaration metadata. Finalized into one interned side table after
+    /// compilation; never embedded in a function, frame, object or Value.
+    generic_declarations: Vec<PendingGenericDeclaration>,
     /// Deferred error from compile_expr (which can't return Result)
     deferred_error: Option<String>,
     /// ref_args for functions known from parent scope (inherited by child compilers)
@@ -1071,6 +1076,7 @@ impl Compiler {
             loop_stack: Vec::new(),
             try_entries: Vec::new(),
             class_defs: Vec::new(),
+            generic_declarations: Vec::new(),
             deferred_error: None,
             known_ref_args: HashMap::new(),
             strict_types: false,
@@ -1082,6 +1088,22 @@ impl Compiler {
             current_function_name: String::new(),
             known_constants: HashMap::new(),
         }
+    }
+
+    fn record_generic_declaration(
+        &mut self,
+        kind: GenericDeclarationKind,
+        owner: String,
+        parameters: &[crate::parser::GenericParameter],
+    ) {
+        if parameters.is_empty() {
+            return;
+        }
+        self.generic_declarations.push(PendingGenericDeclaration {
+            kind,
+            owner,
+            parameters: parameters.to_vec(),
+        });
     }
 
     /// Pre-scan top-level `const` declarations to populate known_constants.
@@ -1272,6 +1294,7 @@ impl Compiler {
             }
         }
 
+        let generic_metadata = GenericMetadata::compile(self.generic_declarations);
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
@@ -1295,6 +1318,7 @@ impl Compiler {
             },
             functions: self.functions,
             class_defs: self.class_defs,
+            generic_metadata,
         })
     }
 }
@@ -1478,6 +1502,12 @@ impl Compiler {
                     .map(|t| self.convert_type_hint(&Some(t.clone())))
                     .collect();
                 ParamTypeHint::Union(converted)
+            }
+            Some(TypeHint::GenericParameter { erased, .. }) => {
+                self.convert_type_hint(&Some(*erased.clone()))
+            }
+            Some(TypeHint::GenericApplication { base, .. }) => {
+                ParamTypeHint::ClassName(self.resolve_name(base))
             }
         }
     }
@@ -2345,10 +2375,21 @@ impl Compiler {
                 use_vars,
                 body,
                 return_type,
+                generic_params,
             } => {
+                let closure_name = format!(
+                    "__closure_{}",
+                    CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed)
+                );
+                self.record_generic_declaration(
+                    GenericDeclarationKind::Closure,
+                    closure_name.clone(),
+                    generic_params,
+                );
                 // Compile closure body into a separate function
                 let mut func_compiler = Compiler::new();
                 func_compiler.known_ref_args = self.build_known_ref_args();
+                func_compiler.current_function_name = closure_name.clone();
                 // params come first as CVs (args), then use_vars
                 let compile_result = self.compile_params(&mut func_compiler, params, "closure");
                 let mut cp = match compile_result {
@@ -2400,6 +2441,8 @@ impl Compiler {
                                 | OpCode::Include
                         )
                     });
+                let nested_generic_declarations =
+                    std::mem::take(&mut func_compiler.generic_declarations);
                 let op_array = OpArray {
                     num_cvs: func_compiler.next_cv,
                     num_temps: func_compiler.next_tmp,
@@ -2432,12 +2475,9 @@ impl Compiler {
                     cp.return_type_hint,
                 );
 
-                // Register closure as anonymous function with unique name
-                let closure_name = format!(
-                    "__closure_{}",
-                    CLOSURE_COUNTER.fetch_add(1, Ordering::Relaxed)
-                );
                 self.functions.extend(func_compiler.functions);
+                self.generic_declarations
+                    .extend(nested_generic_declarations);
                 self.functions.push((closure_name.clone(), user_func));
 
                 // Build closure value with direct function pointer + captured values.

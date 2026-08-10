@@ -87,6 +87,7 @@ pub enum Expr {
         use_vars: Vec<String>,
         body: Vec<Stmt>,
         return_type: Option<TypeHint>,
+        generic_params: Vec<GenericParameter>,
     },
     New {
         // new ClassName(args)
@@ -203,6 +204,29 @@ pub enum TypeHint {
     ClassName(std::string::String), // includes "self", "parent", "static"
     Nullable(Box<TypeHint>),        // ?int, ?string, ?ClassName, etc.
     Union(Vec<TypeHint>),           // int|string, Foo|Bar, etc.
+    GenericParameter {
+        name: std::string::String,
+        erased: Box<TypeHint>,
+    },
+    GenericApplication {
+        base: std::string::String,
+        arguments: Vec<TypeHint>,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericVariance {
+    Invariant,
+    Covariant,
+    Contravariant,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericParameter {
+    pub name: std::string::String,
+    pub variance: GenericVariance,
+    pub bound: Option<TypeHint>,
+    pub default: Option<TypeHint>,
 }
 
 /// Function parameter with optional default value.
@@ -244,6 +268,7 @@ pub enum Stmt {
         params: Vec<Param>,
         body: Vec<Stmt>,
         return_type: Option<TypeHint>,
+        generic_params: Vec<GenericParameter>,
     },
     DoWhile {
         condition: Expr,
@@ -290,16 +315,19 @@ pub enum Stmt {
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
         uses: Vec<String>, // trait names from `use Foo, Bar;`
+        generic_params: Vec<GenericParameter>,
     },
     Interface {
         name: String,
         extends: Vec<String>,
         methods: Vec<ClassMethod>, // all public, abstract (no body)
+        generic_params: Vec<GenericParameter>,
     },
     Trait {
         name: String,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
+        generic_params: Vec<GenericParameter>,
     },
     AssignProp {
         // $obj->prop = expr
@@ -388,6 +416,7 @@ pub struct ClassMethod {
     pub is_static: bool,
     pub is_final: bool,
     pub return_type: Option<TypeHint>,
+    pub generic_params: Vec<GenericParameter>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

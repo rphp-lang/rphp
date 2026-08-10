@@ -86,6 +86,8 @@ impl Parser {
             Token::Identifier(n) => n,
             other => return Err(format!("Expected class name, got {:?}", other)),
         };
+        let generic_params = self.parse_generic_parameters()?;
+        self.push_generic_scope(&generic_params);
         let parent = if self.peek() == Token::Extends {
             self.advance();
             Some(self.parse_qualified_name()?)
@@ -141,6 +143,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
+                let generic_params = self.parse_generic_parameters()?;
+                self.push_generic_scope(&generic_params);
                 self.expect(&Token::LParen)?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
@@ -151,6 +155,7 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
+                self.pop_generic_scope();
                 methods.push(ClassMethod {
                     visibility: vis,
                     name: method_name,
@@ -159,6 +164,7 @@ impl Parser {
                     is_static,
                     is_final,
                     return_type,
+                    generic_params,
                 });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
@@ -191,6 +197,7 @@ impl Parser {
         }
         self.in_class_body = prev_in_class;
         self.expect(&Token::RBrace)?;
+        self.pop_generic_scope();
 
         Ok(Stmt::Class {
             name,
@@ -201,6 +208,7 @@ impl Parser {
             properties,
             methods,
             uses,
+            generic_params,
         })
     }
 
@@ -211,6 +219,8 @@ impl Parser {
             Token::Identifier(n) => n,
             other => return Err(format!("Expected trait name, got {:?}", other)),
         };
+        let generic_params = self.parse_generic_parameters()?;
+        self.push_generic_scope(&generic_params);
         self.expect(&Token::LBrace)?;
 
         let mut properties = Vec::new();
@@ -225,6 +235,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
+                let method_generic_params = self.parse_generic_parameters()?;
+                self.push_generic_scope(&method_generic_params);
                 self.expect(&Token::LParen)?;
                 let params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
@@ -235,6 +247,7 @@ impl Parser {
                     body.push(self.parse_stmt()?);
                 }
                 self.expect(&Token::RBrace)?;
+                self.pop_generic_scope();
                 methods.push(ClassMethod {
                     visibility: vis,
                     name: method_name,
@@ -243,6 +256,7 @@ impl Parser {
                     is_static,
                     is_final,
                     return_type,
+                    generic_params: method_generic_params,
                 });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
@@ -270,11 +284,13 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
+        self.pop_generic_scope();
 
         Ok(Stmt::Trait {
             name,
             properties,
             methods,
+            generic_params,
         })
     }
 
@@ -285,6 +301,8 @@ impl Parser {
             Token::Identifier(n) => n,
             other => return Err(format!("Expected interface name, got {:?}", other)),
         };
+        let generic_params = self.parse_generic_parameters()?;
+        self.push_generic_scope(&generic_params);
         // interface Foo extends Bar, Baz { ... }
         let extends = if self.peek() == Token::Extends {
             self.advance();
@@ -312,6 +330,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
+                let method_generic_params = self.parse_generic_parameters()?;
+                self.push_generic_scope(&method_generic_params);
                 // Interface methods must be public (PHP rule)
                 if vis != Visibility::Public {
                     let vis_str = match vis {
@@ -329,6 +349,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type()?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
+                self.pop_generic_scope();
                 methods.push(ClassMethod {
                     visibility: vis,
                     name: method_name,
@@ -337,6 +358,7 @@ impl Parser {
                     is_static,
                     is_final: false,
                     return_type,
+                    generic_params: method_generic_params,
                 });
             } else {
                 return Err(format!(
@@ -346,11 +368,13 @@ impl Parser {
             }
         }
         self.expect(&Token::RBrace)?;
+        self.pop_generic_scope();
 
         Ok(Stmt::Interface {
             name,
             extends,
             methods,
+            generic_params,
         })
     }
 
@@ -400,6 +424,8 @@ impl Parser {
                         Token::Identifier(n) => n,
                         other => return Err(format!("Expected method name, got {:?}", other)),
                     };
+                    let generic_params = self.parse_generic_parameters()?;
+                    self.push_generic_scope(&generic_params);
                     self.expect(&Token::LParen)?;
                     let params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
@@ -410,6 +436,7 @@ impl Parser {
                         body.push(self.parse_stmt()?);
                     }
                     self.expect(&Token::RBrace)?;
+                    self.pop_generic_scope();
                     methods.push(ClassMethod {
                         visibility: vis,
                         name: method_name,
@@ -418,6 +445,7 @@ impl Parser {
                         is_static,
                         is_final,
                         return_type,
+                        generic_params,
                     });
                 } else {
                     return Err(format!("Unexpected token in enum body: {:?}", self.peek()));
@@ -530,12 +558,15 @@ impl Parser {
     /// Desugars to Closure with auto-captured use vars and body = [Return(expr)]
     fn parse_arrow_function(&mut self) -> Result<Expr, String> {
         self.advance(); // consume 'fn'
+        let generic_params = self.parse_generic_parameters()?;
+        self.push_generic_scope(&generic_params);
         self.expect(&Token::LParen)?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
         let return_type = self.parse_return_type()?;
         self.expect(&Token::DoubleArrow)?;
         let expr = self.parse_expr()?;
+        self.pop_generic_scope();
 
         // Auto-capture: collect free variables from expr that aren't params
         let param_names: std::collections::HashSet<&str> =
@@ -549,6 +580,7 @@ impl Parser {
             use_vars: free_vars,
             body,
             return_type,
+            generic_params,
         })
     }
 
@@ -696,6 +728,8 @@ impl Parser {
     /// Parse closure: function($a, $b) use($c) { ... }
     fn parse_closure(&mut self) -> Result<Expr, String> {
         self.advance(); // consume 'function'
+        let generic_params = self.parse_generic_parameters()?;
+        self.push_generic_scope(&generic_params);
         self.expect(&Token::LParen)?;
         let params = self.parse_param_list()?;
         self.expect(&Token::RParen)?;
@@ -728,12 +762,14 @@ impl Parser {
             body.push(self.parse_stmt()?);
         }
         self.expect(&Token::RBrace)?;
+        self.pop_generic_scope();
 
         Ok(Expr::Closure {
             params,
             use_vars,
             body,
             return_type,
+            generic_params,
         })
     }
 }
