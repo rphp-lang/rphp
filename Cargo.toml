@@ -9,9 +9,11 @@ quick-loops = []
 vm-stats = []
 jit-prototype = []
 coroutines = []
-csv-errors = []
+value-errors = []
+csv-errors = ["value-errors"]
 csv-write = ["csv-errors"]
 resource-lifetime = []
+stream-contents = ["value-errors"]
 
 [dependencies]
 serde = "1.0.228"

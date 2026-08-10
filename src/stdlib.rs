@@ -878,7 +878,7 @@ fn fn_throwable_get_message(
     ret!(rv, Value::string(""));
 }
 
-#[cfg(feature = "csv-errors")]
+#[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
     use crate::compiler::compile::ClassDef;
@@ -1105,7 +1105,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
     }
 
-    #[cfg(feature = "csv-errors")]
+    #[cfg(feature = "value-errors")]
     funcs.extend(register_value_error(eg));
 
     // Generator class — implements Iterator

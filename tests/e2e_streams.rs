@@ -102,6 +102,80 @@ fn line_reads_preserve_newlines_limits_cursor_and_eof() {
 }
 
 #[test]
+#[cfg(feature = "stream-contents")]
+fn stream_contents_preserves_length_offset_cursor_and_eof() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $stream = fopen('php://memory', 'w+');
+            fwrite($stream, 'abcdef'); rewind($stream);
+            echo '['; echo stream_get_contents($stream, 2); echo ']';
+            echo ':'; echo ftell($stream);
+            echo ':'; if (feof($stream)) { echo 'eof'; } else { echo 'open'; }
+            echo ':['; echo stream_get_contents($stream, null, -99); echo ']';
+            echo ':'; echo ftell($stream);
+            echo ':'; if (feof($stream)) { echo 'eof'; } else { echo 'open'; }
+            echo ':['; echo stream_get_contents($stream, 0, 3); echo ']';
+            echo ':'; echo ftell($stream);
+            echo ':'; if (feof($stream)) { echo 'eof'; } else { echo 'open'; }
+            echo ':['; echo stream_get_contents($stream, -1, 1); echo ']';
+            echo ':['; echo stream_get_contents($stream, 2, 10); echo ']';
+            echo ':'; echo ftell($stream);
+            echo ':'; if (feof($stream)) { echo 'eof'; } else { echo 'open'; }
+
+            $temp = fopen('php://temp/maxmemory:4', 'w+');
+            fwrite($temp, 'abcdefghij');
+            echo ':['; echo stream_get_contents($temp, 5, 3); echo ']';
+            echo ':'; echo ftell($temp);
+
+            $exact = fopen('php://memory', 'w+');
+            fwrite($exact, 'xyz'); rewind($exact);
+            echo ':['; echo stream_get_contents($exact, 3); echo ']';
+            echo ':'; if (feof($exact)) { echo 'eof'; } else { echo 'exact-open'; }
+
+            $write_only = fopen('php://memory', 'w');
+            echo ':';
+            if (stream_get_contents($write_only) === false) { echo 'unreadable'; }
+            "
+        ),
+        "[ab]:2:open:[cdef]:6:eof:[]:3:open:[bcdef]:[]:10:eof:[defgh]:8:[xyz]:exact-open:unreadable"
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-contents")]
+fn stream_contents_argument_errors_match_php_classes_and_messages() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $stream = fopen('php://memory', 'w+');
+            try { stream_get_contents(false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_get_contents($stream, -2); }
+            catch (ValueError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_get_contents($stream, []); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_get_contents($stream, 1, new stdClass()); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            fclose($stream); echo '|';
+            try { stream_get_contents($stream); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            "
+        ),
+        concat!(
+            "TypeError:stream_get_contents(): Argument #1 ($stream) must be of type resource, false given",
+            "|ValueError:stream_get_contents(): Argument #2 ($length) must be greater than or equal to -1",
+            "|TypeError:stream_get_contents(): Argument #2 ($length) must be of type ?int, array given",
+            "|TypeError:stream_get_contents(): Argument #3 ($offset) must be of type int, stdClass given",
+            "|TypeError:stream_get_contents(): Argument #1 ($stream) must be an open stream resource"
+        )
+    );
+}
+
+#[test]
 fn memory_and_temp_metadata_report_backend_specific_snapshots() {
     assert_eq!(
         run_php(
@@ -244,6 +318,24 @@ fn file_stream_reads_seeks_writes_and_flushes_real_files() {
     );
     assert_eq!(run_php(&source), "ab:0:2:1:abcdXY:1");
     assert_eq!(std::fs::read(&path.0).unwrap(), b"abcdXY");
+}
+
+#[test]
+#[cfg(feature = "stream-contents")]
+fn stream_contents_reads_real_files_from_an_absolute_offset() {
+    let path = TemporaryPath::unique("stream-contents");
+    std::fs::write(&path.0, b"0123456789").unwrap();
+    let source = format!(
+        "<?php
+        $stream = fopen('{}', 'r');
+        echo stream_get_contents($stream, 4, 3); echo ':';
+        echo ftell($stream); echo ':';
+        echo stream_get_contents($stream); echo ':';
+        if (feof($stream)) {{ echo 'eof'; }}
+        ",
+        path.php_literal()
+    );
+    assert_eq!(run_php(&source), "3456:7:789:eof");
 }
 
 #[test]

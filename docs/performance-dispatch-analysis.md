@@ -1997,3 +1997,20 @@ stdlib registry module. No external library or lockfile change is involved.
 The independent CPU-pinned x86-64 gate against the same exact checkpoint
 passes at +0.106%/+0.378%/-0.274%/-0.549%/-0.191% for scalar, packed array,
 String, order and ledger.
+
+`stream_get_contents()` follows the same pay-for-use boundary. The
+`stream-contents` feature compiles in the handler, a fixed-chunk backend reader
+and the shared checked-argument helpers; without it, those modules and the
+`ValueError` registrar remain absent. Moving the duplicated CSV stream/long
+validation into `streams::checked_args` did not create a default dependency:
+the helper module is compiled only for `csv-errors` or `stream-contents`.
+
+The default ARM64 image retains the exact 2,818,048-byte `f5d4e68` text size
+and monitored hot addresses. X86-64 text/data/bss sizes and the same addresses
+also match its exact baseline. A pinned 20-pair x86 gate measured
+-0.020%/+0.049%/-0.241%/-0.267%/+1.933% for scalar, packed array, String,
+order and ledger. The lone ledger failure contained large outliers on both
+sides despite identical static layout; its required isolated 20-pair rerun
+passed at +0.571%. No result-size preallocation, external buffering library or
+lockfile change was introduced: the backend uses an 8 KiB stack chunk and
+fallible incremental `Vec` growth.

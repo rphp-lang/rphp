@@ -1259,6 +1259,39 @@ users that need deterministic early backend release can enable
 `resource-lifetime`, while ordinary builds retain the established scalar
 resource codegen and request-shutdown contract.
 
+### Opt-in `stream_get_contents()` checkpoint (2026-08-10)
+
+The next compatibility slice adds bulk stream reads without changing the
+resource registry or introducing a buffering crate. `PhpStream::read_contents`
+accepts an optional byte limit and absolute offset, uses one fixed 8 KiB stack
+chunk and grows its caller-owned result through `Vec::try_reserve`. It therefore
+works uniformly for memory, spilled temporary and file backends without
+preallocating an attacker-sized requested length. Existing backend `read` and
+`seek` operations remain the sole owners of cursor and EOF state.
+
+The PHP surface is isolated behind `stream-contents`. It implements PHP 8.5's
+`null`/`-1` unlimited length, zero-length, bounded-length, negative current-
+cursor and non-negative absolute-offset behavior. Wrong types, closed handles
+and lengths below `-1` use the exact covered exception surface; unreadable
+streams return `false`. A private `streams::checked_args` module now owns
+stream-resource validation and weak integer conversion for both this handler
+and the checked CSV handlers. The common `ValueError` class registrar is gated
+by the internal `value-errors` feature implied by both public error surfaces.
+
+Default ARM64 code generation remains the exact 2,818,048-byte `f5d4e68`
+`__TEXT` image with identical monitored hot addresses and lockfile. X86-64
+text/data/bss and those addresses also match exactly. Its full pinned runtime
+gate passed four workloads at -0.020%/+0.049%/-0.241%/-0.267%; the only noisy
+ledger result was +1.933% with large bidirectional outliers and its mandatory
+isolated 20-pair rerun passed at +0.571%.
+
+ARM64 passes 195 default, 186 no-default and 299 all-feature library tests;
+x86-64 passes 195, 186 and 324. Stream coverage is 14 default, 17 bulk-read,
+15 checked-reader, 20 checked-writer, 14 final-alias and 23 all-feature
+scenarios. Both hosts complete the all-feature/all-target build. No dependency
+was added, `Cargo.lock` is byte-identical and the implementation uses only the
+standard library.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

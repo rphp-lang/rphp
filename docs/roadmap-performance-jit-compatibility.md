@@ -7740,6 +7740,43 @@ scenarios pass in both lifecycle configurations and all-feature/all-target
 compilation succeeds. The slice is implemented only with `std`; no dependency
 was added and `Cargo.lock` remains byte-identical.
 
+### Opt-in bulk stream reads (2026-08-10)
+
+Phase 5 now exposes `stream_get_contents()` behind the independent
+`stream-contents` feature. It matches the probed PHP 8.5 length and offset
+contract: `null` and `-1` read to the end, zero performs no read, positive
+lengths are upper bounds, every negative offset retains the current cursor and
+non-negative offsets seek from the start. Memory, spilled temporary and real
+file backends share the same implementation. Unreadable streams return
+`false`; invalid, closed and non-stream arguments produce the covered exact
+`TypeError`/`ValueError` classes and messages.
+
+The backend reads through a fixed 8 KiB stack chunk and grows the result with
+fallible incremental reservations, so a user-supplied length neither creates
+an equally large temporary buffer nor forces eager allocation. Checked stream
+arguments and weak integer conversion moved into a private shared module used
+by both CSV and bulk-read handlers. `ValueError` registration is correspondingly
+owned by the internal `value-errors` feature, which `csv-errors` and
+`stream-contents` imply. This refactor removes the duplicated validation path
+without linking it into ordinary builds.
+
+The default ARM64 release remains at the exact 2,818,048-byte `__TEXT` size and
+the monitored hot-symbol addresses of `f5d4e68`; its lockfile hash is also
+unchanged. On x86-64, text/data/bss sizes and both monitored addresses likewise
+match the exact baseline. The first full pinned 20-pair x86 gate measured
+-0.020%/+0.049%/-0.241%/-0.267%/+1.933% for scalar, packed array, String,
+order and ledger. Because the lone ledger result contained large bidirectional
+system outliers while static layout was exact, its independent 20-pair rerun
+was required and passed at +0.571%.
+
+ARM64 passes 195 default, 186 no-default and 299 all-feature library tests;
+x86-64 passes 195, 186 and 324 respectively. Stream matrices pass 14 default,
+17 `stream-contents`, 15 `csv-errors`, 20 `csv-write`, 14
+`resource-lifetime` and 23 all-feature scenarios, including a real-file offset
+read. Complete all-feature/all-target compilation passes on both hosts. The
+slice uses only `std`; no crate was added and `Cargo.lock` remains
+byte-identical.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

@@ -12,12 +12,12 @@ pub(super) fn fn_fputcsv(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(resource) = super::csv_errors::stream_argument(execute_data, eg, "fputcsv") else {
+    let Some(resource) = super::checked_args::stream_argument(execute_data, eg, "fputcsv") else {
         return Ok(());
     };
     let Some(fields) = super::argument(execute_data, 1).as_array() else {
         let value = super::argument(execute_data, 1);
-        super::csv_errors::argument_error(
+        super::checked_args::argument_error(
             eg,
             "TypeError",
             format!(
@@ -62,7 +62,7 @@ pub(super) fn fn_fputcsv(
                 value.value_type(),
                 ValueType::Array | ValueType::Object | ValueType::Resource | ValueType::Closure
             ) {
-                super::csv_errors::argument_error(
+                super::checked_args::argument_error(
                     eg,
                     "TypeError",
                     format!(
