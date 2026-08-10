@@ -85,6 +85,8 @@ enum Storage {
 pub(super) struct TempStream {
     storage: Storage,
     max_memory: usize,
+    #[cfg(feature = "stream-truncate")]
+    append_after_truncate: bool,
 }
 
 impl TempStream {
@@ -92,6 +94,8 @@ impl TempStream {
         Self {
             storage: Storage::Memory(Cursor::new(Vec::new())),
             max_memory,
+            #[cfg(feature = "stream-truncate")]
+            append_after_truncate: false,
         }
     }
 
@@ -118,6 +122,10 @@ impl TempStream {
         if append {
             self.seek(SeekFrom::End(0))?;
         }
+        #[cfg(feature = "stream-truncate")]
+        if self.append_after_truncate && !append {
+            return self.write_after_memory_truncate(buffer);
+        }
         if let Storage::Memory(memory) = &self.storage {
             let position = usize::try_from(memory.position()).map_err(|_| {
                 io::Error::new(io::ErrorKind::InvalidInput, "stream position is too large")
@@ -143,6 +151,12 @@ impl TempStream {
     }
 
     pub(super) fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
+        #[cfg(feature = "stream-truncate")]
+        {
+            self.append_after_truncate = false;
+            return self.seek_without_reset(position);
+        }
+        #[cfg(not(feature = "stream-truncate"))]
         match &mut self.storage {
             Storage::Memory(memory) => memory.seek(position),
             Storage::File(file) => file.file_mut().seek(position),
@@ -150,9 +164,95 @@ impl TempStream {
     }
 
     pub(super) fn position(&mut self) -> io::Result<u64> {
+        #[cfg(feature = "stream-truncate")]
+        {
+            return self.position_without_reset();
+        }
+        #[cfg(not(feature = "stream-truncate"))]
         match &mut self.storage {
             Storage::Memory(memory) => Ok(memory.position()),
             Storage::File(file) => file.file_mut().stream_position(),
+        }
+    }
+
+    #[cfg(feature = "stream-truncate")]
+    pub(super) fn truncate(&mut self, length: u64) -> io::Result<()> {
+        match &mut self.storage {
+            Storage::Memory(memory) => {
+                let length = usize::try_from(length).map_err(|_| {
+                    io::Error::new(io::ErrorKind::InvalidInput, "stream size is too large")
+                })?;
+                if length > self.max_memory {
+                    self.spill()?;
+                    let Storage::File(file) = &mut self.storage else {
+                        unreachable!("temporary stream spill must create a file")
+                    };
+                    file.file_mut().set_len(length as u64)?;
+                    self.append_after_truncate = false;
+                    return Ok(());
+                }
+                super::truncate::resize_memory(memory, length)?;
+                self.append_after_truncate = memory.position() > length as u64;
+                Ok(())
+            }
+            Storage::File(file) => {
+                file.file_mut().set_len(length)?;
+                self.append_after_truncate = false;
+                Ok(())
+            }
+        }
+    }
+
+    #[cfg(feature = "stream-truncate")]
+    fn write_after_memory_truncate(&mut self, buffer: &[u8]) -> io::Result<usize> {
+        let logical_position = self.position_without_reset()?;
+        let current_length = self.length()?;
+        let required = current_length
+            .checked_add(buffer.len() as u64)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::OutOfMemory, "stream size overflow"))?;
+        if matches!(self.storage, Storage::Memory(_)) && required > self.max_memory as u64 {
+            self.spill()?;
+        }
+        self.seek_without_reset(SeekFrom::End(0))?;
+        let result = match &mut self.storage {
+            Storage::Memory(memory) => memory.write(buffer),
+            Storage::File(file) => file.file_mut().write(buffer),
+        };
+        match result {
+            Ok(written) => {
+                self.seek_without_reset(SeekFrom::Start(
+                    logical_position.saturating_add(written as u64),
+                ))?;
+                Ok(written)
+            }
+            Err(error) => {
+                self.seek_without_reset(SeekFrom::Start(logical_position))?;
+                Err(error)
+            }
+        }
+    }
+
+    #[cfg(feature = "stream-truncate")]
+    fn length(&mut self) -> io::Result<u64> {
+        match &mut self.storage {
+            Storage::Memory(memory) => Ok(memory.get_ref().len() as u64),
+            Storage::File(file) => Ok(file.file_mut().metadata()?.len()),
+        }
+    }
+
+    #[cfg(feature = "stream-truncate")]
+    fn position_without_reset(&mut self) -> io::Result<u64> {
+        match &mut self.storage {
+            Storage::Memory(memory) => Ok(memory.position()),
+            Storage::File(file) => file.file_mut().stream_position(),
+        }
+    }
+
+    #[cfg(feature = "stream-truncate")]
+    fn seek_without_reset(&mut self, position: SeekFrom) -> io::Result<u64> {
+        match &mut self.storage {
+            Storage::Memory(memory) => memory.seek(position),
+            Storage::File(file) => file.file_mut().seek(position),
         }
     }
 

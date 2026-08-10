@@ -20,6 +20,9 @@ mod csv;
 mod get_line;
 #[path = "stream/temp.rs"]
 mod temp;
+#[cfg(feature = "stream-truncate")]
+#[path = "stream/truncate.rs"]
+mod truncate;
 
 #[cfg(not(target_vendor = "apple"))]
 use csv::CsvParser;
@@ -99,6 +102,8 @@ pub struct PhpStream {
     reported_mode: String,
     uri: String,
     eof: bool,
+    #[cfg(feature = "stream-truncate")]
+    memory_append_after_truncate: bool,
     #[cfg(feature = "stream-context")]
     context: Option<StreamContext>,
 }
@@ -132,6 +137,8 @@ impl PhpStream {
                 reported_mode: php_memory_mode(mode).to_string(),
                 uri: path.to_string(),
                 eof: false,
+                #[cfg(feature = "stream-truncate")]
+                memory_append_after_truncate: false,
                 #[cfg(feature = "stream-context")]
                 context: None,
             });
@@ -143,6 +150,8 @@ impl PhpStream {
                 reported_mode: php_memory_mode(mode).to_string(),
                 uri: path.to_string(),
                 eof: false,
+                #[cfg(feature = "stream-truncate")]
+                memory_append_after_truncate: false,
                 #[cfg(feature = "stream-context")]
                 context: None,
             });
@@ -174,6 +183,8 @@ impl PhpStream {
             reported_mode: requested_mode.to_string(),
             uri: path.to_string(),
             eof: false,
+            #[cfg(feature = "stream-truncate")]
+            memory_append_after_truncate: false,
             #[cfg(feature = "stream-context")]
             context: None,
         })
@@ -402,6 +413,21 @@ impl PhpStream {
                     if self.mode.append {
                         memory.seek(SeekFrom::End(0))?;
                     }
+                    #[cfg(feature = "stream-truncate")]
+                    if self.memory_append_after_truncate && !self.mode.append {
+                        let logical_position = memory.position();
+                        memory.set_position(memory.get_ref().len() as u64);
+                        let result = memory.write(buffer);
+                        if let Ok(written) = result {
+                            memory.set_position(logical_position.saturating_add(written as u64));
+                        } else {
+                            memory.set_position(logical_position);
+                        }
+                        result
+                    } else {
+                        memory.write(buffer)
+                    }
+                    #[cfg(not(feature = "stream-truncate"))]
                     memory.write(buffer)
                 }
                 StreamBackend::Temp(temp) => temp.write(buffer, self.mode.append),
@@ -455,6 +481,10 @@ impl PhpStream {
     pub fn seek(&mut self, position: SeekFrom) -> io::Result<u64> {
         let position = self.seek_backend(position)?;
         self.eof = false;
+        #[cfg(feature = "stream-truncate")]
+        {
+            self.memory_append_after_truncate = false;
+        }
         Ok(position)
     }
 

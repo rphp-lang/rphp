@@ -218,6 +218,64 @@ fn arbitrary_line_endings_match_across_chunks_and_overlap() {
 }
 
 #[test]
+#[cfg(feature = "stream-truncate")]
+fn truncation_resizes_memory_and_temp_without_moving_cursor_or_eof() {
+    for path in ["php://memory", "php://temp/maxmemory:99"] {
+        let mut stream = PhpStream::open(path, "w+").unwrap();
+        stream.write(b"abcdef").unwrap();
+        stream.seek(SeekFrom::Start(2)).unwrap();
+        stream.truncate(4).unwrap();
+        assert_eq!(stream.position().unwrap(), 2);
+        assert!(!stream.is_eof());
+
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = [0u8; 8];
+        assert_eq!(stream.read(&mut bytes).unwrap(), 4);
+        assert_eq!(&bytes[..4], b"abcd");
+        assert_eq!(stream.read(&mut bytes).unwrap(), 0);
+        assert!(stream.is_eof());
+
+        stream.truncate(8).unwrap();
+        assert_eq!(stream.position().unwrap(), 4);
+        assert!(stream.is_eof());
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        assert_eq!(stream.read(&mut bytes).unwrap(), 8);
+        assert_eq!(&bytes, b"abcd\0\0\0\0");
+    }
+}
+
+#[test]
+#[cfg(feature = "stream-truncate")]
+fn truncation_preserves_php_memory_append_and_spilled_file_gap_rules() {
+    for path in ["php://memory", "php://temp/maxmemory:99"] {
+        let mut stream = PhpStream::open(path, "w+").unwrap();
+        stream.write(b"abcdef").unwrap();
+        stream.truncate(2).unwrap();
+        assert_eq!(stream.position().unwrap(), 6);
+        stream.write(b"Z").unwrap();
+        assert_eq!(stream.position().unwrap(), 7);
+        stream.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = [0u8; 7];
+        assert_eq!(stream.read(&mut bytes).unwrap(), 3);
+        assert_eq!(&bytes[..3], b"abZ");
+    }
+
+    let mut spilled = PhpStream::open("php://temp/maxmemory:2", "w+").unwrap();
+    spilled.write(b"abcdef").unwrap();
+    assert!(spilled.temp_spill_path().is_some());
+    spilled.truncate(2).unwrap();
+    spilled.write(b"Z").unwrap();
+    spilled.seek(SeekFrom::Start(0)).unwrap();
+    let mut bytes = [0u8; 7];
+    assert_eq!(spilled.read(&mut bytes).unwrap(), 7);
+    assert_eq!(&bytes, b"ab\0\0\0\0Z");
+
+    let mut grown = PhpStream::open("php://temp/maxmemory:4", "w+").unwrap();
+    grown.truncate(8).unwrap();
+    assert!(grown.temp_spill_path().is_some());
+}
+
+#[test]
 fn csv_length_boundary_and_open_enclosure_follow_php_cursor_rules() {
     let mut stream = PhpStream::open("php://memory", "w+").unwrap();
     stream.write(b"\"abcdef\",x\nnext,row\n").unwrap();

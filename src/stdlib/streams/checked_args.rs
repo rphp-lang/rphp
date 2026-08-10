@@ -8,6 +8,7 @@ use crate::vm::frame::ExecuteData;
     feature = "stream-contents",
     feature = "stream-copy",
     feature = "stream-line",
+    feature = "stream-truncate",
     feature = "file-contents",
     feature = "file-write",
     feature = "file-lines"

@@ -8260,6 +8260,43 @@ feature passes 197 library and 16 stream scenarios, all-feature stream coverage
 reaches 35, and all-feature/all-target compilation passes on both hosts. The
 feature adds no crate, external library or `Cargo.lock` change.
 
+### Writable stream truncation checkpoint (2026-08-10)
+
+The next dependency-free Phase 5 slice exposes `ftruncate()` behind the
+independent `stream-truncate` feature. PHP 8.4.24 probes define non-negative
+weak integer conversion, exact invalid/closed-resource errors, writable-policy
+failure, unchanged cursor and EOF state, zero-filled growth and shrink/grow
+behavior for regular files, `php://memory` and both in-memory and spilled
+`php://temp` storage.
+
+PHP memory streams retain a subtle split identity after truncation below the
+logical cursor: `ftell()` remains unchanged, but subsequent writes append at
+the shortened buffer end while advancing the original logical position. A
+temp stream still in memory follows that rule; a temp stream already spilled
+to a file and a regular file instead preserve file semantics and create a zero
+gap. Feature-only state records only this post-truncation condition and is
+cleared by an explicit seek. Growing temp storage beyond its memory ceiling
+uses the existing private spill path before resizing.
+
+The 42-line `stream/truncate.rs` child owns backend resizing and one shared
+fallible memory helper; the 69-line `streams/truncate.rs` child owns PHP-visible
+validation and dispatch. Memory growth reserves fallibly before zero fill, file
+growth delegates to `File::set_len`, and neither path changes EOF or the cursor.
+No buffering crate, filesystem helper or other dependency is added.
+
+Feature-off ARM64/x86-64 text stays byte-identical to `c026124` at
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and `12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`,
+with exact 2,818,048-byte ARM64 `__TEXT` and 3,388,067/51,816/3,048 x86-64
+section totals. ARM64's 20-pair gate passes at
++0.243%/-0.332%/+0.488%/+0.310%/-0.101%; CPU-pinned x86-64 passes at
+-0.239%/+0.157%/-1.395%/+0.154%/+0.132%.
+
+ARM64/x86-64 library matrices pass 195/186/307 and 195/186/332. The focused
+feature passes 197 library and 16 stream scenarios, all-feature stream coverage
+reaches 37, and all-feature/all-target compilation passes on both hosts. One
+opt-in feature is added, with no crate, external library or `Cargo.lock` change.
+
 ## Interphase 5.5: opt-in bound-erased PHP generics
 
 After the current Phase 5 stream slice, add generics behind one independent

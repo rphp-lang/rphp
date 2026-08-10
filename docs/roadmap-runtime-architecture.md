@@ -1746,6 +1746,30 @@ x86-64. Library matrices pass 195/186/305 and 195/186/330; focused/all-feature
 stream coverage is 16/35 scenarios and complete all-feature/all-target linking
 passes on both hosts. No crate, external library or lockfile change is added.
 
+### Writable stream-length checkpoint (2026-08-10)
+
+The independent `stream-truncate` feature adds `ftruncate()` across regular
+files, `php://memory` and `php://temp`. Its handler owns exact weak-size,
+invalid-resource and writability policy, while the 42-line backend child owns
+fallible resize mechanics. Cursor and EOF state are deliberately outside the
+resize operation and therefore remain unchanged as PHP requires.
+
+Memory and file storage diverge only after shrinking below the logical cursor.
+PHP memory storage appends later writes at the new buffer end but advances the
+old logical cursor; file storage writes at the retained cursor and zero-fills
+the gap. One feature-only boolean on memory-backed streams preserves that
+contract and disappears after seek. Temp storage carries the same state only
+while memory-backed; an already-spilled temp stream uses file semantics, and
+growth beyond the memory ceiling reuses the existing spill transition.
+
+Feature-off code and layouts remain byte-identical to `c026124` on ARM64 and
+x86-64. The build-free gates pass at
++0.243%/-0.332%/+0.488%/+0.310%/-0.101% and
+-0.239%/+0.157%/-1.395%/+0.154%/+0.132%, respectively. Library matrices pass
+195/186/307 and 195/186/332; focused/all-feature stream coverage is 16/37 and
+complete all-feature/all-target compilation passes on both hosts. No crate,
+external library or lockfile change is added.
+
 ### Scheduled interphase: feature-gated generic metadata and dispatch
 
 Once the active Phase 5 stream checkpoint is closed, the next architectural

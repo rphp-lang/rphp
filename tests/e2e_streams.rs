@@ -390,6 +390,79 @@ fn stream_line_matches_php_argument_conversion_and_errors() {
 }
 
 #[test]
+#[cfg(feature = "stream-truncate")]
+fn stream_truncate_matches_backend_cursor_eof_and_growth_rules() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $memory = fopen('php://memory', 'w+');
+            fwrite($memory, 'abcdef');
+            echo ftruncate($memory, 4); echo ':'; echo ftell($memory); echo ':';
+            rewind($memory); echo '['; echo fread($memory, 8); echo ']';
+            fread($memory, 1); echo ':'; echo feof($memory); echo ':';
+            echo ftruncate($memory, 8); echo ':'; echo ftell($memory); echo ':'; echo feof($memory);
+            rewind($memory); echo ':['; echo fread($memory, 8); echo ']';
+
+            $memoryPast = fopen('php://memory', 'w+');
+            fwrite($memoryPast, 'abcdef'); ftruncate($memoryPast, 2);
+            echo ':'; echo fwrite($memoryPast, 'Z'); echo ':'; echo ftell($memoryPast);
+            rewind($memoryPast); echo ':['; echo fread($memoryPast, 7); echo ']';
+
+            $tempPast = fopen('php://temp/maxmemory:2', 'w+');
+            fwrite($tempPast, 'abcdef'); ftruncate($tempPast, 2);
+            fwrite($tempPast, 'Z'); rewind($tempPast);
+            echo ':['; echo fread($tempPast, 7); echo ']';
+            "
+        ),
+        concat!(
+            "1:6:[abcd]:1:1:4:1:[abcd\0\0\0\0]",
+            ":1:7:[abZ]:[ab\0\0\0\0Z]"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-truncate")]
+fn stream_truncate_matches_php_argument_errors_and_real_files() {
+    let path = TemporaryPath::unique("stream-truncate");
+    let source = format!(
+        "<?php
+        $stream = fopen('{}', 'w+');
+        fwrite($stream, 'abcdef');
+        echo ftruncate($stream, 2); echo ':'; echo ftell($stream); echo ':';
+        fwrite($stream, 'Z'); rewind($stream); echo '['; echo fread($stream, 7); echo ']|';
+
+        try {{ ftruncate(false, 1); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ ftruncate($stream, -1); }}
+        catch (ValueError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ ftruncate($stream, []); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        fclose($stream);
+        try {{ ftruncate($stream, 1); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        $readOnly = fopen('php://memory', 'r');
+        if (ftruncate($readOnly, 1) === false) {{ echo 'false'; }}
+        ",
+        path.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "1:6:[ab\0\0\0\0Z]|",
+            "TypeError:ftruncate(): Argument #1 ($stream) must be of type resource, false given|",
+            "ValueError:ftruncate(): Argument #2 ($size) must be greater than or equal to 0|",
+            "TypeError:ftruncate(): Argument #2 ($size) must be of type int, array given|",
+            "TypeError:ftruncate(): supplied resource is not a valid stream resource|false"
+        )
+    );
+}
+
+#[test]
 #[cfg(feature = "stream-context")]
 fn stream_context_mutators_merge_context_and_stream_state() {
     assert_eq!(

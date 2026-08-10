@@ -21,6 +21,7 @@ use super::stream::PhpStream;
     feature = "stream-context",
     feature = "stream-line",
     feature = "stream-registry",
+    feature = "stream-truncate",
     feature = "file-contents",
     feature = "file-write",
     feature = "file-lines"
@@ -40,6 +41,8 @@ mod csv_write;
 mod info;
 #[cfg(feature = "stream-line")]
 mod line;
+#[cfg(feature = "stream-truncate")]
+mod truncate;
 
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
@@ -174,6 +177,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             3,
             2,
             &["stream", "length", "ending"],
+        ),
+        #[cfg(feature = "stream-truncate")]
+        (
+            "ftruncate",
+            truncate::fn_ftruncate,
+            2,
+            2,
+            &["stream", "size"],
         ),
         ("fgets", fn_fgets, 2, 1, &["stream", "length"]),
         #[cfg(all(not(target_vendor = "apple"), not(feature = "csv-errors")))]

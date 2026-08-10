@@ -2313,3 +2313,21 @@ at -0.511%. CPU-pinned x86-64 records
 +0.603%/-0.105%/-0.967%/-0.740%/+0.181%. Negative values are not claimed as
 feature gains; every positive delta remains within the one-percent ceiling.
 No crate, external library or lockfile change is introduced.
+
+### Stream truncation default-code admission
+
+The `stream-truncate` boundary removes the public handler, backend resizing and
+the memory-stream post-truncation cursor state from feature-off builds. Every
+new `PhpStream`/`TempStream` field and write branch is compile-time guarded.
+ARM64 therefore retains the exact 0x244700-byte `.text` body at SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and the 2,818,048-byte `__TEXT`. X86-64 remains exact at
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+
+The ARM64 20-pair gate records
++0.243%/-0.332%/+0.488%/+0.310%/-0.101% for scalar, packed array, String,
+order and ledger. CPU-pinned x86-64 records
+-0.239%/+0.157%/-1.395%/+0.154%/+0.132%. Negative values are not claimed as
+improvements; every positive control remains below one percent. The feature
+adds no crate, external library or lockfile change.
