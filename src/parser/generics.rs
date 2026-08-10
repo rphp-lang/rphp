@@ -1,6 +1,22 @@
 const MAX_GENERIC_ARITY: usize = 127;
 
 impl Parser {
+    fn parse_generic_ancestor(&mut self) -> Result<GenericAncestor, String> {
+        let name = self.parse_qualified_name()?;
+        let arguments = if self.peek() == Token::Less {
+            if !GenericRuntimeCapabilities::CONFIGURED.syntax_enabled() {
+                return Err(
+                    "Generic syntax requires php-generics-erased or php-generics-reified"
+                        .to_string(),
+                );
+            }
+            self.parse_generic_type_arguments()?
+        } else {
+            Vec::new()
+        };
+        Ok(GenericAncestor { name, arguments })
+    }
+
     /// Parse an optional RFC v0.22 type-parameter list immediately following
     /// a declaration name. The two Cargo features select the runtime model;
     /// without either one the shared engine remains compiled but syntax is rejected.

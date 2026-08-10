@@ -380,6 +380,11 @@ impl ExecutorGlobals {
                 class_name
             ));
         }
+        let class_table = &self.class_table;
+        self.generic_metadata
+            .validate_inheritance(&class_name, |actual, bound| {
+                class_is_a_in_table(class_table, actual, bound)
+            })?;
         // Assign stable class ID
         let id = self.next_class_id;
         self.next_class_id += 1;
@@ -1239,6 +1244,27 @@ impl ExecutorGlobals {
     pub fn write_output(&self, data: &[u8]) {
         self.output.borrow_mut().write_all(data).unwrap();
     }
+}
+
+fn class_is_a_in_table(
+    class_table: &HashMap<String, Box<ClassDef>>,
+    class_name: &str,
+    target: &str,
+) -> bool {
+    if class_name.eq_ignore_ascii_case(target) {
+        return true;
+    }
+    let Some(class_def) = class_table.get(class_name) else {
+        return false;
+    };
+    class_def
+        .parent
+        .as_ref()
+        .is_some_and(|parent| class_is_a_in_table(class_table, parent, target))
+        || class_def
+            .implements
+            .iter()
+            .any(|interface| class_is_a_in_table(class_table, interface, target))
 }
 
 #[cfg(feature = "coroutines")]

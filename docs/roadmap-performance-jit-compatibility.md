@@ -8466,6 +8466,17 @@ is -0.612% in 31 order-alternated ARM64 pairs, while text grows by about 57 KiB
 kept because future cold compatibility work must not repeatedly perturb the
 large measured dispatch loops.
 
+Direct generic inheritance now reaches the link layer. The parser retains
+pre-erasure arguments on class/interface `extends`, `implements` and trait
+`use`, while the ordinary `ClassDef` continues to carry only erased names.
+Those bindings merge through the same executor-wide symbol graph as included
+declarations. Class registration validates omitted arguments as arity zero,
+defaults, concrete bounds and forwarded parameters by comparing the forwarding
+parameter's own erased bound (bound-on-bound). This is cold registration work:
+no field was added to an object, frame, `Value`, instruction or inline cache.
+Declaration-site polarity, substituted inherited members, diamond merging and
+the resulting parametric-LSP checks remain the next link-layer slices.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

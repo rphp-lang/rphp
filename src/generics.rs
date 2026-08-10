@@ -65,6 +65,14 @@ pub enum GenericVariance {
     Contravariant,
 }
 
+#[repr(u8)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GenericInheritanceKind {
+    Extends,
+    Implements,
+    Uses,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum GenericType {
     Int,
@@ -121,6 +129,23 @@ pub struct PendingGenericDeclaration {
     pub properties: Vec<(String, TypeHint, bool)>,
 }
 
+#[derive(Debug, Clone)]
+pub struct PendingGenericInheritance {
+    pub kind: GenericInheritanceKind,
+    pub owner: String,
+    pub ancestor: String,
+    pub owner_parameters: Vec<String>,
+    pub arguments: Vec<TypeHint>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericInheritance {
+    pub kind: GenericInheritanceKind,
+    pub owner: GenericSymbol,
+    pub ancestor: GenericSymbol,
+    pub arguments: Box<[GenericType]>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReifiedBinding {
     pub declaration: u32,
@@ -144,6 +169,7 @@ pub struct GenericUseSite {
 pub struct GenericMetadata {
     symbols: Box<[Box<str>]>,
     declarations: Box<[GenericDeclaration]>,
+    inheritances: Box<[GenericInheritance]>,
     use_sites: Box<[GenericUseSite]>,
 }
 
@@ -152,9 +178,20 @@ impl GenericMetadata {
         pending: Vec<PendingGenericDeclaration>,
         pending_use_sites: Vec<PendingGenericUseSite>,
     ) -> Self {
+        Self::compile_with_inheritance(pending, Vec::new(), pending_use_sites)
+    }
+
+    pub fn compile_with_inheritance(
+        pending: Vec<PendingGenericDeclaration>,
+        pending_inheritances: Vec<PendingGenericInheritance>,
+        pending_use_sites: Vec<PendingGenericUseSite>,
+    ) -> Self {
         let mut builder = GenericMetadataBuilder::default();
         for declaration in pending {
             builder.push(declaration);
+        }
+        for inheritance in pending_inheritances {
+            builder.push_inheritance(inheritance);
         }
         for use_site in pending_use_sites {
             builder.push_use_site(use_site);
@@ -172,6 +209,7 @@ impl GenericMetadata {
         let use_site_base = current.use_sites.len() as u32;
         if incoming.symbols.is_empty()
             && incoming.declarations.is_empty()
+            && incoming.inheritances.is_empty()
             && incoming.use_sites.is_empty()
         {
             *self = current;
@@ -222,6 +260,16 @@ impl GenericMetadata {
             declarations.push(declaration);
         }
 
+        let mut inheritances = current.inheritances.into_vec();
+        for mut inheritance in incoming.inheritances {
+            inheritance.owner = symbol_relocation[inheritance.owner as usize];
+            inheritance.ancestor = symbol_relocation[inheritance.ancestor as usize];
+            for argument in &mut inheritance.arguments {
+                remap_type_symbols(argument, &symbol_relocation);
+            }
+            inheritances.push(inheritance);
+        }
+
         let mut use_sites = current.use_sites.into_vec();
         for mut use_site in incoming.use_sites {
             for argument in &mut use_site.arguments {
@@ -232,6 +280,7 @@ impl GenericMetadata {
         *self = Self {
             symbols: symbols.into_boxed_slice(),
             declarations: declarations.into_boxed_slice(),
+            inheritances: inheritances.into_boxed_slice(),
             use_sites: use_sites.into_boxed_slice(),
         };
         use_site_base
@@ -239,12 +288,17 @@ impl GenericMetadata {
 
     #[inline]
     pub fn is_empty(&self) -> bool {
-        self.declarations.is_empty()
+        self.declarations.is_empty() && self.inheritances.is_empty()
     }
 
     #[inline]
     pub fn declarations(&self) -> &[GenericDeclaration] {
         &self.declarations
+    }
+
+    #[inline]
+    pub fn inheritances(&self) -> &[GenericInheritance] {
+        &self.inheritances
     }
 
     #[inline]
@@ -272,6 +326,98 @@ impl GenericMetadata {
                         .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
             })
             .map(|index| index as u32)
+    }
+
+    /// Validate the direct generic bindings declared by one class-like. This
+    /// runs when the class is linked, after metadata from its compilation unit
+    /// has joined the executor-wide table.
+    pub fn validate_inheritance<F>(&self, owner: &str, class_is_a: F) -> Result<(), String>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        let owner_declaration = self.find_class_like(owner);
+        for inheritance in self.inheritances.iter().filter(|inheritance| {
+            self.symbol(inheritance.owner)
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
+        }) {
+            let ancestor = self.symbol(inheritance.ancestor).unwrap_or("?");
+            let Some(ancestor_declaration) = self.find_class_like(ancestor) else {
+                if inheritance.arguments.is_empty() {
+                    continue;
+                }
+                return Err(format!(
+                    "Cannot supply generic arguments to non-generic ancestor {}",
+                    ancestor
+                ));
+            };
+
+            let required = ancestor_declaration
+                .parameters
+                .iter()
+                .take_while(|parameter| parameter.default.is_none())
+                .count();
+            let supplied = inheritance.arguments.len();
+            if supplied < required || supplied > ancestor_declaration.parameters.len() {
+                return Err(format!(
+                    "Generic ancestor {} expects {} to {} type arguments, {} given",
+                    ancestor,
+                    required,
+                    ancestor_declaration.parameters.len(),
+                    supplied
+                ));
+            }
+
+            let mut effective = inheritance.arguments.to_vec();
+            for parameter in ancestor_declaration.parameters.iter().skip(effective.len()) {
+                let default = parameter
+                    .default
+                    .as_ref()
+                    .expect("optional generic ancestor parameter must have a default");
+                effective.push(substitute_generic_parameters(default, &effective));
+            }
+            for (index, parameter) in ancestor_declaration.parameters.iter().enumerate() {
+                let Some(bound) = parameter.bound.as_ref() else {
+                    continue;
+                };
+                // Ancestor bounds use ancestor parameter indices. Substitute
+                // those first, then erase any forwarded owner parameter to its
+                // own bound (the RFC's bound-on-bound rule).
+                let bound = substitute_generic_parameters(bound, &effective);
+                let actual = erase_forwarded_parameters(
+                    &effective[index],
+                    owner_declaration,
+                    owner_declaration.map_or(1, |declaration| declaration.parameters.len() + 1),
+                );
+                let bound = erase_forwarded_parameters(
+                    &bound,
+                    owner_declaration,
+                    owner_declaration.map_or(1, |declaration| declaration.parameters.len() + 1),
+                );
+                if !self.type_satisfies(&actual, &bound, &[], &class_is_a) {
+                    let parameter_name = self.symbol(parameter.name).unwrap_or("?");
+                    return Err(format!(
+                        "Type argument {} for generic ancestor {} does not satisfy bound of {}",
+                        index + 1,
+                        ancestor,
+                        parameter_name
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn find_class_like(&self, owner: &str) -> Option<&GenericDeclaration> {
+        self.declarations.iter().find(|declaration| {
+            matches!(
+                declaration.kind,
+                GenericDeclarationKind::Class
+                    | GenericDeclarationKind::Interface
+                    | GenericDeclarationKind::Trait
+            ) && self
+                .symbol(declaration.owner)
+                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
+        })
     }
 
     /// Validate one explicit `::<...>` use without constructing runtime values.
@@ -757,6 +903,73 @@ impl GenericMetadata {
     }
 }
 
+fn substitute_generic_parameters(value: &GenericType, arguments: &[GenericType]) -> GenericType {
+    match value {
+        GenericType::Parameter(index) => arguments
+            .get(*index as usize)
+            .cloned()
+            .unwrap_or(GenericType::Mixed),
+        GenericType::Named {
+            name,
+            arguments: inner,
+        } => GenericType::Named {
+            name: *name,
+            arguments: inner
+                .iter()
+                .map(|argument| substitute_generic_parameters(argument, arguments))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        },
+        GenericType::Nullable(inner) => {
+            GenericType::Nullable(Box::new(substitute_generic_parameters(inner, arguments)))
+        }
+        GenericType::Union(parts) => GenericType::Union(
+            parts
+                .iter()
+                .map(|part| substitute_generic_parameters(part, arguments))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        concrete => concrete.clone(),
+    }
+}
+
+fn erase_forwarded_parameters(
+    value: &GenericType,
+    owner: Option<&GenericDeclaration>,
+    remaining: usize,
+) -> GenericType {
+    if remaining == 0 {
+        return GenericType::Mixed;
+    }
+    match value {
+        GenericType::Parameter(index) => owner
+            .and_then(|declaration| declaration.parameters.get(*index as usize))
+            .and_then(|parameter| parameter.bound.as_ref())
+            .map(|bound| erase_forwarded_parameters(bound, owner, remaining - 1))
+            .unwrap_or(GenericType::Mixed),
+        GenericType::Named { name, arguments } => GenericType::Named {
+            name: *name,
+            arguments: arguments
+                .iter()
+                .map(|argument| erase_forwarded_parameters(argument, owner, remaining))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        },
+        GenericType::Nullable(inner) => GenericType::Nullable(Box::new(
+            erase_forwarded_parameters(inner, owner, remaining),
+        )),
+        GenericType::Union(parts) => GenericType::Union(
+            parts
+                .iter()
+                .map(|part| erase_forwarded_parameters(part, owner, remaining))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        concrete => concrete.clone(),
+    }
+}
+
 fn remap_type_symbols(value: &mut GenericType, relocation: &[GenericSymbol]) {
     match value {
         GenericType::Named { name, arguments } => {
@@ -816,6 +1029,7 @@ struct GenericMetadataBuilder {
     symbols: Vec<Box<str>>,
     symbol_ids: HashMap<String, GenericSymbol>,
     declarations: Vec<GenericDeclaration>,
+    inheritances: Vec<GenericInheritance>,
     use_sites: Vec<GenericUseSite>,
 }
 
@@ -895,6 +1109,28 @@ impl GenericMetadataBuilder {
         });
     }
 
+    fn push_inheritance(&mut self, inheritance: PendingGenericInheritance) {
+        let owner = self.intern(&inheritance.owner);
+        let ancestor = self.intern(&inheritance.ancestor);
+        let parameter_names = inheritance
+            .owner_parameters
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let arguments = inheritance
+            .arguments
+            .iter()
+            .map(|argument| self.compile_type(argument, &parameter_names))
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
+        self.inheritances.push(GenericInheritance {
+            kind: inheritance.kind,
+            owner,
+            ancestor,
+            arguments,
+        });
+    }
+
     fn push_use_site(&mut self, use_site: PendingGenericUseSite) {
         let arguments = use_site
             .arguments
@@ -960,6 +1196,7 @@ impl GenericMetadataBuilder {
         GenericMetadata {
             symbols: self.symbols.into_boxed_slice(),
             declarations: self.declarations.into_boxed_slice(),
+            inheritances: self.inheritances.into_boxed_slice(),
             use_sites: self.use_sites.into_boxed_slice(),
         }
     }

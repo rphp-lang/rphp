@@ -35,6 +35,13 @@ fn default_build_contains_engine_but_rejects_generic_syntax() {
         use_error,
         "Generic syntax requires php-generics-erased or php-generics-reified"
     );
+
+    let inheritance_error =
+        parse("<?php class Base {} class Child extends Base<int> {}").unwrap_err();
+    assert_eq!(
+        inheritance_error,
+        "Generic syntax requires php-generics-erased or php-generics-reified"
+    );
 }
 
 #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
@@ -138,6 +145,59 @@ echo make::<Child>(7);
         (
             "<?php function plain($v) { return $v; } plain::<int>(1);",
             "non-generic function plain",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn inheritance_arguments_link_with_arity_bounds_and_forwarding() {
+    let output = common::run_php(
+        r#"<?php
+class Base {}
+class Concrete extends Base {}
+class ParentBox<T : Base> {}
+class Forwarded<U : Concrete> extends ParentBox<U> {}
+class DefaultParent<T : Base = Concrete> {}
+class UsesDefault extends DefaultParent {}
+interface Sink<T : int> {}
+trait Carries<T : int> { public T $value; }
+class Combined<U : int> implements Sink<U> {
+    use Carries<U>;
+}
+$value = new Forwarded::<Concrete>();
+$combined = new Combined::<int>();
+$combined->value = 7;
+echo ($value instanceof ParentBox) ? "parent:" : "missing:";
+echo $combined->value;
+echo (new UsesDefault()) instanceof DefaultParent ? ":default" : ":missing";
+"#,
+    );
+    assert_eq!(output, "parent:7:default");
+
+    for (source, expected) in [
+        (
+            "<?php class ParentBox<T> {} class Missing extends ParentBox {}",
+            "expects 1 to 1 type arguments, 0 given",
+        ),
+        (
+            "<?php class Base {} class ParentBox<T : Base> {} class Bad extends ParentBox<string> {}",
+            "does not satisfy bound",
+        ),
+        (
+            "<?php class Base {} class ParentBox<T : Base> {} class Bad<U> extends ParentBox<U> {}",
+            "does not satisfy bound",
+        ),
+        (
+            "<?php class Plain {} class Bad extends Plain<int> {}",
+            "non-generic ancestor Plain",
         ),
     ] {
         let error = common::run_php_expect_error(source);
@@ -385,6 +445,20 @@ function id<T : Box<Box<int>>>(T $value): T { return $value; }
         boxed.properties[0].value_type,
         GenericType::Parameter(0)
     ));
+
+    let inheritance_statements = parse(
+        "<?php interface Source<T> {} trait Holder<T> {} class Child<U> implements Source<U> { use Holder<U>; }",
+    )
+    .unwrap();
+    let inheritance_result = Compiler::new().compile(&inheritance_statements).unwrap();
+    assert_eq!(inheritance_result.generic_metadata.inheritances().len(), 2);
+    assert!(
+        inheritance_result
+            .generic_metadata
+            .inheritances()
+            .iter()
+            .all(|inheritance| matches!(inheritance.arguments[0], GenericType::Parameter(0)))
+    );
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

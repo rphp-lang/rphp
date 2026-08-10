@@ -98,12 +98,15 @@ class IncludedCaller {
     }
 }
 class IncludedBox<T> { public T $value; }
+class IncludedParent<T : int> {}
+class IncludedChild<U : int> extends IncludedParent<U> {}
 echo included_call();
 echo (new IncludedCaller())->call();
 $reflection = new ReflectionFunction("included_id");
 $parameters = $reflection->getGenericParameters();
 echo $reflection->isGeneric() ? ":yes:" : ":no:";
 echo $parameters[0]["name"] . ":" . $parameters[0]["bound"];
+echo (new IncludedChild::<int>()) instanceof IncludedParent ? ":linked" : ":missing";
 "#,
     );
     let source = format!(
@@ -118,7 +121,7 @@ echo ":" . $box->value;
 "#,
         path
     );
-    assert_eq!(run_php(&source), "1ss:yes:T:string:2");
+    assert_eq!(run_php(&source), "1ss:yes:T:string:linked:2");
 }
 
 #[test]

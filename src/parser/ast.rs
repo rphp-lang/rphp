@@ -234,6 +234,14 @@ pub struct GenericParameter {
     pub default: Option<TypeHint>,
 }
 
+/// A class-like name in an inheritance clause together with its pre-erasure
+/// generic arguments. Runtime class lookup continues to use only `name`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericAncestor {
+    pub name: std::string::String,
+    pub arguments: Vec<TypeHint>,
+}
+
 /// Function parameter with optional default value.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Param {
@@ -313,18 +321,18 @@ pub enum Stmt {
     Throw(Expr),
     Class {
         name: String,
-        parent: Option<String>,
-        implements: Vec<String>,
+        parent: Option<GenericAncestor>,
+        implements: Vec<GenericAncestor>,
         is_abstract: bool,
         is_final: bool,
         properties: Vec<ClassProperty>,
         methods: Vec<ClassMethod>,
-        uses: Vec<String>, // trait names from `use Foo, Bar;`
+        uses: Vec<GenericAncestor>, // trait names from `use Foo<T>, Bar<U>;`
         generic_params: Vec<GenericParameter>,
     },
     Interface {
         name: String,
-        extends: Vec<String>,
+        extends: Vec<GenericAncestor>,
         methods: Vec<ClassMethod>, // all public, abstract (no body)
         generic_params: Vec<GenericParameter>,
     },

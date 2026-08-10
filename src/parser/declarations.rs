@@ -90,7 +90,7 @@ impl Parser {
         self.push_generic_scope(&generic_params);
         let parent = if self.peek() == Token::Extends {
             self.advance();
-            Some(self.parse_qualified_name()?)
+            Some(self.parse_generic_ancestor()?)
         } else {
             None
         };
@@ -98,7 +98,7 @@ impl Parser {
             self.advance();
             let mut ifaces = Vec::new();
             loop {
-                ifaces.push(self.parse_qualified_name()?);
+                ifaces.push(self.parse_generic_ancestor()?);
                 if self.peek() == Token::Comma {
                     self.advance();
                 } else {
@@ -123,7 +123,7 @@ impl Parser {
             if self.peek() == Token::Use {
                 self.advance(); // consume 'use'
                 loop {
-                    uses.push(self.parse_qualified_name()?);
+                    uses.push(self.parse_generic_ancestor()?);
                     if self.peek() == Token::Comma {
                         self.advance();
                     } else {
@@ -309,7 +309,7 @@ impl Parser {
             self.advance();
             let mut parents = Vec::new();
             loop {
-                parents.push(self.parse_qualified_name()?);
+                parents.push(self.parse_generic_ancestor()?);
                 if self.peek() == Token::Comma {
                     self.advance();
                 } else {

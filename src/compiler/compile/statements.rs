@@ -926,6 +926,26 @@ impl Compiler {
                     properties,
                     methods,
                 );
+                if let Some(parent) = parent {
+                    self.record_generic_inheritances(
+                        &resolved_class,
+                        generic_params,
+                        crate::generics::GenericInheritanceKind::Extends,
+                        std::slice::from_ref(parent),
+                    );
+                }
+                self.record_generic_inheritances(
+                    &resolved_class,
+                    generic_params,
+                    crate::generics::GenericInheritanceKind::Implements,
+                    implements,
+                );
+                self.record_generic_inheritances(
+                    &resolved_class,
+                    generic_params,
+                    crate::generics::GenericInheritanceKind::Uses,
+                    uses,
+                );
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
@@ -1072,11 +1092,11 @@ impl Compiler {
                 }
 
                 // Store class definition for runtime
-                let resolved_parent = parent.as_ref().map(|p| self.resolve_name(p));
+                let resolved_parent = parent.as_ref().map(|p| self.resolve_name(&p.name));
                 let resolved_implements: Vec<String> =
-                    implements.iter().map(|i| self.resolve_name(i)).collect();
+                    implements.iter().map(|i| self.resolve_name(&i.name)).collect();
                 let resolved_uses: Vec<String> =
-                    uses.iter().map(|u| self.resolve_name(u)).collect();
+                    uses.iter().map(|u| self.resolve_name(&u.name)).collect();
                 self.class_defs.push(ClassDef {
                     name: resolved_class,
                     parent: resolved_parent,
@@ -1108,6 +1128,12 @@ impl Compiler {
                     generic_params,
                     None,
                     None,
+                );
+                self.record_generic_inheritances(
+                    &resolved_iface,
+                    generic_params,
+                    crate::generics::GenericInheritanceKind::Extends,
+                    extends,
                 );
                 // Interface methods have no body — we still create stub UserFunctions
                 // so they appear in the class_def for type checking, but they should
@@ -1194,7 +1220,7 @@ impl Compiler {
 
                 // For interface "extends", all parent interfaces become the implements list
                 let resolved_extends: Vec<String> =
-                    extends.iter().map(|e| self.resolve_name(e)).collect();
+                    extends.iter().map(|e| self.resolve_name(&e.name)).collect();
                 self.class_defs.push(ClassDef {
                     name: resolved_iface,
                     parent: None,

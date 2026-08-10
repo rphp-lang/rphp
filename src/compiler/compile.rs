@@ -10,10 +10,11 @@ static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use super::OpArray;
 use crate::generics::{
-    GenericDeclarationKind, GenericMetadata, PendingGenericDeclaration, PendingGenericUseSite,
+    GenericDeclarationKind, GenericInheritanceKind, GenericMetadata, PendingGenericDeclaration,
+    PendingGenericInheritance, PendingGenericUseSite,
 };
 use crate::parser::{
-    BinOp, CallArg, CastType, Expr, ListTarget, Param, Stmt, TypeHint, Visibility,
+    BinOp, CallArg, CastType, Expr, GenericAncestor, ListTarget, Param, Stmt, TypeHint, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -1063,6 +1064,9 @@ pub struct Compiler {
     /// Cold declaration metadata. Finalized into one interned side table after
     /// compilation; never embedded in a function, frame, object or Value.
     generic_declarations: Vec<PendingGenericDeclaration>,
+    /// Direct `extends`/`implements`/trait `use` bindings. Kept cold and
+    /// validated when each class-like is linked.
+    generic_inheritances: Vec<PendingGenericInheritance>,
     /// Globally numbered explicit type-argument sites shared by every nested
     /// compiler in this compilation unit. This is cold compiler state only.
     generic_use_sites: Rc<RefCell<Vec<PendingGenericUseSite>>>,
@@ -1118,6 +1122,7 @@ impl Compiler {
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             generic_declarations: Vec::new(),
+            generic_inheritances: Vec::new(),
             generic_use_sites: Rc::new(RefCell::new(Vec::new())),
             deferred_error: None,
             known_ref_args: HashMap::new(),
@@ -1205,6 +1210,62 @@ impl Compiler {
             return_type: None,
             properties: property_types,
         });
+    }
+
+    fn record_generic_inheritances(
+        &mut self,
+        owner: &str,
+        owner_parameters: &[crate::parser::GenericParameter],
+        kind: GenericInheritanceKind,
+        ancestors: &[GenericAncestor],
+    ) {
+        let owner_parameters = owner_parameters
+            .iter()
+            .map(|parameter| parameter.name.clone())
+            .collect::<Vec<_>>();
+        for ancestor in ancestors {
+            self.generic_inheritances.push(PendingGenericInheritance {
+                kind,
+                owner: owner.to_string(),
+                ancestor: self.resolve_name(&ancestor.name),
+                owner_parameters: owner_parameters.clone(),
+                arguments: ancestor
+                    .arguments
+                    .iter()
+                    .map(|argument| self.resolve_generic_type_names(argument))
+                    .collect(),
+            });
+        }
+    }
+
+    fn resolve_generic_type_names(&self, hint: &TypeHint) -> TypeHint {
+        match hint {
+            TypeHint::ClassName(name) => match name.as_str() {
+                "self" | "parent" | "static" => hint.clone(),
+                _ => TypeHint::ClassName(self.resolve_name(name)),
+            },
+            TypeHint::GenericParameter { name, erased } => TypeHint::GenericParameter {
+                name: name.clone(),
+                erased: Box::new(self.resolve_generic_type_names(erased)),
+            },
+            TypeHint::GenericApplication { base, arguments } => TypeHint::GenericApplication {
+                base: self.resolve_name(base),
+                arguments: arguments
+                    .iter()
+                    .map(|argument| self.resolve_generic_type_names(argument))
+                    .collect(),
+            },
+            TypeHint::Nullable(inner) => {
+                TypeHint::Nullable(Box::new(self.resolve_generic_type_names(inner)))
+            }
+            TypeHint::Union(parts) => TypeHint::Union(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_generic_type_names(part))
+                    .collect(),
+            ),
+            concrete => concrete.clone(),
+        }
     }
 
     fn record_generic_use_site(&mut self, arguments: &[crate::parser::TypeHint]) -> u32 {
@@ -1558,8 +1619,11 @@ impl Compiler {
         }
 
         let generic_use_sites = self.generic_use_sites.borrow().clone();
-        let generic_metadata =
-            GenericMetadata::compile(self.generic_declarations, generic_use_sites);
+        let generic_metadata = GenericMetadata::compile_with_inheritance(
+            self.generic_declarations,
+            self.generic_inheritances,
+            generic_use_sites,
+        );
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
