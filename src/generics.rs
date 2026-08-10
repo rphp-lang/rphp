@@ -95,12 +95,20 @@ pub struct GenericParameterMetadata {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct GenericPropertyMetadata {
+    pub name: GenericSymbol,
+    pub value_type: GenericType,
+    pub is_static: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct GenericDeclaration {
     pub kind: GenericDeclarationKind,
     pub owner: GenericSymbol,
     pub parameters: Box<[GenericParameterMetadata]>,
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,
+    pub properties: Box<[GenericPropertyMetadata]>,
 }
 
 #[derive(Debug, Clone)]
@@ -110,6 +118,7 @@ pub struct PendingGenericDeclaration {
     pub parameters: Vec<GenericParameter>,
     pub value_parameters: Vec<Option<TypeHint>>,
     pub return_type: Option<TypeHint>,
+    pub properties: Vec<(String, TypeHint, bool)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -205,6 +214,10 @@ impl GenericMetadata {
             }
             if let Some(return_type) = &mut declaration.return_type {
                 remap_type_symbols(return_type, &symbol_relocation);
+            }
+            for property in &mut declaration.properties {
+                property.name = symbol_relocation[property.name as usize];
+                remap_type_symbols(&mut property.value_type, &symbol_relocation);
             }
             declarations.push(declaration);
         }
@@ -351,6 +364,102 @@ impl GenericMetadata {
         self.declarations.get(binding.declaration as usize)
     }
 
+    pub fn property_type(
+        &self,
+        binding: ReifiedBinding,
+        name: &str,
+        is_static: bool,
+    ) -> Option<&GenericType> {
+        self.declaration(binding)?
+            .properties
+            .iter()
+            .find(|property| {
+                property.is_static == is_static
+                    && self
+                        .symbol(property.name)
+                        .is_some_and(|candidate| candidate == name)
+            })
+            .map(|property| &property.value_type)
+    }
+
+    pub fn value_matches_property_binding<F>(
+        &self,
+        value: &Value,
+        name: &str,
+        binding: ReifiedBinding,
+        class_is_a: F,
+    ) -> Option<bool>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        let expected = self.property_type(binding, name, false)?;
+        Some(self.value_matches_binding(value, expected, binding, class_is_a))
+    }
+
+    pub fn value_matches_erased_property<F>(
+        &self,
+        kind: GenericDeclarationKind,
+        owner: &str,
+        name: &str,
+        value: &Value,
+        class_is_a: F,
+    ) -> Option<bool>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        let declaration = self.find_index(kind, owner)?;
+        self.value_matches_erased_property_declaration(declaration, name, value, class_is_a)
+    }
+
+    pub fn value_matches_erased_property_declaration<F>(
+        &self,
+        declaration: u32,
+        name: &str,
+        value: &Value,
+        class_is_a: F,
+    ) -> Option<bool>
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        let declaration = self.declarations.get(declaration as usize)?;
+        let property = declaration.properties.iter().find(|property| {
+            !property.is_static
+                && self
+                    .symbol(property.name)
+                    .is_some_and(|candidate| candidate == name)
+        })?;
+        let value = if value.is_reference() {
+            unsafe { &*value.as_ref_ptr() }
+        } else {
+            value
+        };
+        Some(self.value_matches_erased_type(
+            value,
+            &property.value_type,
+            declaration,
+            &class_is_a,
+            0,
+        ))
+    }
+
+    pub fn property_erases_to_mixed(&self, declaration: u32, name: &str) -> bool {
+        let Some(declaration) = self.declarations.get(declaration as usize) else {
+            return false;
+        };
+        declaration
+            .properties
+            .iter()
+            .find(|property| {
+                !property.is_static
+                    && self
+                        .symbol(property.name)
+                        .is_some_and(|candidate| candidate == name)
+            })
+            .is_some_and(|property| {
+                Self::type_erases_to_mixed(&property.value_type, declaration, 0)
+            })
+    }
+
     pub fn value_matches_binding<F>(
         &self,
         value: &Value,
@@ -418,6 +527,20 @@ impl GenericMetadata {
         }
     }
 
+    pub fn format_binding_arguments(&self, binding: ReifiedBinding) -> Option<Vec<String>> {
+        let declaration = self.declaration(binding)?;
+        let use_site = self.use_site(binding.use_site)?;
+        let mut rendered = Vec::with_capacity(declaration.parameters.len());
+        for (index, parameter) in declaration.parameters.iter().enumerate() {
+            let argument = use_site
+                .arguments
+                .get(index)
+                .or(parameter.default.as_ref())?;
+            rendered.push(self.format_type(declaration, argument));
+        }
+        Some(rendered)
+    }
+
     fn value_matches_type<F>(
         &self,
         value: &Value,
@@ -482,6 +605,83 @@ impl GenericMetadata {
             GenericType::Union(parts) => parts.iter().any(|part| {
                 self.value_matches_type(value, part, declaration, site, class_is_a, depth)
             }),
+        }
+    }
+
+    fn value_matches_erased_type<F>(
+        &self,
+        value: &Value,
+        expected: &GenericType,
+        declaration: &GenericDeclaration,
+        class_is_a: &F,
+        depth: usize,
+    ) -> bool
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        if depth > declaration.parameters.len() + 1 {
+            return false;
+        }
+        match expected {
+            GenericType::Parameter(index) => declaration
+                .parameters
+                .get(*index as usize)
+                .and_then(|parameter| parameter.bound.as_ref())
+                .is_none_or(|bound| {
+                    self.value_matches_erased_type(value, bound, declaration, class_is_a, depth + 1)
+                }),
+            GenericType::Int => value.value_type() == ValueType::Long,
+            GenericType::Float => value.value_type() == ValueType::Double,
+            GenericType::String => value.value_type() == ValueType::String,
+            GenericType::Bool => matches!(value.value_type(), ValueType::True | ValueType::False),
+            GenericType::Array => value.value_type() == ValueType::Array,
+            GenericType::Callable => matches!(
+                value.value_type(),
+                ValueType::String | ValueType::Array | ValueType::Closure
+            ),
+            GenericType::Null => value.value_type() == ValueType::Null,
+            GenericType::Void | GenericType::Never => false,
+            GenericType::Mixed => true,
+            GenericType::Named { name, .. } => {
+                let Some(expected_name) = self.symbol(*name) else {
+                    return false;
+                };
+                value.as_object().is_some_and(|object| {
+                    expected_name.eq_ignore_ascii_case("object")
+                        || object.class_name.eq_ignore_ascii_case(expected_name)
+                        || class_is_a(&object.class_name, expected_name)
+                })
+            }
+            GenericType::Nullable(inner) => {
+                value.value_type() == ValueType::Null
+                    || self.value_matches_erased_type(value, inner, declaration, class_is_a, depth)
+            }
+            GenericType::Union(parts) => parts.iter().any(|part| {
+                self.value_matches_erased_type(value, part, declaration, class_is_a, depth)
+            }),
+        }
+    }
+
+    fn type_erases_to_mixed(
+        value: &GenericType,
+        declaration: &GenericDeclaration,
+        depth: usize,
+    ) -> bool {
+        if depth > declaration.parameters.len() + 1 {
+            return false;
+        }
+        match value {
+            GenericType::Mixed => true,
+            GenericType::Parameter(index) => declaration
+                .parameters
+                .get(*index as usize)
+                .and_then(|parameter| parameter.bound.as_ref())
+                .is_none_or(|bound| Self::type_erases_to_mixed(bound, declaration, depth + 1)),
+            GenericType::Nullable(inner) => Self::type_erases_to_mixed(inner, declaration, depth),
+            GenericType::Union(parts) => parts
+                .iter()
+                .any(|part| Self::type_erases_to_mixed(part, declaration, depth)),
+            _ => false,
         }
     }
 
@@ -675,12 +875,23 @@ impl GenericMetadataBuilder {
             .return_type
             .as_ref()
             .map(|hint| self.compile_type(hint, &parameter_names));
+        let properties = declaration
+            .properties
+            .iter()
+            .map(|(name, hint, is_static)| GenericPropertyMetadata {
+                name: self.intern(name),
+                value_type: self.compile_type(hint, &parameter_names),
+                is_static: *is_static,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         self.declarations.push(GenericDeclaration {
             kind: declaration.kind,
             owner,
             parameters,
             value_parameters,
             return_type,
+            properties,
         });
     }
 

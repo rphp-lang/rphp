@@ -1818,6 +1818,28 @@ call. A collision test deliberately gives the main and included units local
 use-site index zero with different bounds and verifies both runtimes plus
 Reflection after linking.
 
+The first reified-instance slice keeps canonical class arguments outside the
+object. Explicit construction registers `(weak object identity, binding)` in a
+feature-only executor sidecar before the constructor runs; cloning transfers
+the binding, a weak reference prevents address-reuse aliasing, and
+exponentially scheduled stale-entry sweeps retain amortized O(1) construction.
+A weak one-entry L0 serves repeated property access without hashing. Typed
+class and promoted properties are preserved in the same interned declaration
+graph. Erased instances enforce the parameter bound, while reified instances
+substitute their actual argument for defaults, constructor writes, ordinary
+writes and clones. `ReflectionObject` exposes class parameters in every build
+and concrete instance arguments only when a reified binding exists. `Value`,
+`PhpObject`, `ExecuteData`, `FunctionCommon` and the 16-byte instruction/cache
+layouts remain unchanged.
+
+ARM64 and x86-64 release builds additionally align functions to one 64-byte
+cache line. This stabilizes the large dispatch entry points against unrelated
+cold metadata/drop-glue growth: the unaligned feature-off property control
+regressed 12.17% solely after `execute_ex` moved off its favorable boundary,
+whereas the aligned final build is -0.612% in 31 paired ARM64 runs. The cost is
+about 57 KiB of text (1.6%) on that build, with no source-level padding or
+backend-specific dependency.
+
 Ordinary calls continue through the existing call-frame path with no generic
 flag test. Only `::<...>` sites emit a validation operation; its
 inline cache stores the canonical argument tuple, resolved callee identity and

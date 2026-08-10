@@ -88,6 +88,11 @@ fn op_clone_obj<'a>(
     };
     let cloned_val = Value::object(cloned_obj);
 
+    #[cfg(feature = "php-generics-reified")]
+    if let Some(binding) = eg.reified_object_binding(src_val) {
+        eg.bind_reified_object(&cloned_val, binding);
+    }
+
     let _ = call_magic_method(eg, &cloned_val, "__clone", &[])?;
 
     // If __clone threw an exception, propagate it

@@ -919,12 +919,12 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_class = self.resolve_name(name);
-                self.record_generic_declaration(
+                self.record_generic_class_declaration(
                     crate::generics::GenericDeclarationKind::Class,
                     resolved_class.clone(),
                     generic_params,
-                    None,
-                    None,
+                    properties,
+                    methods,
                 );
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
@@ -1220,12 +1220,12 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_trait = self.resolve_name(name);
-                self.record_generic_declaration(
+                self.record_generic_class_declaration(
                     crate::generics::GenericDeclarationKind::Trait,
                     resolved_trait.clone(),
                     generic_params,
-                    None,
-                    None,
+                    properties,
+                    methods,
                 );
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.

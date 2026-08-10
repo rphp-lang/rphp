@@ -200,6 +200,32 @@ echo wrong::<int>();
     assert_eq!(output, "accepted by mixed erasurestill erased");
 }
 
+#[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+#[test]
+fn erased_generic_properties_keep_the_erased_storage_contract() {
+    let output = common::run_php(
+        r#"<?php
+class Box<T> { public T $value; }
+$box = new Box::<int>();
+$box->value = "accepted by mixed erasure";
+echo $box->value;
+$reflection = new ReflectionObject($box);
+echo ":" . count($reflection->getGenericArguments());
+echo ":" . count($reflection->getGenericParameters());
+"#,
+    );
+    assert_eq!(output, "accepted by mixed erasure:0:1");
+
+    let error = common::run_php_expect_error(
+        r#"<?php
+class IntBox<T : int> { public T $value; }
+$box = new IntBox::<int>();
+$box->value = "not an int";
+"#,
+    );
+    assert!(format!("{error:?}").contains("bound-erased property IntBox::$value"));
+}
+
 #[cfg(feature = "php-generics-reified")]
 #[test]
 fn reified_runtime_enforces_substituted_argument_and_return_contracts() {
@@ -229,6 +255,86 @@ echo outer::<int>(inner::<int>(9));
     assert_eq!(output, "9");
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_instances_enforce_property_bindings_and_clone_identity() {
+    let output = common::run_php(
+        r#"<?php
+class Box<T> { public T $value; }
+$ints = new Box::<int>();
+$strings = new Box::<string>();
+$ints->value = 1;
+$strings->value = "s";
+$clone = clone $ints;
+$clone->value = 2;
+echo $ints->value . $strings->value . $clone->value;
+$intArguments = (new ReflectionObject($ints))->getGenericArguments();
+$stringArguments = (new ReflectionObject($strings))->getGenericArguments();
+echo ":" . $intArguments[0] . ":" . $stringArguments[0];
+function assignBox($box, $value) { $box->value = $value; }
+assignBox($ints, 3);
+assignBox($strings, "t");
+echo ":" . $ints->value . ":" . $strings->value;
+"#,
+    );
+    assert_eq!(output, "1s2:int:string:3:t");
+
+    let promoted_error = common::run_php_expect_error(
+        r#"<?php
+class Promoted<T> {
+    public function __construct(public T $value) {}
+}
+$valid = new Promoted::<int>(1);
+$invalid = new Promoted::<int>("not an int");
+"#,
+    );
+    assert!(
+        format!("{promoted_error:?}").contains("reified property Promoted::$value"),
+        "{promoted_error:?}"
+    );
+
+    let visibility_error = common::run_php_expect_error(
+        r#"<?php
+class PrivateBox<T> { private T $value; }
+$box = new PrivateBox::<int>();
+$box->value = "not an int";
+"#,
+    );
+    assert!(format!("{visibility_error:?}").contains("Cannot access private property"));
+
+    for source in [
+        r#"<?php
+class Box<T> { public T $value; }
+$box = new Box::<int>();
+$box->value = "not an int";
+"#,
+        r#"<?php
+class Box<T> { public T $value; }
+$box = new Box::<int>();
+$clone = clone $box;
+$clone->value = "not an int";
+"#,
+        r#"<?php
+class Box<T> { public T $value = "not an int"; }
+$box = new Box::<int>();
+"#,
+        r#"<?php
+class Box<T> { public T $value; }
+function assignBox($box, $value) { $box->value = $value; }
+$strings = new Box::<string>();
+$ints = new Box::<int>();
+assignBox($strings, "valid and caches the property site");
+assignBox($ints, "not an int");
+"#,
+    ] {
+        let error = common::run_php_expect_error(source);
+        assert!(
+            format!("{error:?}").contains("reified property Box::$value"),
+            "{error:?}"
+        );
+    }
+}
+
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
 fn compiler_preserves_interned_pre_erasure_metadata_off_hot_structures() {
@@ -237,6 +343,7 @@ fn compiler_preserves_interned_pre_erasure_metadata_off_hot_structures() {
 interface Source<+T> {}
 trait Holder<T : object> {}
 class Box<T : object = stdClass> {
+    public T $value;
     public function pair<-L, +R : Box<T>>(L $left, R $right): Box<R> { return $right; }
 }
 function id<T : Box<Box<int>>>(T $value): T { return $value; }
@@ -271,6 +378,13 @@ function id<T : Box<Box<int>>>(T $value): T { return $value; }
     };
     assert_eq!(arguments.len(), 1);
     assert!(matches!(arguments[0], GenericType::Named { .. }));
+
+    let boxed = metadata.find(GenericDeclarationKind::Class, "Box").unwrap();
+    assert_eq!(boxed.properties.len(), 1);
+    assert!(matches!(
+        boxed.properties[0].value_type,
+        GenericType::Parameter(0)
+    ));
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

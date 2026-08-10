@@ -167,6 +167,31 @@ fn op_new_obj<'a>(
         PhpObject::with_layout(class_id, property_layout, property_values)
     };
     unsafe { slot_set(result_ptr, Value::object(obj)) };
+    #[cfg(feature = "php-generics-reified")]
+    if let Some(binding) = eg.reified_bindings.last().copied().filter(|binding| {
+        eg.generic_metadata
+            .declaration(*binding)
+            .is_some_and(|declaration| {
+                declaration.kind == crate::generics::GenericDeclarationKind::Class
+                    && eg
+                        .generic_metadata
+                        .symbol(declaration.owner)
+                        .is_some_and(|owner| owner.eq_ignore_ascii_case(name))
+            })
+    }) {
+        let object = unsafe { &*result_ptr };
+        eg.bind_reified_object(object, binding);
+    }
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    if let Some(class) = eg.class_by_id(class_id) {
+        let object = unsafe { &*result_ptr };
+        for (property, default, _, _) in &class.properties {
+            if let Some(default) = default {
+                eg.check_generic_property_value(object, &class.name, property, default)
+                    .map_err(VmError::Fatal)?;
+            }
+        }
+    }
 
     // Constructor lookup is invariant for this literal `new ClassName` site.
     // Cache both hits and misses under the stable class ID so repeated object
@@ -568,6 +593,10 @@ fn op_assign_obj_prop<'a>(
                 }
             }
         }
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        let generic_declaration = eg
+            .check_generic_property_value(obj, &php_obj.class_name, &name, val)
+            .map_err(VmError::Fatal)?;
         // Resolve storage key (mangled for private properties)
         let key = crate::runtime::resolve_property_key(eg, &php_obj.class_name, &name, effective_caller);
 
@@ -576,6 +605,29 @@ fn op_assign_obj_prop<'a>(
             let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
             let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
             if let Some(slot) = php_obj.property_slot(&key) {
+                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                if let Some(declaration) = generic_declaration {
+                    #[cfg(all(
+                        feature = "php-generics-erased",
+                        not(feature = "php-generics-reified")
+                    ))]
+                    if eg
+                        .generic_metadata
+                        .property_erases_to_mixed(declaration, &name)
+                    {
+                        // An unbounded parameter erases to `mixed`; after the
+                        // declaration is proven once, its write is identical
+                        // to the ordinary property fast path.
+                        ic_mut.set_property(php_obj.class_id, slot, 3);
+                    } else {
+                        ic_mut.set_generic_property(declaration, php_obj.class_id, slot);
+                    }
+                    #[cfg(feature = "php-generics-reified")]
+                    ic_mut.set_generic_property(declaration, php_obj.class_id, slot);
+                } else {
+                    ic_mut.set_property(php_obj.class_id, slot, 3);
+                }
+                #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
                 ic_mut.set_property(php_obj.class_id, slot, 3);
             }
         }

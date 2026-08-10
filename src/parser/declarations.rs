@@ -168,8 +168,7 @@ impl Parser {
                 });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
-                // Skip type hint if present (we don't enforce property types at runtime yet)
-                let _type_hint = self.try_parse_type_hint()?;
+                let type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
                     Token::Variable(n) => n,
                     other => return Err(format!("Expected property variable, got {:?}", other)),
@@ -184,6 +183,7 @@ impl Parser {
                 properties.push(ClassProperty {
                     visibility: vis,
                     name: prop_name,
+                    type_hint,
                     default,
                     is_static,
                     is_readonly,
@@ -260,7 +260,7 @@ impl Parser {
                 });
             } else if matches!(self.peek(), Token::Variable(_)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
-                let _type_hint = self.try_parse_type_hint()?;
+                let type_hint = self.try_parse_type_hint()?;
                 let prop_name = match self.advance() {
                     Token::Variable(n) => n,
                     other => return Err(format!("Expected property variable, got {:?}", other)),
@@ -275,6 +275,7 @@ impl Parser {
                 properties.push(ClassProperty {
                     visibility: vis,
                     name: prop_name,
+                    type_hint,
                     default,
                     is_static,
                     is_readonly,

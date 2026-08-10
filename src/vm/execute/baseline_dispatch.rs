@@ -2359,10 +2359,47 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             obj_val.object_set_property_slot_unchecked(ic.property_slot(), cloned);
                         };
                     } else {
-                        match op_assign_obj_prop(eg, frame, op_array, opline)? {
-                            ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
-                            ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
-                            _ => {}
+                        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                        {
+                            let generic_handled = if ic.class_id == obj_class_id && obj_class_id != 0 {
+                                if let Some(declaration) = ic.generic_property_declaration() {
+                                    let name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) }
+                                        .as_str()
+                                        .unwrap_or("");
+                                    let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
+                                    eg.check_cached_generic_property_value(
+                                        obj_val,
+                                        name,
+                                        val,
+                                        declaration,
+                                    )
+                                    .map_err(VmError::Fatal)?;
+                                    let cloned = val.clone();
+                                    unsafe {
+                                        obj_val.object_set_property_slot_unchecked(ic.property_slot(), cloned);
+                                    };
+                                    true
+                                } else {
+                                    false
+                                }
+                            } else {
+                                false
+                            };
+                            if !generic_handled {
+                                match op_assign_obj_prop(eg, frame, op_array, opline)? {
+                                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+                        {
+                            match op_assign_obj_prop(eg, frame, op_array, opline)? {
+                                ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                                ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                                _ => {}
+                            }
                         }
                     }
                 } else {

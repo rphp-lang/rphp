@@ -8428,6 +8428,44 @@ large favorable movement is recorded as code-layout noise rather than an
 optimization claim, while establishing that this cold linker caused no hot
 path regression.
 
+Reified class construction now has stable per-instance identity without an
+object payload. A feature-only weak sidecar is populated before constructors,
+copied on clone and read by substituted property guards and
+`ReflectionObject::getGenericArguments()`. Typed declared and promoted
+properties remain interned declaration metadata. Bound-erased writes check the
+parameter bound; unbounded `T` proves to `mixed` and becomes the original
+write-safe property slot after the first link. A real guard reuses the existing
+16-byte property IC for class ID, slot and declaration ID. Reified repeated
+receivers additionally use a weak L0 identity cache, avoiding a hash-table
+lookup without permitting recycled-address aliasing.
+
+Three permanent five-million-write workloads compare an untyped manual slot,
+unbounded `T` and `T : int`. On ARM64, 31 order-alternated release pairs report
+the following paired medians:
+
+- erased unbounded/mixed property versus manual: -1.154% (no-op proof; the
+  ratio of independent medians is +0.569%);
+- erased checked `int` bound versus manual: +79.851%, or approximately
+  8.52 ns per enforced write;
+- reified `Box<int>` versus manual: +89.073%, or approximately 10.42 ns per
+  substituted per-instance write.
+
+The initial correct slow implementation took about 0.99/1.05 seconds for five
+million erased/reified writes locally. Declaration/slot caching and the weak L0
+reduce that to roughly 0.07/0.08 seconds on the same host. The percentage
+against an unchecked direct slot remains intentionally visible; the absolute
+guard cost and the removal of only semantically empty work are the admission
+criteria for this slice.
+
+Cold metadata growth initially moved the otherwise byte-identical feature-off
+dispatch entry from a 256-byte boundary and produced a repeatable +12.17%
+microbenchmark regression. RPHP now asks LLVM for one-cache-line (64-byte)
+function alignment on ARM64 and x86-64. The final feature-off property control
+is -0.612% in 31 order-alternated ARM64 pairs, while text grows by about 57 KiB
+(1.6% versus the same unaligned revision). This build-level stability rule is
+kept because future cold compatibility work must not repeatedly perturb the
+large measured dispatch loops.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

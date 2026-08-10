@@ -1159,6 +1159,51 @@ impl Compiler {
                 .map(|parameter| parameter.type_hint.clone())
                 .collect(),
             return_type: return_type.cloned(),
+            properties: Vec::new(),
+        });
+    }
+
+    fn record_generic_class_declaration(
+        &mut self,
+        kind: GenericDeclarationKind,
+        owner: String,
+        parameters: &[crate::parser::GenericParameter],
+        properties: &[crate::parser::ClassProperty],
+        methods: &[crate::parser::ClassMethod],
+    ) {
+        if parameters.is_empty() {
+            return;
+        }
+        let mut property_types = properties
+            .iter()
+            .filter_map(|property| {
+                property
+                    .type_hint
+                    .clone()
+                    .map(|hint| (property.name.clone(), hint, property.is_static))
+            })
+            .collect::<Vec<_>>();
+        if let Some(constructor) = methods
+            .iter()
+            .find(|method| method.name.eq_ignore_ascii_case("__construct"))
+        {
+            property_types.extend(constructor.params.iter().filter_map(|parameter| {
+                if parameter.promotion.is_none() {
+                    return None;
+                }
+                parameter
+                    .type_hint
+                    .clone()
+                    .map(|hint| (parameter.name.clone(), hint, false))
+            }));
+        }
+        self.generic_declarations.push(PendingGenericDeclaration {
+            kind,
+            owner,
+            parameters: parameters.to_vec(),
+            value_parameters: Vec::new(),
+            return_type: None,
+            properties: property_types,
         });
     }
 
@@ -1232,6 +1277,13 @@ impl Compiler {
         }
         if !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified {
             return true;
+        }
+        // Reified construction has observable instance identity even when its
+        // constructor signature happens to equal bound erasure. Keep the cold
+        // binding opcode so properties, cloning and later Reflection can use
+        // the canonical argument tuple.
+        if kind == GenericDeclarationKind::Class {
+            return false;
         }
 
         let mut effective = arguments.to_vec();

@@ -1,0 +1,5 @@
+# Keep hot function entry points stable as cold compiler/runtime machinery
+# grows. One cache-line alignment costs little code size and prevents large
+# fat-LTO layout swings in the measured dispatch loops.
+[target.'cfg(any(target_arch = "aarch64", target_arch = "x86_64"))']
+rustflags = ["-C", "llvm-args=--align-all-functions=6"]

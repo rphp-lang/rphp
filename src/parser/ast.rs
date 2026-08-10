@@ -407,6 +407,10 @@ pub enum Visibility {
 pub struct ClassProperty {
     pub visibility: Visibility,
     pub name: String,
+    /// Source-level property contract. The ordinary runtime currently uses
+    /// the erased storage model; generics metadata preserves this form for
+    /// reified substitution and Reflection.
+    pub type_hint: Option<TypeHint>,
     pub default: Option<Expr>,
     pub is_static: bool,
     pub is_readonly: bool,

@@ -228,6 +228,24 @@ impl InlineCache {
         self.prop_info = declaration.saturating_add(1);
     }
 
+    /// Generic property writes reuse the otherwise-idle function word for a
+    /// declaration index. The class, slot and read-safe bit keep their normal
+    /// property-cache meanings; absence of the write-safe bit routes Assign
+    /// through the substituted type guard.
+    #[inline(always)]
+    pub fn generic_property_declaration(&self) -> Option<u32> {
+        if self.class_id == 0 || self.property_flags() != 1 || self.func.is_null() {
+            return None;
+        }
+        u32::try_from((self.func as usize).checked_sub(1)?).ok()
+    }
+
+    #[inline]
+    pub fn set_generic_property(&mut self, declaration: u32, class_id: u32, slot: usize) {
+        self.set_property(class_id, slot, 1);
+        self.func = declaration.saturating_add(1) as usize as *const FunctionCommon;
+    }
+
     #[inline(always)]
     pub fn property_flags(&self) -> u32 {
         self.prop_info & Self::PROP_FLAG_MASK
@@ -423,5 +441,18 @@ mod inline_cache_tests {
         cache.set_dynamic_property_read(&layout, None);
         assert!(cache.is_dynamic_property_read());
         assert_eq!(cache.dynamic_property_position(), None);
+    }
+
+    #[test]
+    fn generic_property_cache_keeps_class_slot_and_declaration() {
+        let mut cache = InlineCache::empty();
+        cache.set_generic_property(11, 7, 3);
+        assert_eq!(cache.class_id, 7);
+        assert_eq!(cache.property_slot(), 3);
+        assert_eq!(cache.property_flags(), 1);
+        assert_eq!(cache.generic_property_declaration(), Some(11));
+
+        cache.set_property(7, 3, 1);
+        assert_eq!(cache.generic_property_declaration(), None);
     }
 }

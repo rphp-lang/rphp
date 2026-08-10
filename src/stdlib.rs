@@ -960,6 +960,24 @@ fn fn_reflection_class_construct(
     Ok(())
 }
 
+fn fn_reflection_object_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = arg!(ed, 1).clone();
+    let owner = target
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .ok_or_else(|| VmError::Fatal("ReflectionObject expects an object".into()))?;
+    reflection_set_target(ed, "class", owner);
+    let this = arg!(ed, 0);
+    if let Some(mut object) = this.as_object_mut() {
+        object.set_property("__generic_object", target);
+    }
+    Ok(())
+}
+
 fn fn_reflection_method_construct(
     ed: *mut ExecuteData,
     _rv: *mut Value,
@@ -1060,6 +1078,39 @@ fn fn_reflection_generic_runtime_modes(
     ret!(rv, Value::array(modes));
 }
 
+fn fn_reflection_generic_arguments(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let target = arg!(ed, 0)
+        .as_object()
+        .and_then(|object| object.get_property("__generic_object").cloned());
+    #[cfg(feature = "php-generics-reified")]
+    let arguments = if let Some(binding) = target
+        .as_ref()
+        .and_then(|target| eg.reified_object_binding(target))
+    {
+        if let Some(rendered) = eg.generic_metadata.format_binding_arguments(binding) {
+            let mut arguments = PhpArray::with_packed_capacity(rendered.len());
+            for argument in rendered {
+                arguments.push(Value::string(argument));
+            }
+            arguments
+        } else {
+            PhpArray::new()
+        }
+    } else {
+        PhpArray::new()
+    };
+    #[cfg(not(feature = "php-generics-reified"))]
+    let arguments = {
+        let _ = (target, eg);
+        PhpArray::new()
+    };
+    ret!(rv, Value::array(arguments));
+}
+
 #[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
@@ -1133,7 +1184,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         }};
     }
 
-    for class in ["ReflectionFunction", "ReflectionClass", "ReflectionMethod"] {
+    for class in [
+        "ReflectionFunction",
+        "ReflectionClass",
+        "ReflectionObject",
+        "ReflectionMethod",
+    ] {
         eg.register_class(ClassDef {
             name: class.to_string(),
             parent: None,
@@ -1170,6 +1226,14 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "name"
     );
     reg_method!(
+        "ReflectionObject",
+        "__construct",
+        fn_reflection_object_construct,
+        2,
+        1,
+        "object"
+    );
+    reg_method!(
         "ReflectionMethod",
         "__construct",
         fn_reflection_method_construct,
@@ -1178,7 +1242,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "class",
         "method"
     );
-    for class in ["ReflectionFunction", "ReflectionClass", "ReflectionMethod"] {
+    for class in [
+        "ReflectionFunction",
+        "ReflectionClass",
+        "ReflectionObject",
+        "ReflectionMethod",
+    ] {
         reg_method!(class, "isgeneric", fn_reflection_is_generic, 1, 0);
         reg_method!(
             class,
@@ -1195,6 +1264,13 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0
         );
     }
+    reg_method!(
+        "ReflectionObject",
+        "getgenericarguments",
+        fn_reflection_generic_arguments,
+        1,
+        0
+    );
 
     // Throwable — proper interface (PHP 8 compatible)
     eg.register_class(ClassDef {

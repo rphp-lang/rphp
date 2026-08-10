@@ -97,6 +97,7 @@ class IncludedCaller {
         return ($includedCallable)::<string>("s");
     }
 }
+class IncludedBox<T> { public T $value; }
 echo included_call();
 echo (new IncludedCaller())->call();
 $reflection = new ReflectionFunction("included_id");
@@ -111,10 +112,13 @@ function main_id<T : int>(T $value): T {{ return $value; }}
 $mainCallable = "main_id";
 echo ($mainCallable)::<int>(1);
 include '{}';
+$box = new IncludedBox::<int>();
+$box->value = 2;
+echo ":" . $box->value;
 "#,
         path
     );
-    assert_eq!(run_php(&source), "1ss:yes:T:string");
+    assert_eq!(run_php(&source), "1ss:yes:T:string:2");
 }
 
 #[test]
