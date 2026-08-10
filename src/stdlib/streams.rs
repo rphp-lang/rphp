@@ -22,6 +22,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         ),
         ("fread", fn_fread, 2, 2, &["stream", "length"]),
         ("fgets", fn_fgets, 2, 1, &["stream", "length"]),
+        #[cfg(not(target_vendor = "apple"))]
+        (
+            "fgetcsv",
+            fn_fgetcsv,
+            5,
+            1,
+            &["stream", "length", "separator", "enclosure", "escape"],
+        ),
         ("fwrite", fn_fwrite, 3, 2, &["stream", "data", "length"]),
         ("fclose", fn_fclose, 1, 1, &["stream"]),
         ("fflush", fn_fflush, 1, 1, &["stream"]),
@@ -59,6 +67,28 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         eg.register_function(name, pointer).unwrap();
         functions.push(function);
     }
+}
+
+#[cfg(target_vendor = "apple")]
+#[cold]
+// Appending the Apple-only registration preserves the measured ordering of
+// the pre-existing handlers while Linux keeps the regular table registration.
+pub(super) fn register_extensions(
+    eg: &mut ExecutorGlobals,
+    functions: &mut Vec<Box<InternalFunction>>,
+) {
+    let function = Box::new(make_internal_function(
+        fn_fgetcsv,
+        5,
+        1,
+        ["stream", "length", "separator", "enclosure", "escape"]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+    ));
+    let pointer = &function.common as *const FunctionCommon;
+    eg.register_function("fgetcsv", pointer).unwrap();
+    functions.push(function);
 }
 
 #[inline]
@@ -183,6 +213,90 @@ fn fn_fgets(
             )
         }
         _ => return_value(return_pointer, Value::bool(false)),
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
+fn fn_fgetcsv(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let resource = argument(execute_data, 0).as_resource_id();
+    let length = match optional_argument(execute_data, 1) {
+        Some(length) => {
+            let length = length.to_long_val();
+            let Ok(length) = usize::try_from(length) else {
+                return return_value(return_pointer, Value::bool(false));
+            };
+            (length != 0).then_some(length)
+        }
+        None => None,
+    };
+    let Some(separator) = csv_character_argument(execute_data, 2, b',') else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+    let Some(enclosure) = csv_character_argument(execute_data, 3, b'"') else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+    let Some(escape) = csv_escape_argument(execute_data, 4, Some(b'\\')) else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+
+    let result = resource.and_then(|resource| {
+        with_stream(eg, resource, |stream| {
+            stream.read_csv_record(length, separator, enclosure, escape)
+        })
+    });
+    match result {
+        Some(Ok(Some(fields))) => {
+            let mut record = PhpArray::with_packed_capacity(fields.len());
+            for field in fields {
+                record.push(match field {
+                    Some(bytes) => Value::string(super::bytes_to_php_string(&bytes)),
+                    None => Value::null(),
+                });
+            }
+            return_value(return_pointer, Value::array(record))
+        }
+        _ => return_value(return_pointer, Value::bool(false)),
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
+fn csv_character_argument(execute_data: *mut ExecuteData, index: u32, default: u8) -> Option<u8> {
+    let Some(_) = optional_argument(execute_data, index) else {
+        return Some(default);
+    };
+    let value = argument_string(execute_data, index);
+    let bytes = super::php_string_to_bytes(value.as_ref());
+    match bytes.as_slice() {
+        [byte] => Some(*byte),
+        _ => None,
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_vendor = "apple", unsafe(link_section = "__TEXT,__rphp_csv"))]
+fn csv_escape_argument(
+    execute_data: *mut ExecuteData,
+    index: u32,
+    default: Option<u8>,
+) -> Option<Option<u8>> {
+    let Some(_) = optional_argument(execute_data, index) else {
+        return Some(default);
+    };
+    let value = argument_string(execute_data, index);
+    let bytes = super::php_string_to_bytes(value.as_ref());
+    match bytes.as_slice() {
+        [] => Some(None),
+        [escape] => Some(Some(*escape)),
+        _ => None,
     }
 }
 

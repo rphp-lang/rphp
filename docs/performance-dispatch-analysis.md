@@ -1935,3 +1935,21 @@ with one marginal array-build loss at 1.03x. Both complete release
 configurations pass, and the focused type suite now contains 80 tests. The
 next typed-boundary extension is guarded monomorphic method-return propagation;
 string heap return/ownership remains a separate hot-executor problem.
+
+## Cold compatibility additions and hot-layout admission
+
+The 2026-08-10 `fgetcsv()` checkpoint exposed a separate optimization risk:
+adding unreachable cold source can perturb LLVM's generation or placement of
+an unrelated large hot function under release LTO. A five-second ARM64 sample
+still attributed approximately 97 percent of the ledger workload to
+`run_quick_long_ops_loop`; CSV code was absent from the runtime stack. The
+regression was therefore treated as a code-layout failure, not optimized by
+changing CSV semantics or adding padding.
+
+The admitted build preserves the established textual dispatcher include on
+x86-64 Linux. ARM64 Apple builds isolate that dispatcher in a real child module
+and place the CSV parser and handler in a dedicated cold text section. This is
+a narrow target-specific translation-unit boundary, documented next to the
+source attributes and covered by the same cross-host admission gates as an
+ordinary runtime optimization. The CSV implementation itself uses only `std`;
+neither Cargo manifest changes nor a third-party parser are part of the fix.

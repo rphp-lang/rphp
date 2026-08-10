@@ -829,6 +829,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("ctype_upper", fn_ctype_upper, 1, 1, "text");
     reg!("ctype_lower", fn_ctype_lower, 1, 1, "text");
 
+    // See streams::register_extensions: this append-only Apple path keeps the
+    // admitted hot-code layout stable as new cold stream handlers are added.
+    #[cfg(target_vendor = "apple")]
+    streams::register_extensions(eg, &mut funcs);
+
     funcs
 }
 

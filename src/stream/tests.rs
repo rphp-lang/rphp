@@ -132,3 +132,66 @@ fn line_reads_cross_stack_chunks_without_hiding_cursor_bytes() {
     assert_eq!(line, b"tail");
     assert!(stream.is_eof());
 }
+
+#[test]
+fn csv_length_boundary_and_open_enclosure_follow_php_cursor_rules() {
+    let mut stream = PhpStream::open("php://memory", "w+").unwrap();
+    stream.write(b"\"abcdef\",x\nnext,row\n").unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+
+    let record = stream
+        .read_csv_record(Some(8), b',', b'"', Some(b'\\'))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record, vec![Some(b"abcdef".to_vec())]);
+    assert_eq!(stream.position().unwrap(), 8);
+
+    let record = stream
+        .read_csv_record(None, b',', b'"', Some(b'\\'))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record, vec![Some(Vec::new()), Some(b"x".to_vec())]);
+    assert_eq!(stream.position().unwrap(), 11);
+
+    stream.seek(SeekFrom::Start(0)).unwrap();
+    let record = stream
+        .read_csv_record(Some(4), b',', b'"', Some(b'\\'))
+        .unwrap()
+        .unwrap();
+    assert_eq!(record, vec![Some(b"abcdef".to_vec()), Some(b"x".to_vec())]);
+    assert_eq!(stream.position().unwrap(), 11);
+}
+
+#[test]
+fn csv_records_preserve_quoted_newlines_and_blank_line_identity() {
+    let mut stream = PhpStream::open("php://temp/maxmemory:4", "w+").unwrap();
+    stream.write(b"a,\"two\nlines\",z\r\n\r\n").unwrap();
+    stream.seek(SeekFrom::Start(0)).unwrap();
+
+    let record = stream
+        .read_csv_record(None, b',', b'"', None)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        record,
+        vec![
+            Some(b"a".to_vec()),
+            Some(b"two\nlines".to_vec()),
+            Some(b"z".to_vec())
+        ]
+    );
+    assert_eq!(
+        stream
+            .read_csv_record(None, b',', b'"', None)
+            .unwrap()
+            .unwrap(),
+        vec![None]
+    );
+    assert!(
+        stream
+            .read_csv_record(None, b',', b'"', None)
+            .unwrap()
+            .is_none()
+    );
+    assert!(stream.is_eof());
+}

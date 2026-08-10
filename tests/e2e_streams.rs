@@ -297,3 +297,87 @@ fn file_modes_cover_truncate_append_exclusive_and_non_truncating_create() {
     assert_eq!(run_php(&source), "onetwo:exclusive:Xnetwo");
     assert_eq!(std::fs::read(&path.0).unwrap(), b"Xnetwo");
 }
+
+#[test]
+fn csv_records_preserve_multiline_quotes_empty_lines_and_eof() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://temp/maxmemory:4', 'w+');
+            fwrite($stream, "a,\"two\nlines\",\"b\"\"c\"\r\n\r\n");
+            rewind($stream);
+            $row = fgetcsv($stream);
+            echo count($row); echo ':'; echo $row[0]; echo ':';
+            echo $row[1]; echo ':'; echo $row[2];
+            $blank = fgetcsv($stream);
+            echo ':';
+            if ($blank[0] === null) { echo 'null'; }
+            echo ':';
+            if (fgetcsv($stream) === false) { echo 'eof'; }
+            "#,
+        ),
+        "3:a:two\nlines:b\"c:null:eof"
+    );
+}
+
+#[test]
+fn csv_length_and_custom_controls_preserve_exact_cursor() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://memory', 'w+');
+            fwrite($stream, "\"abcdef\";x\nnext;row\n");
+            rewind($stream);
+            $bounded = fgetcsv($stream, 8, ';', '"', '');
+            echo count($bounded); echo ':'; echo $bounded[0];
+            echo ':'; echo ftell($stream);
+            $tail = fgetcsv($stream, null, ';', '"', '');
+            echo ':'; echo count($tail); echo ':'; echo $tail[0];
+            echo ':'; echo $tail[1]; echo ':'; echo ftell($stream);
+
+            rewind($stream);
+            $continued = fgetcsv($stream, 4, ';', '"', '');
+            echo ':'; echo $continued[0]; echo ':'; echo $continued[1];
+            echo ':'; echo ftell($stream);
+
+            rewind($stream);
+            if (fgetcsv($stream, null, '::', '"', '') === false) { echo ':invalid'; }
+            if (fgetcsv($stream, null, ',', 'xx', '') === false) { echo ':enclosure'; }
+            if (fgetcsv($stream, null, ',', '"', 'xx') === false) { echo ':escape'; }
+            echo ':'; echo ftell($stream);
+            "#,
+        ),
+        "1:abcdef:8:2::x:11:abcdef:x:11:invalid:enclosure:escape:0"
+    );
+}
+
+#[test]
+fn csv_quote_edges_match_php_byte_rules() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://memory', 'w+');
+            fwrite($stream, "  \"a,b\",c\nx\"y,z\n\"a\"tail,b\n\"a\"  ,b\n\"a\" \"b\",c\n");
+            rewind($stream);
+
+            $one = fgetcsv($stream, null, ',', '"', '');
+            echo '['; echo $one[0]; echo ']['; echo $one[1]; echo ']';
+            $two = fgetcsv($stream, null, ',', '"', '');
+            echo ':['; echo $two[0]; echo ']['; echo $two[1]; echo ']';
+            $three = fgetcsv($stream, null, ',', '"', '');
+            echo ':['; echo $three[0]; echo ']['; echo $three[1]; echo ']';
+            $four = fgetcsv($stream, null, ',', '"', '');
+            echo ':['; echo $four[0]; echo ']['; echo $four[1]; echo ']';
+            $five = fgetcsv($stream, null, ',', '"', '');
+            echo ':['; echo $five[0]; echo ']['; echo $five[1]; echo ']';
+
+            $escaped = fopen('php://memory', 'w+');
+            fwrite($escaped, 'a,"b\"c",d' . "\n");
+            rewind($escaped);
+            $row = fgetcsv($escaped, null, ',', '"', '\\');
+            echo ':['; echo $row[1]; echo ']';
+            "#,
+        ),
+        "[a,b][c]:[x\"y][z]:[atail][b]:[a  ][b]:[a \"b\"][c]:[b\\\"c]"
+    );
+}

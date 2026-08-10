@@ -1,4 +1,5 @@
-// Kept in the execute module through include! so this structural split does not change visibility or code generation.
+#[cfg(target_vendor = "apple")]
+use super::*;
 
 #[inline(never)]
 #[cfg(feature = "quick-loops")]
@@ -25,10 +26,7 @@ unsafe fn run_quick_long_ops_loop(
 
     if let Some(kernel) = plan.straight_array_kernel {
         return Ok(run_quick_straight_array_region(
-            frame,
-            op_array,
-            plan,
-            kernel,
+            frame, op_array, plan, kernel,
         ));
     }
 
@@ -65,9 +63,7 @@ unsafe fn run_quick_long_ops_loop(
         let slot = object_mask.trailing_zeros() as usize;
         object_mask &= object_mask - 1;
         let value = &*slot_base.add(slot);
-        if value.value_type() != ValueType::Object
-            || value.is_reference()
-        {
+        if value.value_type() != ValueType::Object || value.is_reference() {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         }
@@ -104,19 +100,10 @@ unsafe fn run_quick_long_ops_loop(
     ))]
     if let Some(kernel) = native_quick_long_straight_kernel(plan) {
         if let Some(outcome) = run_native_quick_long_straight_kernel(
-            eg,
-            frame,
-            op_array,
-            plan,
-            slot_base,
-            &mut slots,
-            &kernel,
+            eg, frame, op_array, plan, slot_base, &mut slots, &kernel,
         )? {
             #[cfg(feature = "vm-stats")]
-            record_native_quick_outcome(
-                stats::JitRegionKind::TypedOpsLoop,
-                &outcome,
-            );
+            record_native_quick_outcome(stats::JitRegionKind::TypedOpsLoop, &outcome);
             return Ok(outcome);
         }
     }
@@ -172,21 +159,13 @@ unsafe fn run_quick_long_ops_loop(
         let array = mutable_arrays[kernel.array as usize];
         debug_assert!(!array.is_null());
         return run_quick_array_push_loop(
-            eg,
-            frame,
-            op_array,
-            plan,
-            slot_base,
-            slots,
-            array,
-            kernel,
+            eg, frame, op_array, plan, slot_base, slots, array, kernel,
         );
     }
 
     let array_kernel = quick_long_array_loop_kernel(plan);
     let exact_array_slot = array_kernel.as_ref().and_then(|(kernel, body, _)| {
-        matches!(body, QuickLongArrayBodyKernel::OneAdd { .. })
-            .then_some(kernel.array as usize)
+        matches!(body, QuickLongArrayBodyKernel::OneAdd { .. }).then_some(kernel.array as usize)
     });
     let mut arrays = [QuickLongArray::EMPTY; 64];
     let mut exact_int_layout = None;
@@ -217,8 +196,7 @@ unsafe fn run_quick_long_ops_loop(
             {
                 exact_int_layout = Some(QuickLongExactIntLayout { layout });
             } else if let Some((first_key, stride)) = array.integer_position_hint() {
-                int_position_hints[slot] =
-                    Some(QuickLongIntPositionHint { first_key, stride });
+                int_position_hints[slot] = Some(QuickLongIntPositionHint { first_key, stride });
             } else {
                 indexed_int_array_mask |= 1u64 << slot;
             }
@@ -237,10 +215,7 @@ unsafe fn run_quick_long_ops_loop(
             all(target_arch = "x86_64", target_os = "linux")
         )
     ))]
-    if indexed_int_array_mask != 0
-        && plan.string_input_mask == 0
-        && plan.object_input_mask == 0
-    {
+    if indexed_int_array_mask != 0 && plan.string_input_mask == 0 && plan.object_input_mask == 0 {
         let mut string_state = QuickStringSlotState::new(slot_base, 0);
         if let Some(kernel) = native_quick_long_mixed_kernel(op_array, plan, &[])
             && let Some(outcome) = run_native_quick_long_mixed_kernel(
@@ -324,14 +299,9 @@ unsafe fn run_quick_long_ops_loop(
     let resolved_object_ops = if plan.object_input_mask == 0 {
         Vec::new()
     } else {
-        let Some(resolved) = resolve_quick_object_ops(
-            eg,
-            op_array,
-            slot_base,
-            &slots,
-            &string_state,
-            plan,
-        ) else {
+        let Some(resolved) =
+            resolve_quick_object_ops(eg, op_array, slot_base, &slots, &string_state, plan)
+        else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         };
@@ -340,11 +310,9 @@ unsafe fn run_quick_long_ops_loop(
     let invariant_object_property_mask = if plan.object_input_mask == 0 {
         0
     } else {
-        let Some(mask) = prepare_quick_invariant_object_properties(
-            plan,
-            &resolved_object_ops,
-            &mut slots,
-        ) else {
+        let Some(mask) =
+            prepare_quick_invariant_object_properties(plan, &resolved_object_ops, &mut slots)
+        else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         };
@@ -357,11 +325,7 @@ unsafe fn run_quick_long_ops_loop(
             all(target_arch = "x86_64", target_os = "linux")
         )
     ))]
-    if let Some(kernel) = native_quick_long_mixed_kernel(
-        op_array,
-        plan,
-        &resolved_object_ops,
-    ) {
+    if let Some(kernel) = native_quick_long_mixed_kernel(op_array, plan, &resolved_object_ops) {
         if let Some(outcome) = run_native_quick_long_mixed_kernel(
             eg,
             frame,
@@ -375,25 +339,15 @@ unsafe fn run_quick_long_ops_loop(
             &kernel,
         )? {
             #[cfg(feature = "vm-stats")]
-            record_native_quick_outcome(
-                stats::JitRegionKind::TypedOpsLoop,
-                &outcome,
-            );
+            record_native_quick_outcome(stats::JitRegionKind::TypedOpsLoop, &outcome);
             return Ok(outcome);
         }
     }
-    if let Some(kernel) = quick_long_invariant_property_accumulate_kernel(
-        plan,
-        invariant_object_property_mask,
-    ) {
+    if let Some(kernel) =
+        quick_long_invariant_property_accumulate_kernel(plan, invariant_object_property_mask)
+    {
         return run_quick_long_invariant_property_accumulate_kernel(
-            eg,
-            frame,
-            op_array,
-            plan,
-            slot_base,
-            slots,
-            kernel,
+            eg, frame, op_array, plan, slot_base, slots, kernel,
         );
     }
     let mut object_call_recorder = QuickObjectCallRecorder {
@@ -456,8 +410,7 @@ unsafe fn run_quick_long_ops_loop(
                 next_target,
                 ..
             } => {
-                let condition = quick_long_operand(&slots, lhs)
-                    <= quick_long_operand(&slots, rhs);
+                let condition = quick_long_operand(&slots, lhs) <= quick_long_operand(&slots, rhs);
                 if let Some(slot) = condition_tmp {
                     slots[slot as usize] = i64::from(condition);
                     dirty_bool_mask |= 1u64 << slot;
@@ -593,31 +546,31 @@ unsafe fn run_quick_long_ops_loop(
                     }
                     fusion.next_target
                 } else {
-                let fetched = match index {
-                    QuickArrayIndex::ValueSlot(slot) => {
-                        let key = string_state.value(slot).as_str().unwrap_unchecked();
-                        string_fetch_cache.long_at(array, arrays[array as usize], key)
+                    let fetched = match index {
+                        QuickArrayIndex::ValueSlot(slot) => {
+                            let key = string_state.value(slot).as_str().unwrap_unchecked();
+                            string_fetch_cache.long_at(array, arrays[array as usize], key)
+                        }
+                        _ => arrays[array as usize].long_at(index, &slots, op_array),
+                    };
+                    let Some(fetched) = fetched else {
+                        commit_quick_long_ops_slots(
+                            slot_base,
+                            &slots,
+                            dirty_long_mask,
+                            dirty_bool_mask,
+                        );
+                        (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
+                        stats::inc_quick_loop_deoptimized(iterations);
+                        return Ok(QuickLoopOutcome::Deoptimized);
+                    };
+                    slots[result as usize] = fetched;
+                    dirty_long_mask |= 1u64 << result;
+                    if let Some(destination) = destination {
+                        slots[destination as usize] = fetched;
+                        dirty_long_mask |= 1u64 << destination;
                     }
-                    _ => arrays[array as usize].long_at(index, &slots, op_array),
-                };
-                let Some(fetched) = fetched else {
-                    commit_quick_long_ops_slots(
-                        slot_base,
-                        &slots,
-                        dirty_long_mask,
-                        dirty_bool_mask,
-                    );
-                    (*frame).opline = op_array.instructions.as_ptr().add(resume_ip);
-                    stats::inc_quick_loop_deoptimized(iterations);
-                    return Ok(QuickLoopOutcome::Deoptimized);
-                };
-                slots[result as usize] = fetched;
-                dirty_long_mask |= 1u64 << result;
-                if let Some(destination) = destination {
-                    slots[destination as usize] = fetched;
-                    dirty_long_mask |= 1u64 << destination;
-                }
-                next_target
+                    next_target
                 }
             }
             QuickLongOp::StoreArrayLong {
@@ -632,10 +585,8 @@ unsafe fn run_quick_long_ops_loop(
                 debug_assert!(!array_ptr.is_null());
                 match index {
                     QuickArrayIndex::Long(index) => {
-                        (*array_ptr).set_int(
-                            quick_long_operand(&slots, index),
-                            Value::long(stored),
-                        );
+                        (*array_ptr)
+                            .set_int(quick_long_operand(&slots, index), Value::long(stored));
                     }
                     QuickArrayIndex::StringLiteral(literal) => {
                         let key = op_array
@@ -837,8 +788,7 @@ unsafe fn run_quick_long_ops_loop(
                         dirty_long_mask,
                         dirty_bool_mask,
                     );
-                    (*frame).opline =
-                        op_array.instructions.as_ptr().add(add_resume_ip);
+                    (*frame).opline = op_array.instructions.as_ptr().add(add_resume_ip);
                     stats::inc_quick_loop_deoptimized(iterations);
                     return Ok(QuickLoopOutcome::Deoptimized);
                 }
@@ -881,8 +831,7 @@ unsafe fn run_quick_long_ops_loop(
                         Some(value) => {
                             slots[result as usize] = value;
                             slots[destination as usize] = value;
-                            dirty_long_mask |=
-                                (1u64 << result) | (1u64 << destination);
+                            dirty_long_mask |= (1u64 << result) | (1u64 << destination);
                             next_target
                         }
                         None => {
@@ -892,8 +841,7 @@ unsafe fn run_quick_long_ops_loop(
                                 dirty_long_mask,
                                 dirty_bool_mask,
                             );
-                            (*frame).opline =
-                                op_array.instructions.as_ptr().add(add_resume_ip);
+                            (*frame).opline = op_array.instructions.as_ptr().add(add_resume_ip);
                             stats::inc_quick_loop_deoptimized(iterations);
                             return Ok(QuickLoopOutcome::Deoptimized);
                         }
@@ -912,9 +860,7 @@ unsafe fn run_quick_long_ops_loop(
                 first_resume_ip,
                 second_resume_ip,
             } => {
-                let first = match slots[first_lhs as usize]
-                    .checked_add(slots[first_rhs as usize])
-                {
+                let first = match slots[first_lhs as usize].checked_add(slots[first_rhs as usize]) {
                     Some(value) => value,
                     None => {
                         commit_quick_long_ops_slots(
@@ -923,8 +869,7 @@ unsafe fn run_quick_long_ops_loop(
                             dirty_long_mask,
                             dirty_bool_mask,
                         );
-                        (*frame).opline =
-                            op_array.instructions.as_ptr().add(first_resume_ip);
+                        (*frame).opline = op_array.instructions.as_ptr().add(first_resume_ip);
                         stats::inc_quick_loop_deoptimized(iterations);
                         return Ok(QuickLoopOutcome::Deoptimized);
                     }
@@ -932,27 +877,24 @@ unsafe fn run_quick_long_ops_loop(
                 slots[first_result as usize] = first;
                 dirty_long_mask |= 1u64 << first_result;
 
-                let second = match slots[second_lhs as usize]
-                    .checked_add(slots[second_rhs as usize])
-                {
-                    Some(value) => value,
-                    None => {
-                        commit_quick_long_ops_slots(
-                            slot_base,
-                            &slots,
-                            dirty_long_mask,
-                            dirty_bool_mask,
-                        );
-                        (*frame).opline =
-                            op_array.instructions.as_ptr().add(second_resume_ip);
-                        stats::inc_quick_loop_deoptimized(iterations);
-                        return Ok(QuickLoopOutcome::Deoptimized);
-                    }
-                };
+                let second =
+                    match slots[second_lhs as usize].checked_add(slots[second_rhs as usize]) {
+                        Some(value) => value,
+                        None => {
+                            commit_quick_long_ops_slots(
+                                slot_base,
+                                &slots,
+                                dirty_long_mask,
+                                dirty_bool_mask,
+                            );
+                            (*frame).opline = op_array.instructions.as_ptr().add(second_resume_ip);
+                            stats::inc_quick_loop_deoptimized(iterations);
+                            return Ok(QuickLoopOutcome::Deoptimized);
+                        }
+                    };
                 slots[second_result as usize] = second;
                 slots[destination as usize] = second;
-                dirty_long_mask |=
-                    (1u64 << second_result) | (1u64 << destination);
+                dirty_long_mask |= (1u64 << second_result) | (1u64 << destination);
                 next_target
             }
             QuickLongOp::ObjectPropertyLong {
@@ -1091,8 +1033,7 @@ unsafe fn run_quick_long_ops_loop(
                         plan,
                         ..
                     } => {
-                        let object_arguments =
-                            call.arguments.map(QuickObjectLongArgument::Long);
+                        let object_arguments = call.arguments.map(QuickObjectLongArgument::Long);
                         evaluate_quick_object_long_method(
                             receiver,
                             user,
@@ -1383,12 +1324,7 @@ unsafe fn run_quick_long_ops_loop(
         if completed_backedge || next_target.op_index() == Some(plan.entry_op as usize) {
             iterations += 1;
             if iterations & 31 == 0 && eg.vm_interrupt.load(Ordering::Relaxed) {
-                commit_quick_long_ops_slots(
-                    slot_base,
-                    &slots,
-                    dirty_long_mask,
-                    dirty_bool_mask,
-                );
+                commit_quick_long_ops_slots(slot_base, &slots, dirty_long_mask, dirty_bool_mask);
                 string_state.commit();
                 let next_ip = plan.target_ip(next_target).unwrap_unchecked();
                 (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
@@ -1402,15 +1338,21 @@ unsafe fn run_quick_long_ops_loop(
             continue;
         }
 
-        commit_quick_long_ops_slots(
-            slot_base,
-            &slots,
-            dirty_long_mask,
-            dirty_bool_mask,
-        );
+        commit_quick_long_ops_slots(slot_base, &slots, dirty_long_mask, dirty_bool_mask);
         let next_ip = next_target.exit_ip().unwrap_unchecked();
         (*frame).opline = op_array.instructions.as_ptr().add(next_ip);
         stats::inc_quick_loop_completed(iterations);
         return Ok(QuickLoopOutcome::Completed);
     }
+}
+
+#[cfg(all(feature = "quick-loops", target_vendor = "apple"))]
+#[inline(always)]
+pub(super) unsafe fn run_quick_long_ops_loop_entry(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    plan: &QuickLongOpsLoop,
+) -> Result<QuickLoopOutcome, VmError> {
+    run_quick_long_ops_loop(eg, frame, op_array, plan)
 }

@@ -6217,6 +6217,17 @@ unsafe fn run_native_quick_long_straight_kernel(
 ))]
 include!("execute/native_mixed_runtime.rs");
 
+// Apple builds isolate the large hot dispatcher as a child module to keep its
+// code generation stable when unrelated cold handlers are added. Linux keeps
+// the original textual include because that is its admitted x86 layout.
+#[cfg(all(feature = "quick-loops", target_vendor = "apple"))]
+#[path = "execute/quick_dispatch.rs"]
+mod quick_dispatch;
+
+#[cfg(all(feature = "quick-loops", target_vendor = "apple"))]
+use quick_dispatch::run_quick_long_ops_loop_entry as run_quick_long_ops_loop;
+
+#[cfg(all(feature = "quick-loops", not(target_vendor = "apple")))]
 include!("execute/quick_dispatch.rs");
 
 #[inline(never)]

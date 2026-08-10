@@ -7575,6 +7575,59 @@ only the Rust standard library. Final-alias resource release remains the next
 lifetime boundary; broader line parsers such as CSV should build on this
 cursor contract rather than add a parallel buffered-stream abstraction.
 
+### Streaming CSV records and cold-layout isolation (2026-08-10)
+
+The next stream slice implements `fgetcsv()` directly on the established
+seekable cursor contract, using only the Rust standard library. `CsvParser` is
+an incremental byte state machine rather than a second buffered-stream layer.
+It retains only the current record, continues quoted fields across arbitrary
+physical lines, handles doubled enclosures and PHP's retained escape byte,
+and uses fallible `Vec` growth. A positive length constrains the first physical
+read exactly; an enclosure still open at that boundary continues to the end of
+the logical record. Parser or allocation failure rewinds every consumed byte.
+
+Differential probes against PHP 8.5.9 established the byte-level edge rules:
+leading horizontal whitespace before an opening enclosure is discarded,
+quotes in unquoted fields remain literal, bytes after a closing enclosure are
+appended, a blank record is `[null]`, delimiter-only fields are empty strings,
+CRLF is stripped outside quotes and retained inside them, and a newline remains
+the record boundary even when selected as the separator. The enclosure wins
+when enclosure and escape are equal. The first compatibility slice returns
+`false` for a negative length or invalid multi-byte control argument; PHP 8.5
+raises `ValueError` for those argument-validation cases, which remains a
+deliberate error-surface follow-up.
+
+Adding a cold handler initially changed placement of the large
+`run_quick_long_ops_loop` function enough to move unrelated runtime timings.
+Sampling still placed approximately 97 percent of the ledger workload in that
+same function, identifying code generation and placement rather than new CSV
+work as the cause. The accepted boundary keeps the established textual
+quick-dispatch include on Linux. Apple builds compile the dispatcher as a real
+child module and place CSV parser/handler code in a dedicated cold text
+section; the Apple registration is append-only so existing handler order stays
+stable. Comments at each target boundary record this measured constraint.
+
+A clean 20-pair ARM64 default-runtime gate on the admitted code reports
+-0.656%/+0.318%/+0.678%/-1.062%/-0.126% for scalar, packed array, String,
+order and ledger, with a later focused final ledger confirmation at -0.687%.
+A clean code-equivalent x86-64 gate reports
++0.497%/+0.386%/-0.071%/-0.434%/+0.533%. One final full x86-64 run under
+system load measured +1.367% for ledger while its other four controls stayed
+between -1.224% and +0.342%; the independent 20-pair ledger rerun measured
++0.757%, below the +1% ceiling. The final coroutine gates pass at
+-0.928%/-3.618%/+0.265% on ARM64 and -2.920%/+0.316%/+0.765% on x86-64.
+
+Both hosts pass 186 no-default library tests, 288 ARM64 or 313 x86-64
+all-feature library tests, 14 stream scenarios and complete
+all-feature/all-target compilation. Final ARM64/x86-64 default release
+SHA-256 values are
+`532ec13e40fc001c6202444695d63d3f99501c09168ef0454d3c5b6640f2517c` and
+`5d2e7ba750f037414078617ec717c967cc2a38c2536df938595f9a8c1549d20a`.
+`Cargo.toml` and `Cargo.lock` remain unchanged: the complete CSV path adds no
+external dependency. `fputcsv()` and exact PHP argument-error construction are
+the next bounded CSV compatibility slices; final-alias stream release remains
+an independent lifetime boundary.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
