@@ -8006,15 +8006,16 @@ opt-in `stream-context` feature. It introduces the request-owned
 `stream_context_get_options()` and `stream_context_get_params()`. Wrapper
 options are normalized into nested PHP arrays; parameters retain a validated
 `notification` callback. The feature-only `fopen()`, `file_get_contents()`,
-`file_put_contents()` and `file()` paths accept this resource and attach an
-owned snapshot to newly opened streams.
+`file_put_contents()` and `file()` paths accept this resource. PHP uses the
+Context for the open operation but gives the resulting stream independent,
+initially empty Context state.
 
 PHP 8.5.9 differential tests lock the covered weak types, validation order,
-resource-kind errors, option shape and getter results. Mutation APIs,
-wrapper-specific interpretation of stored options and include-path search are
-not claimed by this slice. The implementation reuses the existing callback,
-array, resource and stream owners and adds no external crate; `Cargo.lock`
-remains unchanged.
+resource-kind errors, option shape and getter results. Mutation APIs are added
+in the independently measured follow-up below; wrapper-specific interpretation
+of stored options and include-path search remain unclaimed. The implementation
+reuses the existing callback, array, resource and stream owners and adds no
+external crate; `Cargo.lock` remains unchanged.
 
 With the feature disabled, ARM64 retains the exact 2,818,048-byte `__TEXT` and
 monitored addresses. Its noisy full 20-pair run ended at
@@ -8026,6 +8027,43 @@ retains the post-refactor 3388067/51816/3048 text/data/bss, 0x988-byte
 ARM64 and 195/186/325 on x86-64, with 16 feature-only stream, 28 all-feature
 stream and 11 all-feature file scenarios plus all-target compilation on both
 hosts.
+
+### Mutable Stream Context state checkpoint (2026-08-10)
+
+The follow-up implements `stream_context_set_option()`,
+`stream_context_set_options()` and `stream_context_set_params()` for both
+Context resources and ordinary streams. Wrapper options merge by string key;
+numeric inner keys are ignored, invalid outer shapes retain PHP's exact
+ValueError and weak wrapper/option strings preserve the probed null and omitted
+argument distinctions. `set_params()` recognizes a validated `notification`
+callback plus nested `options`; PHP's observable partial-update order is kept
+when a valid callback precedes an invalid options shape.
+
+The original 628-line implementation is divided into a 374-line create/get/open
+module and a 301-line mutation child module. The state owner remains one
+`StreamContext`; the split adds no indirection, runtime dependency or default
+registration. The benchmark gate can now reuse explicitly supplied executables
+for paired reruns, avoiding compile-induced thermal drift without changing its
+statistics.
+
+ARM64 `__text` is byte-identical to checkpoint `7ec3224` at SHA-256
+`feae31bd9f8de1ce4b08aaf5da5a106c28c61c6592ee91d6d0429cd35a528a2a`,
+with exact 2,818,048-byte `__TEXT` and monitored symbols. Its historical batch
+was thermally unstable at -1.168%/+1.439%/+1.459%/-5.998%/-1.068%; only UUID
+and five line-metadata bytes differ outside identical executable code.
+
+X86-64 retains exact 3388067/51816/3048 text/data/bss, `.rphp_cold` and hot
+addresses. `.text` matches `7ec3224` at SHA-256
+`66b53177492bbcc339cf7383a7770de330eed12d40b85e1e767b18db29096204`, and the
+build-free pinned gate against that checkpoint passes at
++0.078%/-0.036%/-1.033%/-0.144%/+0.691%. The separately reproduced +5.077%
+String drift against historical `f5d4e68` is present in both identical
+checkpoint binaries and remains explicit follow-up performance work.
+
+Library matrices pass 195/186/300 on ARM64 and 195/186/325 on x86-64. The
+feature-only/all-feature stream targets pass 17/29 scenarios, file coverage
+remains 11, and all-feature/all-target compilation passes on both hosts. No
+feature, crate or lockfile change is involved.
 
 ## Phase 6: optional numerical computing and accelerator platform
 

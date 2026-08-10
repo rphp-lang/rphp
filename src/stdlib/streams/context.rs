@@ -9,6 +9,12 @@ use super::{
     argument, argument_string, insert_stream, optional_argument, return_value, with_stream,
 };
 
+mod mutate;
+
+pub(super) use mutate::{
+    fn_stream_context_set_option, fn_stream_context_set_options, fn_stream_context_set_params,
+};
+
 #[cold]
 pub(super) fn fn_stream_context_create(
     execute_data: *mut ExecuteData,
@@ -32,15 +38,26 @@ pub(super) fn fn_stream_context_create(
         Err(()) => return Ok(()),
     };
     let params = match nullable_array_argument(execute_data, 1, eg, "params") {
-        Ok(Some(params)) => match normalize_params(params, eg, execute_data) {
-            Some(params) => params,
-            None => return Ok(()),
-        },
-        Ok(None) => PhpArray::new(),
+        Ok(params) => params,
         Err(()) => return Ok(()),
     };
 
-    let context = StreamContext { options, params };
+    let mut context = StreamContext {
+        options,
+        params: PhpArray::new(),
+    };
+    if let Some(params) = params
+        && !apply_params(
+            &mut context,
+            params,
+            eg,
+            execute_data,
+            "stream_context_create",
+            "options",
+        )
+    {
+        return Ok(());
+    }
     #[cfg(feature = "resource-lifetime")]
     let value = super::super::resource::insert_value_for_request(eg, "stream-context", context);
     #[cfg(not(feature = "resource-lifetime"))]
@@ -118,22 +135,15 @@ pub(super) fn fn_fopen(
         Ok(context) => context,
         Err(()) => return Ok(()),
     };
-    let context = match context_id {
-        Some(context) => match context_snapshot(eg, context) {
-            Some(context) => Some(context),
-            None => {
-                invalid_context_error(eg, "fopen");
-                return Ok(());
-            }
-        },
-        None => None,
-    };
+    if let Some(context) = context_id
+        && context_snapshot(eg, context).is_none()
+    {
+        invalid_context_error(eg, "fopen");
+        return Ok(());
+    }
 
     let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
-        Ok(mut stream) => {
-            if let Some(context) = context {
-                stream.attach_context(context);
-            }
+        Ok(stream) => {
             #[cfg(feature = "resource-lifetime")]
             let value = insert_stream(eg, stream);
             #[cfg(not(feature = "resource-lifetime"))]
@@ -216,7 +226,7 @@ fn nullable_array_argument<'a>(
     Ok(Some(array))
 }
 
-fn normalize_options(options: &PhpArray) -> Option<PhpArray> {
+pub(super) fn normalize_options(options: &PhpArray) -> Option<PhpArray> {
     let mut normalized = PhpArray::new();
     for (wrapper, value) in options.iter() {
         let ArrayKey::String(wrapper) = wrapper else {
@@ -229,36 +239,97 @@ fn normalize_options(options: &PhpArray) -> Option<PhpArray> {
                 normalized_wrapper.set_str(&name, value.clone());
             }
         }
-        normalized.set_str(&wrapper, Value::array(normalized_wrapper));
+        if !normalized_wrapper.is_empty() {
+            normalized.set_str(&wrapper, Value::array(normalized_wrapper));
+        }
     }
     Some(normalized)
 }
 
-fn normalize_params(
+pub(super) fn merge_options(options: &mut PhpArray, updates: &PhpArray) {
+    for (wrapper, value) in updates.iter() {
+        let ArrayKey::String(wrapper) = wrapper else {
+            continue;
+        };
+        let Some(updates) = value.as_array() else {
+            continue;
+        };
+        let mut wrapper_options = options
+            .get_str(&wrapper)
+            .and_then(Value::as_array)
+            .cloned()
+            .unwrap_or_else(PhpArray::new);
+        for (name, value) in updates.iter() {
+            if let ArrayKey::String(name) = name {
+                wrapper_options.set_str(&name, value.clone());
+            }
+        }
+        if !wrapper_options.is_empty() {
+            options.set_str(&wrapper, Value::array(wrapper_options));
+        }
+    }
+}
+
+pub(super) fn set_option(options: &mut PhpArray, wrapper: &str, name: &str, value: Value) {
+    let mut wrapper_options = options
+        .get_str(wrapper)
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_else(PhpArray::new);
+    wrapper_options.set_str(name, value);
+    options.set_str(wrapper, Value::array(wrapper_options));
+}
+
+pub(super) fn apply_params(
+    context: &mut StreamContext,
     params: &PhpArray,
     eg: &mut ExecutorGlobals,
     execute_data: *mut ExecuteData,
-) -> Option<PhpArray> {
-    let mut normalized = PhpArray::new();
-    let Some(notification) = params.get_str("notification") else {
-        return Some(normalized);
-    };
-    if super::super::resolve_callback_at_callsite(notification, eg, execute_data).is_none() {
-        let detail = notification.as_str().map_or_else(
-            || "no array or string given".to_string(),
-            |function| format!("function \"{function}\" not found or invalid function name"),
-        );
-        argument_error(
-            eg,
-            "TypeError",
-            format!(
-                "stream_context_create(): Argument #1 ($options) must be an array with valid callbacks as values, {detail}"
-            ),
-        );
-        return None;
+    function: &str,
+    callback_argument: &str,
+) -> bool {
+    if let Some(notification) = params.get_str("notification") {
+        if super::super::resolve_callback_at_callsite(notification, eg, execute_data).is_none() {
+            let detail = notification.as_str().map_or_else(
+                || "no array or string given".to_string(),
+                |function| format!("function \"{function}\" not found or invalid function name"),
+            );
+            argument_error(
+                eg,
+                "TypeError",
+                format!(
+                    "{function}(): Argument #1 (${callback_argument}) must be an array with valid callbacks as values, {detail}"
+                ),
+            );
+            return false;
+        }
+        context.params.set_str("notification", notification.clone());
     }
-    normalized.set_str("notification", notification.clone());
-    Some(normalized)
+
+    if let Some(options) = params.get_str("options") {
+        let Some(options) = options.as_array() else {
+            argument_error(
+                eg,
+                "TypeError",
+                "Invalid stream/context parameter".to_string(),
+            );
+            return false;
+        };
+        let Some(options) = normalize_options(options) else {
+            invalid_options_error(eg);
+            return false;
+        };
+        merge_options(&mut context.options, &options);
+    }
+    true
+}
+
+pub(super) fn invalid_options_error(eg: &mut ExecutorGlobals) {
+    argument_error(
+        eg,
+        "ValueError",
+        "Options should have the form [\"wrappername\"][\"optionname\"] = $value".to_string(),
+    );
 }
 
 fn stream_or_context_argument(
@@ -295,7 +366,7 @@ fn stream_or_context_argument(
     None
 }
 
-fn empty_context() -> StreamContext {
+pub(super) fn empty_context() -> StreamContext {
     StreamContext {
         options: PhpArray::new(),
         params: PhpArray::new(),

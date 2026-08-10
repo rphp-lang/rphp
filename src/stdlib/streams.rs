@@ -78,6 +78,30 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             1,
             &["context"],
         ),
+        #[cfg(feature = "stream-context")]
+        (
+            "stream_context_set_option",
+            context::fn_stream_context_set_option,
+            4,
+            2,
+            &["context", "wrapper_or_options", "option_name", "value"],
+        ),
+        #[cfg(feature = "stream-context")]
+        (
+            "stream_context_set_options",
+            context::fn_stream_context_set_options,
+            2,
+            2,
+            &["context", "options"],
+        ),
+        #[cfg(feature = "stream-context")]
+        (
+            "stream_context_set_params",
+            context::fn_stream_context_set_params,
+            2,
+            2,
+            &["context", "params"],
+        ),
         ("fread", fn_fread, 2, 2, &["stream", "length"]),
         #[cfg(feature = "stream-contents")]
         (

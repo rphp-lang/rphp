@@ -18,6 +18,8 @@ pairs=${RPHP_RUNTIME_GATE_PAIRS:-20}
 limit=${RPHP_RUNTIME_GATE_LIMIT:-1}
 warmups=${RPHP_RUNTIME_GATE_WARMUPS:-4}
 only=${RPHP_RUNTIME_GATE_ONLY:-}
+candidate_binary=${RPHP_RUNTIME_GATE_CANDIDATE_BINARY:-}
+baseline_binary=${RPHP_RUNTIME_GATE_BASELINE_BINARY:-}
 
 case $pairs in
     '' | *[!0-9]*)
@@ -73,6 +75,21 @@ build_runtime() {
     printf '%s\n' "$binary"
 }
 
+resolve_runtime() {
+    source_root=$1
+    target_root=$2
+    supplied_binary=$3
+    if [ -n "$supplied_binary" ]; then
+        if [ ! -x "$supplied_binary" ]; then
+            echo "supplied runtime executable not found: $supplied_binary" >&2
+            return 1
+        fi
+        printf '%s\n' "$supplied_binary"
+        return
+    fi
+    build_runtime "$source_root" "$target_root"
+}
+
 measure_once() {
     binary=$1
     workload=$2
@@ -125,10 +142,18 @@ median() {
         '
 }
 
-echo "building candidate from $candidate_root" >&2
-candidate=$(build_runtime "$candidate_root" "$candidate_target")
-echo "building baseline from $baseline_root" >&2
-baseline=$(build_runtime "$baseline_root" "$baseline_target")
+if [ -n "$candidate_binary" ]; then
+    echo "using supplied candidate $candidate_binary" >&2
+else
+    echo "building candidate from $candidate_root" >&2
+fi
+candidate=$(resolve_runtime "$candidate_root" "$candidate_target" "$candidate_binary")
+if [ -n "$baseline_binary" ]; then
+    echo "using supplied baseline $baseline_binary" >&2
+else
+    echo "building baseline from $baseline_root" >&2
+fi
+baseline=$(resolve_runtime "$baseline_root" "$baseline_target" "$baseline_binary")
 
 while read -r workload repetitions; do
     if [ -n "$only" ] && [ "$workload" != "$only" ]; then

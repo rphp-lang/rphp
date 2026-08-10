@@ -103,7 +103,7 @@ fn line_reads_preserve_newlines_limits_cursor_and_eof() {
 
 #[test]
 #[cfg(feature = "stream-context")]
-fn stream_context_resources_round_trip_options_params_and_open_streams() {
+fn stream_context_resources_round_trip_options_params_and_independent_streams() {
     assert_eq!(
         run_php(
             "<?php
@@ -112,28 +112,93 @@ fn stream_context_resources_round_trip_options_params_and_open_streams() {
                     'file' => ['probe' => 'yes'],
                     'http' => ['method' => 'POST'],
                 ],
-                ['notification' => 'strlen', 'ignored' => 'strlen']
+                [
+                    'notification' => 'strlen',
+                    'ignored' => 'strlen',
+                    'options' => ['file' => ['from_params' => 'merged']],
+                ]
             );
             echo gettype($context); echo ':';
             echo get_resource_type($context); echo ':';
             $options = stream_context_get_options($context);
             echo $options['file']['probe']; echo ':';
+            echo $options['file']['from_params']; echo ':';
             echo $options['http']['method']; echo ':';
             $params = stream_context_get_params($context);
             echo count($params); echo ':';
             echo $params['notification']; echo ':';
-            echo $params['options']['file']['probe']; echo ':';
+            echo $params['options']['file']['from_params']; echo ':';
 
             $stream = fopen('php://memory', 'w+', false, $context);
             echo get_resource_type($stream); echo ':';
             fwrite($stream, 'ok'); rewind($stream); echo fread($stream, 2); echo ':';
             $streamOptions = stream_context_get_options($stream);
-            echo $streamOptions['http']['method']; echo ':';
+            echo count($streamOptions); echo ':';
             $streamParams = stream_context_get_params($stream);
-            echo $streamParams['options']['file']['probe'];
+            echo count($streamParams['options']); echo ':';
+            stream_context_set_option($stream, 'http', 'method', 'STREAM');
+            $streamOptions = stream_context_get_options($stream);
+            $contextOptions = stream_context_get_options($context);
+            echo $streamOptions['http']['method']; echo ':';
+            echo $contextOptions['http']['method'];
             "
         ),
-        "resource:stream-context:yes:POST:2:strlen:yes:stream:ok:POST:yes"
+        "resource:stream-context:yes:merged:POST:2:strlen:merged:stream:ok:0:0:STREAM:POST"
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-context")]
+fn stream_context_mutators_merge_context_and_stream_state() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $context = stream_context_create(
+                ['file' => ['a' => 1, 'keep' => 2]],
+                ['notification' => 'strlen']
+            );
+            echo stream_context_set_option($context, 'file', 'a', 9); echo ':';
+            echo stream_context_set_options($context, [
+                'file' => ['extra' => 3],
+                'http' => ['method' => 'POST'],
+            ]); echo ':';
+            echo stream_context_set_params($context, [
+                'notification' => 'trim',
+                'options' => ['http' => ['timeout' => 4]],
+                'ignored' => true,
+            ]); echo ':';
+            $options = stream_context_get_options($context);
+            echo $options['file']['a']; echo ':';
+            echo $options['file']['keep']; echo ':';
+            echo $options['file']['extra']; echo ':';
+            echo $options['http']['method']; echo ':';
+            echo $options['http']['timeout']; echo ':';
+            $params = stream_context_get_params($context);
+            echo $params['notification']; echo ':';
+            try {
+                stream_context_set_params($context, [
+                    'notification' => 'strlen',
+                    'options' => ['broken' => 1],
+                ]);
+            } catch (ValueError $error) {
+                echo get_class($error); echo ':';
+            }
+            $params = stream_context_get_params($context);
+            echo $params['notification']; echo ':';
+
+            $stream = fopen('php://memory', 'w+');
+            stream_context_set_options($stream, ['file' => ['stream' => 5]]);
+            stream_context_set_params($stream, [
+                'notification' => 'strlen',
+                'options' => ['http' => ['stream' => 6]],
+            ]);
+            $streamParams = stream_context_get_params($stream);
+            echo $streamParams['notification']; echo ':';
+            echo $streamParams['options']['file']['stream']; echo ':';
+            echo $streamParams['options']['http']['stream'];
+            "
+        ),
+        "1:1:1:9:2:3:POST:4:trim:ValueError:strlen:strlen:5:6"
     );
 }
 
@@ -168,6 +233,31 @@ fn stream_context_argument_errors_match_php_classes_and_messages() {
             fclose($stream);
             try { stream_context_get_params($stream); }
             catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_option(false, 'file', 'x', 1); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            $context = stream_context_create();
+            try { stream_context_set_options($context, false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_options($context, ['file' => 1]); }
+            catch (ValueError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_option($context, 'file', 'x'); }
+            catch (ValueError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_option($context, ['file' => ['x' => 1]], null, 1); }
+            catch (ValueError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_params($context, ['notification' => 'missing_stream_context_callback']); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_params($context, ['options' => false]); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_set_params($stream, []); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
             "
         ),
         concat!(
@@ -178,7 +268,15 @@ fn stream_context_argument_errors_match_php_classes_and_messages() {
             "|TypeError:fopen(): Argument #3 ($use_include_path) must be of type bool, array given",
             "|TypeError:fopen(): Argument #4 ($context) must be of type resource or null, false given",
             "|TypeError:fopen(): supplied resource is not a valid Stream-Context resource",
-            "|TypeError:stream_context_get_params(): Argument #1 ($context) must be a valid stream/context"
+            "|TypeError:stream_context_get_params(): Argument #1 ($context) must be a valid stream/context",
+            "|TypeError:stream_context_set_option(): Argument #1 ($context) must be of type resource, false given",
+            "|TypeError:stream_context_set_options(): Argument #2 ($options) must be of type array, false given",
+            "|ValueError:Options should have the form [\"wrappername\"][\"optionname\"] = $value",
+            "|ValueError:stream_context_set_option(): Argument #4 ($value) must be provided when argument #2 ($wrapper_or_options) is a string",
+            "|ValueError:stream_context_set_option(): Argument #4 ($value) cannot be provided when argument #2 ($wrapper_or_options) is an array",
+            "|TypeError:stream_context_set_params(): Argument #1 ($context) must be an array with valid callbacks as values, function \"missing_stream_context_callback\" not found or invalid function name",
+            "|TypeError:Invalid stream/context parameter",
+            "|TypeError:stream_context_set_params(): Argument #1 ($context) must be a valid stream/context"
         )
     );
 }

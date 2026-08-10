@@ -2129,9 +2129,10 @@ The Stream Context compatibility slice preserves the same default codegen
 boundary. `stream-context` compiles in a request-owned Context resource,
 normalization of nested wrapper options, validation of the supported
 `notification` callback parameter and checked Context arguments for `fopen()`
-and the three expanded file APIs. Streams retain an owned snapshot rather than
-a borrowed registry reference. When the feature is absent, the original
-handlers and `PhpStream` layout remain selected.
+and the three expanded file APIs. A supplied Context affects opening but is not
+copied into the resulting stream; stream state is independent and initially
+empty. When the feature is absent, the original handlers and `PhpStream` layout
+remain selected.
 
 Default ARM64 stays at the exact 2,818,048-byte `__TEXT` with unchanged
 quick-long-loop and String-commit addresses. The full 20-pair run was noisy:
@@ -2142,6 +2143,40 @@ required isolated ledger rerun passed at +0.347%. X86-64 remains exact at
 post-refactor hot addresses; its pinned gate passes at
 -0.287%/+0.217%/-0.693%/-0.694%/+0.049%.
 
-The slice adds no crate and leaves `Cargo.lock` unchanged. Mutable Context APIs,
-wrapper-specific option effects and include-path lookup remain separate
-compatibility work rather than being folded into a default-runtime change.
+The slice adds no crate and leaves `Cargo.lock` unchanged. Mutable Context APIs
+follow in the next measured slice; wrapper-specific option effects and
+include-path lookup remain separate compatibility work.
+
+The mutable follow-up adds the singular/array option setters and parameter
+setter without changing that default boundary. Context resources and streams
+own independent `StreamContext` values. Options merge by wrapper/name;
+`notification` is resolved through the existing callback machinery, nested
+parameter `options` merge through the same normalizer, and the probed partial
+update order is retained when later option validation fails. Setter ownership
+and weak argument policy live in the 301-line `context/mutate.rs` child instead
+of growing the 374-line create/get/open module.
+
+The gate learned optional prebuilt candidate/baseline inputs. This retains the
+same order-alternated median-ratio calculation while allowing noisy reruns to
+avoid back-to-back release compilations. It also made the admission evidence
+more precise: current ARM64 `__text` is byte-identical to checkpoint `7ec3224`
+at SHA-256
+`feae31bd9f8de1ce4b08aaf5da5a106c28c61c6592ee91d6d0429cd35a528a2a`.
+`__TEXT`, quick-long, array-push/kernel and String-commit placement are exact;
+the only loaded-segment differences are UUID and five line-metadata bytes.
+
+The historical ARM64 batch remained thermally unstable at
+-1.168%/+1.439%/+1.459%/-5.998%/-1.068%. X86-64 supplies the stable direct
+comparison: exact 3388067/51816/3048 text/data/bss, exact monitored addresses,
+exact 0x988-byte `.rphp_cold`, and byte-identical `.text` SHA-256
+`66b53177492bbcc339cf7383a7770de330eed12d40b85e1e767b18db29096204`.
+Its build-free pinned 20-pair gate versus `7ec3224` passes at
++0.078%/-0.036%/-1.033%/-0.144%/+0.691%.
+
+A separate no-build comparison against historical `f5d4e68` now reproduces a
++5.077% String drift in both identical immediate-checkpoint binaries. That is
+a cumulative pre-existing performance investigation, not a delta caused by
+feature-only setters. The functional matrices remain 195/186/300 on ARM64 and
+195/186/325 on x86-64, with 17 feature-only and 29 all-feature stream scenarios
+plus 11 file scenarios. No external library, Cargo feature or lockfile change
+is introduced.

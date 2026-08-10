@@ -1494,20 +1494,21 @@ Phase 5 now has a request-owned `stream-context` resource behind the independent
 into nested PHP arrays and retains the supported `notification` callback
 parameter after validating it through the existing callback resolver.
 `stream_context_get_options()` and `stream_context_get_params()` expose the
-stored state for both Context resources and streams opened with a Context.
+stored state for both Context resources and open streams.
 
 The expanded `fopen()`, `file_get_contents()`, `file_put_contents()` and
 `file()` handlers accept only a valid Stream Context resource and preserve PHP
-8.5.9 validation order and exact covered TypeError/ValueError messages. A
-stream receives an owned snapshot at open time, so closing or releasing the
-source Context cannot invalidate the stream. Default handlers, resource layout
-and registration remain compiled exactly as before when the feature is off.
+8.5.9 validation order and exact covered TypeError/ValueError messages. PHP
+uses the supplied Context while opening but does not copy its state into the
+new stream; the stream therefore starts with its own empty Context state.
+Default handlers, resource layout and registration remain compiled exactly as
+before when the feature is off.
 
-This is deliberately immutable substrate. `stream_context_set_option(s)()`,
-`stream_context_set_params()`, wrapper-specific consumption of stored options
-and configurable include-path lookup remain independent follow-up slices. The
-implementation uses only existing runtime types and the standard library; no
-crate is added and `Cargo.lock` is unchanged.
+The first checkpoint deliberately limits the surface to creation, reads and
+validated file opens. Mutators follow as a separate measured slice below;
+wrapper-specific consumption of stored options and configurable include-path
+lookup remain independent work. The implementation uses only existing runtime
+types and the standard library; no crate is added and `Cargo.lock` is unchanged.
 
 ARM64 keeps the exact 2,818,048-byte default `__TEXT`, quick-long-loop and
 String-commit addresses. Its noisy full 20-pair gate reported
@@ -1522,6 +1523,53 @@ Default/no-default/all-feature library matrices pass 195/186/300 on ARM64 and
 195/186/325 on x86-64. Stream Context-only coverage passes 16 stream scenarios;
 the all-feature surface passes 28 stream and 11 file scenarios, and complete
 all-feature/all-target compilation passes on both hosts.
+
+### Mutable Stream Context state checkpoint (2026-08-10)
+
+PHP 8.5.9 differential probes corrected the initial stream-attachment
+assumption and define the mutable surface. `stream_context_set_option()` accepts
+the legacy two-argument option-array form or the four-argument wrapper form;
+`stream_context_set_options()` exposes the non-deprecated array form, and
+`stream_context_set_params()` updates callbacks and nested options. Context
+resources and streams own independent state, and an ordinary stream lazily
+creates its empty Context state on the first mutation.
+
+Option updates merge by wrapper and option name. Empty or numeric-only inner
+arrays add nothing, invalid top-level shapes raise the PHP ValueError, and weak
+string conversion plus omitted/null argument distinctions follow the probed
+error order. Parameters retain the last valid `notification` callback and can
+merge an `options` array. PHP applies a valid callback before validating that
+array, so a later options error deliberately preserves the callback update.
+Unknown parameter keys remain ignored.
+
+The 628-line prototype was split before admission: the create/get/open owner is
+374 lines and `context/mutate.rs` owns 301 lines of setters and their type
+policy. There is no second state abstraction. The runtime gate now optionally
+accepts prebuilt candidate and baseline executables, allowing thermal-noise
+reruns to use the identical paired statistic without two preceding release
+compilations.
+
+The default ARM64 `__text` bytes match checkpoint `7ec3224` at SHA-256
+`feae31bd9f8de1ce4b08aaf5da5a106c28c61c6592ee91d6d0429cd35a528a2a`;
+`__TEXT` remains 2,818,048 bytes and all four monitored loop/string symbols are
+exact. Only Mach-O UUID and five line-metadata bytes differ in loaded segments.
+The historical full batch was thermally unstable at
+-1.168%/+1.439%/+1.459%/-5.998%/-1.068%, so it is not used to invent a runtime
+delta for byte-identical code.
+
+X86-64 likewise retains exact 3388067/51816/3048 text/data/bss, monitored
+addresses and 0x988-byte `.rphp_cold`; its `.text` SHA-256 matches `7ec3224` at
+`66b53177492bbcc339cf7383a7770de330eed12d40b85e1e767b18db29096204`.
+The build-free CPU-pinned 20-pair gate against that immediate checkpoint passes
+at +0.078%/-0.036%/-1.033%/-0.144%/+0.691%. A separate historical `f5d4e68`
+String comparison now reproduces a pre-existing +5.077% cumulative drift in
+both identical checkpoint binaries; it is tracked as follow-up performance
+work, not attributed to this feature-only slice.
+
+Library matrices remain 195/186/300 on ARM64 and 195/186/325 on x86-64.
+Feature-only stream coverage grows from 16 to 17 scenarios and all-feature
+coverage from 28 to 29; 11 file scenarios and all-feature/all-target compilation
+pass on both hosts. No feature, crate or lockfile change is involved.
 
 ### Performance gates
 

@@ -177,8 +177,11 @@ impl PhpStream {
     }
 
     #[cfg(feature = "stream-context")]
-    pub(crate) fn attach_context(&mut self, context: StreamContext) {
-        self.context = Some(context);
+    pub(crate) fn context_mut(&mut self) -> &mut StreamContext {
+        self.context.get_or_insert_with(|| StreamContext {
+            options: PhpArray::new(),
+            params: PhpArray::new(),
+        })
     }
 
     #[cfg(feature = "stream-context")]
