@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::ClassDef;
-#[cfg(feature = "php-generics-reified")]
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, ReifiedBinding, ReifiedMethodContract};
 use crate::parser::Visibility;
@@ -38,9 +38,10 @@ struct ReifiedMethodContractBinding {
     contract: std::rc::Rc<ReifiedMethodContract>,
 }
 
-#[cfg(feature = "php-generics-reified")]
-struct ReifiedPropertyContractBinding {
-    binding: ReifiedBinding,
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+struct GenericPropertyContractBinding {
+    declaration: u32,
+    use_site: Option<u32>,
     property: Box<str>,
     expected: GenericType,
 }
@@ -186,8 +187,8 @@ pub struct ExecutorGlobals {
     /// One-entry fully substituted property contract. Cold resolution may
     /// compose an arbitrary inheritance chain; warm writes only compare the
     /// receiver binding/name and validate against this owned type.
-    #[cfg(feature = "php-generics-reified")]
-    reified_property_contract_cache: std::cell::RefCell<Option<ReifiedPropertyContractBinding>>,
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    generic_property_contract_cache: std::cell::RefCell<Option<GenericPropertyContractBinding>>,
 }
 
 impl ExecutorGlobals {
@@ -219,8 +220,8 @@ impl ExecutorGlobals {
             active_reified_member_calls: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_method_contract_cache: std::cell::RefCell::new(None),
-            #[cfg(feature = "php-generics-reified")]
-            reified_property_contract_cache: std::cell::RefCell::new(None),
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -269,8 +270,8 @@ impl ExecutorGlobals {
             active_reified_member_calls: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_method_contract_cache: std::cell::RefCell::new(None),
-            #[cfg(feature = "php-generics-reified")]
-            reified_property_contract_cache: std::cell::RefCell::new(None),
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            generic_property_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,

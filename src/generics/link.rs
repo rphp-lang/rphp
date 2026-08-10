@@ -80,17 +80,25 @@ impl GenericMetadata {
         Ok(())
     }
 
+    pub fn find_class_like_index(&self, owner: &str) -> Option<u32> {
+        self.declarations
+            .iter()
+            .position(|declaration| {
+                matches!(
+                    declaration.kind,
+                    GenericDeclarationKind::Class
+                        | GenericDeclarationKind::Interface
+                        | GenericDeclarationKind::Trait
+                ) && self
+                    .symbol(declaration.owner)
+                    .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
+            })
+            .map(|index| index as u32)
+    }
+
     pub(super) fn find_class_like(&self, owner: &str) -> Option<&GenericDeclaration> {
-        self.declarations.iter().find(|declaration| {
-            matches!(
-                declaration.kind,
-                GenericDeclarationKind::Class
-                    | GenericDeclarationKind::Interface
-                    | GenericDeclarationKind::Trait
-            ) && self
-                .symbol(declaration.owner)
-                .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
-        })
+        self.find_class_like_index(owner)
+            .and_then(|index| self.declarations.get(index as usize))
     }
 }
 

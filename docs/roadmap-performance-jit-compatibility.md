@@ -8555,8 +8555,9 @@ Generic instance properties now resolve through the same composed inheritance
 graph as methods. An own declaration wins; otherwise direct and transitive
 class ancestors plus generic traits are searched with their effective type
 arguments. Reified writes validate the fully substituted property type, while
-bound-erased writes validate the defining declaration's erased bound and keep
-an unbounded parameter as `mixed`. The property IC remains keyed by the
+bound-erased writes validate the child's linked signature: a remaining child
+parameter erases to that child's bound and an unbounded parameter remains
+`mixed`. The property IC remains keyed by the
 receiver's concrete child declaration, so included child metadata and cached
 writes use the same resolver without changing its 16-byte layout.
 
@@ -8575,9 +8576,31 @@ retains the real property guard, but inheritance itself adds less than one
 percent on both architectures. No object, `Value`, frame, function,
 instruction or property-IC layout grows.
 
-The general non-scalar substituted signature view, method-generic
-alpha-renaming and deterministic diamond merging remain follow-ups rather than
-weakening either exact fast-path proof.
+The linked property view now also covers a child with no type parameters or
+per-object reified binding. Thus `class IntBox extends Box<int>` materializes
+the inherited backed property as `int` in both runtimes, even when constructed
+by ordinary `new IntBox()`. A forwarded `U` instead remains relative to the
+child and erases to `U`'s bound in the bound-erased mode. The same rule reaches
+transitive concrete descendants, concretely bound traits, constructor fast
+property initialization and included child declarations. This is the RFC
+v0.22 distinction between a turbofish argument, which does not tighten an
+erased parameter, and a link-time inheritance binding, which does create the
+child's substituted runtime signature.
+
+The shared property L0 is keyed by child declaration, optional reified use
+site and property name. A zero-parameter child cannot own a reified object
+binding, so its warmed IC bypasses the weak-object map entirely. In 31
+order-alternated ARM64 sets, the concrete linked guard is -4.533% versus the
+equivalent own bound-erased guard and -5.799% versus an explicitly reified own
+property. CPU-pinned x86-64 measurements report -1.429% concrete/own-erased
+and -7.272% concrete/own-reified over 61 pairs. A direct 101-pair comparison
+of the new erased own-bound guard against checkpoint `d2ad952` is -4.986%
+(0.101582 versus 0.106627 seconds), so generalizing the L0 did not tax the
+existing checked path.
+
+The general linked method/constructor view for non-reified concrete
+descendants, method-generic alpha-renaming and deterministic diamond merging
+remain follow-ups rather than weakening either exact fast-path proof.
 
 Generics-aware JIT work is the final milestone of this interphase, not a
 concurrent semantic shortcut. It begins only after parser/link/runtime/

@@ -1,8 +1,7 @@
 use super::link::substitute_generic_parameters;
 use super::lsp::effective_inheritance_arguments;
 use super::{
-    GenericDeclaration, GenericDeclarationKind, GenericMetadata, GenericPropertyMetadata,
-    GenericType, ReifiedBinding,
+    GenericDeclaration, GenericMetadata, GenericPropertyMetadata, GenericType, ReifiedBinding,
 };
 use crate::value::Value;
 
@@ -20,68 +19,63 @@ impl GenericMetadata {
         if effective.len() != child.parameters.len() {
             return None;
         }
-        if let Some(property) = self.find_instance_property(child, name) {
-            return Some(substitute_generic_parameters(
-                &property.value_type,
-                &effective,
-            ));
-        }
-        self.resolved_inherited_property_type(child, &effective, name)
+        self.resolved_instance_property_type(child, &effective, name)
     }
 
-    pub fn value_matches_erased_property<F>(
-        &self,
-        kind: GenericDeclarationKind,
-        owner: &str,
-        name: &str,
-        value: &Value,
-        class_is_a: F,
-    ) -> Option<bool>
-    where
-        F: Fn(&str, &str) -> bool,
-    {
-        let declaration = self.find_index(kind, owner)?;
-        self.value_matches_erased_property_declaration(declaration, name, value, class_is_a)
-    }
-
-    pub fn value_matches_erased_property_declaration<F>(
+    /// Materialize the link-time view of an instance property relative to the
+    /// concrete child declaration. Parameters that remain in the returned
+    /// type belong to that child and therefore erase to the child's bounds.
+    pub fn linked_instance_property_type(
         &self,
         declaration: u32,
         name: &str,
+    ) -> Option<GenericType> {
+        let child = self.declarations.get(declaration as usize)?;
+        let identity = (0..child.parameters.len())
+            .map(|index| GenericType::Parameter(index as u8))
+            .collect::<Vec<_>>();
+        self.resolved_instance_property_type(child, &identity, name)
+    }
+
+    pub fn value_matches_erased_instance_property_type<F>(
+        &self,
         value: &Value,
+        expected: &GenericType,
+        declaration: u32,
         class_is_a: F,
     ) -> Option<bool>
     where
         F: Fn(&str, &str) -> bool,
     {
-        let (declaration, property) = self.instance_property_declaration(declaration, name)?;
+        let declaration = self.declarations.get(declaration as usize)?;
         let value = if value.is_reference() {
             unsafe { &*value.as_ref_ptr() }
         } else {
             value
         };
-        Some(self.value_matches_erased_type(
-            value,
-            &property.value_type,
-            declaration,
-            &class_is_a,
-            0,
-        ))
+        Some(self.value_matches_erased_type(value, expected, declaration, &class_is_a, 0))
     }
 
     pub fn property_erases_to_mixed(&self, declaration: u32, name: &str) -> bool {
-        self.instance_property_declaration(declaration, name)
-            .is_some_and(|(declaration, property)| {
-                Self::type_erases_to_mixed(&property.value_type, declaration, 0)
-            })
+        let Some(child) = self.declarations.get(declaration as usize) else {
+            return false;
+        };
+        self.linked_instance_property_type(declaration, name)
+            .is_some_and(|property| Self::type_erases_to_mixed(&property, child, 0))
     }
 
-    fn resolved_inherited_property_type(
+    fn resolved_instance_property_type(
         &self,
         child: &GenericDeclaration,
         effective: &[GenericType],
         name: &str,
     ) -> Option<GenericType> {
+        if let Some(property) = self.find_instance_property(child, name) {
+            return Some(substitute_generic_parameters(
+                &property.value_type,
+                effective,
+            ));
+        }
         for (ancestor, arguments) in self.ancestor_bindings_from(child, effective) {
             let Some(property) = self.find_instance_property(ancestor, name) else {
                 continue;
@@ -90,23 +84,6 @@ impl GenericMetadata {
                 &property.value_type,
                 &arguments,
             ));
-        }
-        None
-    }
-
-    fn instance_property_declaration(
-        &self,
-        declaration: u32,
-        name: &str,
-    ) -> Option<(&GenericDeclaration, &GenericPropertyMetadata)> {
-        let child = self.declarations.get(declaration as usize)?;
-        if let Some(property) = self.find_instance_property(child, name) {
-            return Some((child, property));
-        }
-        for (ancestor, _) in self.ancestor_bindings(child) {
-            if let Some(property) = self.find_instance_property(ancestor, name) {
-                return Some((ancestor, property));
-            }
         }
         None
     }

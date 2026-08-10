@@ -369,12 +369,16 @@ fn erased_generic_properties_keep_the_erased_storage_contract() {
 class Box<T> { public T $value; }
 class ParentBox<T> { public T $value; }
 class ChildBox<U> extends ParentBox<U> {}
+class IntBox extends ParentBox<int> {}
 $box = new Box::<int>();
 $box->value = "accepted by mixed erasure";
 echo $box->value;
 $child = new ChildBox::<int>();
 $child->value = " through inherited mixed erasure";
 echo $child->value;
+$intBox = new IntBox();
+$intBox->value = 7;
+echo ":" . $intBox->value;
 $reflection = new ReflectionObject($box);
 echo ":" . count($reflection->getGenericArguments());
 echo ":" . count($reflection->getGenericParameters());
@@ -382,7 +386,7 @@ echo ":" . count($reflection->getGenericParameters());
     );
     assert_eq!(
         output,
-        "accepted by mixed erasure through inherited mixed erasure:0:1"
+        "accepted by mixed erasure through inherited mixed erasure:7:0:1"
     );
 
     let error = common::run_php_expect_error(
@@ -419,6 +423,17 @@ $box->value = "not an int";
         format!("{trait_error:?}").contains("bound-erased property IntCarrier::$value"),
         "{trait_error:?}"
     );
+
+    for source in [
+        "<?php class ParentBox<T> { public T $value; } class IntBox extends ParentBox<int> {} $box = new IntBox(); $box->value = 'bad';",
+        "<?php class ParentBox<T> { public T $value; } class ForwardedBox<U : int> extends ParentBox<U> {} $box = new ForwardedBox::<int>(); $box->value = 'bad';",
+        "<?php trait Carries<T> { public T $value; } class IntCarrier { use Carries<int>; } $box = new IntCarrier(); $box->value = 'bad';",
+        "<?php class ParentBox<T> { public T $value; public function __construct(mixed $value) { $this->value = $value; } } class IntBox extends ParentBox<int> {} new IntBox(1); new IntBox('bad');",
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("bound-erased property"), "{rendered:?}");
+    }
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -541,14 +556,17 @@ class ParentBox<T> {
 }
 class ChildBox<U> extends ParentBox<U> {}
 class GrandchildBox<V> extends ChildBox<V> {}
+class IntBox extends ParentBox<int> {}
 $child = new ChildBox::<int>(1);
 $child->value = 2;
 $grandchild = new GrandchildBox::<string>("three");
 $grandchild->value = "four";
-echo $child->value . ":" . $grandchild->value;
+$intBox = new IntBox(5);
+$intBox->value = 6;
+echo $child->value . ":" . $grandchild->value . ":" . $intBox->value;
 "#,
     );
-    assert_eq!(output, "2:four");
+    assert_eq!(output, "2:four:6");
 
     for source in [
         "<?php class ParentBox<T> { public T $value; } class ChildBox<U> extends ParentBox<U> {} $box = new ChildBox::<int>(); $box->value = 'bad';",
@@ -563,6 +581,17 @@ echo $child->value . ":" . $grandchild->value;
             rendered.contains("reified property") && rendered.contains("::$value"),
             "{rendered:?}"
         );
+    }
+
+    for source in [
+        "<?php class ParentBox<T> { public T $value; } class IntBox extends ParentBox<int> {} $box = new IntBox(); $box->value = 'bad';",
+        "<?php class ParentBox<T> { public T $value; } class IntBox extends ParentBox<int> {} class ConcreteGrandchild extends IntBox {} $box = new ConcreteGrandchild(); $box->value = 'bad';",
+        "<?php trait Carries<T> { public T $value; } class IntCarrier { use Carries<int>; } $box = new IntCarrier(); $box->value = 'bad';",
+        "<?php class ParentBox<T> { public T $value; public function __construct(mixed $value) { $this->value = $value; } } class IntBox extends ParentBox<int> {} new IntBox(1); new IntBox('bad');",
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("bound-erased property"), "{rendered:?}");
     }
 }
 

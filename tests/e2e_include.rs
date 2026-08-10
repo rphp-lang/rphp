@@ -182,17 +182,14 @@ fn test_include_links_reified_instance_method_contracts() {
 fn test_include_links_inherited_generic_property_contracts() {
     let (_dir, path) = write_temp_php(
         "generic_property_child.php",
-        "<?php class IncludedPropertyChild<U : int> extends IncludedPropertyParent<U> {}",
+        "<?php class IncludedPropertyChild extends IncludedPropertyParent<int> {}",
     );
     let source = format!(
-        "<?php class IncludedPropertyParent<T : int> {{ public T $value; }} include '{}'; $box = new IncludedPropertyChild::<int>(); $box->value = 'bad';",
+        "<?php class IncludedPropertyParent<T> {{ public T $value; }} include '{}'; $box = new IncludedPropertyChild(); $box->value = 'bad';",
         path
     );
     let error = common::run_php_expect_error(&source);
     let rendered = format!("{error:?}");
-    #[cfg(feature = "php-generics-reified")]
-    assert!(rendered.contains("reified property"), "{rendered:?}");
-    #[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
     assert!(rendered.contains("bound-erased property"), "{rendered:?}");
 }
 

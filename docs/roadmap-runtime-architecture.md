@@ -1879,8 +1879,9 @@ reifying a later ordinary call through stale LIFO state.
 
 Generic property lookup now composes the same direct/transitive class and trait
 bindings. Own properties take precedence; inherited reified properties receive
-the fully substituted child binding, while bound-erased properties retain the
-defining ancestor's bound and unbounded parameters remain `mixed`. This covers
+the fully substituted child binding, while bound-erased properties use the
+child's linked signature: forwarded parameters erase to the child's bound and
+unbounded parameters remain `mixed`. This covers
 ordinary writes, the constructor property-initializer proof, trait properties,
 cache invalidation between distinct bindings and child metadata merged from an
 included unit. The cold metadata walk lives in `generics/properties.rs`; the
@@ -1890,9 +1891,19 @@ writes allocate nothing and metadata merges cannot invalidate a borrow. The
 existing property IC still stores the concrete child declaration and no
 object, `Value`, frame, function, instruction or IC layout changes.
 
-Materializing a general substituted signature for non-reified concrete
-descendants, method-generic alpha-renaming and deterministic diamond contract
-merging remain explicit follow-up link/runtime steps. Generics-aware JIT
+That linked view now remains executable when the child itself is non-generic.
+`IntBox extends Box<int>` has no turbofish and no object sidecar, but its
+inherited property contract is `int` in both runtime modes; transitive children
+and concrete trait bindings behave identically. The shared L0 distinguishes an
+erased child declaration from a reified declaration/use-site pair. Cached
+zero-parameter children skip the weak reified-object lookup because such a
+declaration cannot carry an explicit binding. This closes the property half of
+the RFC's general substituted signature; non-overridden inherited methods and
+constructors remain the next half.
+
+Materializing inherited method and constructor signatures for non-reified
+concrete descendants, method-generic alpha-renaming and deterministic diamond
+contract merging remain explicit follow-up link/runtime steps. Generics-aware JIT
 specialization is deliberately last: it starts only after these semantics and
 both runtimes are closed, and must consume the canonical metadata with exact
 guards and deoptimization back to the established erased/reified paths.
