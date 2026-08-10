@@ -1497,7 +1497,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // For TMP/Var operands that are provably scalar (Long, Double, Bool, Null),
                 // use raw 16-byte bitwise copy — no clone/drop overhead.
                 // TMP values are consumed (not read again), so move semantics are valid.
-                // IMPORTANT: heap types (String, Array, Object, Closure) and References
+                // IMPORTANT: owned types (String, Array, Object, Resource, Closure) and References
                 // MUST go through clone to maintain refcount / avoid double-free.
                 if borrowed {
                     // The destination deliberately remains outside the owned

@@ -7708,6 +7708,38 @@ Making either CSV extension a production default still requires a compiler or
 translation-unit boundary that passes the ordinary runtime gate on both
 architectures.
 
+### Opt-in final-alias resource ownership (2026-08-10)
+
+The next resource-lifetime slice implements automatic backend release after
+the last PHP resource alias disappears. With `resource-lifetime`, the 16-byte
+`Value` stores a raw pointer to a standard-library `Rc<ResourceHandle>`; the
+handle carries request scope, stable id and an indirect close callback.
+Resource clone/drop participates in the existing owned-value path, including
+small-frame bitmaps, large-frame scans, closure captures and guarded raw-copy
+fast paths. Explicit `fclose()` still invalidates every alias immediately and
+later handle drops cannot close the backend twice. Registry removal precedes
+payload destruction, which also makes nested resource destruction re-entrant
+without retaining a thread-local mutable borrow.
+
+Linking that lifecycle into the default build retained the exact 16-byte
+`Value` and total text size, but changed whole-program placement. A fresh
+20-pair ARM64 gate against `f5d4e68` measured -1.081%/+0.028%/+0.462%/-0.670%
+and +2.102% for scalar, packed array, String, order and ledger. The ledger
+failure rejects the default-linked form. Moving the handle into an independent
+module and calling the registry through an indirect callback removed the
+direct ownership/registry dependency, but did not justify weakening the gate.
+
+The accepted `resource-lifetime` feature compiles every ownership change out
+of default builds. Default release returns to the exact 2,818,048-byte
+`__TEXT` and the monitored `run_quick_long_ops_loop`/String commit addresses of
+`f5d4e68`. The pinned x86-64 gate records
++0.106%/+0.378%/-0.274%/-0.549%/-0.191% for scalar, packed array, String,
+order and ledger. Both hosts pass 195 default and 186 no-default tests;
+all-feature coverage is 296 on ARM64 and 321 on x86-64. Fourteen stream
+scenarios pass in both lifecycle configurations and all-feature/all-target
+compilation succeeds. The slice is implemented only with `std`; no dependency
+was added and `Cargo.lock` remains byte-identical.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

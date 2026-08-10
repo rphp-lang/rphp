@@ -1220,6 +1220,45 @@ coroutine integration values are
 No Cargo file, crate or external stream, buffering or scheduler library was
 added. Final-alias resource destruction remains explicit future work.
 
+### Opt-in final-alias resource lifetime checkpoint (2026-08-10)
+
+The final-alias boundary is now implemented behind the independent
+`resource-lifetime` feature. A resource-enabled `Value` still occupies exactly
+16 bytes: its payload points to a standard-library `Rc<ResourceHandle>` that
+stores request scope, stable resource id and an indirect close callback.
+Assignment increments that handle, explicit `fclose()` removes the backend
+immediately, and dropping the last still-open alias removes it automatically.
+Dropping aliases after `fclose()` is a no-op, while request shutdown remains a
+safety net for every registry entry.
+
+Resource is included in `needs_cleanup()`, small-frame ownership bitmaps and
+the large-frame fallback scan only when the feature is enabled. Raw-copy fast
+paths therefore reject owned resource aliases exactly as they reject strings,
+arrays and objects. Backend payloads are removed from the thread-local
+registry before their destructors run, so a destructor can release another
+resource without re-entering an active `RefCell` borrow. Tests cover final
+alias release, explicit-close idempotence, nested resource destruction and the
+unchanged 16-byte `Value` layout.
+
+The first default-linked version was rejected: a fresh balanced ARM64 gate
+kept scalar, array, String and order controls within the ceiling but moved the
+ledger workload by +2.102 percent. The admitted feature boundary restores the
+default release image to the exact `f5d4e68` `__TEXT` size (2,818,048 bytes)
+and the exact monitored hot-symbol addresses. The CPU-pinned x86-64 gate
+records +0.106%/+0.378%/-0.274%/-0.549%/-0.191% for scalar, packed array,
+String, order and ledger, all below the +1% ceiling. Both hosts pass 195
+default and 186 no-default library tests; all-feature coverage is 296 on ARM64
+and 321 on x86-64. The 14 stream scenarios pass with and without
+`resource-lifetime`, and complete all-feature/all-target compilation succeeds.
+The implementation adds no crate, `Cargo.lock` is byte-identical, and no
+external resource or stream library is used.
+
+Making final-alias destruction a production default now requires the same
+two-host runtime admission as other compatibility extensions. Until then,
+users that need deterministic early backend release can enable
+`resource-lifetime`, while ordinary builds retain the established scalar
+resource codegen and request-shutdown contract.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

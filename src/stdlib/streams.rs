@@ -223,6 +223,13 @@ fn return_value(pointer: *mut Value, value: Value) -> Result<(), VmError> {
 }
 
 #[cold]
+#[cfg(feature = "resource-lifetime")]
+fn insert_stream(eg: &mut ExecutorGlobals, stream: PhpStream) -> Value {
+    super::resource::insert_value_for_request(eg, "stream", stream)
+}
+
+#[cold]
+#[cfg(not(feature = "resource-lifetime"))]
 fn insert_stream(eg: &mut ExecutorGlobals, stream: PhpStream) -> i64 {
     super::resource::insert_for_request(eg, "stream", stream)
 }
@@ -245,6 +252,9 @@ fn fn_fopen(
     let path = argument_string(execute_data, 0);
     let mode = argument_string(execute_data, 1);
     let value = match PhpStream::open(path.as_ref(), mode.as_ref()) {
+        #[cfg(feature = "resource-lifetime")]
+        Ok(stream) => insert_stream(eg, stream),
+        #[cfg(not(feature = "resource-lifetime"))]
         Ok(stream) => Value::resource(insert_stream(eg, stream)),
         Err(_) => Value::bool(false),
     };

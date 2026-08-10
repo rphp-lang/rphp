@@ -11,6 +11,7 @@ jit-prototype = []
 coroutines = []
 csv-errors = []
 csv-write = ["csv-errors"]
+resource-lifetime = []
 
 [dependencies]
 serde = "1.0.228"

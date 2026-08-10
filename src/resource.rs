@@ -3,7 +3,10 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU32, Ordering};
 
+#[cfg(feature = "resource-lifetime")]
+use crate::resource_handle::ResourceHandle;
 use crate::runtime::ExecutorGlobals;
+use crate::value::Value;
 
 const RESOURCE_SCOPE_CONSTANT: &str = "\0rphp-resource-scope";
 
@@ -21,9 +24,9 @@ struct ResourceEntry {
 
 /// Request-owned PHP resource registry.
 ///
-/// Resource `Value`s contain only a stable integer id. Explicit close removes
-/// and drops the backend immediately; any remaining entries are dropped with
-/// `ExecutorGlobals` at request shutdown.
+/// Resource `Value`s contain a stable integer id. With `resource-lifetime`, a
+/// shared handle also closes the backend after the final alias disappears.
+/// Request shutdown remains the safety net in both configurations.
 pub struct ResourceRegistry {
     next_id: i64,
     entries: HashMap<i64, ResourceEntry>,
@@ -79,6 +82,13 @@ impl ResourceRegistry {
 
     /// Close only a resource whose backend has the requested concrete type.
     /// A wrong kind or an id closed earlier leaves the registry unchanged.
+    #[cfg_attr(
+        feature = "resource-lifetime",
+        allow(
+            dead_code,
+            reason = "request close removes the entry first so its destructor runs outside the TLS borrow"
+        )
+    )]
     #[cold]
     pub fn close<T: 'static>(&mut self, id: i64) -> bool {
         if !self
@@ -90,6 +100,25 @@ impl ResourceRegistry {
         }
         self.entries.remove(&id);
         true
+    }
+
+    #[cfg(feature = "resource-lifetime")]
+    #[cold]
+    fn remove<T: 'static>(&mut self, id: i64) -> Option<ResourceEntry> {
+        if !self
+            .entries
+            .get(&id)
+            .is_some_and(|entry| entry.payload.is::<T>())
+        {
+            return None;
+        }
+        self.entries.remove(&id)
+    }
+
+    #[cfg(feature = "resource-lifetime")]
+    #[cold]
+    fn remove_any(&mut self, id: i64) -> Option<ResourceEntry> {
+        self.entries.remove(&id)
     }
 }
 
@@ -138,6 +167,7 @@ pub(crate) fn with_payload_mut<T: 'static, R>(
 }
 
 #[cold]
+#[cfg(not(feature = "resource-lifetime"))]
 pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
     if scope == 0 {
         return false;
@@ -148,6 +178,47 @@ pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
             .get_mut(&scope)
             .is_some_and(|registry| registry.close::<T>(id))
     })
+}
+
+#[cold]
+#[cfg(feature = "resource-lifetime")]
+pub(crate) fn close<T: 'static>(scope: u32, id: i64) -> bool {
+    if scope == 0 {
+        return false;
+    }
+    let entry = REQUEST_RESOURCES.with(|registries| {
+        registries
+            .borrow_mut()
+            .get_mut(&scope)
+            .and_then(|registry| registry.remove::<T>(id))
+    });
+    let closed = entry.is_some();
+    drop(entry);
+    closed
+}
+
+#[cfg(feature = "resource-lifetime")]
+#[cold]
+fn close_any(scope: u32, id: i64) {
+    if scope == 0 {
+        return;
+    }
+    let Ok(entry) = REQUEST_RESOURCES.try_with(|registries| {
+        let Ok(mut registries) = registries.try_borrow_mut() else {
+            // A backend operation currently owns the registry borrow. Request
+            // shutdown remains the safety net for this exceptional re-entry.
+            return None;
+        };
+        registries
+            .get_mut(&scope)
+            .and_then(|registry| registry.remove_any(id))
+    }) else {
+        // Thread-local teardown already owns the registry and will drop it.
+        return;
+    };
+    // Drop the backend after releasing the thread-local RefCell borrow. A
+    // backend destructor may itself release another resource Value.
+    drop(entry);
 }
 
 #[cold]
@@ -204,10 +275,23 @@ pub(crate) fn insert_for_request<T: 'static>(
         scope = allocate_scope();
         eg.constant_table.borrow_mut().insert(
             RESOURCE_SCOPE_CONSTANT.to_string(),
-            crate::value::Value::long(scope as i64),
+            Value::long(scope as i64),
         );
     }
     insert(scope, resource_type, payload)
+}
+
+#[cfg(feature = "resource-lifetime")]
+#[cold]
+pub(crate) fn insert_value_for_request<T: 'static>(
+    eg: &mut ExecutorGlobals,
+    resource_type: &'static str,
+    payload: T,
+) -> Value {
+    let id = insert_for_request(eg, resource_type, payload);
+    let scope = request_scope(eg);
+    debug_assert_ne!(scope, 0);
+    Value::resource(ResourceHandle::new(scope, id, close_any))
 }
 
 #[cold]
@@ -242,9 +326,11 @@ impl Drop for ExecutorGlobals {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "resource-lifetime")]
+    use super::insert_value_for_request;
     use super::{
-        ResourceRegistry, allocate_scope, close_scope, insert, insert_for_request, is_open,
-        is_open_for_request, resource_type,
+        ResourceRegistry, allocate_scope, close_for_request, close_scope, insert,
+        insert_for_request, is_open, is_open_for_request, resource_type,
     };
     use crate::runtime::ExecutorGlobals;
     use std::cell::Cell;
@@ -314,6 +400,84 @@ mod tests {
             assert!(is_open_for_request(&executor, id));
             assert_eq!(drops.get(), 0);
         }
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn final_value_alias_closes_backend_before_request_shutdown() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let value = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let id = value.as_resource_id().unwrap();
+        let alias = value.clone();
+
+        drop(value);
+        assert_eq!(drops.get(), 0);
+        assert!(is_open_for_request(&executor, id));
+
+        drop(alias);
+        assert_eq!(drops.get(), 1);
+        assert!(!is_open_for_request(&executor, id));
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn resource_handle_keeps_value_layout_compact() {
+        assert_eq!(std::mem::size_of::<crate::value::Value>(), 16);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn backend_drop_can_release_another_resource_without_reentrant_borrow() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let inner = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let inner_id = inner.as_resource_id().unwrap();
+        let outer = insert_value_for_request(&mut executor, "nested", inner);
+        let outer_id = outer.as_resource_id().unwrap();
+
+        drop(outer);
+
+        assert_eq!(drops.get(), 1);
+        assert!(!is_open_for_request(&executor, outer_id));
+        assert!(!is_open_for_request(&executor, inner_id));
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn explicit_backend_close_can_release_a_nested_resource() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let inner = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let inner_id = inner.as_resource_id().unwrap();
+        let outer = insert_value_for_request(&mut executor, "nested", inner);
+        let outer_id = outer.as_resource_id().unwrap();
+
+        assert!(close_for_request::<crate::value::Value>(
+            &mut executor,
+            outer_id
+        ));
+        assert_eq!(drops.get(), 1);
+        assert!(!is_open_for_request(&executor, outer_id));
+        assert!(!is_open_for_request(&executor, inner_id));
+        drop(outer);
+        assert_eq!(drops.get(), 1);
+    }
+
+    #[test]
+    #[cfg(feature = "resource-lifetime")]
+    fn explicit_close_then_alias_drops_do_not_drop_backend_twice() {
+        let drops = Rc::new(Cell::new(0));
+        let mut executor = ExecutorGlobals::with_output(Box::new(std::io::sink()));
+        let value = insert_value_for_request(&mut executor, "probe", DropProbe(drops.clone()));
+        let id = value.as_resource_id().unwrap();
+        let alias = value.clone();
+
+        assert!(close_for_request::<DropProbe>(&mut executor, id));
+        assert_eq!(drops.get(), 1);
+        drop(value);
+        drop(alias);
         assert_eq!(drops.get(), 1);
     }
 }

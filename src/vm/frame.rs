@@ -66,8 +66,8 @@ pub struct ExecuteData {
     /// Such a call has no body CVs/TMPs until a failed scalar guard materializes
     /// the ordinary ABI frame on the main VM stack.
     pub deferred_scalar_call: bool,
-    /// Per-slot heap bitmap: bit N = 1 means slot N currently holds a heap value
-    /// (String, Array, Object, Closure) that needs drop on cleanup or overwrite.
+    /// Per-slot heap bitmap: bit N = 1 means slot N currently holds an owned value
+    /// (String, Array, Object, Resource, Closure) that needs cleanup or overwrite.
     /// Only valid for frames with <= 64 total slots (CVs + TMPs).
     /// For larger frames, falls back to has_heap_slots + full scan.
     /// Only maintained when has_heap_slots is true (scalar-only frames skip bitmap ops).

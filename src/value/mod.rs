@@ -7,6 +7,8 @@ use std::marker::PhantomData;
 use std::ops::Deref;
 use std::rc::Rc;
 
+#[cfg(feature = "resource-lifetime")]
+use crate::resource_handle::ResourceHandle;
 use crate::vm::function::FunctionCommon;
 use crate::vm::generator::GeneratorRef;
 use crate::vm::stats;
@@ -3082,7 +3084,7 @@ pub struct PhpClosure {
     pub func: *const FunctionCommon,
     /// Captured `use` variable values, in declaration order.
     pub captures: Vec<Value>,
-    /// True if any captured value needs_cleanup (String/Array/Object/Closure).
+    /// True if any captured value needs cleanup (owned heap values/resources).
     /// When false, captures are all scalars — clone is a cheap memcpy.
     pub has_heap_captures: bool,
 }
@@ -3214,7 +3216,7 @@ impl Value {
     /// Raw 16-byte copy from src to dst. No type-checking, no clone ceremony.
     /// Use for TMP→arg copies where the source is a scalar (Long/Double/Bool/Null)
     /// and will not be read again (consumed TMP).
-    /// For heap-backed values (String/Array/Object), caller must handle refcount.
+    /// For owned values (String/Array/Object/Resource), caller must handle refcount.
     #[inline(always)]
     pub unsafe fn raw_copy(src: *const Value, dst: *mut Value) {
         std::ptr::copy_nonoverlapping(
@@ -3892,10 +3894,24 @@ impl Value {
     }
 
     #[inline]
+    #[cfg(not(feature = "resource-lifetime"))]
     pub fn needs_cleanup(&self) -> bool {
         matches!(
             self.value_type(),
             ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure
+        )
+    }
+
+    #[inline]
+    #[cfg(feature = "resource-lifetime")]
+    pub fn needs_cleanup(&self) -> bool {
+        matches!(
+            self.value_type(),
+            ValueType::String
+                | ValueType::Array
+                | ValueType::Object
+                | ValueType::Resource
+                | ValueType::Closure
         )
     }
 
@@ -3906,10 +3922,25 @@ impl Value {
         self.data.ptr as *mut Value
     }
 
-    /// Create a scalar handle for one request-owned resource-registry entry.
-    /// Assignment preserves identity without touching the ordinary heap-value
-    /// clone/drop fast path.
+    /// Create a shared handle for one request-owned resource-registry entry.
+    /// The handle keeps `Value` at 16 bytes while the final alias closes an
+    /// entry that was not closed explicitly.
     #[inline]
+    #[cfg(feature = "resource-lifetime")]
+    pub(crate) fn resource(handle: ResourceHandle) -> Self {
+        let handle = Rc::into_raw(Rc::new(handle));
+        Self {
+            data: ValueData {
+                ptr: handle as *mut u8,
+            },
+            type_info: ValueType::Resource as u32,
+            _not_send: PhantomData,
+        }
+    }
+
+    /// Create the default scalar handle for one request-owned registry entry.
+    #[inline]
+    #[cfg(not(feature = "resource-lifetime"))]
     pub fn resource(id: i64) -> Self {
         Self {
             data: ValueData { long: id },
@@ -3921,7 +3952,15 @@ impl Value {
     #[inline]
     pub fn as_resource_id(&self) -> Option<i64> {
         if self.value_type() == ValueType::Resource {
-            Some(unsafe { self.data.long })
+            #[cfg(feature = "resource-lifetime")]
+            {
+                let handle = unsafe { &*(self.data.ptr as *const ResourceHandle) };
+                Some(handle.id())
+            }
+            #[cfg(not(feature = "resource-lifetime"))]
+            {
+                Some(unsafe { self.data.long })
+            }
         } else {
             None
         }
@@ -3972,6 +4011,19 @@ impl Clone for Value {
                     _not_send: PhantomData,
                 }
             }
+            #[cfg(feature = "resource-lifetime")]
+            ValueType::Resource => {
+                unsafe {
+                    Rc::increment_strong_count(self.data.ptr as *const ResourceHandle);
+                }
+                Self {
+                    data: ValueData {
+                        ptr: unsafe { self.data.ptr },
+                    },
+                    type_info: self.type_info,
+                    _not_send: PhantomData,
+                }
+            }
             ValueType::Closure => {
                 let c = unsafe { &*(self.data.ptr as *const PhpClosure) };
                 Value::closure(c.clone())
@@ -4008,6 +4060,10 @@ impl Drop for Value {
             ValueType::Object => {
                 // Drop = Rc decrement. Frees PhpObject when refcount reaches 0.
                 unsafe { Rc::decrement_strong_count(self.data.ptr as *const RefCell<PhpObject>) };
+            }
+            #[cfg(feature = "resource-lifetime")]
+            ValueType::Resource => {
+                unsafe { Rc::decrement_strong_count(self.data.ptr as *const ResourceHandle) };
             }
             ValueType::Closure => {
                 unsafe { drop(Box::from_raw(self.data.ptr as *mut PhpClosure)) };

@@ -5166,8 +5166,21 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     stats::inc_cleanup_frame(total, false);
     for i in 0..total {
         let ptr = base.add(i);
+        #[cfg(not(feature = "resource-lifetime"))]
         match (*ptr).value_type() {
             ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure => {
+                std::ptr::drop_in_place(ptr);
+                std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
+            }
+            _ => {}
+        }
+        #[cfg(feature = "resource-lifetime")]
+        match (*ptr).value_type() {
+            ValueType::String
+            | ValueType::Array
+            | ValueType::Object
+            | ValueType::Resource
+            | ValueType::Closure => {
                 std::ptr::drop_in_place(ptr);
                 std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
             }

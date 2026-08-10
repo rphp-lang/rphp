@@ -1978,3 +1978,22 @@ therefore compiles the checked reader and `ValueError` registration only with
 the established reader handler, `.text` size and monitored hot-symbol
 addresses are identical to the prior checkpoint. No linker/profile workaround
 is retained.
+
+Final-alias resource ownership exposed the same boundary from a genuinely
+owned runtime type. A standard-library `Rc` handle can preserve the 16-byte
+`Value`, correctly close on the last alias and participate in every existing
+frame cleanup path. The first default-linked build nevertheless regressed the
+ledger control by +2.102 percent in a balanced 20-pair ARM64 gate while the
+other four controls remained within +1 percent. This is a codegen admission
+failure, not evidence that reference counting is executed by the ledger: that
+workload creates no stream resource.
+
+The admitted implementation is therefore behind `resource-lifetime`.
+Compiling without it restores the exact `f5d4e68` text size and monitored hot
+symbol addresses; compiling with it supplies final-alias close, explicit-close
+idempotence and nested-destructor safety. The handle calls the registry through
+an indirect callback so `Value` ownership does not directly depend on the
+stdlib registry module. No external library or lockfile change is involved.
+The independent CPU-pinned x86-64 gate against the same exact checkpoint
+passes at +0.106%/+0.378%/-0.274%/-0.549%/-0.191% for scalar, packed array,
+String, order and ledger.

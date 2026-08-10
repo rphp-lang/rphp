@@ -9,6 +9,8 @@ pub mod jit;
 pub mod lexer;
 pub mod parser;
 pub mod regex;
+#[cfg(feature = "resource-lifetime")]
+mod resource_handle;
 pub mod runtime;
 #[allow(unused_unsafe)]
 pub mod stdlib;
