@@ -19,6 +19,8 @@ mod lsp;
 mod methods;
 #[path = "generics/properties.rs"]
 mod properties;
+#[path = "generics/reflection.rs"]
+mod reflection;
 #[path = "generics/variance.rs"]
 mod variance;
 
@@ -264,6 +266,12 @@ pub struct GenericInheritance {
     pub kind: GenericInheritanceKind,
     pub owner: GenericSymbol,
     pub ancestor: GenericSymbol,
+    pub arguments: Box<[GenericType]>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct GenericReflectionBinding {
+    pub ancestor: Box<str>,
     pub arguments: Box<[GenericType]>,
 }
 

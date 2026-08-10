@@ -412,6 +412,60 @@ echo ($result instanceof Cacheable) ? "cacheable" : "missing";
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn reflection_exposes_parent_interface_trait_and_nested_argument_bindings() {
+    let output = common::run_php(
+        r#"<?php
+interface Renderable {}
+interface Cacheable {}
+interface Foo<T> {}
+class Dup implements Foo<string>, Foo<int> {}
+
+class Box<T> {}
+class IntBox extends Box<int> {}
+class Forward<U> extends Box<U> {}
+class Nested extends Box<Foo<int>> {}
+class Compound extends Box<Renderable&Cacheable> {}
+
+trait Holder<T> {}
+class StringHolder { use Holder<string>; }
+
+$parent = (new ReflectionClass("IntBox"))->getGenericArgumentsForParentClass();
+echo get_class($parent[0]) . ":" . $parent[0]->getName() . ":";
+
+$bindings = (new ReflectionClass("Dup"))->getGenericArgumentsForParentInterface("Foo");
+echo count($bindings) . ":" . $bindings[0][0]->getName() . ":" . $bindings[1][0]->getName() . ":";
+
+$trait = (new ReflectionClass("StringHolder"))->getGenericArgumentsForUsedTrait("Holder");
+echo $trait[0]->getName() . ":";
+
+$forward = (new ReflectionClass("Forward"))->getGenericArgumentsForParentClass();
+echo get_class($forward[0]) . ":" . $forward[0]->getName() . ":";
+
+$nested = (new ReflectionClass("Nested"))->getGenericArgumentsForParentClass();
+echo $nested[0]->getName() . ":";
+echo $nested[0]->hasGenericArguments() ? "yes:" : "no:";
+echo $nested[0]->getGenericArguments()[0]->getName() . ":";
+
+$compound = (new ReflectionClass("Compound"))->getGenericArgumentsForParentClass();
+echo get_class($compound[0]) . ":";
+echo $compound[0]->getTypes()[0]->getName() . ":" . $compound[0]->getTypes()[1]->getName();
+
+try {
+    $invalid = new ReflectionClass("Dup");
+    $invalid->getGenericArgumentsForParentInterface("Renderable");
+} catch (ReflectionException $error) {
+    echo ":caught";
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "ReflectionNamedType:int:2:string:int:string:ReflectionTypeParameterReference:U:Foo:yes:int:ReflectionIntersectionType:Renderable:Cacheable:caught"
+    );
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn inherited_trait_diamonds_enforce_merged_runtime_contracts() {
     let output = common::run_php(
         r#"<?php

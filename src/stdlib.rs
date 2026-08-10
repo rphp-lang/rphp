@@ -233,7 +233,8 @@ pub(crate) fn invoke_direct_internal2(
 /// Register all stdlib functions into the executor globals.
 /// The returned Vec must live as long as the EG (owns the InternalFunction structs).
 pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(96);
+    eg.reserve_stdlib_capacity();
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(128);
 
     // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
     let class_funcs = register_builtin_classes(eg);
@@ -986,7 +987,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     use crate::compiler::compile::ClassDef;
     use crate::parser::Visibility;
 
-    let mut funcs: Vec<Box<InternalFunction>> = Vec::new();
+    let mut funcs: Vec<Box<InternalFunction>> = Vec::with_capacity(64);
 
     // Helper: register an internal method and return its func pointer
     macro_rules! reg_method {
@@ -1007,8 +1008,6 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             funcs.push(f);
         }};
     }
-
-    funcs.extend(reflection::register(eg));
 
     // Throwable — proper interface (PHP 8 compatible)
     eg.register_class(ClassDef {
@@ -1163,6 +1162,8 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         // getMessage: num_args=1 (CV 0=$this), required=0 (no explicit args)
         reg_method!(class, "getmessage", fn_throwable_get_message, 1, 0);
     }
+
+    funcs.extend(reflection::register(eg));
 
     #[cfg(feature = "value-errors")]
     funcs.extend(register_value_error(eg));

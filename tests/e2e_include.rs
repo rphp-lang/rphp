@@ -280,6 +280,20 @@ fn test_include_merges_cross_unit_generic_diamond_contracts() {
     assert!(format!("{error:?}").contains("property"), "{error:?}");
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn test_include_reflects_plural_generic_ancestor_bindings() {
+    let (_dir, path) = write_temp_php(
+        "generic_reflection_diamond.php",
+        "<?php interface IncludedStrings extends IncludedView<string> {} interface IncludedInts extends IncludedView<int> {} class IncludedViewDiamond implements IncludedStrings, IncludedInts {}",
+    );
+    let source = format!(
+        "<?php interface IncludedView<T> {{}} include '{}'; $reflection = new ReflectionClass('IncludedViewDiamond'); $bindings = $reflection->getGenericArgumentsForParentInterface('IncludedView'); echo count($bindings) . ':' . $bindings[0][0]->getName() . ':' . $bindings[1][0]->getName();",
+        path
+    );
+    assert_eq!(run_php(&source), "2:string:int");
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

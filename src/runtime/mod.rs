@@ -195,6 +195,17 @@ pub struct ExecutorGlobals {
 }
 
 impl ExecutorGlobals {
+    /// Reserve the stable built-in registry envelope immediately before stdlib
+    /// registration. Executors that never install stdlib stay allocation-lazy;
+    /// normal executors avoid repeated hash-table growth while installing the
+    /// fixed built-in class and function set.
+    pub(crate) fn reserve_stdlib_capacity(&mut self) {
+        self.function_table.reserve(192);
+        self.class_table.reserve(64);
+        self.method_declaring_class.reserve(96);
+        self.class_by_id.reserve(64);
+    }
+
     pub fn new() -> Self {
         Self {
             vm_stack: VmStack::new(),
@@ -794,6 +805,14 @@ impl ExecutorGlobals {
     #[inline]
     pub fn class_id_of(&self, class_name: &str) -> u32 {
         self.class_table.get(class_name).map_or(0, |cd| cd.class_id)
+    }
+
+    /// Cold metadata query used by Reflection to distinguish an ancestor
+    /// interface from a parent class with the same reachability relation.
+    pub fn class_is_interface(&self, class_name: &str) -> bool {
+        self.class_table
+            .get(class_name)
+            .is_some_and(|class| class.is_interface)
     }
 
     /// Get the declaring class for a function pointer.

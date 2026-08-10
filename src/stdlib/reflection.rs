@@ -4,30 +4,37 @@
 //! cold handlers outside the main stdlib unit prevents metadata-facing API
 //! growth from obscuring unrelated built-ins or entering their hot paths.
 
+use std::collections::HashMap;
+
 use crate::compiler::compile::ClassDef;
 use crate::compiler::make_internal_method;
-use crate::generics::{GenericDeclarationKind, GenericRuntimeCapabilities, GenericVariance};
+use crate::generics::{
+    GenericDeclaration, GenericDeclarationKind, GenericInheritanceKind, GenericMetadata,
+    GenericReflectionBinding, GenericRuntimeCapabilities, GenericType, GenericVariance,
+};
 use crate::runtime::ExecutorGlobals;
-use crate::value::{PhpArray, Value, ValueType};
+use crate::value::{PhpArray, PhpObject, Value, make_error_value};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{FunctionCommon, InternalFunction};
 
-fn argument<'a>(ed: *mut ExecuteData, index: u32) -> &'a Value {
+fn with_argument<R>(ed: *mut ExecuteData, index: u32, visit: impl FnOnce(&Value) -> R) -> R {
     let value = unsafe { (*ed).cv(index) };
-    if value.is_reference() {
+    let value = if value.is_reference() {
         unsafe { &*value.as_ref_ptr() }
     } else {
         value
-    }
+    };
+    visit(value)
 }
 
 fn argument_string(ed: *mut ExecuteData, index: u32) -> String {
-    let value = argument(ed, index);
-    value
-        .as_str()
-        .map(str::to_owned)
-        .unwrap_or_else(|| value.echo_to_string())
+    with_argument(ed, index, |value| {
+        value
+            .as_str()
+            .map(str::to_owned)
+            .unwrap_or_else(|| value.echo_to_string())
+    })
 }
 
 fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
@@ -37,11 +44,188 @@ fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
     Ok(())
 }
 
-fn set_target(ed: *mut ExecuteData, kind: &str, owner: String) {
-    if let Some(mut object) = argument(ed, 0).as_object_mut() {
-        object.set_property("__generic_kind", Value::string(kind));
-        object.set_property("__generic_owner", Value::string(owner));
+fn object_value(
+    class_name: &str,
+    properties: impl IntoIterator<Item = (&'static str, Value)>,
+) -> Value {
+    let properties = properties
+        .into_iter()
+        .map(|(name, value)| (name.to_string(), value))
+        .collect::<HashMap<_, _>>();
+    Value::object(PhpObject::dynamic(class_name.to_string(), 0, properties))
+}
+
+fn reflected_type(
+    metadata: &GenericMetadata,
+    declaration: &GenericDeclaration,
+    value: &GenericType,
+) -> Value {
+    let rendered = metadata.format_type(declaration, value);
+    match value {
+        GenericType::Parameter(index) => {
+            let name = declaration
+                .parameters
+                .get(*index as usize)
+                .and_then(|parameter| metadata.symbol(parameter.name))
+                .unwrap_or("?");
+            object_value(
+                "ReflectionTypeParameterReference",
+                [
+                    ("__generic_name", Value::string(name)),
+                    ("__generic_string", Value::string(rendered)),
+                ],
+            )
+        }
+        GenericType::Union(parts) | GenericType::Intersection(parts) => {
+            let mut types = PhpArray::with_packed_capacity(parts.len());
+            for part in parts.iter() {
+                types.push(reflected_type(metadata, declaration, part));
+            }
+            let class_name = if matches!(value, GenericType::Union(_)) {
+                "ReflectionUnionType"
+            } else {
+                "ReflectionIntersectionType"
+            };
+            object_value(
+                class_name,
+                [
+                    ("__generic_types", Value::array(types)),
+                    ("__generic_string", Value::string(rendered)),
+                ],
+            )
+        }
+        GenericType::Named { name, arguments } => {
+            let mut reflected_arguments = PhpArray::with_packed_capacity(arguments.len());
+            for argument in arguments.iter() {
+                reflected_arguments.push(reflected_type(metadata, declaration, argument));
+            }
+            object_value(
+                "ReflectionNamedType",
+                [
+                    (
+                        "__generic_name",
+                        Value::string(metadata.symbol(*name).unwrap_or("?")),
+                    ),
+                    ("__generic_arguments", Value::array(reflected_arguments)),
+                    ("__generic_string", Value::string(rendered)),
+                ],
+            )
+        }
+        GenericType::Nullable(inner) => {
+            let mut types = PhpArray::with_packed_capacity(2);
+            types.push(reflected_type(metadata, declaration, inner));
+            types.push(named_reflected_type("null"));
+            object_value(
+                "ReflectionUnionType",
+                [
+                    ("__generic_types", Value::array(types)),
+                    ("__generic_string", Value::string(rendered)),
+                ],
+            )
+        }
+        _ => named_reflected_type(&rendered),
     }
+}
+
+fn named_reflected_type(name: &str) -> Value {
+    object_value(
+        "ReflectionNamedType",
+        [
+            ("__generic_name", Value::string(name)),
+            ("__generic_arguments", Value::array(PhpArray::new())),
+            ("__generic_string", Value::string(name)),
+        ],
+    )
+}
+
+fn reflected_arguments(
+    metadata: &GenericMetadata,
+    declaration: Option<&GenericDeclaration>,
+    binding: &GenericReflectionBinding,
+) -> PhpArray {
+    let Some(declaration) = declaration else {
+        return PhpArray::new();
+    };
+    let mut arguments = PhpArray::with_packed_capacity(binding.arguments.len());
+    for argument in binding.arguments.iter() {
+        arguments.push(reflected_type(metadata, declaration, argument));
+    }
+    arguments
+}
+
+fn reflected_property(ed: *mut ExecuteData, name: &str) -> Option<Value> {
+    with_argument(ed, 0, |value| {
+        value.as_object()?.get_property(name).cloned()
+    })
+}
+
+fn reflection_type_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__generic_name").unwrap_or_else(|| Value::string("")),
+    )
+}
+
+fn reflection_type_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__generic_string").unwrap_or_else(|| Value::string("")),
+    )
+}
+
+fn reflection_type_has_generic_arguments(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let found = reflected_property(ed, "__generic_arguments")
+        .and_then(|arguments| arguments.as_array().map(|arguments| !arguments.is_empty()))
+        .unwrap_or(false);
+    return_value(rv, Value::bool(found))
+}
+
+fn reflection_type_generic_arguments(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__generic_arguments")
+            .unwrap_or_else(|| Value::array(PhpArray::new())),
+    )
+}
+
+fn reflection_compound_types(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__generic_types").unwrap_or_else(|| Value::array(PhpArray::new())),
+    )
+}
+
+fn reflection_exception(eg: &mut ExecutorGlobals, message: impl AsRef<str>) {
+    eg.exception = Some(make_error_value("ReflectionException", message.as_ref()));
+}
+
+fn set_target(ed: *mut ExecuteData, kind: &str, owner: String) {
+    with_argument(ed, 0, |value| {
+        if let Some(mut object) = value.as_object_mut() {
+            object.set_property("__generic_kind", Value::string(kind));
+            object.set_property("__generic_owner", Value::string(owner));
+        }
+    });
 }
 
 fn function_construct(
@@ -67,15 +251,17 @@ fn object_construct(
     _rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let target = argument(ed, 1).clone();
+    let target = with_argument(ed, 1, Clone::clone);
     let owner = target
         .as_object()
         .map(|object| object.class_name.to_string())
         .ok_or_else(|| VmError::Fatal("ReflectionObject expects an object".into()))?;
     set_target(ed, "class", owner);
-    if let Some(mut object) = argument(ed, 0).as_object_mut() {
-        object.set_property("__generic_object", target);
-    }
+    with_argument(ed, 0, |value| {
+        if let Some(mut object) = value.as_object_mut() {
+            object.set_property("__generic_object", target);
+        }
+    });
     Ok(())
 }
 
@@ -90,18 +276,121 @@ fn method_construct(
 }
 
 fn generic_target(ed: *mut ExecuteData) -> Option<(GenericDeclarationKind, String)> {
-    let object = argument(ed, 0).as_object()?;
-    let kind = match object.get_property("__generic_kind")?.as_str()? {
-        "function" => GenericDeclarationKind::Function,
-        "class" => GenericDeclarationKind::Class,
-        "method" => GenericDeclarationKind::Method,
-        _ => return None,
+    with_argument(ed, 0, |value| {
+        let object = value.as_object()?;
+        let kind = match object.get_property("__generic_kind")?.as_str()? {
+            "function" => GenericDeclarationKind::Function,
+            "class" => GenericDeclarationKind::Class,
+            "method" => GenericDeclarationKind::Method,
+            _ => return None,
+        };
+        let owner = object
+            .get_property("__generic_owner")?
+            .as_str()?
+            .to_string();
+        Some((kind, owner))
+    })
+}
+
+fn reflected_class_owner(ed: *mut ExecuteData) -> Option<String> {
+    generic_target(ed)
+        .and_then(|(kind, owner)| (kind == GenericDeclarationKind::Class).then_some(owner))
+}
+
+fn generic_arguments_for_parent_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(owner) = reflected_class_owner(ed) else {
+        reflection_exception(eg, "Reflection target is not a class");
+        return Ok(());
     };
-    let owner = object
-        .get_property("__generic_owner")?
-        .as_str()?
-        .to_string();
-    Some((kind, owner))
+    if eg.class_is_interface(&owner) {
+        reflection_exception(eg, format!("Interface {owner} has no parent class"));
+        return Ok(());
+    }
+    let Some(binding) = eg.generic_metadata.reflection_direct_binding(
+        &owner,
+        GenericInheritanceKind::Extends,
+        None,
+    ) else {
+        reflection_exception(eg, format!("Class {owner} has no parent class"));
+        return Ok(());
+    };
+    let context = eg
+        .generic_metadata
+        .find_class_like_index(&owner)
+        .and_then(|index| eg.generic_metadata.declarations().get(index as usize));
+    let arguments = reflected_arguments(&eg.generic_metadata, context, &binding);
+    return_value(rv, Value::array(arguments))
+}
+
+fn generic_arguments_for_parent_interface(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(owner) = reflected_class_owner(ed) else {
+        reflection_exception(eg, "Reflection target is not a class or interface");
+        return Ok(());
+    };
+    let ancestor = argument_string(ed, 1);
+    if owner.eq_ignore_ascii_case(&ancestor)
+        || !eg.class_is_interface(&ancestor)
+        || !eg.class_is_a(&owner, &ancestor)
+    {
+        reflection_exception(
+            eg,
+            format!("Interface {ancestor} is not an ancestor interface of {owner}"),
+        );
+        return Ok(());
+    }
+    let bindings = eg
+        .generic_metadata
+        .reflection_interface_bindings(&owner, &ancestor);
+    let context = eg
+        .generic_metadata
+        .find_class_like_index(&owner)
+        .and_then(|index| eg.generic_metadata.declarations().get(index as usize));
+    let mut result = PhpArray::with_packed_capacity(bindings.len());
+    for binding in bindings.iter() {
+        result.push(Value::array(reflected_arguments(
+            &eg.generic_metadata,
+            context,
+            binding,
+        )));
+    }
+    return_value(rv, Value::array(result))
+}
+
+fn generic_arguments_for_used_trait(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(owner) = reflected_class_owner(ed) else {
+        reflection_exception(eg, "Reflection target is not a class");
+        return Ok(());
+    };
+    let trait_name = argument_string(ed, 1);
+    let Some(binding) = eg.generic_metadata.reflection_direct_binding(
+        &owner,
+        GenericInheritanceKind::Uses,
+        Some(&trait_name),
+    ) else {
+        reflection_exception(
+            eg,
+            format!("Trait {trait_name} is not directly used by {owner}"),
+        );
+        return Ok(());
+    };
+    let context = eg
+        .generic_metadata
+        .find_class_like_index(&owner)
+        .and_then(|index| eg.generic_metadata.declarations().get(index as usize));
+    let arguments = reflected_arguments(&eg.generic_metadata, context, &binding);
+    return_value(rv, Value::array(arguments))
 }
 
 fn is_generic(
@@ -181,9 +470,11 @@ fn generic_arguments(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let target = argument(ed, 0)
-        .as_object()
-        .and_then(|object| object.get_property("__generic_object").cloned());
+    let target = with_argument(ed, 0, |value| {
+        value
+            .as_object()
+            .and_then(|object| object.get_property("__generic_object").cloned())
+    });
     #[cfg(feature = "php-generics-reified")]
     let arguments = if let Some(binding) = target
         .as_ref()
@@ -209,6 +500,33 @@ fn generic_arguments(
     return_value(rv, Value::array(arguments))
 }
 
+fn register_reflection_class(
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    parent: Option<&str>,
+    is_abstract: bool,
+    is_final: bool,
+) {
+    eg.register_class(ClassDef {
+        name: name.to_string(),
+        parent: parent.map(str::to_owned),
+        implements: vec![],
+        is_interface: false,
+        is_abstract,
+        is_final,
+        is_trait: false,
+        is_enum: false,
+        uses: vec![],
+        properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+}
+
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     let mut functions = Vec::new();
 
@@ -231,30 +549,25 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
-    for class in [
-        "ReflectionFunction",
-        "ReflectionClass",
+    for class in ["ReflectionFunction", "ReflectionClass", "ReflectionMethod"] {
+        register_reflection_class(eg, class, None, false, false);
+    }
+    register_reflection_class(
+        eg,
         "ReflectionObject",
-        "ReflectionMethod",
+        Some("ReflectionClass"),
+        false,
+        false,
+    );
+    register_reflection_class(eg, "ReflectionException", Some("Exception"), false, false);
+    register_reflection_class(eg, "ReflectionType", None, true, false);
+    for class in [
+        "ReflectionNamedType",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+        "ReflectionTypeParameterReference",
     ] {
-        eg.register_class(ClassDef {
-            name: class.to_string(),
-            parent: None,
-            implements: vec![],
-            is_interface: false,
-            is_abstract: false,
-            is_final: false,
-            is_trait: false,
-            is_enum: false,
-            uses: vec![],
-            properties: vec![],
-            property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
-            property_defaults: std::rc::Rc::from([]),
-            readonly_props: vec![],
-            methods: vec![],
-            class_id: 0,
-        })
-        .unwrap();
+        register_reflection_class(eg, class, Some("ReflectionType"), false, true);
     }
 
     register_method!(
@@ -314,6 +627,62 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         0,
         []
     );
+    for class in ["ReflectionClass", "ReflectionObject"] {
+        register_method!(
+            class,
+            "getgenericargumentsforparentclass",
+            generic_arguments_for_parent_class,
+            1,
+            0,
+            []
+        );
+        register_method!(
+            class,
+            "getgenericargumentsforparentinterface",
+            generic_arguments_for_parent_interface,
+            2,
+            1,
+            ["name"]
+        );
+        register_method!(
+            class,
+            "getgenericargumentsforusedtrait",
+            generic_arguments_for_used_trait,
+            2,
+            1,
+            ["name"]
+        );
+    }
+    for class in [
+        "ReflectionNamedType",
+        "ReflectionUnionType",
+        "ReflectionIntersectionType",
+        "ReflectionTypeParameterReference",
+    ] {
+        register_method!(class, "__tostring", reflection_type_to_string, 1, 0, []);
+    }
+    for class in ["ReflectionNamedType", "ReflectionTypeParameterReference"] {
+        register_method!(class, "getname", reflection_type_name, 1, 0, []);
+    }
+    register_method!(
+        "ReflectionNamedType",
+        "hasgenericarguments",
+        reflection_type_has_generic_arguments,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionNamedType",
+        "getgenericarguments",
+        reflection_type_generic_arguments,
+        1,
+        0,
+        []
+    );
+    for class in ["ReflectionUnionType", "ReflectionIntersectionType"] {
+        register_method!(class, "gettypes", reflection_compound_types, 1, 0, []);
+    }
 
     functions
 }

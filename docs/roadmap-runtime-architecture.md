@@ -1950,12 +1950,30 @@ This remains sidecar/IC work: calls consume one already-merged contract and do
 not traverse ancestors. ARM64 and CPU-pinned x86-64 31-pair production-feature
 controls keep diamond versus an explicitly premerged contract, concrete versus
 manual methods and the default-build manual control within one percent. No hot
-layout, dependency, JIT or native lowering changed. The next semantic step is
-the Reflection inheritance view, including plural bindings for repeated
-generic ancestors. Generics-aware JIT specialization is deliberately last: it
-starts only after these semantics, Reflection and both runtimes are closed, and
-must consume the canonical metadata with exact guards and deoptimization back
-to the established erased/reified paths.
+layout, dependency, JIT or native lowering changed.
+
+The Reflection inheritance view now reads that same graph. Parent-class and
+direct-trait methods return one argument list, while
+`getGenericArgumentsForParentInterface()` returns one inner list per distinct
+binding in traversal order. Defaults, forwarded parameters, nested arguments,
+unions/intersections and included declarations are materialized as
+`ReflectionType` objects; invalid targets raise `ReflectionException`. The
+stdlib-facing handlers live in the isolated `stdlib/reflection.rs` unit and the
+graph walk in `generics/reflection.rs`, so neither leaks into ordinary
+dispatch. Fixed stdlib table capacities are reserved only when stdlib is
+installed, recovering the initially visible cold-start cost without making a
+bare executor allocate.
+
+Before/after release controls keep the five-million-call ordinary method at
+-0.017% ARM64 and -0.073% CPU-pinned x86-64; 101 batches of 20 empty starts are
++0.559% and +0.497%, respectively. All four all-target matrices pass on both
+architectures. No hot representation, dependency or native lowering changed.
+The next semantic step is the remaining RFC Reflection object surface for
+generic parameter declarations, variance and type-parameter references.
+Generics-aware JIT specialization is deliberately last: it starts only after
+these semantics, complete Reflection and both runtimes are closed, and must
+consume the canonical metadata with exact guards and deoptimization back to
+the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

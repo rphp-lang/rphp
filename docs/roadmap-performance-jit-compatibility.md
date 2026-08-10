@@ -8598,10 +8598,45 @@ on both hosts:
   concrete/manual +0.258%; reified diamond/premerged is -0.079% and reified
   concrete/manual +0.067%; the reified/default manual control is -0.103%.
 
-The next semantic checkpoint is the Reflection inheritance view, including the
-plural bindings created by a diamond. Generics-aware JIT specialization remains
-deliberately last, after both runtime models, Reflection and their
-fallback/deoptimization contracts are complete.
+The RFC v0.22 Reflection inheritance view is now executable from
+`ReflectionClass` and `ReflectionObject`. Parent-class and directly used-trait
+lookups return one `list<ReflectionType>`; the parent-interface lookup returns
+the RFC's plural `list<list<ReflectionType>>`, retaining a separate argument
+set for every distinct diamond binding in inheritance traversal order. Invalid
+parent/interface/trait targets raise `ReflectionException`. The view is built
+from the linker graph, so defaults, forwarded child parameters, nested generic
+arguments, unions/intersections and metadata merged after `include` need no
+parallel representation.
+
+Inheritance arguments are real `ReflectionNamedType`, `ReflectionUnionType`,
+`ReflectionIntersectionType` or `ReflectionTypeParameterReference` objects.
+Named types expose nested generic arguments, compound types expose their
+members and every type has the pre-erasure string form. Permanent coverage
+includes direct parent and trait bindings, two differently bound copies of one
+interface, forwarded `U`, nested `Foo<int>`, an intersection argument, invalid
+ancestor handling and a cross-unit diamond. The existing feature flags only
+control syntax/runtime selection; this shared Reflection machinery remains
+compiled into the default build.
+
+The first cold-start measurement exposed the cost of growing fixed stdlib hash
+tables while adding the new classes. `register_stdlib` now reserves the known
+built-in envelope once; an executor that does not install stdlib remains lazy.
+Against the pre-API refactor commit, final release controls report:
+
+- ARM64: ordinary five-million-call method -0.017% balanced over 31 pairs;
+  process startup +0.559% over 101 order-alternated batches of 20 starts;
+- CPU-2-pinned x86-64: method -0.073% and startup +0.497% under the same
+  gates.
+
+No object, frame, `Value`, function/opcode/IC layout, external dependency or
+JIT/native lowering changed. All four `--all-targets` configurations pass on
+both architectures; focused dual/reified coverage is now 26 generics and 21
+include scenarios, erased-only 21 and 20, and default remains 2 and 12. The
+next Reflection slice replaces the provisional generic-parameter arrays with
+RFC `ReflectionGenericTypeParameter` objects, variance cases and exact
+type-parameter back-references. Generics-aware JIT specialization remains
+deliberately last, after both runtime models and the complete Reflection surface
+are closed.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked
@@ -8693,10 +8728,11 @@ inheritance is at parity on both architectures without relying on JIT
 specialization. ARM64 passes 197 default, 197 erased-only, 197 reified-only and
 309 all-feature library tests plus every all-feature target; x86-64 passes the
 same first three sets, 334 all-feature library tests and every target.
-Method-generic alpha-renaming and deterministic diamond merging are now closed
-in the cold interned graph without weakening either exact fast-path proof. The
-remaining semantic follow-up is the Reflection inheritance view, including
-plural bindings for repeated generic ancestors.
+Method-generic alpha-renaming, deterministic diamond merging and the plural
+Reflection inheritance view are now closed in the cold interned graph without
+weakening either exact fast-path proof. The remaining Reflection follow-up is
+the RFC object surface for generic parameter declarations and their type
+references.
 
 Generics-aware JIT work is the final milestone of this interphase, not a
 concurrent semantic shortcut. It begins only after parser/link/runtime/
