@@ -1292,6 +1292,34 @@ scenarios. Both hosts complete the all-feature/all-target build. No dependency
 was added, `Cargo.lock` is byte-identical and the implementation uses only the
 standard library.
 
+### Opt-in stream-to-stream copy checkpoint (2026-08-10)
+
+`stream-copy` adds `stream_copy_to_stream()` without expanding `PhpStream` or
+the resource registry. One 8 KiB array lives on the handler stack. Each loop
+iteration releases the source registry borrow after reading, then borrows the
+destination for as many writes as needed. This keeps the existing single-
+payload `RefCell` access valid even when source and destination ids are equal,
+avoids a heap copy buffer and preserves the source cursor when a later write
+fails.
+
+PHP 8.5 differential coverage defines the admitted semantics. Omitted, zero
+and negative offsets use the current position; positive offsets seek from the
+start. `null` and negative lengths are unbounded, zero performs only a requested
+positive seek, and an exact limit does not set EOF. Both stream arguments are
+validated before scalar options, closed resources produce parameter-specific
+errors, and read, seek or write failures return `false`. The private checked-
+argument helper was generalized by argument index/name and remains compiled
+only for opt-in stream/CSV error surfaces.
+
+Default ARM64 remains the exact 2,818,048-byte `f5d4e68` `__TEXT` image with
+the same monitored addresses and lockfile. X86-64 text/data/bss and hot
+addresses also match exactly; its pinned 20-pair gate passes at
+-0.797%/-0.138%/-0.795%/+0.309%/-0.332% for scalar, packed array, String,
+order and ledger. Test matrices remain 195/186/299 on ARM64 and 195/186/324 on
+x86-64. The dedicated and combined stream matrices pass 17 and 26 scenarios,
+and both hosts complete all-feature/all-target compilation. The slice is
+standard-library-only and leaves `Cargo.lock` byte-identical.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

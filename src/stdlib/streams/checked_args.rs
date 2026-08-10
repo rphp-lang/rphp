@@ -51,18 +51,31 @@ pub(super) fn given_type_name(value: &Value) -> String {
 }
 
 #[cold]
+#[cfg(any(feature = "csv-errors", feature = "stream-contents"))]
 pub(super) fn stream_argument(
     execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     function: &str,
 ) -> Option<i64> {
-    let value = super::argument(execute_data, 0);
+    stream_argument_at(execute_data, eg, function, 0, "stream")
+}
+
+#[cold]
+pub(super) fn stream_argument_at(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    index: u32,
+    parameter: &str,
+) -> Option<i64> {
+    let value = super::argument(execute_data, index);
+    let argument = index + 1;
     let Some(resource) = value.as_resource_id() else {
         argument_error(
             eg,
             "TypeError",
             format!(
-                "{function}(): Argument #1 ($stream) must be of type resource, {} given",
+                "{function}(): Argument #{argument} (${parameter}) must be of type resource, {} given",
                 given_type_name(value)
             ),
         );
@@ -74,7 +87,9 @@ pub(super) fn stream_argument(
         argument_error(
             eg,
             "TypeError",
-            format!("{function}(): Argument #1 ($stream) must be an open stream resource"),
+            format!(
+                "{function}(): Argument #{argument} (${parameter}) must be an open stream resource"
+            ),
         );
         return None;
     }

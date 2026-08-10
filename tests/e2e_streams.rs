@@ -176,6 +176,135 @@ fn stream_contents_argument_errors_match_php_classes_and_messages() {
 }
 
 #[test]
+#[cfg(feature = "stream-copy")]
+fn stream_copy_preserves_php_length_offset_cursor_eof_and_failure_rules() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $source = fopen('php://memory', 'w+');
+            fwrite($source, 'abcdef'); fseek($source, 2);
+            $destination = fopen('php://temp/maxmemory:2', 'w+');
+            echo stream_copy_to_stream($source, $destination);
+            echo ':'; echo ftell($source);
+            echo ':'; if (feof($source)) { echo 'eof'; }
+            echo ':'; echo ftell($destination); echo ':';
+            rewind($destination); echo fread($destination, 100);
+
+            $exact = fopen('php://memory', 'w+');
+            fwrite($exact, 'abcdef'); fseek($exact, 4);
+            $exact_destination = fopen('php://memory', 'w+');
+            echo ':'; echo stream_copy_to_stream($exact, $exact_destination, 2, 0);
+            echo ':'; echo ftell($exact);
+            echo ':'; if (feof($exact)) { echo 'eof'; } else { echo 'exact-open'; }
+            echo ':'; rewind($exact_destination); echo fread($exact_destination, 100);
+
+            $offset = fopen('php://memory', 'w+');
+            fwrite($offset, 'abcdef'); fseek($offset, 4);
+            $offset_destination = fopen('php://memory', 'w+');
+            echo ':'; echo stream_copy_to_stream($offset, $offset_destination, -9, 1);
+            echo ':'; echo ftell($offset);
+            echo ':'; if (feof($offset)) { echo 'eof'; }
+            echo ':'; rewind($offset_destination); echo fread($offset_destination, 100);
+
+            $beyond = fopen('php://memory', 'w+');
+            fwrite($beyond, 'abc');
+            echo ':'; echo stream_copy_to_stream($beyond, $offset_destination, null, 10);
+            echo ':'; echo ftell($beyond);
+            echo ':'; if (feof($beyond)) { echo 'eof'; }
+
+            $same = fopen('php://memory', 'w+');
+            fwrite($same, 'abcdef'); rewind($same);
+            echo ':'; echo stream_copy_to_stream($same, $same);
+            echo ':'; echo ftell($same); echo ':';
+            rewind($same); echo fread($same, 100);
+
+            $write_failure_source = fopen('php://memory', 'w+');
+            fwrite($write_failure_source, 'xyz'); rewind($write_failure_source);
+            $read_only = fopen('php://memory', 'r');
+            echo ':';
+            if (stream_copy_to_stream($write_failure_source, $read_only) === false) {
+                echo 'write-failed';
+            }
+            echo ':'; echo ftell($write_failure_source);
+            "
+        ),
+        concat!(
+            "4:6:eof:4:cdef",
+            ":2:6:exact-open:ef",
+            ":5:6:eof:bcdef",
+            ":0:10:eof",
+            ":6:12:abcdefabcdef",
+            ":write-failed:3"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-copy")]
+fn stream_copy_crosses_fixed_chunks_between_real_files() {
+    let source_path = TemporaryPath::unique("stream-copy-source");
+    let destination_path = TemporaryPath::unique("stream-copy-destination");
+    let unreadable_path = TemporaryPath::unique("stream-copy-unreadable");
+    let payload: Vec<u8> = (0..20_000).map(|index| (index % 251) as u8).collect();
+    std::fs::write(&source_path.0, &payload).unwrap();
+    std::fs::write(&unreadable_path.0, b"unreadable").unwrap();
+    let source = format!(
+        "<?php
+        $source = fopen('{}', 'r');
+        $destination = fopen('{}', 'w');
+        echo stream_copy_to_stream($source, $destination); echo ':';
+        echo ftell($source); echo ':'; echo ftell($destination); echo ':';
+        if (feof($source)) {{ echo 'eof'; }}
+
+        $unreadable = fopen('{}', 'w');
+        echo ':';
+        if (stream_copy_to_stream($unreadable, $destination) === false) {{
+            echo 'read-failed';
+        }}
+        echo ':'; echo ftell($unreadable);
+        ",
+        source_path.php_literal(),
+        destination_path.php_literal(),
+        unreadable_path.php_literal()
+    );
+    assert_eq!(run_php(&source), "20000:20000:20000:eof:read-failed:0");
+    assert_eq!(std::fs::read(&destination_path.0).unwrap(), payload);
+}
+
+#[test]
+#[cfg(feature = "stream-copy")]
+fn stream_copy_argument_errors_match_php_classes_and_messages() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $stream = fopen('php://memory', 'w+');
+            try { stream_copy_to_stream(false, $stream); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_copy_to_stream($stream, false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_copy_to_stream($stream, $stream, []); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_copy_to_stream($stream, $stream, 1, new stdClass()); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            $closed = fopen('php://memory', 'w+'); fclose($closed); echo '|';
+            try { stream_copy_to_stream($stream, $closed); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            "
+        ),
+        concat!(
+            "TypeError:stream_copy_to_stream(): Argument #1 ($from) must be of type resource, false given",
+            "|TypeError:stream_copy_to_stream(): Argument #2 ($to) must be of type resource, false given",
+            "|TypeError:stream_copy_to_stream(): Argument #3 ($length) must be of type ?int, array given",
+            "|TypeError:stream_copy_to_stream(): Argument #4 ($offset) must be of type int, stdClass given",
+            "|TypeError:stream_copy_to_stream(): Argument #2 ($to) must be an open stream resource"
+        )
+    );
+}
+
+#[test]
 fn memory_and_temp_metadata_report_backend_specific_snapshots() {
     assert_eq!(
         run_php(

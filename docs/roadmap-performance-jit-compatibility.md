@@ -7777,6 +7777,41 @@ read. Complete all-feature/all-target compilation passes on both hosts. The
 slice uses only `std`; no crate was added and `Cargo.lock` remains
 byte-identical.
 
+### Opt-in bounded stream-to-stream copies (2026-08-10)
+
+The next Phase 5 slice exposes `stream_copy_to_stream()` behind `stream-copy`.
+Differential PHP 8.5 probes establish its distinct cursor contract: omitted,
+zero and negative offsets keep the current source position, while a positive
+offset seeks absolutely before copying, including for a zero length. `null`
+and every negative length copy to EOF; an exact non-negative limit stops
+without probing EOF. Read or write failure returns `false`, and the covered
+wrong-type and closed-resource cases reproduce the exact `TypeError` classes
+and messages for `$from`, `$to`, `$length` and `$offset`.
+
+The handler owns one fixed 8 KiB stack chunk and never allocates a buffer based
+on the requested length. It borrows the request resource registry only for one
+source read or destination write at a time, so it neither holds two mutable
+registry borrows nor requires a second resource API. Short writes are completed
+before the next read; a write failure preserves PHP's already-advanced source
+cursor. Using the same resource for source and destination follows the same
+sequential cursor behavior. The shared checked-argument helper now accepts an
+argument index and parameter name, removing a second validation path without
+changing the existing CSV or bulk-read surfaces.
+
+The default ARM64 release still has the exact 2,818,048-byte `f5d4e68`
+`__TEXT`, monitored hot addresses and lockfile hash. X86-64 text/data/bss and
+the same hot addresses also remain exact. Its fresh pinned 20-pair runtime gate
+passes at -0.797%/-0.138%/-0.795%/+0.309%/-0.332% for scalar, packed array,
+String, order and ledger.
+
+ARM64 passes 195 default, 186 no-default and 299 all-feature library tests;
+x86-64 passes 195, 186 and 324. Seventeen `stream-copy` scenarios cover
+memory, spilled temporary and real files, a 20,000-byte multi-chunk transfer,
+same-resource copying, offsets, exact EOF and independent read/write failures.
+The combined stream matrix passes 26 scenarios and complete all-feature/all-
+target compilation passes on both hosts. No crate or external buffering
+library was added and `Cargo.lock` remains byte-identical.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

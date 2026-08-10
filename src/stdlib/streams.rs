@@ -14,10 +14,16 @@ use super::stream::PhpStream;
 // unrelated hot-code placement enough to fail the runtime admission gate. Keep
 // both dependency-free implementations separately selectable until that
 // codegen boundary is solved.
-#[cfg(any(feature = "csv-errors", feature = "stream-contents"))]
+#[cfg(any(
+    feature = "csv-errors",
+    feature = "stream-contents",
+    feature = "stream-copy"
+))]
 mod checked_args;
 #[cfg(feature = "stream-contents")]
 mod contents;
+#[cfg(feature = "stream-copy")]
+mod copy;
 #[cfg(feature = "csv-errors")]
 mod csv_errors;
 #[cfg(feature = "csv-write")]
@@ -41,6 +47,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             3,
             1,
             &["stream", "length", "offset"],
+        ),
+        #[cfg(feature = "stream-copy")]
+        (
+            "stream_copy_to_stream",
+            copy::fn_stream_copy_to_stream,
+            4,
+            2,
+            &["from", "to", "length", "offset"],
         ),
         ("fgets", fn_fgets, 2, 1, &["stream", "length"]),
         #[cfg(all(not(target_vendor = "apple"), not(feature = "csv-errors")))]

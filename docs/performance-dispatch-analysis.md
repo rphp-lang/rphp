@@ -2014,3 +2014,19 @@ sides despite identical static layout; its required isolated 20-pair rerun
 passed at +0.571%. No result-size preallocation, external buffering library or
 lockfile change was introduced: the backend uses an 8 KiB stack chunk and
 fallible incremental `Vec` growth.
+
+The follow-up `stream-copy` surface is also fully absent from default builds.
+Unlike `stream_get_contents()`, it allocates no result vector: one 8 KiB stack
+array is alternately read from the source and written to the destination. The
+operation deliberately releases the request-registry borrow between those
+steps, avoiding any new dual-payload borrowing primitive and preserving
+same-resource cursor behavior. Generalizing the feature-only checked stream
+helper by argument index and name leaves all ordinary registration and handler
+code compiled out.
+
+ARM64 again retains the exact 2,818,048-byte `f5d4e68` text size and monitored
+addresses. X86-64 text/data/bss and those addresses are exact as well. A fresh
+pinned 20-pair x86 gate passes without a rerun at
+-0.797%/-0.138%/-0.795%/+0.309%/-0.332% for scalar, packed array, String,
+order and ledger. The feature adds no crate, heap-sized copy request or
+lockfile change.
