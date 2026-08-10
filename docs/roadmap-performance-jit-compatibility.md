@@ -8260,6 +8260,64 @@ feature passes 197 library and 16 stream scenarios, all-feature stream coverage
 reaches 35, and all-feature/all-target compilation passes on both hosts. The
 feature adds no crate, external library or `Cargo.lock` change.
 
+## Interphase 5.5: opt-in bound-erased PHP generics
+
+After the current Phase 5 stream slice, add generics behind one independent
+`php-generics` Cargo feature. The semantic baseline is the latest published
+[PHP RFC: Bound-Erased Generic Types, version 0.22](https://wiki.php.net/rfc/bound_erased_generic_types)
+and its linked [reference implementation](https://github.com/php/php-src/pull/21969).
+The RFC is marked Declined as of 2026-08-10, so RPHP must describe this as an
+experimental language extension rather than implemented PHP compatibility. If
+a successor RFC is published before this interphase starts, record its semantic
+delta and deliberately rebase the plan instead of silently mixing proposals.
+
+Implement the RFC surface in measured layers. The parser/AST layer covers type
+parameters on classes, interfaces, traits, functions, methods, closures and
+arrow functions; `:` bounds, defaults, `+T`/`-T` variance, nested generic type
+arguments, `::<...>` turbofish use sites and the 127-argument cap. The metadata
+and link layer preserves the pre-erasure form, substitutes generic ancestors,
+checks inheritance arity and bounds, applies parametric LSP and validates
+variance. Reflection follows only after the internal metadata identity and
+inheritance rules are stable.
+
+Execution follows bound erasure: every parameter becomes its declared bound or
+`mixed`, ordinary calls use the existing call path, and generic arguments do
+not become per-object or per-`Value` payload. Generic declarations without a
+turbofish must compile to the same runtime instruction stream as their erased
+equivalent. Explicit turbofish sites may emit one feature-only validation
+instruction before the ordinary call/new/attribute path; canonical argument
+tuples and successful arity/bound results are cached at that site. Quick plans
+and the JIT may consume a proven bound or stable argument tuple as optimization
+metadata, but every specialization needs an exact guard and canonical
+deoptimization path.
+
+Performance is an admission requirement, not follow-up polish:
+
+- Feature-off ARM64/x86-64 executable text, hot symbol layout, 16-byte `Value`
+  layout and the runtime corpus must remain exact against the accepted baseline.
+- With `php-generics` enabled, programs that declare or use no generics must
+  retain bytecode identity, perform no generic side-table lookup in ordinary
+  dispatch and stay inside the existing one-percent runtime gate.
+- Generic declarations called without turbofish must add no steady-state heap
+  allocation or per-call generic branch and must remain inside one percent of
+  the equivalent manually erased declaration.
+- A warmed explicit turbofish site must allocate nothing after its metadata is
+  resolved and target at most five-percent overhead versus the same call with
+  an already-proven ordinary bound check. Report cold metadata/link cost and
+  warm dispatch cost separately.
+- Metadata is interned per declaration/use site, never copied into each object
+  or frame. Monomorphization is excluded from the first implementation; any
+  later selective specialization must prove an end-to-end win without code-size
+  explosion.
+
+The permanent corpus must include ambiguous comparison/shift grammar, nested
+arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
+traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
+the upstream RFC implementation tests that fit RPHP's supported PHP surface.
+Add dedicated cold-compile, link, ordinary-call, generic-call and turbofish hot
+benchmarks on ARM64 and x86-64. Use no parser, type-system or collection crate;
+the implementation remains within the standard library and existing runtime.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

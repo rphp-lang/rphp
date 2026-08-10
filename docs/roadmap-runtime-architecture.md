@@ -1746,6 +1746,32 @@ x86-64. Library matrices pass 195/186/305 and 195/186/330; focused/all-feature
 stream coverage is 16/35 scenarios and complete all-feature/all-target linking
 passes on both hosts. No crate, external library or lockfile change is added.
 
+### Scheduled interphase: feature-gated generic metadata and dispatch
+
+Once the active Phase 5 stream checkpoint is closed, the next architectural
+interphase implements the latest published Bound-Erased Generic Types RFC
+v0.22 behind `php-generics`. Because that RFC is currently Declined, this is an
+explicit RPHP experiment and stays absent from default PHP-compatibility
+claims. Its complete syntax and validation contract is tracked in the main
+performance/JIT roadmap.
+
+Generic type parameters and use-site arguments live in compact, interned side
+tables owned by declarations and explicit use sites. Objects retain their
+current class identity, frames retain their current layout and `Value` remains
+16 bytes; no reified argument vector is attached per instance. The executable
+signature is produced once by erasing each parameter to its bound or `mixed`,
+while the pre-erasure signature remains available to inheritance checks,
+Reflection and optimizers.
+
+Ordinary calls continue through the existing call-frame path with no generic
+flag test. Only `::<...>` sites emit a feature-only validation operation; its
+inline cache stores the canonical argument tuple, resolved callee identity and
+successful bound result before entering the normal call/new path. This mirrors
+the RFC's pay-at-use boundary and gives the quick/JIT tiers stable proof data
+without forcing a lookup on non-generic code. Feature-off codegen identity,
+zero steady-state allocation at warm sites, a one-percent erased-call ceiling
+and a five-percent warm-turbofish ceiling are hard admission gates.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
