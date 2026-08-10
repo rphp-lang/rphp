@@ -10,6 +10,12 @@ use crate::vm::function::{FunctionCommon, InternalFunction, InternalFunctionHand
 
 use super::stream::PhpStream;
 
+// Linking the writer into the default ARM64 binary changes unrelated hot-code
+// placement enough to fail the runtime admission gate. Keep the dependency-free
+// implementation separately selectable until that codegen boundary is solved.
+#[cfg(feature = "csv-write")]
+mod csv_write;
+
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
     for (name, handler, maximum, required, parameter_names) in [
@@ -29,6 +35,21 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             5,
             1,
             &["stream", "length", "separator", "enclosure", "escape"],
+        ),
+        #[cfg(all(feature = "csv-write", not(target_vendor = "apple")))]
+        (
+            "fputcsv",
+            csv_write::fn_fputcsv,
+            6,
+            2,
+            &[
+                "stream",
+                "fields",
+                "separator",
+                "enclosure",
+                "escape",
+                "eol",
+            ],
         ),
         ("fwrite", fn_fwrite, 3, 2, &["stream", "data", "length"]),
         ("fclose", fn_fclose, 1, 1, &["stream"]),
@@ -89,6 +110,28 @@ pub(super) fn register_extensions(
     let pointer = &function.common as *const FunctionCommon;
     eg.register_function("fgetcsv", pointer).unwrap();
     functions.push(function);
+    #[cfg(feature = "csv-write")]
+    {
+        let function = Box::new(make_internal_function(
+            csv_write::fn_fputcsv,
+            6,
+            2,
+            [
+                "stream",
+                "fields",
+                "separator",
+                "enclosure",
+                "escape",
+                "eol",
+            ]
+            .into_iter()
+            .map(str::to_string)
+            .collect(),
+        ));
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("fputcsv", pointer).unwrap();
+        functions.push(function);
+    }
 }
 
 #[inline]

@@ -1953,3 +1953,16 @@ a narrow target-specific translation-unit boundary, documented next to the
 source attributes and covered by the same cross-host admission gates as an
 ordinary runtime optimization. The CSV implementation itself uses only `std`;
 neither Cargo manifest changes nor a third-party parser are part of the fix.
+
+The following `fputcsv()` slice deliberately does not repeat the target-layout
+workaround. Moving the writer into its own normal `streams::csv_write` module
+made the existing reader and stream files byte-identical to their accepted
+baseline, but enabling the additional cold code by default still moved the
+ARM64 ledger workload by roughly 4--5 percent. Whole-crate codegen-unit and LTO
+experiments stabilized individual symbols only by causing substantially larger
+regressions in other runtime workloads. Those profile changes and custom
+section experiments were rejected. The dependency-free writer is therefore
+kept behind the explicit `csv-write` feature while the default build compiles
+it out and retains its admitted hot layout. This is the intended gate behavior:
+compatibility work may land independently, but it does not become production
+default merely because its own handler is cold.

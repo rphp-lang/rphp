@@ -381,3 +381,84 @@ fn csv_quote_edges_match_php_byte_rules() {
         "[a,b][c]:[x\"y][z]:[atail][b]:[a  ][b]:[a \"b\"][c]:[b\\\"c]"
     );
 }
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_writes_quote_php_special_bytes_and_report_length() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://memory', 'w+');
+            $length = fputcsv(
+                $stream,
+                ['plain', 'a b', "a\tb", 'a,b', 'a"b', 'a\\b', "a\nb", ''],
+                ',',
+                '"',
+                '\\'
+            );
+            echo $length; echo ':'; echo ftell($stream); echo ':';
+            rewind($stream); echo fread($stream, 1000);
+            "#,
+        ),
+        "44:44:plain,\"a b\",\"a\tb\",\"a,b\",\"a\"\"b\",\"a\\b\",\"a\nb\",\n"
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_writes_custom_controls_eol_scalars_and_empty_records() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://temp/maxmemory:4', 'w+');
+            echo fputcsv($stream, [null, false, true, 0, 1, 1.5, ''], ';', '~', '', '<EOL>');
+            echo ':';
+            echo fputcsv($stream, [], ';', '~', '', '');
+            echo ':';
+            if (fputcsv($stream, ['x'], '::', '~', '', "\n") === false) { echo 'separator'; }
+            if (fputcsv($stream, ['x'], ';', 'xx', '', "\n") === false) { echo ':enclosure'; }
+            if (fputcsv($stream, ['x'], ';', '~', 'xx', "\n") === false) { echo ':escape'; }
+            echo ':'; echo ftell($stream); echo ':';
+            rewind($stream); echo fread($stream, 1000);
+            "#,
+        ),
+        "17:0:separator:enclosure:escape:17:;;1;0;1;1.5;<EOL>"
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_writes_preserve_legacy_escape_byte_behavior() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://memory', 'w+');
+            fputcsv($stream, ['a\\"b', 'a\\\\b', 'a"b'], ',', '"', '\\', '<EOL>');
+            fputcsv($stream, ['a\\"b', 'a\\\\b', 'a"b'], ',', '"', '', '');
+            rewind($stream); echo fread($stream, 1000);
+            "#,
+        ),
+        "\"a\\\"b\",\"a\\\\b\",\"a\"\"b\"<EOL>\"a\\\"\"b\",a\\\\b,\"a\"\"b\""
+    );
+}
+
+#[test]
+#[cfg(feature = "csv-write")]
+fn csv_writes_use_array_order_and_reject_unwritable_streams() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $stream = fopen('php://memory', 'w+');
+            $fields = ['second' => 'two', 10 => 'ten', 'last' => 'x,y'];
+            echo fputcsv($stream, $fields, ',', '"', '', "\r\n");
+            echo ':';
+            rewind($stream); echo fread($stream, 1000);
+
+            $read_only = fopen('php://memory', 'r');
+            if (fputcsv($read_only, ['no']) === false) { echo ':readonly'; }
+            if (fputcsv($stream, 'not-an-array') === false) { echo ':fields'; }
+            "#,
+        ),
+        "15:two,ten,\"x,y\"\r\n:readonly:fields"
+    );
+}

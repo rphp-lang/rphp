@@ -7628,6 +7628,46 @@ external dependency. `fputcsv()` and exact PHP argument-error construction are
 the next bounded CSV compatibility slices; final-alias stream release remains
 an independent lifetime boundary.
 
+### Opt-in streaming CSV writer and default-layout admission (2026-08-10)
+
+The complementary write slice implements `fputcsv()` in the new
+`streams::csv_write` child module using only the Rust standard library. Its
+incremental `CsvEncoder` follows PHP 8.5 byte rules: fields containing the
+separator, enclosure, configured escape, newline, carriage return, tab or an
+ASCII space are enclosed; unescaped enclosure bytes are doubled; legacy
+escape-byte behavior is retained. Array insertion order, PHP scalar rendering,
+custom and empty record terminators and empty records are covered directly.
+The handler uses fallible record growth, reports the complete encoded length
+and loops over short writes until the full record reaches the existing stream
+backend. Invalid control widths, non-array fields, closed resources and
+unwritable streams conservatively return `false`; exact PHP `ValueError` and
+`TypeError` construction remains the shared argument-error follow-up.
+
+The writer was first evaluated as a default function. Even after moving every
+new implementation detail into a real child module and restoring
+`stream.rs`, `stream/csv.rs` and the existing reader path byte-for-byte, the
+additional linked code changed ARM64 placement/code generation enough to move
+the unrelated ledger workload by about 4--5 percent. The same change passed on
+x86-64, confirming that this was not execution of the writer. Single-codegen-
+unit and whole-crate LTO experiments could stabilize selected symbols, but
+caused much larger packed-array, String or scalar regressions elsewhere; custom
+text-section experiments also failed the gate. None of those global profile or
+layout workarounds is retained.
+
+`fputcsv()` therefore lands behind the explicit `csv-write` feature. With the
+feature disabled, the module and registration compile out. The final default
+ARM64 image has the same `.text` size and the same addresses for
+`run_quick_long_ops_loop` and `QuickStringSlotState::commit` as the accepted
+parser-only baseline. A fresh order-balanced 20-pair default-runtime gate
+reports +0.299%/-0.004%/-0.414%/-0.115%/-0.542% for scalar, packed array,
+String, order and ledger, all within the +1% ceiling. With `csv-write` enabled,
+18 stream scenarios and the dedicated encoder tests pass; the default 14
+stream scenarios remain unchanged. The ARM64 matrices pass 195 default, 186
+no-default and 291 all-feature library tests plus complete all-feature/all-
+target compilation. No crate or external library was added; `Cargo.lock` is
+unchanged. Resolving the compiler/layout boundary is required before promoting
+the writer into the default function set.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed
