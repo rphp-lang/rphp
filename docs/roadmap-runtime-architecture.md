@@ -1648,6 +1648,41 @@ Feature-only/all-feature stream coverage grows to 19/31 scenarios, including
 stable identity, merge order, alias lifetime, independence, exact type errors
 and partial updates. Complete all-feature/all-target linking passes on x86-64.
 
+### Canonical include-path reporting checkpoint (2026-08-10)
+
+The existing `include-path` feature now registers
+`stream_resolve_include_path()`. It returns the canonical absolute identity of
+the first existing target or `false`, resolving symlinks and `..` components
+for absolute paths, explicit `./`/`../` paths, ordered include-path candidates
+and local `file://` URIs. Existing directories are valid results, a
+case-insensitive `file://localhost/...` maps to its local path, and unsupported
+wrappers remain unresolved.
+
+PHP 8.4.24 distinguishes this reporting function from the open-time resolver:
+empty include-path entries are skipped, while an empty filename can resolve
+the first non-empty directory itself. The two policies therefore remain
+explicit instead of overloading the operational resolver: the original module
+is 223 lines and the 127-line `include_path/report.rs` child owns canonical
+reporting and its unit contract. Type/NUL validation is shared with
+`set_include_path()` after a small local refactor; null, false,
+bool, integer and float values retain PHP's weak string conversion, while
+arrays/resources and embedded NUL bytes retain exact covered errors.
+
+Only `std::fs::canonicalize` and `std::path` are used. Feature-off ARM64/x86-64
+text stays byte-identical to `c026124` at
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and `12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`,
+with exact 2,818,048-byte `__TEXT` and 3,388,067/51,816/3,048 x86-64 section
+totals. Build-free 20-pair gates pass at
++0.339%/-0.213%/+0.494%/-0.491%/+0.196% on ARM64 and
++0.165%/-0.029%/-0.525%/+0.136%/-0.034% on pinned x86-64.
+
+Library matrices pass 195/186/302 on ARM64 and 195/186/327 on x86-64, with
+201 tests in the focused include-path build. Include-path E2E coverage grows
+from two to four scenarios; 31 all-feature
+stream scenarios and complete x86-64 all-feature/all-target linking remain
+green. No feature, crate or lockfile change is involved.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -2253,3 +2253,22 @@ order and ledger. CPU-pinned x86-64 records
 noisy and their negative aggregate is not counted as a speedup. Every positive
 delta is below the one-percent ceiling, so the slice is admitted on exact
 static layout and passing runtime controls without changing a dependency.
+
+### Canonical include-path reporting admission
+
+`stream_resolve_include_path()` and its canonicalization helpers compile only
+with the opt-in `include-path` feature. Sharing its checked weak-string argument
+policy with the existing setter changes no feature-off registration or runtime
+state. ARM64 `.text` consequently remains the exact 0x244700-byte body at
+SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`,
+and `__TEXT` remains 2,818,048 bytes. X86-64 preserves exact
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+
+The build-free ARM64 20-pair gate records
++0.339%/-0.213%/+0.494%/-0.491%/+0.196% for scalar, packed array, String,
+order and ledger. CPU-pinned x86-64 records
++0.165%/-0.029%/-0.525%/+0.136%/-0.034%. All controls are inside the
+one-percent admission ceiling, and the slice adds neither a dependency nor
+default-path filesystem work.

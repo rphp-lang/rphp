@@ -8152,6 +8152,43 @@ passes 31, with both `resource-lifetime` configurations covered. Complete
 all-feature/all-target compilation passes on x86-64. `Cargo.toml` dependencies
 and `Cargo.lock` are unchanged.
 
+### Canonical include-path resolution checkpoint (2026-08-10)
+
+Phase 5 now exposes `stream_resolve_include_path()` behind the already accepted
+`include-path` boundary. PHP 8.4.24 probes define a reporting contract that is
+deliberately stricter than open-time search: the first existing candidate is
+returned as a canonical absolute path, symlinks and parent components are
+resolved, empty include-path entries are skipped, and an empty filename can
+name the first non-empty include directory. Absolute and explicit relative
+paths resolve directly; local, case-insensitive `file://` and
+`file://localhost` URIs are accepted; missing paths and other wrappers return
+`false`.
+
+The handler shares weak string and embedded-NUL validation with
+`set_include_path()` but keeps canonical reporting separate from the
+operational resolver used by file opens. This prevents the new empty-entry and
+canonicalization rules from changing accepted include/read/write behavior.
+Canonical reporting and its focused unit contract live in the 127-line
+`include_path/report.rs` child; the request state and operational policy remain
+in the 223-line owner. The implementation is built entirely from `std::path` and
+`std::fs::canonicalize`; PHP 8.4's removed `restore_include_path()` is not
+reintroduced, and no dependency or manifest surface changes.
+
+Feature-off code is exact. ARM64 retains the 0x244700-byte `.text` SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and 2,818,048-byte `__TEXT`; x86-64 retains
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+Build-free 20-pair gates report
++0.339%/-0.213%/+0.494%/-0.491%/+0.196% on ARM64 and
++0.165%/-0.029%/-0.525%/+0.136%/-0.034% on CPU-pinned x86-64.
+
+ARM64/x86-64 library matrices pass 195/186/302 and 195/186/327, with 201 tests
+in the focused include-path build. Include-path E2E coverage grows to four
+scenarios, while 31 all-feature stream
+scenarios and complete x86-64 all-feature/all-target compilation remain green.
+No crate, external library or lockfile change is introduced.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

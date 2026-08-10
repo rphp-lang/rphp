@@ -647,6 +647,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         "include_path"
     );
+    #[cfg(feature = "include-path")]
+    reg!(
+        "stream_resolve_include_path",
+        include_path::fn_stream_resolve_include_path,
+        1,
+        1,
+        "filename"
+    );
     streams::register(eg, &mut funcs);
     #[cfg(not(feature = "file-contents"))]
     reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");

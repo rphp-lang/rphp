@@ -9,6 +9,10 @@ use crate::vm::frame::ExecuteData;
 
 use super::streams::checked_args::{argument_error, given_type_name};
 
+mod report;
+
+pub(super) use report::fn_stream_resolve_include_path;
+
 const INCLUDE_PATH_STATE: &str = "\0rphp-include-path";
 const INCLUDE_PATH_VALUE: &str = "current";
 const DEFAULT_INCLUDE_PATH: &str = ".";
@@ -29,26 +33,10 @@ pub(super) fn fn_set_include_path(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let value = argument(execute_data, 0);
-    let Some(path) = weak_string(value) else {
-        argument_error(
-            eg,
-            "TypeError",
-            format!(
-                "set_include_path(): Argument #1 ($include_path) must be of type string, {} given",
-                given_type_name(value)
-            ),
-        );
-        return Ok(());
+    let path = match path_argument(value, eg, "set_include_path", "include_path") {
+        Ok(path) => path,
+        Err(()) => return Ok(()),
     };
-    if path.contains('\0') {
-        argument_error(
-            eg,
-            "ValueError",
-            "set_include_path(): Argument #1 ($include_path) must not contain any null bytes"
-                .to_string(),
-        );
-        return Ok(());
-    }
     if path.is_empty() {
         return return_value(return_pointer, Value::bool(false));
     }
@@ -140,6 +128,34 @@ fn weak_string(value: &Value) -> Option<String> {
         | ValueType::Reference
         | ValueType::Closure => None,
     }
+}
+
+fn path_argument(
+    value: &Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    name: &str,
+) -> Result<String, ()> {
+    let Some(path) = weak_string(value) else {
+        argument_error(
+            eg,
+            "TypeError",
+            format!(
+                "{function}(): Argument #1 (${name}) must be of type string, {} given",
+                given_type_name(value)
+            ),
+        );
+        return Err(());
+    };
+    if path.contains('\0') {
+        argument_error(
+            eg,
+            "ValueError",
+            format!("{function}(): Argument #1 (${name}) must not contain any null bytes"),
+        );
+        return Err(());
+    }
+    Ok(path)
 }
 
 fn argument<'a>(execute_data: *mut ExecuteData, index: u32) -> &'a Value {
