@@ -1797,6 +1797,17 @@ return and property checks. It does not widen `Value`, `FunctionCommon` or the
 ordinary frame. Separate erased-only, reified-only and dual-feature builds stay
 green so the runtime-model cost is measured rather than inferred.
 
+The first vertical implementation now retains call bindings in a feature-only
+LIFO vector placed last in `ExecutorGlobals`, so all established field offsets
+remain exact. Named same-compilation-unit turbofish sites are discharged during
+linking when arity, bounds and the reified runtime signature are provably
+identical to erasure; they emit the same call stream as the ordinary generic
+call. Sites requiring stricter substitution keep explicit pre-call and
+post-return checks. `ReflectionFunction`, `ReflectionClass` and
+`ReflectionMethod` all read the same interned declarations and report enabled
+runtime capabilities even though the default parser keeps generic syntax
+disabled.
+
 Ordinary calls continue through the existing call-frame path with no generic
 flag test. Only `::<...>` sites emit a validation operation; its
 inline cache stores the canonical argument tuple, resolved callee identity and

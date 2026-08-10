@@ -1143,13 +1143,19 @@ impl Compiler {
         &mut self,
         kind: GenericDeclarationKind,
         arguments: &[crate::parser::TypeHint],
+        static_owner: Option<&str>,
         owner_op: u16,
         owner_type: OpType,
         secondary_op: u16,
         secondary_type: OpType,
-    ) {
+    ) -> bool {
         if arguments.is_empty() {
-            return;
+            return false;
+        }
+        if static_owner
+            .is_some_and(|owner| self.static_generic_use_is_fully_proven(kind, owner, arguments))
+        {
+            return false;
         }
         let use_site = self.record_generic_use_site(arguments);
         let mut check = Instruction::new(OpCode::CheckGenericArgs);
@@ -1160,11 +1166,104 @@ impl Compiler {
         check.extended_value = use_site;
         check._pad = kind as u16;
         self.instructions.push(check);
+        true
     }
 
-    fn emit_reified_argument_check(&mut self, arguments: &[TypeHint]) {
-        if arguments.is_empty() || !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified
+    /// Statically named declarations in the same compilation unit can prove
+    /// both their RFC arity/bounds and, when reified is enabled, whether the
+    /// substituted call contract is identical to bound erasure. Such sites
+    /// need no runtime opcode at all.
+    fn static_generic_use_is_fully_proven(
+        &self,
+        kind: GenericDeclarationKind,
+        owner: &str,
+        arguments: &[TypeHint],
+    ) -> bool {
+        let Some(declaration) = self.generic_declarations.iter().find(|declaration| {
+            declaration.kind == kind && declaration.owner.eq_ignore_ascii_case(owner)
+        }) else {
+            return false;
+        };
+        let metadata = GenericMetadata::compile(
+            vec![declaration.clone()],
+            vec![PendingGenericUseSite {
+                arguments: arguments.to_vec(),
+            }],
+        );
+        if metadata
+            .resolve_binding(kind, owner, 0, |actual, bound| {
+                actual.eq_ignore_ascii_case(bound)
+            })
+            .is_err()
         {
+            return false;
+        }
+        if !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified {
+            return true;
+        }
+
+        let mut effective = arguments.to_vec();
+        for parameter in declaration.parameters.iter().skip(effective.len()) {
+            let Some(default) = parameter.default.clone() else {
+                return false;
+            };
+            effective.push(default);
+        }
+        let same_runtime_contract = |hint: &TypeHint| {
+            let erased = self.convert_type_hint(&Some(hint.clone()));
+            let substituted =
+                self.substitute_generic_hint(hint, &declaration.parameters, &effective);
+            erased == self.convert_type_hint(&Some(substituted))
+        };
+        declaration
+            .value_parameters
+            .iter()
+            .flatten()
+            .all(same_runtime_contract)
+            && declaration
+                .return_type
+                .as_ref()
+                .is_none_or(same_runtime_contract)
+    }
+
+    fn substitute_generic_hint(
+        &self,
+        hint: &TypeHint,
+        parameters: &[crate::parser::GenericParameter],
+        arguments: &[TypeHint],
+    ) -> TypeHint {
+        match hint {
+            TypeHint::GenericParameter { name, erased } => parameters
+                .iter()
+                .position(|parameter| parameter.name == *name)
+                .and_then(|index| arguments.get(index))
+                .cloned()
+                .unwrap_or_else(|| (**erased).clone()),
+            TypeHint::GenericApplication {
+                base,
+                arguments: inner,
+            } => TypeHint::GenericApplication {
+                base: base.clone(),
+                arguments: inner
+                    .iter()
+                    .map(|argument| self.substitute_generic_hint(argument, parameters, arguments))
+                    .collect(),
+            },
+            TypeHint::Nullable(inner) => TypeHint::Nullable(Box::new(
+                self.substitute_generic_hint(inner, parameters, arguments),
+            )),
+            TypeHint::Union(parts) => TypeHint::Union(
+                parts
+                    .iter()
+                    .map(|part| self.substitute_generic_hint(part, parameters, arguments))
+                    .collect(),
+            ),
+            concrete => concrete.clone(),
+        }
+    }
+
+    fn emit_reified_argument_check(&mut self, runtime_binding: bool) {
+        if !runtime_binding || !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified {
             return;
         }
         self.instructions
@@ -1173,12 +1272,11 @@ impl Compiler {
 
     fn emit_reified_return_check(
         &mut self,
-        arguments: &[TypeHint],
+        runtime_binding: bool,
         result: u16,
         result_type: OpType,
     ) {
-        if arguments.is_empty() || !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified
-        {
+        if !runtime_binding || !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified {
             return;
         }
         let mut check = Instruction::new(OpCode::CheckReifiedReturn);
@@ -2132,7 +2230,7 @@ impl Compiler {
 
                 let resolved = self.resolve_name(name);
                 let ref_args = self.lookup_ref_args(&resolved);
-                let name_idx = self.add_literal(Value::string(resolved));
+                let name_idx = self.add_literal(Value::string(resolved.clone()));
 
                 // For unqualified function calls in a namespace, PHP falls back to global.
                 // Store the original unqualified name as a fallback literal.
@@ -2143,9 +2241,10 @@ impl Compiler {
                     0 // no fallback
                 };
 
-                self.emit_generic_check(
+                let runtime_generic_check = self.emit_generic_check(
                     GenericDeclarationKind::Function,
                     generic_args,
+                    Some(&resolved),
                     name_idx,
                     OpType::Const,
                     fallback_idx,
@@ -2172,14 +2271,14 @@ impl Compiler {
                     self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
                 }
 
-                self.emit_reified_argument_check(generic_args);
+                self.emit_reified_argument_check(runtime_generic_check);
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
-                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
+                self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
@@ -2641,10 +2740,11 @@ impl Compiler {
                     .collect();
 
                 let resolved_class = self.resolve_name(class_name);
-                let name_idx = self.add_literal(Value::string(resolved_class));
-                self.emit_generic_check(
+                let name_idx = self.add_literal(Value::string(resolved_class.clone()));
+                let runtime_generic_check = self.emit_generic_check(
                     GenericDeclarationKind::Class,
                     generic_args,
+                    Some(&resolved_class),
                     name_idx,
                     OpType::Const,
                     0,
@@ -2661,7 +2761,7 @@ impl Compiler {
 
                 // Send constructor args — offset by 1 because CV 0 is $this
                 self.emit_precompiled_call_args(&compiled_args, 1);
-                self.emit_reified_argument_check(generic_args);
+                self.emit_reified_argument_check(runtime_generic_check);
 
                 // DoFcall to run __construct (VM skips if no constructor exists)
                 let discard = self.alloc_tmp();
@@ -2669,7 +2769,7 @@ impl Compiler {
                 do_fcall.result = discard;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
-                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
+                self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
@@ -2739,9 +2839,10 @@ impl Compiler {
 
                 let method_idx = self.add_literal(Value::string(method.clone()));
 
-                self.emit_generic_check(
+                let runtime_generic_check = self.emit_generic_check(
                     GenericDeclarationKind::Method,
                     generic_args,
+                    None,
                     obj_op,
                     obj_type,
                     method_idx,
@@ -2765,13 +2866,13 @@ impl Compiler {
                     self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
                 }
 
-                self.emit_reified_argument_check(generic_args);
+                self.emit_reified_argument_check(runtime_generic_check);
 
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
-                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
+                self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 if let Some(idx) = nullsafe_patch {
                     self.instructions[idx].op2 = self.instructions.len() as u16;
@@ -2789,11 +2890,12 @@ impl Compiler {
                 let generic_owner = format!("{}::{}", resolved_class, method);
                 let class_idx = self.add_literal(Value::string(resolved_class));
                 let method_idx = self.add_literal(Value::string(method.clone()));
-                let generic_owner_idx = self.add_literal(Value::string(generic_owner));
+                let generic_owner_idx = self.add_literal(Value::string(generic_owner.clone()));
 
-                self.emit_generic_check(
+                let runtime_generic_check = self.emit_generic_check(
                     GenericDeclarationKind::Method,
                     generic_args,
+                    Some(&generic_owner),
                     generic_owner_idx,
                     OpType::Const,
                     0,
@@ -2809,14 +2911,14 @@ impl Compiler {
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 1, 0, true, true);
-                self.emit_reified_argument_check(generic_args);
+                self.emit_reified_argument_check(runtime_generic_check);
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
-                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
+                self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
@@ -2856,9 +2958,10 @@ impl Compiler {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
 
-                self.emit_generic_check(
+                let runtime_generic_check = self.emit_generic_check(
                     GenericDeclarationKind::Function,
                     generic_args,
+                    None,
                     callable_op,
                     callable_type,
                     0,
@@ -2874,7 +2977,7 @@ impl Compiler {
 
                 // Send arguments
                 self.emit_call_args(args, 0, 0, true, true);
-                self.emit_reified_argument_check(generic_args);
+                self.emit_reified_argument_check(runtime_generic_check);
 
                 // DoFcall
                 let tmp = self.alloc_tmp();
@@ -2882,7 +2985,7 @@ impl Compiler {
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
-                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
+                self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }

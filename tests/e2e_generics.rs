@@ -6,6 +6,8 @@ use rphp::compiler::compile::Compiler;
 use rphp::generics::{GenericDeclarationKind, GenericType, GenericVariance};
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+use rphp::vm::opcode::OpCode;
 
 fn parse(source: &str) -> Result<Vec<rphp::parser::Stmt>, String> {
     let tokens = Lexer::new(source).tokenize()?;
@@ -143,6 +145,43 @@ echo make::<Child>(7);
         assert!(
             rendered.contains(expected),
             "{rendered:?} did not contain {expected:?}"
+        );
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {
+    let statements =
+        parse("<?php function id<T : int>(T $value): T { return $value; } echo id::<int>(1);")
+            .unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    assert!(result.main.instructions.iter().all(|instruction| {
+        !matches!(
+            instruction.opcode,
+            OpCode::CheckGenericArgs | OpCode::CheckReifiedArgs | OpCode::CheckReifiedReturn
+        )
+    }));
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_substitution_that_differs_from_erasure_keeps_boundary_checks() {
+    let statements =
+        parse("<?php function id<T>(T $value): T { return $value; } echo id::<int>(1);").unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    for opcode in [
+        OpCode::CheckGenericArgs,
+        OpCode::CheckReifiedArgs,
+        OpCode::CheckReifiedReturn,
+    ] {
+        assert!(
+            result
+                .main
+                .instructions
+                .iter()
+                .any(|instruction| instruction.opcode == opcode),
+            "missing {opcode:?}"
         );
     }
 }

@@ -62,10 +62,6 @@ pub struct ExecutorGlobals {
     pub class_table: HashMap<String, Box<ClassDef>>,
     /// Cold generic declaration side table. Ordinary dispatch never reads it.
     pub generic_metadata: GenericMetadata,
-    /// LIFO binding sidecar used only by explicit reified calls. Keeping it in
-    /// executor cold state preserves Value, object and ExecuteData layouts.
-    #[cfg(feature = "php-generics-reified")]
-    pub reified_bindings: Vec<ReifiedBinding>,
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
@@ -103,6 +99,10 @@ pub struct ExecutorGlobals {
     /// Stable boxed ClassDef pointers indexed by class ID. Slot zero is
     /// reserved for dynamic/unknown classes.
     class_by_id: Vec<*const ClassDef>,
+    /// LIFO binding sidecar used only by explicit reified calls. It stays last
+    /// so every pre-existing ExecutorGlobals field keeps the feature-off offset.
+    #[cfg(feature = "php-generics-reified")]
+    pub reified_bindings: Vec<ReifiedBinding>,
 }
 
 impl ExecutorGlobals {

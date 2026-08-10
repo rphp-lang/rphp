@@ -8374,6 +8374,48 @@ Performance is an admission requirement, not follow-up polish:
   later selective specialization must prove an end-to-end win without code-size
   explosion.
 
+### Dual-runtime generics vertical checkpoint (2026-08-10)
+
+The first executable slice now covers turbofish calls to named functions,
+classes, instance/static methods, dynamic string callables and closures. One
+interned declaration/use-site graph feeds both runtimes and the built-in
+`ReflectionFunction`, `ReflectionClass` and `ReflectionMethod` views. The
+default binary keeps this machinery and Reflection API compiled in but rejects
+declaration, type-application and turbofish syntax. No crate or lockfile change
+was added.
+
+Erased-only sites validate arity and bounds, then cache declaration identity in
+the existing 16-byte per-opline inline-cache slot. Reified-only sites keep a
+LIFO binding sidecar at the end of `ExecutorGlobals` and enforce substituted
+argument and return contracts without changing `Value`, `FunctionCommon`, an
+object or `ExecuteData`. Putting the feature-only sidecar last preserves every
+pre-existing executor-field offset.
+
+A statically named same-unit call whose arity/bounds are proven and whose
+substituted runtime signature equals bound erasure emits no generic runtime
+instruction. This is semantic proof, not a benchmark-pattern exception: the
+compiler compares every parameter and return runtime shape after default
+substitution. Unknown, polymorphic, invalid or stricter-reified sites retain
+the canonical checked path.
+
+Three permanent five-million-call workloads separate manual erasure, an
+ordinary generic declaration and `::<int>`. On the ARM64 reference host, 31
+order-paired release ratios after the static proof are:
+
+- erased ordinary generic/manual erasure: +0.681%;
+- erased proven turbofish/ordinary generic: -0.268%;
+- reified ordinary generic/manual erasure: -0.122%;
+- reified proven turbofish/ordinary generic: +0.211%;
+- reified feature binary/default binary on the non-generic manual control:
+  -0.178%.
+
+The same focused matrix passes 11 reified and 10 erased scenarios on ARM64,
+including deliberately different erased/reified behavior, nested bindings,
+bound/default/arity failures and Reflection. The remaining performance work is
+the genuinely stricter case such as unbounded `T` reified as `int`, plus dynamic
+and cross-unit sites; those may not use the zero-opcode proof and must reach the
+warm-site gate through compact checked dispatch.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
