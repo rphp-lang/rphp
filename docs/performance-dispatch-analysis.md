@@ -2272,3 +2272,23 @@ order and ledger. CPU-pinned x86-64 records
 +0.165%/-0.029%/-0.525%/+0.136%/-0.034%. All controls are inside the
 one-percent admission ceiling, and the slice adds neither a dependency nor
 default-path filesystem work.
+
+### Stream-registry default-code admission
+
+The `stream-registry` boundary removes all registry handlers, locality policy
+and the object-string bridge from feature-off builds. The existing private
+magic-method helper keeps its default callers; only the enabled variant
+compiles the narrow bridge used by `stream_is_local()`. ARM64 `.text` is
+consequently still the exact 0x244700-byte `c026124` body at SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`,
+with 2,818,048-byte `__TEXT`. X86-64 remains exact at
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+
+The build-free ARM64 20-pair gate records
++0.558%/-0.589%/+0.304%/-0.891%/-0.272% for scalar, packed array, String,
+order and ledger. CPU-pinned x86-64 records
+-0.191%/+0.062%/-0.892%/-1.806%/+0.216%. The negative, visibly noisy order
+aggregate is not claimed as a gain. Every positive delta remains below the
+one-percent admission ceiling, and no dependency or default runtime work is
+added.

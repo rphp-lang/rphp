@@ -8189,6 +8189,44 @@ scenarios, while 31 all-feature stream
 scenarios and complete x86-64 all-feature/all-target compilation remain green.
 No crate, external library or lockfile change is introduced.
 
+### Opt-in stream registry and locality checkpoint (2026-08-10)
+
+The next Phase 5 slice introduces the dependency-free `stream-registry`
+feature. `stream_get_wrappers()` reports only the integrated `php` and `file`
+wrappers. `stream_get_transports()` and `stream_get_filters()` return empty
+arrays because coroutine descriptors are not PHP Stream resources and RPHP has
+no admitted filter chain. This truthful registry avoids promising APIs that
+cannot be opened or composed through `fopen()`.
+
+`stream_is_local()` follows the PHP 8.4.24 contract for strings and resources.
+It distinguishes remote HTTP(S), FTP(S), data and remote-file URLs from local
+paths, local file hosts, `php://`, local archive/compression schemes and the
+unknown-wrapper fallback. Current file, memory and temporary stream resources
+are local; closed or non-stream resources raise the covered TypeError. Weak
+scalar/array conversion is retained. A small feature-only VM bridge reuses the
+existing magic-method executor for Stringable objects, while stdClass/Closure
+conversion raises PHP's exact covered Error.
+
+The registry and locality policy live in the focused 139-line
+`streams/info.rs` module. The default binary does not compile its registration,
+policy or magic-call bridge. ARM64 therefore retains the exact 0x244700-byte
+`.text` SHA-256
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and 2,818,048-byte `__TEXT`; x86-64 retains
+3,388,067/51,816/3,048 text/data/bss and `.text` SHA-256
+`12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`.
+
+Build-free 20-pair gates report
++0.558%/-0.589%/+0.304%/-0.891%/-0.272% on ARM64 and
+-0.191%/+0.062%/-0.892%/-1.806%/+0.216% on CPU-pinned x86-64. The x86 order
+samples were noisy and their negative aggregate is not an optimization claim;
+all positive controls remain below one percent.
+
+ARM64/x86-64 library matrices pass 195/186/303 and 195/186/328. The focused
+feature passes 196 library and 16 stream scenarios; all-feature stream coverage
+grows from 31 to 33, and all-feature/all-target compilation passes on both
+hosts. The feature adds no crate, external library or `Cargo.lock` change.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

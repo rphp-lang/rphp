@@ -278,6 +278,15 @@ fn call_magic_method(
     }
 }
 
+/// Reuse PHP object string conversion from feature-only internal handlers.
+#[cfg(feature = "stream-registry")]
+pub(crate) fn call_object_string_conversion(
+    eg: &mut ExecutorGlobals,
+    object: &Value,
+) -> Result<Option<Value>, VmError> {
+    call_magic_method(eg, object, "__tostring", &[])
+}
+
 /// Execute a top-level script.
 /// Result of throw_in_frame: either the exception was handled (new frame + op_array)
 /// or it was not and should propagate via eg.exception.

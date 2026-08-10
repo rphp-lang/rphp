@@ -1683,6 +1683,43 @@ from two to four scenarios; 31 all-feature
 stream scenarios and complete x86-64 all-feature/all-target linking remain
 green. No feature, crate or lockfile change is involved.
 
+### Truthful stream-registry checkpoint (2026-08-10)
+
+The independent `stream-registry` feature adds `stream_get_wrappers()`,
+`stream_get_transports()`, `stream_get_filters()` and `stream_is_local()`.
+Registry results describe the integrated PHP Stream layer rather than every
+unrelated runtime capability: `php` and `file` are the admitted wrappers,
+while transports and filters remain empty. Coroutine TCP/UDP descriptors are
+intentionally not advertised as PHP Stream transports, and no filter pipeline
+is claimed before one exists.
+
+PHP 8.4.24 probes define locality independently of path existence. Plain paths,
+`php://`, local file hosts, archive/compression-style and unknown fallback
+schemes are local; HTTP(S), FTP(S), data URLs and remote `file://` hosts are
+not. Every current `PhpStream` backend is local. Closed streams and other
+resource types raise the exact covered invalid-stream TypeError. Scalar/array
+weak conversion is retained, and Stringable objects reuse the VM's existing
+`__toString()` call path; non-Stringable objects and closures raise PHP's Error
+instead of silently using the runtime debug representation.
+
+The 139-line `streams/info.rs` module owns registry policy and one pure locality
+test. A feature-only VM bridge delegates object conversion to the existing
+magic-method helper, so there is no second invocation mechanism. The default
+ARM64/x86-64 text remains byte-identical to `c026124` at
+`98860c8ab367e6c392b4978d316311aceb16c7acb38a79455270a6746ee6da34`
+and `12df229c942df4203be1a5df086bf920da492251f5494b9a158dd170e68e2584`;
+section totals remain 2,818,048-byte ARM64 `__TEXT` and
+3,388,067/51,816/3,048 on x86-64.
+
+Build-free 20-pair gates pass at
++0.558%/-0.589%/+0.304%/-0.891%/-0.272% on ARM64 and
+-0.191%/+0.062%/-0.892%/-1.806%/+0.216% on CPU-pinned x86-64. The noisy
+negative order result is not treated as a speedup. Library matrices pass
+195/186/303 and 195/186/328; the focused feature passes 196 library and 16
+stream scenarios, while all-feature stream coverage reaches 33. Complete
+all-feature/all-target compilation passes on both hosts. One opt-in Cargo
+feature is added, but no crate, external library or lockfile change.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

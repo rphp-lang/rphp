@@ -232,6 +232,78 @@ fn default_stream_context_errors_match_php_and_preserve_prior_updates() {
 }
 
 #[test]
+#[cfg(feature = "stream-registry")]
+fn stream_registry_reports_only_integrated_wrappers_transports_and_filters() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $wrappers = stream_get_wrappers();
+            echo implode(',', $wrappers); echo ':';
+            echo count(stream_get_transports()); echo ':';
+            echo count(stream_get_filters()); echo ':';
+            $wrappers[0] = 'changed';
+            $fresh = stream_get_wrappers();
+            echo $fresh[0];
+            "
+        ),
+        "php,file:0:0:php"
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-registry")]
+fn stream_locality_matches_php_wrappers_resources_and_string_conversion() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $cases = [
+                ['relative.php', true],
+                ['php://memory', true],
+                ['glob://*.php', true],
+                ['unknown://target', true],
+                ['file:///tmp/file.php', true],
+                ['file://localhost/tmp/file.php', true],
+                ['http://example.com', false],
+                ['data://text/plain,value', false],
+                ['file://remote/tmp/file.php', false],
+                ['file://localhost', false],
+                ['a' . chr(0) . 'b', true],
+            ];
+            foreach ($cases as $case) {
+                echo stream_is_local($case[0]) === $case[1];
+            }
+            echo '|';
+
+            $stream = fopen('php://memory', 'w+');
+            echo stream_is_local($stream); echo ':';
+            fclose($stream);
+            try { stream_is_local($stream); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            echo stream_is_local([]); echo stream_is_local(null); echo stream_is_local(1); echo '|';
+
+            class RemoteStreamName {
+                public function __toString(): string { return 'http://example.com'; }
+            }
+            echo stream_is_local(new RemoteStreamName()) === false; echo '|';
+            try { stream_is_local(new stdClass()); }
+            catch (Error $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_is_local(function () {}); }
+            catch (Error $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            "
+        ),
+        concat!(
+            "11111111111|1:",
+            "TypeError:stream_is_local(): supplied resource is not a valid stream resource|",
+            "111|1|",
+            "Error:Object of class stdClass could not be converted to string|",
+            "Error:Object of class Closure could not be converted to string"
+        )
+    );
+}
+
+#[test]
 #[cfg(feature = "stream-context")]
 fn stream_context_mutators_merge_context_and_stream_state() {
     assert_eq!(
