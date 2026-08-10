@@ -2817,6 +2817,18 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 op_init_dynamic_call(eg, frame, op_array, opline)?;
             }
 
+            OpCode::CheckGenericArgs => {
+                op_check_generic_args(eg, frame, op_array, opline)?;
+            }
+
+            OpCode::CheckReifiedArgs => {
+                op_check_reified_args(eg, frame)?;
+            }
+
+            OpCode::CheckReifiedReturn => {
+                op_check_reified_return(eg, frame, op_array, opline)?;
+            }
+
             OpCode::FetchStaticProp => {
                 op_fetch_static_prop(eg, frame, op_array, opline);
             }

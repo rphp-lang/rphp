@@ -40,6 +40,7 @@ pub enum Expr {
     FunctionCall {
         name: String,
         args: Vec<CallArg>,
+        generic_args: Vec<TypeHint>,
     },
     PostInc(String),       // $i++
     PostDec(String),       // $i--
@@ -93,6 +94,7 @@ pub enum Expr {
         // new ClassName(args)
         class_name: String,
         args: Vec<CallArg>,
+        generic_args: Vec<TypeHint>,
     },
     PropertyAccess {
         // $obj->prop or $obj?->prop
@@ -105,6 +107,7 @@ pub enum Expr {
         object: Box<Expr>,
         method: String,
         args: Vec<CallArg>,
+        generic_args: Vec<TypeHint>,
         nullsafe: bool,
     },
     StaticCall {
@@ -112,6 +115,7 @@ pub enum Expr {
         class_name: String,
         method: String,
         args: Vec<CallArg>,
+        generic_args: Vec<TypeHint>,
     },
     StaticProperty {
         // ClassName::$prop
@@ -128,6 +132,7 @@ pub enum Expr {
         // $var(args) — variable function call / closure call
         callable: Box<Expr>,
         args: Vec<CallArg>,
+        generic_args: Vec<TypeHint>,
     },
     Instanceof {
         // $obj instanceof ClassName

@@ -116,13 +116,15 @@ impl Compiler {
                 generic_params,
             } => {
                 // Compile function body into a separate OpArray
-                let mut func_compiler = Compiler::new();
+                let mut func_compiler = self.child_compiler();
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 let resolved_name = self.resolve_name(name);
                 self.record_generic_declaration(
                     crate::generics::GenericDeclarationKind::Function,
                     resolved_name.clone(),
                     generic_params,
+                    Some(params),
+                    return_type.as_ref(),
                 );
                 func_compiler.current_function_name = resolved_name.clone();
                 let mut cp = self.compile_params(&mut func_compiler, params, name)?;
@@ -921,6 +923,8 @@ impl Compiler {
                     crate::generics::GenericDeclarationKind::Class,
                     resolved_class.clone(),
                     generic_params,
+                    None,
+                    None,
                 );
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
@@ -932,8 +936,10 @@ impl Compiler {
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_class, method.name),
                         &method.generic_params,
+                        Some(&method.params),
+                        method.return_type.as_ref(),
                     );
-                    let mut func_compiler = Compiler::new();
+                    let mut func_compiler = self.child_compiler();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
@@ -1100,6 +1106,8 @@ impl Compiler {
                     crate::generics::GenericDeclarationKind::Interface,
                     resolved_iface.clone(),
                     generic_params,
+                    None,
+                    None,
                 );
                 // Interface methods have no body — we still create stub UserFunctions
                 // so they appear in the class_def for type checking, but they should
@@ -1110,9 +1118,11 @@ impl Compiler {
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_iface, method.name),
                         &method.generic_params,
+                        Some(&method.params),
+                        method.return_type.as_ref(),
                     );
                     // Create a minimal op_array that just returns null
-                    let mut func_compiler = Compiler::new();
+                    let mut func_compiler = self.child_compiler();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("interface method {}::{}", name, method.name);
@@ -1214,6 +1224,8 @@ impl Compiler {
                     crate::generics::GenericDeclarationKind::Trait,
                     resolved_trait.clone(),
                     generic_params,
+                    None,
+                    None,
                 );
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.
@@ -1223,8 +1235,10 @@ impl Compiler {
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_trait, method.name),
                         &method.generic_params,
+                        Some(&method.params),
+                        method.return_type.as_ref(),
                     );
-                    let mut func_compiler = Compiler::new();
+                    let mut func_compiler = self.child_compiler();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("trait method {}::{}", name, method.name);
@@ -1353,8 +1367,10 @@ impl Compiler {
                         crate::generics::GenericDeclarationKind::Method,
                         format!("{}::{}", resolved_enum, method.name),
                         &method.generic_params,
+                        Some(&method.params),
+                        method.return_type.as_ref(),
                     );
-                    let mut func_compiler = Compiler::new();
+                    let mut func_compiler = self.child_compiler();
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("enum method {}::{}", name, method.name);

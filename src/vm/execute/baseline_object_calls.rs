@@ -227,13 +227,20 @@ fn op_new_obj<'a>(
             frame_set_this(call, obj_ref.clone());
         }
     } else {
-        // No constructor — skip num_args SendVals + 1 DoFcall.
+        // No constructor — skip the call protocol through DoFcall. Explicit
+        // reified construction may insert a boundary check between SendVals
+        // and DoFcall plus a return/object-binding check after it, so locate
+        // the terminator instead of relying on a fixed instruction count.
         // Arg expressions were compiled before NewObj so side effects
         // have already executed; we just discard the values.
-        let skip = num_args + 1; // SendVals + DoFcall
         let base_ptr = op_array.instructions.as_ptr();
         let current_ip = unsafe { (*frame).opline.offset_from(base_ptr) } as usize;
-        unsafe { (*frame).opline = base_ptr.add(current_ip + 1 + skip as usize) };
+        let do_fcall_ip = op_array.instructions[current_ip + 1..]
+            .iter()
+            .position(|instruction| instruction.opcode == OpCode::DoFcall)
+            .map(|offset| current_ip + 1 + offset)
+            .ok_or_else(|| VmError::Fatal("new expression is missing DoFcall".into()))?;
+        unsafe { (*frame).opline = base_ptr.add(do_fcall_ip + 1) };
         return Ok(ColdResult::Continue);
     }
     Ok(ColdResult::Done)

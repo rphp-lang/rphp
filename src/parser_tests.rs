@@ -47,6 +47,7 @@ fn test_parse_function_call() {
         vec![Stmt::Echo(Expr::FunctionCall {
             name: "my_double".into(),
             args: vec![CallArg::Positional(Expr::Integer(21))],
+            generic_args: vec![],
         })]
     );
 }

@@ -1,14 +1,20 @@
 /// AST → OpArray compiler.
 /// Converts parsed statements into VM instructions.
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 /// Global closure counter — ensures unique names across nested compilers.
 static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 
 use super::OpArray;
-use crate::generics::{GenericDeclarationKind, GenericMetadata, PendingGenericDeclaration};
-use crate::parser::{BinOp, CallArg, CastType, Expr, ListTarget, Param, Stmt, Visibility};
+use crate::generics::{
+    GenericDeclarationKind, GenericMetadata, PendingGenericDeclaration, PendingGenericUseSite,
+};
+use crate::parser::{
+    BinOp, CallArg, CastType, Expr, ListTarget, Param, Stmt, TypeHint, Visibility,
+};
 use crate::value::{
     ObjectLayout, Value, ValueType,
     canonical_decimal_array_key as canonical_string_literal_array_key,
@@ -1025,6 +1031,9 @@ pub struct Compiler {
     /// Cold declaration metadata. Finalized into one interned side table after
     /// compilation; never embedded in a function, frame, object or Value.
     generic_declarations: Vec<PendingGenericDeclaration>,
+    /// Globally numbered explicit type-argument sites shared by every nested
+    /// compiler in this compilation unit. This is cold compiler state only.
+    generic_use_sites: Rc<RefCell<Vec<PendingGenericUseSite>>>,
     /// Deferred error from compile_expr (which can't return Result)
     deferred_error: Option<String>,
     /// ref_args for functions known from parent scope (inherited by child compilers)
@@ -1077,6 +1086,7 @@ impl Compiler {
             try_entries: Vec::new(),
             class_defs: Vec::new(),
             generic_declarations: Vec::new(),
+            generic_use_sites: Rc::new(RefCell::new(Vec::new())),
             deferred_error: None,
             known_ref_args: HashMap::new(),
             strict_types: false,
@@ -1090,11 +1100,19 @@ impl Compiler {
         }
     }
 
+    fn child_compiler(&self) -> Self {
+        let mut child = Self::new();
+        child.generic_use_sites = Rc::clone(&self.generic_use_sites);
+        child
+    }
+
     fn record_generic_declaration(
         &mut self,
         kind: GenericDeclarationKind,
         owner: String,
         parameters: &[crate::parser::GenericParameter],
+        value_parameters: Option<&[Param]>,
+        return_type: Option<&TypeHint>,
     ) {
         if parameters.is_empty() {
             return;
@@ -1103,7 +1121,70 @@ impl Compiler {
             kind,
             owner,
             parameters: parameters.to_vec(),
+            value_parameters: value_parameters
+                .unwrap_or_default()
+                .iter()
+                .map(|parameter| parameter.type_hint.clone())
+                .collect(),
+            return_type: return_type.cloned(),
         });
+    }
+
+    fn record_generic_use_site(&mut self, arguments: &[crate::parser::TypeHint]) -> u32 {
+        let mut use_sites = self.generic_use_sites.borrow_mut();
+        let index = use_sites.len() as u32;
+        use_sites.push(PendingGenericUseSite {
+            arguments: arguments.to_vec(),
+        });
+        index
+    }
+
+    fn emit_generic_check(
+        &mut self,
+        kind: GenericDeclarationKind,
+        arguments: &[crate::parser::TypeHint],
+        owner_op: u16,
+        owner_type: OpType,
+        secondary_op: u16,
+        secondary_type: OpType,
+    ) {
+        if arguments.is_empty() {
+            return;
+        }
+        let use_site = self.record_generic_use_site(arguments);
+        let mut check = Instruction::new(OpCode::CheckGenericArgs);
+        check.op1 = owner_op;
+        check.op1_type = owner_type;
+        check.op2 = secondary_op;
+        check.op2_type = secondary_type;
+        check.extended_value = use_site;
+        check._pad = kind as u16;
+        self.instructions.push(check);
+    }
+
+    fn emit_reified_argument_check(&mut self, arguments: &[TypeHint]) {
+        if arguments.is_empty() || !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified
+        {
+            return;
+        }
+        self.instructions
+            .push(Instruction::new(OpCode::CheckReifiedArgs));
+    }
+
+    fn emit_reified_return_check(
+        &mut self,
+        arguments: &[TypeHint],
+        result: u16,
+        result_type: OpType,
+    ) {
+        if arguments.is_empty() || !crate::generics::GenericRuntimeCapabilities::CONFIGURED.reified
+        {
+            return;
+        }
+        let mut check = Instruction::new(OpCode::CheckReifiedReturn);
+        check.op1 = result;
+        check.op1_type = result_type;
+        self.instructions.push(check);
     }
 
     /// Pre-scan top-level `const` declarations to populate known_constants.
@@ -1294,7 +1375,9 @@ impl Compiler {
             }
         }
 
-        let generic_metadata = GenericMetadata::compile(self.generic_declarations);
+        let generic_use_sites = self.generic_use_sites.borrow().clone();
+        let generic_metadata =
+            GenericMetadata::compile(self.generic_declarations, generic_use_sites);
         Ok(CompileResult {
             main: OpArray {
                 num_cvs: self.next_cv,
@@ -1887,129 +1970,101 @@ impl Compiler {
                 let one_lit = self.add_literal(Value::long(1));
                 (one_lit, OpType::Const)
             }
-            Expr::FunctionCall { name, args } => {
-                if let [CallArg::Positional(argument)] = args.as_slice() {
-                    let direct_kind = self
-                        .unambiguous_global_function_name(name)
-                        .and_then(crate::builtin_metadata::direct_internal_spec)
-                        .filter(|spec| {
-                            spec.required_args <= 1
-                                && spec.max_args >= 1
-                                && spec.kind.lowering()
-                                    != crate::builtin_metadata::DirectInternalLowering::Generic2
-                        })
-                        .map(|spec| spec.kind);
+            Expr::FunctionCall {
+                name,
+                args,
+                generic_args,
+            } => {
+                if generic_args.is_empty() {
+                    if let [CallArg::Positional(argument)] = args.as_slice() {
+                        let direct_kind = self
+                            .unambiguous_global_function_name(name)
+                            .and_then(crate::builtin_metadata::direct_internal_spec)
+                            .filter(|spec| {
+                                spec.required_args <= 1
+                                    && spec.max_args >= 1
+                                    && spec.kind.lowering()
+                                        != crate::builtin_metadata::DirectInternalLowering::Generic2
+                            })
+                            .map(|spec| spec.kind);
 
-                    if let Some(direct_kind) = direct_kind {
-                        let (argument_op, argument_type) = self.compile_expr(argument);
-                        let tmp = self.alloc_tmp();
-                        let opcode = match direct_kind.lowering() {
-                            crate::builtin_metadata::DirectInternalLowering::Generic => {
-                                OpCode::DirectInternalCall1
-                            }
-                            crate::builtin_metadata::DirectInternalLowering::Strlen => {
-                                if argument_type == OpType::Cv {
-                                    OpCode::Strlen_Cv
-                                } else {
-                                    OpCode::Strlen
-                                }
-                            }
-                            crate::builtin_metadata::DirectInternalLowering::Generic2 => {
-                                unreachable!("binary direct builtin selected by unary lowering")
-                            }
-                        };
-                        let mut call = Instruction::new(opcode);
-                        call.op1 = argument_op;
-                        call.op1_type = argument_type;
-                        call.result = tmp;
-                        call.result_type = OpType::Tmp;
-                        if opcode == OpCode::DirectInternalCall1 {
-                            call.extended_value = direct_kind as u32;
-                        }
-                        self.instructions.push(call);
-                        return (tmp, OpType::Tmp);
-                    }
-                }
-
-                if let [CallArg::Positional(first), CallArg::Positional(second)] = args.as_slice() {
-                    let direct_kind = self
-                        .unambiguous_global_function_name(name)
-                        .and_then(crate::builtin_metadata::direct_internal_spec)
-                        .filter(|spec| {
-                            spec.required_args <= 2
-                                && spec.max_args >= 2
-                                && spec.kind.lowering()
-                                    == crate::builtin_metadata::DirectInternalLowering::Generic2
-                        })
-                        .map(|spec| spec.kind);
-
-                    if let Some(direct_kind) = direct_kind {
-                        let (first_op, first_type) = self.compile_expr(first);
-                        let (second_op, second_type) = self.compile_expr(second);
-                        let tmp = self.alloc_tmp();
-                        let mut call = Instruction::new(OpCode::DirectInternalCall2);
-                        call.op1 = first_op;
-                        call.op1_type = first_type;
-                        call.op2 = second_op;
-                        call.op2_type = second_type;
-                        call.result = tmp;
-                        call.result_type = OpType::Tmp;
-                        call.extended_value = direct_kind as u32;
-                        self.instructions.push(call);
-                        return (tmp, OpType::Tmp);
-                    }
-                }
-
-                if self.is_global_builtin_call(name, "call_user_func") {
-                    if let Some((CallArg::Positional(callback), forwarded)) = args.split_first() {
-                        if forwarded
-                            .iter()
-                            .all(|arg| matches!(arg, CallArg::Positional(_)))
-                        {
-                            let (callback_op, callback_type) = self.compile_expr(callback);
-                            let mut init = Instruction::new(OpCode::InitUserCall);
-                            init.op1 = callback_op;
-                            init.op1_type = callback_type;
-                            init.extended_value = forwarded.len() as u32;
-                            self.instructions.push(init);
-
-                            self.emit_user_call_args(forwarded);
-
+                        if let Some(direct_kind) = direct_kind {
+                            let (argument_op, argument_type) = self.compile_expr(argument);
                             let tmp = self.alloc_tmp();
-                            let mut do_fcall = Instruction::new(OpCode::DoFcall);
-                            do_fcall.result = tmp;
-                            do_fcall.result_type = OpType::Tmp;
-                            self.instructions.push(do_fcall);
+                            let opcode = match direct_kind.lowering() {
+                                crate::builtin_metadata::DirectInternalLowering::Generic => {
+                                    OpCode::DirectInternalCall1
+                                }
+                                crate::builtin_metadata::DirectInternalLowering::Strlen => {
+                                    if argument_type == OpType::Cv {
+                                        OpCode::Strlen_Cv
+                                    } else {
+                                        OpCode::Strlen
+                                    }
+                                }
+                                crate::builtin_metadata::DirectInternalLowering::Generic2 => {
+                                    unreachable!("binary direct builtin selected by unary lowering")
+                                }
+                            };
+                            let mut call = Instruction::new(opcode);
+                            call.op1 = argument_op;
+                            call.op1_type = argument_type;
+                            call.result = tmp;
+                            call.result_type = OpType::Tmp;
+                            if opcode == OpCode::DirectInternalCall1 {
+                                call.extended_value = direct_kind as u32;
+                            }
+                            self.instructions.push(call);
                             return (tmp, OpType::Tmp);
                         }
                     }
-                }
 
-                if self.is_global_builtin_call(name, "call_user_func_array") {
-                    if let [CallArg::Positional(callback), CallArg::Positional(array)] =
+                    if let [CallArg::Positional(first), CallArg::Positional(second)] =
                         args.as_slice()
                     {
-                        if let Expr::ArrayLiteral(elements) = array {
-                            if elements.iter().all(|element| element.key.is_none()) {
-                                // A temporary packed literal cannot be observed by PHP
-                                // code. Forward its values directly and avoid allocating,
-                                // filling and dropping a PhpArray for every invocation.
+                        let direct_kind = self
+                            .unambiguous_global_function_name(name)
+                            .and_then(crate::builtin_metadata::direct_internal_spec)
+                            .filter(|spec| {
+                                spec.required_args <= 2
+                                    && spec.max_args >= 2
+                                    && spec.kind.lowering()
+                                        == crate::builtin_metadata::DirectInternalLowering::Generic2
+                            })
+                            .map(|spec| spec.kind);
+
+                        if let Some(direct_kind) = direct_kind {
+                            let (first_op, first_type) = self.compile_expr(first);
+                            let (second_op, second_type) = self.compile_expr(second);
+                            let tmp = self.alloc_tmp();
+                            let mut call = Instruction::new(OpCode::DirectInternalCall2);
+                            call.op1 = first_op;
+                            call.op1_type = first_type;
+                            call.op2 = second_op;
+                            call.op2_type = second_type;
+                            call.result = tmp;
+                            call.result_type = OpType::Tmp;
+                            call.extended_value = direct_kind as u32;
+                            self.instructions.push(call);
+                            return (tmp, OpType::Tmp);
+                        }
+                    }
+
+                    if self.is_global_builtin_call(name, "call_user_func") {
+                        if let Some((CallArg::Positional(callback), forwarded)) = args.split_first()
+                        {
+                            if forwarded
+                                .iter()
+                                .all(|arg| matches!(arg, CallArg::Positional(_)))
+                            {
                                 let (callback_op, callback_type) = self.compile_expr(callback);
                                 let mut init = Instruction::new(OpCode::InitUserCall);
                                 init.op1 = callback_op;
                                 init.op1_type = callback_type;
-                                init.extended_value = elements.len() as u32;
+                                init.extended_value = forwarded.len() as u32;
                                 self.instructions.push(init);
 
-                                for (index, element) in elements.iter().enumerate() {
-                                    let (op, op_type) = self.compile_expr(&element.value);
-                                    let mut send = Instruction::new(OpCode::SendUser);
-                                    send.op1 = op;
-                                    send.op1_type = op_type;
-                                    send.op2 = index as u16;
-                                    send.extended_value = index as u32;
-                                    self.instructions.push(send);
-                                }
+                                self.emit_user_call_args(forwarded);
 
                                 let tmp = self.alloc_tmp();
                                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
@@ -2019,22 +2074,59 @@ impl Compiler {
                                 return (tmp, OpType::Tmp);
                             }
                         }
+                    }
 
-                        // PHP treats call_user_func_array as a call construct. Compile both
-                        // operands in source order, then resolve and invoke the callback
-                        // directly instead of entering the variadic stdlib wrapper.
-                        let (callback_op, callback_type) = self.compile_expr(callback);
-                        let (array_op, array_type) = self.compile_expr(array);
-                        let tmp = self.alloc_tmp();
-                        let mut call = Instruction::new(OpCode::CallUserFuncArray);
-                        call.op1 = callback_op;
-                        call.op1_type = callback_type;
-                        call.op2 = array_op;
-                        call.op2_type = array_type;
-                        call.result = tmp;
-                        call.result_type = OpType::Tmp;
-                        self.instructions.push(call);
-                        return (tmp, OpType::Tmp);
+                    if self.is_global_builtin_call(name, "call_user_func_array") {
+                        if let [CallArg::Positional(callback), CallArg::Positional(array)] =
+                            args.as_slice()
+                        {
+                            if let Expr::ArrayLiteral(elements) = array {
+                                if elements.iter().all(|element| element.key.is_none()) {
+                                    // A temporary packed literal cannot be observed by PHP
+                                    // code. Forward its values directly and avoid allocating,
+                                    // filling and dropping a PhpArray for every invocation.
+                                    let (callback_op, callback_type) = self.compile_expr(callback);
+                                    let mut init = Instruction::new(OpCode::InitUserCall);
+                                    init.op1 = callback_op;
+                                    init.op1_type = callback_type;
+                                    init.extended_value = elements.len() as u32;
+                                    self.instructions.push(init);
+
+                                    for (index, element) in elements.iter().enumerate() {
+                                        let (op, op_type) = self.compile_expr(&element.value);
+                                        let mut send = Instruction::new(OpCode::SendUser);
+                                        send.op1 = op;
+                                        send.op1_type = op_type;
+                                        send.op2 = index as u16;
+                                        send.extended_value = index as u32;
+                                        self.instructions.push(send);
+                                    }
+
+                                    let tmp = self.alloc_tmp();
+                                    let mut do_fcall = Instruction::new(OpCode::DoFcall);
+                                    do_fcall.result = tmp;
+                                    do_fcall.result_type = OpType::Tmp;
+                                    self.instructions.push(do_fcall);
+                                    return (tmp, OpType::Tmp);
+                                }
+                            }
+
+                            // PHP treats call_user_func_array as a call construct. Compile both
+                            // operands in source order, then resolve and invoke the callback
+                            // directly instead of entering the variadic stdlib wrapper.
+                            let (callback_op, callback_type) = self.compile_expr(callback);
+                            let (array_op, array_type) = self.compile_expr(array);
+                            let tmp = self.alloc_tmp();
+                            let mut call = Instruction::new(OpCode::CallUserFuncArray);
+                            call.op1 = callback_op;
+                            call.op1_type = callback_type;
+                            call.op2 = array_op;
+                            call.op2_type = array_type;
+                            call.result = tmp;
+                            call.result_type = OpType::Tmp;
+                            self.instructions.push(call);
+                            return (tmp, OpType::Tmp);
+                        }
                     }
                 }
 
@@ -2050,6 +2142,19 @@ impl Compiler {
                 } else {
                     0 // no fallback
                 };
+
+                self.emit_generic_check(
+                    GenericDeclarationKind::Function,
+                    generic_args,
+                    name_idx,
+                    OpType::Const,
+                    fallback_idx,
+                    if fallback_idx == 0 {
+                        OpType::Unused
+                    } else {
+                        OpType::Const
+                    },
+                );
 
                 let mut init = Instruction::new(OpCode::InitFcall);
                 init.op1 = args.len() as u16;
@@ -2067,11 +2172,14 @@ impl Compiler {
                     self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
                 }
 
+                self.emit_reified_argument_check(generic_args);
+
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
+                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
@@ -2385,9 +2493,11 @@ impl Compiler {
                     GenericDeclarationKind::Closure,
                     closure_name.clone(),
                     generic_params,
+                    Some(params),
+                    return_type.as_ref(),
                 );
                 // Compile closure body into a separate function
-                let mut func_compiler = Compiler::new();
+                let mut func_compiler = self.child_compiler();
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 func_compiler.current_function_name = closure_name.clone();
                 // params come first as CVs (args), then use_vars
@@ -2507,7 +2617,11 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::New { class_name, args } => {
+            Expr::New {
+                class_name,
+                args,
+                generic_args,
+            } => {
                 // Pre-compile arg expressions BEFORE NewObj so side effects
                 // always execute, even when the class has no __construct.
                 // Compile args, tracking which are named for SendNamed emission
@@ -2528,6 +2642,14 @@ impl Compiler {
 
                 let resolved_class = self.resolve_name(class_name);
                 let name_idx = self.add_literal(Value::string(resolved_class));
+                self.emit_generic_check(
+                    GenericDeclarationKind::Class,
+                    generic_args,
+                    name_idx,
+                    OpType::Const,
+                    0,
+                    OpType::Unused,
+                );
                 let tmp = self.alloc_tmp();
                 let mut new_obj = Instruction::new(OpCode::NewObj);
                 new_obj.op1 = name_idx;
@@ -2539,6 +2661,7 @@ impl Compiler {
 
                 // Send constructor args — offset by 1 because CV 0 is $this
                 self.emit_precompiled_call_args(&compiled_args, 1);
+                self.emit_reified_argument_check(generic_args);
 
                 // DoFcall to run __construct (VM skips if no constructor exists)
                 let discard = self.alloc_tmp();
@@ -2546,6 +2669,7 @@ impl Compiler {
                 do_fcall.result = discard;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
+                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
@@ -2592,6 +2716,7 @@ impl Compiler {
                 object,
                 method,
                 args,
+                generic_args,
                 nullsafe,
             } => {
                 let (obj_op, obj_type) = self.compile_expr(object);
@@ -2614,6 +2739,15 @@ impl Compiler {
 
                 let method_idx = self.add_literal(Value::string(method.clone()));
 
+                self.emit_generic_check(
+                    GenericDeclarationKind::Method,
+                    generic_args,
+                    obj_op,
+                    obj_type,
+                    method_idx,
+                    OpType::Const,
+                );
+
                 let mut init = Instruction::new(OpCode::InitMethodCall);
                 init.op1 = obj_op;
                 init.op1_type = obj_type;
@@ -2631,10 +2765,13 @@ impl Compiler {
                     self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
                 }
 
+                self.emit_reified_argument_check(generic_args);
+
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
+                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
 
                 if let Some(idx) = nullsafe_patch {
                     self.instructions[idx].op2 = self.instructions.len() as u16;
@@ -2646,10 +2783,22 @@ impl Compiler {
                 class_name,
                 method,
                 args,
+                generic_args,
             } => {
                 let resolved_class = self.resolve_name(class_name);
+                let generic_owner = format!("{}::{}", resolved_class, method);
                 let class_idx = self.add_literal(Value::string(resolved_class));
                 let method_idx = self.add_literal(Value::string(method.clone()));
+                let generic_owner_idx = self.add_literal(Value::string(generic_owner));
+
+                self.emit_generic_check(
+                    GenericDeclarationKind::Method,
+                    generic_args,
+                    generic_owner_idx,
+                    OpType::Const,
+                    0,
+                    OpType::Unused,
+                );
 
                 let mut init = Instruction::new(OpCode::InitStaticCall);
                 init.op1 = class_idx;
@@ -2660,12 +2809,14 @@ impl Compiler {
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 1, 0, true, true);
+                self.emit_reified_argument_check(generic_args);
 
                 let tmp = self.alloc_tmp();
                 let mut do_fcall = Instruction::new(OpCode::DoFcall);
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
+                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }
@@ -2697,9 +2848,22 @@ impl Compiler {
                 let null_idx = self.add_literal(Value::null());
                 (null_idx, OpType::Const)
             }
-            Expr::DynamicCall { callable, args } => {
+            Expr::DynamicCall {
+                callable,
+                args,
+                generic_args,
+            } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
+
+                self.emit_generic_check(
+                    GenericDeclarationKind::Function,
+                    generic_args,
+                    callable_op,
+                    callable_type,
+                    0,
+                    OpType::Unused,
+                );
 
                 // InitDynamicCall: op1=callable, extended_value=num_args
                 let mut init = Instruction::new(OpCode::InitDynamicCall);
@@ -2710,6 +2874,7 @@ impl Compiler {
 
                 // Send arguments
                 self.emit_call_args(args, 0, 0, true, true);
+                self.emit_reified_argument_check(generic_args);
 
                 // DoFcall
                 let tmp = self.alloc_tmp();
@@ -2717,6 +2882,7 @@ impl Compiler {
                 do_fcall.result = tmp;
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
+                self.emit_reified_return_check(generic_args, tmp, OpType::Tmp);
 
                 (tmp, OpType::Tmp)
             }

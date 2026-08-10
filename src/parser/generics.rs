@@ -208,6 +208,20 @@ impl Parser {
         Ok(arguments)
     }
 
+    fn parse_optional_turbofish(&mut self) -> Result<Vec<TypeHint>, String> {
+        if self.peek() != Token::DoubleColon || self.peek_at(1) != Token::Less {
+            return Ok(Vec::new());
+        }
+        if !GenericRuntimeCapabilities::CONFIGURED.syntax_enabled() {
+            return Err(
+                "Generic syntax requires php-generics-erased or php-generics-reified"
+                    .to_string(),
+            );
+        }
+        self.advance(); // ::
+        self.parse_generic_type_arguments()
+    }
+
     /// The lexer correctly treats `>>` as a shift in expressions. Inside a
     /// generic list it instead closes two nested lists, so split it lazily at
     /// the grammar boundary and leave expression tokenization untouched.

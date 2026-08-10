@@ -43,8 +43,10 @@ pub fn run_php_with_functions(source: &str, register: impl FnOnce(&mut ExecutorG
     let tokens = Lexer::new(source).tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts).unwrap();
+    let generic_metadata = result.generic_metadata;
     let main_func = make_user_function(result.main);
     let (mut eg, buf) = make_eg_with_capture();
+    eg.generic_metadata = generic_metadata;
     // Register stdlib functions
     let _stdlib = stdlib::register_stdlib(&mut eg);
     // Register user-declared functions
@@ -67,8 +69,10 @@ pub fn run_php_silent(source: &str) {
     let tokens = Lexer::new(source).tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let result = Compiler::new().compile(&stmts).unwrap();
+    let generic_metadata = result.generic_metadata;
     let main_func = make_user_function(result.main);
     let (mut eg, _buf) = make_eg_with_capture();
+    eg.generic_metadata = generic_metadata;
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)
@@ -102,8 +106,10 @@ impl PreparedPhp {
         let tokens = Lexer::new(source).tokenize().unwrap();
         let stmts = Parser::new(tokens).parse().unwrap();
         let result = Compiler::new().compile(&stmts).unwrap();
+        let generic_metadata = result.generic_metadata;
         let main_func = make_user_function(result.main);
         let (mut eg, buf) = make_eg_with_capture();
+        eg.generic_metadata = generic_metadata;
         let stdlib = stdlib::register_stdlib(&mut eg);
         for (name, func) in &result.functions {
             eg.register_function(name, &func.common as *const FunctionCommon)
@@ -143,8 +149,10 @@ pub fn run_php_expect_error(source: &str) -> execute::VmError {
         Ok(r) => r,
         Err(e) => return execute::VmError::Fatal(e),
     };
+    let generic_metadata = result.generic_metadata;
     let main_func = make_user_function(result.main);
     let (mut eg, _buf) = make_eg_with_capture();
+    eg.generic_metadata = generic_metadata;
     let _stdlib = stdlib::register_stdlib(&mut eg);
     for (name, func) in &result.functions {
         if let Err(e) = eg.register_function(name, &func.common as *const FunctionCommon) {

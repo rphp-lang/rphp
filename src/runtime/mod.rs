@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::ClassDef;
-use crate::generics::GenericMetadata;
+use crate::generics::{GenericMetadata, ReifiedBinding};
 use crate::parser::Visibility;
 use crate::value::ObjectLayout;
 use crate::vm::frame::ExecuteData;
@@ -62,6 +62,10 @@ pub struct ExecutorGlobals {
     pub class_table: HashMap<String, Box<ClassDef>>,
     /// Cold generic declaration side table. Ordinary dispatch never reads it.
     pub generic_metadata: GenericMetadata,
+    /// LIFO binding sidecar used only by explicit reified calls. Keeping it in
+    /// executor cold state preserves Value, object and ExecuteData layouts.
+    #[cfg(feature = "php-generics-reified")]
+    pub reified_bindings: Vec<ReifiedBinding>,
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
     pub constant_table: std::cell::RefCell<HashMap<String, crate::value::Value>>,
@@ -112,6 +116,8 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             generic_metadata: GenericMetadata::default(),
+            #[cfg(feature = "php-generics-reified")]
+            reified_bindings: Vec::new(),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -142,6 +148,8 @@ impl ExecutorGlobals {
             function_table: HashMap::new(),
             class_table: HashMap::new(),
             generic_metadata: GenericMetadata::default(),
+            #[cfg(feature = "php-generics-reified")]
+            reified_bindings: Vec::new(),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,

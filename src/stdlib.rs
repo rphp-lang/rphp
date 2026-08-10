@@ -934,6 +934,132 @@ fn fn_throwable_get_message(
     ret!(rv, Value::string(""));
 }
 
+fn reflection_set_target(ed: *mut ExecuteData, kind: &str, owner: String) {
+    let this = arg!(ed, 0);
+    if let Some(mut object) = this.as_object_mut() {
+        object.set_property("__generic_kind", Value::string(kind));
+        object.set_property("__generic_owner", Value::string(owner));
+    }
+}
+
+fn fn_reflection_function_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    reflection_set_target(ed, "function", arg_str!(ed, 1).into_owned());
+    Ok(())
+}
+
+fn fn_reflection_class_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    reflection_set_target(ed, "class", arg_str!(ed, 1).into_owned());
+    Ok(())
+}
+
+fn fn_reflection_method_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let owner = format!("{}::{}", arg_str!(ed, 1), arg_str!(ed, 2));
+    reflection_set_target(ed, "method", owner);
+    Ok(())
+}
+
+fn reflection_generic_target(
+    ed: *mut ExecuteData,
+) -> Option<(crate::generics::GenericDeclarationKind, String)> {
+    let this = arg!(ed, 0);
+    let object = this.as_object()?;
+    let kind = match object.get_property("__generic_kind")?.as_str()? {
+        "function" => crate::generics::GenericDeclarationKind::Function,
+        "class" => crate::generics::GenericDeclarationKind::Class,
+        "method" => crate::generics::GenericDeclarationKind::Method,
+        _ => return None,
+    };
+    let owner = object
+        .get_property("__generic_owner")?
+        .as_str()?
+        .to_string();
+    Some((kind, owner))
+}
+
+fn fn_reflection_is_generic(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let found = reflection_generic_target(ed)
+        .is_some_and(|(kind, owner)| eg.generic_metadata.find(kind, &owner).is_some());
+    ret!(rv, Value::bool(found));
+}
+
+fn fn_reflection_generic_parameters(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((kind, owner)) = reflection_generic_target(ed) else {
+        ret!(rv, Value::array(PhpArray::new()));
+    };
+    let Some(declaration) = eg.generic_metadata.find(kind, &owner) else {
+        ret!(rv, Value::array(PhpArray::new()));
+    };
+    let mut result = PhpArray::with_packed_capacity(declaration.parameters.len());
+    for parameter in declaration.parameters.iter() {
+        let mut reflected = PhpArray::with_hash_capacity(4);
+        reflected.set_str(
+            "name",
+            Value::string(eg.generic_metadata.symbol(parameter.name).unwrap_or("?")),
+        );
+        let variance = match parameter.variance {
+            crate::generics::GenericVariance::Invariant => "invariant",
+            crate::generics::GenericVariance::Covariant => "covariant",
+            crate::generics::GenericVariance::Contravariant => "contravariant",
+        };
+        reflected.set_str("variance", Value::string(variance));
+        reflected.set_str(
+            "bound",
+            parameter.bound.as_ref().map_or_else(Value::null, |bound| {
+                Value::string(eg.generic_metadata.format_type(declaration, bound))
+            }),
+        );
+        reflected.set_str(
+            "default",
+            parameter
+                .default
+                .as_ref()
+                .map_or_else(Value::null, |default| {
+                    Value::string(eg.generic_metadata.format_type(declaration, default))
+                }),
+        );
+        result.push(Value::array(reflected));
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn fn_reflection_generic_runtime_modes(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let capabilities = crate::generics::GenericRuntimeCapabilities::CONFIGURED;
+    let mut modes = PhpArray::with_packed_capacity(
+        capabilities.erased as usize + capabilities.reified as usize,
+    );
+    if capabilities.erased {
+        modes.push(Value::string("bound-erased"));
+    }
+    if capabilities.reified {
+        modes.push(Value::string("reified"));
+    }
+    ret!(rv, Value::array(modes));
+}
+
 #[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
@@ -1005,6 +1131,69 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             eg.method_declaring_class.insert(ptr, $class.to_string());
             funcs.push(f);
         }};
+    }
+
+    for class in ["ReflectionFunction", "ReflectionClass", "ReflectionMethod"] {
+        eg.register_class(ClassDef {
+            name: class.to_string(),
+            parent: None,
+            implements: vec![],
+            is_interface: false,
+            is_abstract: false,
+            is_final: false,
+            is_trait: false,
+            is_enum: false,
+            uses: vec![],
+            properties: vec![],
+            property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+            property_defaults: std::rc::Rc::from([]),
+            readonly_props: vec![],
+            methods: vec![],
+            class_id: 0,
+        })
+        .unwrap();
+    }
+    reg_method!(
+        "ReflectionFunction",
+        "__construct",
+        fn_reflection_function_construct,
+        2,
+        1,
+        "name"
+    );
+    reg_method!(
+        "ReflectionClass",
+        "__construct",
+        fn_reflection_class_construct,
+        2,
+        1,
+        "name"
+    );
+    reg_method!(
+        "ReflectionMethod",
+        "__construct",
+        fn_reflection_method_construct,
+        3,
+        2,
+        "class",
+        "method"
+    );
+    for class in ["ReflectionFunction", "ReflectionClass", "ReflectionMethod"] {
+        reg_method!(class, "isgeneric", fn_reflection_is_generic, 1, 0);
+        reg_method!(
+            class,
+            "getgenericparameters",
+            fn_reflection_generic_parameters,
+            1,
+            0
+        );
+        reg_method!(
+            class,
+            "getgenericruntimemodes",
+            fn_reflection_generic_runtime_modes,
+            1,
+            0
+        );
     }
 
     // Throwable — proper interface (PHP 8 compatible)

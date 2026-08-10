@@ -619,7 +619,7 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
-            Expr::DynamicCall { callable, args } => {
+            Expr::DynamicCall { callable, args, .. } => {
                 Self::collect_free_vars(callable, bound, out);
                 for arg in args {
                     Self::collect_free_vars(arg.expr(), bound, out);

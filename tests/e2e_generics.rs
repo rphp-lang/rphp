@@ -27,6 +27,26 @@ fn default_build_contains_engine_but_rejects_generic_syntax() {
         type_error,
         "Generic syntax requires php-generics-erased or php-generics-reified"
     );
+
+    let use_error = parse("<?php id::<int>(1);").unwrap_err();
+    assert_eq!(
+        use_error,
+        "Generic syntax requires php-generics-erased or php-generics-reified"
+    );
+}
+
+#[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+#[test]
+fn reflection_layer_is_present_when_generic_syntax_is_disabled() {
+    let output = common::run_php(
+        r#"<?php
+$reflection = new ReflectionFunction("strlen");
+echo $reflection->isGeneric() ? "yes" : "no";
+echo count($reflection->getGenericParameters());
+echo count($reflection->getGenericRuntimeModes());
+"#,
+    );
+    assert_eq!(output, "no00");
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -61,6 +81,113 @@ fn erased_bound_uses_existing_runtime_type_check() {
         "<?php function only_int<T : int>(T $value): T { return $value; } only_int(\"bad\");",
     );
     assert!(format!("{error:?}").contains("must be of type int"));
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn explicit_type_arguments_cover_function_class_method_static_and_dynamic_calls() {
+    let output = common::run_php(
+        r#"<?php
+function id<T : int>(T $value): T { return $value; }
+class Box<T : object> {
+    public function map<U : string>(U $value): U { return $value; }
+    public static function twice<V : int>(V $value): V { return $value; }
+}
+$box = new Box::<stdClass>();
+echo id::<int>(1);
+echo id::<int>(2);
+echo $box->map::<string>("m");
+echo Box::twice::<int>(3);
+$callable = "id";
+echo ($callable)::<int>(4);
+$closure = function<C : int>(C $value): C { return $value; };
+echo $closure::<int>(5);
+"#,
+    );
+    assert_eq!(output, "12m345");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn explicit_type_arguments_validate_arity_defaults_and_bounds() {
+    let output = common::run_php(
+        r#"<?php
+class Base {}
+class Child extends Base {}
+function make<T : Base, U : int = int>(U $value): U { return $value; }
+echo make::<Child>(7);
+"#,
+    );
+    assert_eq!(output, "7");
+
+    for (source, expected) in [
+        (
+            "<?php function id<T : int>(T $v): T { return $v; } id::<string>(1);",
+            "does not satisfy bound",
+        ),
+        (
+            "<?php function pair<T, U>(T $a, U $b): T { return $a; } pair::<int>(1, 2);",
+            "expects 2 to 2 type arguments, 1 given",
+        ),
+        (
+            "<?php function id<T>(T $v): T { return $v; } id::<int, string>(1);",
+            "expects 1 to 1 type arguments, 2 given",
+        ),
+        (
+            "<?php function plain($v) { return $v; } plain::<int>(1);",
+            "non-generic function plain",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+    }
+}
+
+#[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+#[test]
+fn erased_runtime_validates_bindings_but_erases_substitution_contracts() {
+    let output = common::run_php(
+        r#"<?php
+function id<T>(T $value): T { return $value; }
+function wrong<T>(): T { return "still erased"; }
+echo id::<int>("accepted by mixed erasure");
+echo wrong::<int>();
+"#,
+    );
+    assert_eq!(output, "accepted by mixed erasurestill erased");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_runtime_enforces_substituted_argument_and_return_contracts() {
+    let argument_error = common::run_php_expect_error(
+        r#"<?php
+function id<T>(T $value): T { return $value; }
+id::<int>("not an int");
+"#,
+    );
+    assert!(format!("{argument_error:?}").contains("does not match its reified generic type"));
+
+    let return_error = common::run_php_expect_error(
+        r#"<?php
+function wrong<T>(): T { return "not an int"; }
+wrong::<int>();
+"#,
+    );
+    assert!(format!("{return_error:?}").contains("Return value of wrong"));
+
+    let output = common::run_php(
+        r#"<?php
+function inner<U>(U $value): U { return $value; }
+function outer<T>(T $value): T { return $value; }
+echo outer::<int>(inner::<int>(9));
+"#,
+    );
+    assert_eq!(output, "9");
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -109,6 +236,33 @@ function id<T : Box<Box<int>>>(T $value): T { return $value; }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn shared_reflection_exposes_interned_declarations_and_runtime_capabilities() {
+    let output = common::run_php(
+        r#"<?php
+function id<T : int>(T $value): T { return $value; }
+class Box<T : object = stdClass> {
+    public function map<+U : string>(U $value): U { return $value; }
+}
+$function = new ReflectionFunction("id");
+$functionParameters = $function->getGenericParameters();
+echo $function->isGeneric() ? "yes:" : "no:";
+echo $functionParameters[0]["name"] . ":" . $functionParameters[0]["bound"] . ":";
+$class = new ReflectionClass("Box");
+$classParameters = $class->getGenericParameters();
+echo $classParameters[0]["default"] . ":";
+$method = new ReflectionMethod("Box", "map");
+$methodParameters = $method->getGenericParameters();
+echo $methodParameters[0]["variance"] . ":";
+echo count($method->getGenericRuntimeModes());
+"#,
+    );
+    let mode_count = usize::from(cfg!(feature = "php-generics-erased"))
+        + usize::from(cfg!(feature = "php-generics-reified"));
+    assert_eq!(output, format!("yes:T:int:stdClass:covariant:{mode_count}"));
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn parser_enforces_declaration_invariants() {
     let cases = [
         (
@@ -134,6 +288,10 @@ fn parser_enforces_declaration_invariants() {
         (
             "<?php class C<T> { public function bad<T>() {} }",
             "shadows an outer generic parameter",
+        ),
+        (
+            "<?php class C { public static $value; } C::value::<int>;",
+            "must be followed by a method call",
         ),
     ];
     for (source, expected) in cases {

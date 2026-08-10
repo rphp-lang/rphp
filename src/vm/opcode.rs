@@ -126,6 +126,15 @@ pub enum OpCode {
     /// Frame-free call to a known pure internal function with two positional
     /// arguments: op1/op2=arguments, extended_value=handler ID.
     DirectInternalCall2 = 132,
+    /// Validate an explicit generic `::<...>` use. `extended_value` addresses
+    /// immutable interned metadata; the ordinary per-opline cache records a
+    /// successful erased validation so subsequent executions are one branch.
+    CheckGenericArgs = 133,
+    /// Reified-only boundary check of values already written into the pending
+    /// call frame. Erased-only binaries never emit this opcode.
+    CheckReifiedArgs = 134,
+    /// Reified-only return check. Pops the matching LIFO sidecar binding.
+    CheckReifiedReturn = 135,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

@@ -208,6 +208,26 @@ impl InlineCache {
         }
     }
 
+    /// Declaration ID cached by CheckGenericArgs. Opcode-local cache slots do
+    /// not share property/call meanings, so the existing packed word can hold
+    /// index+1 without changing InlineCache's 16-byte layout.
+    #[inline(always)]
+    pub fn generic_declaration(&self) -> Option<u32> {
+        self.prop_info.checked_sub(1)
+    }
+
+    #[inline(always)]
+    pub fn set_generic_declaration(
+        &mut self,
+        declaration: u32,
+        receiver_class_id: u32,
+        callable: *const FunctionCommon,
+    ) {
+        self.func = callable;
+        self.class_id = receiver_class_id;
+        self.prop_info = declaration.saturating_add(1);
+    }
+
     #[inline(always)]
     pub fn property_flags(&self) -> u32 {
         self.prop_info & Self::PROP_FLAG_MASK

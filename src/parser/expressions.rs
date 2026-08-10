@@ -477,7 +477,7 @@ impl Parser {
                 self.advance();
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
-                Ok(expr)
+                self.parse_postfix_chain(expr)
             }
             Token::Isset => {
                 self.advance();
@@ -509,6 +509,16 @@ impl Parser {
             Token::Backslash => {
                 // Fully qualified name: \App\Models\User() or \App\Models\User::method()
                 let name = self.parse_qualified_name()?;
+                let generic_args = self.parse_optional_turbofish()?;
+                if !generic_args.is_empty() {
+                    self.expect(&Token::LParen)?;
+                    let args = self.parse_call_args()?;
+                    return Ok(Expr::FunctionCall {
+                        name,
+                        args,
+                        generic_args,
+                    });
+                }
                 if self.peek() == Token::DoubleColon {
                     self.advance();
                     if let Token::Variable(_) = self.peek() {
@@ -527,6 +537,7 @@ impl Parser {
                             return Err(format!("Expected member name after ::, got {:?}", other));
                         }
                     };
+                    let generic_args = self.parse_optional_turbofish()?;
                     if self.peek() == Token::LParen {
                         self.advance();
                         let args = self.parse_call_args()?;
@@ -534,8 +545,15 @@ impl Parser {
                             class_name: name,
                             method: member,
                             args,
+                            generic_args,
                         });
                     } else {
+                        if !generic_args.is_empty() {
+                            return Err(
+                                "Generic type arguments must be followed by a method call"
+                                    .into(),
+                            );
+                        }
                         return Ok(Expr::StaticProperty {
                             class_name: name,
                             property: member,
@@ -545,7 +563,11 @@ impl Parser {
                 if self.peek() == Token::LParen {
                     self.advance();
                     let args = self.parse_call_args()?;
-                    Ok(Expr::FunctionCall { name, args })
+                    Ok(Expr::FunctionCall {
+                        name,
+                        args,
+                        generic_args: Vec::new(),
+                    })
                 } else {
                     Ok(Expr::Constant(name))
                 }
@@ -560,6 +582,17 @@ impl Parser {
                         _ => unreachable!(),
                     }
                 };
+                let generic_args = self.parse_optional_turbofish()?;
+                if !generic_args.is_empty() {
+                    self.expect(&Token::LParen)?;
+                    let args = self.parse_call_args()?;
+                    let expr = Expr::FunctionCall {
+                        name,
+                        args,
+                        generic_args,
+                    };
+                    return Ok(self.parse_postfix_chain(expr)?);
+                }
                 // Static access: ClassName::method() or ClassName::$prop
                 if self.peek() == Token::DoubleColon {
                     self.advance(); // consume ::
@@ -581,6 +614,7 @@ impl Parser {
                             return Err(format!("Expected member name after ::, got {:?}", other));
                         }
                     };
+                    let generic_args = self.parse_optional_turbofish()?;
                     if self.peek() == Token::LParen {
                         self.advance();
                         let args = self.parse_call_args()?;
@@ -588,9 +622,16 @@ impl Parser {
                             class_name: name,
                             method: member,
                             args,
+                            generic_args,
                         };
                         return Ok(self.parse_postfix_chain(expr)?);
                     } else {
+                        if !generic_args.is_empty() {
+                            return Err(
+                                "Generic type arguments must be followed by a method call"
+                                    .into(),
+                            );
+                        }
                         // Static constant/enum case access: ClassName::CONSTANT
                         let expr = Expr::StaticProperty {
                             class_name: name,
@@ -603,7 +644,11 @@ impl Parser {
                 if self.peek() == Token::LParen {
                     self.advance(); // consume (
                     let args = self.parse_call_args()?;
-                    Ok(Expr::FunctionCall { name, args })
+                    Ok(Expr::FunctionCall {
+                        name,
+                        args,
+                        generic_args: Vec::new(),
+                    })
                 } else {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
                     Ok(Expr::Constant(name))
@@ -632,13 +677,18 @@ impl Parser {
                         self.peek()
                     ));
                 };
+                let generic_args = self.parse_optional_turbofish()?;
                 let args = if self.peek() == Token::LParen {
                     self.advance(); // consume (
                     self.parse_call_args()?
                 } else {
                     Vec::new()
                 };
-                let mut expr = Expr::New { class_name, args };
+                let mut expr = Expr::New {
+                    class_name,
+                    args,
+                    generic_args,
+                };
                 // Handle ->method() / ->prop chains on new
                 expr = self.parse_postfix_chain(expr)?;
                 return Ok(expr);
@@ -724,6 +774,17 @@ impl Parser {
                     expr = Expr::DynamicCall {
                         callable: Box::new(expr),
                         args,
+                        generic_args: Vec::new(),
+                    };
+                }
+                Token::DoubleColon if self.peek_at(1) == Token::Less => {
+                    let generic_args = self.parse_optional_turbofish()?;
+                    self.expect(&Token::LParen)?;
+                    let args = self.parse_call_args()?;
+                    expr = Expr::DynamicCall {
+                        callable: Box::new(expr),
+                        args,
+                        generic_args,
                     };
                 }
                 Token::Arrow | Token::NullSafe => {
@@ -739,6 +800,7 @@ impl Parser {
                             ));
                         }
                     };
+                    let generic_args = self.parse_optional_turbofish()?;
                     if self.peek() == Token::LParen {
                         self.advance();
                         let args = self.parse_call_args()?;
@@ -746,6 +808,7 @@ impl Parser {
                             object: Box::new(expr),
                             method: member,
                             args,
+                            generic_args,
                             nullsafe,
                         };
                     } else {
