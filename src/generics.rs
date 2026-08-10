@@ -15,6 +15,8 @@ use crate::value::{Value, ValueType};
 mod link;
 #[path = "generics/lsp.rs"]
 mod lsp;
+#[path = "generics/methods.rs"]
+mod methods;
 #[path = "generics/variance.rs"]
 mod variance;
 
@@ -139,6 +141,56 @@ pub struct GenericMethodMetadata {
     pub required_parameters: u16,
     pub is_variadic: bool,
     pub is_static: bool,
+}
+
+/// Fully substituted, cold runtime view of an instance method whose contract
+/// depends on the receiver's reified class arguments. It lives only in an
+/// executor sidecar while that call is active; no function or frame grows.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ReifiedMethodContract {
+    pub owner: Box<str>,
+    pub method: Box<str>,
+    pub value_parameters: Box<[Option<GenericType>]>,
+    pub return_type: Option<GenericType>,
+    pub is_variadic: bool,
+}
+
+impl ReifiedMethodContract {
+    /// A direct Long method plan validates every argument representation and
+    /// produces a Long or side-exits. It can therefore discharge this
+    /// substituted contract without allocating a frame or sidecar entry when
+    /// every occupied boundary admits Long.
+    #[inline]
+    pub fn admits_exact_long_call(&self, arguments: u32) -> bool {
+        !self.is_variadic
+            && self.value_parameters.len() == arguments as usize
+            && self
+                .value_parameters
+                .iter()
+                .all(|value| value.as_ref().is_none_or(generic_type_admits_long))
+            && self
+                .return_type
+                .as_ref()
+                .is_none_or(generic_type_admits_long)
+    }
+}
+
+fn generic_type_admits_long(value: &GenericType) -> bool {
+    match value {
+        GenericType::Int | GenericType::Mixed => true,
+        GenericType::Nullable(inner) => generic_type_admits_long(inner),
+        GenericType::Union(parts) => parts.iter().any(generic_type_admits_long),
+        GenericType::Float
+        | GenericType::String
+        | GenericType::Bool
+        | GenericType::Array
+        | GenericType::Callable
+        | GenericType::Null
+        | GenericType::Void
+        | GenericType::Never
+        | GenericType::Named { .. }
+        | GenericType::Parameter(_) => false,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -595,6 +647,68 @@ impl GenericMetadata {
             value
         };
         self.value_matches_type(value, expected, declaration, site, &class_is_a, 0)
+    }
+
+    /// Match a type after every declaration parameter has been substituted.
+    /// Remaining `Parameter` nodes are malformed metadata and fail closed.
+    pub fn value_matches_resolved_type<F>(
+        &self,
+        value: &Value,
+        expected: &GenericType,
+        class_is_a: F,
+    ) -> bool
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        let value = if value.is_reference() {
+            unsafe { &*value.as_ref_ptr() }
+        } else {
+            value
+        };
+        self.value_matches_resolved_type_inner(value, expected, &class_is_a)
+    }
+
+    fn value_matches_resolved_type_inner<F>(
+        &self,
+        value: &Value,
+        expected: &GenericType,
+        class_is_a: &F,
+    ) -> bool
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        match expected {
+            GenericType::Parameter(_) => false,
+            GenericType::Int => value.value_type() == ValueType::Long,
+            GenericType::Float => value.value_type() == ValueType::Double,
+            GenericType::String => value.value_type() == ValueType::String,
+            GenericType::Bool => matches!(value.value_type(), ValueType::True | ValueType::False),
+            GenericType::Array => value.value_type() == ValueType::Array,
+            GenericType::Callable => matches!(
+                value.value_type(),
+                ValueType::String | ValueType::Array | ValueType::Closure
+            ),
+            GenericType::Null => value.value_type() == ValueType::Null,
+            GenericType::Void | GenericType::Never => false,
+            GenericType::Mixed => true,
+            GenericType::Named { name, .. } => {
+                let Some(expected_name) = self.symbol(*name) else {
+                    return false;
+                };
+                value.as_object().is_some_and(|object| {
+                    expected_name.eq_ignore_ascii_case("object")
+                        || object.class_name.eq_ignore_ascii_case(expected_name)
+                        || class_is_a(&object.class_name, expected_name)
+                })
+            }
+            GenericType::Nullable(inner) => {
+                value.value_type() == ValueType::Null
+                    || self.value_matches_resolved_type_inner(value, inner, class_is_a)
+            }
+            GenericType::Union(parts) => parts
+                .iter()
+                .any(|part| self.value_matches_resolved_type_inner(value, part, class_is_a)),
+        }
     }
 
     pub fn format_type(&self, declaration: &GenericDeclaration, value: &GenericType) -> String {

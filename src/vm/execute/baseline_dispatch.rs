@@ -1660,6 +1660,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 }
 
+                #[cfg(feature = "php-generics-reified")]
+                let reified_member_contract =
+                    eg.take_pending_reified_member_call(call as usize);
+                #[cfg(feature = "php-generics-reified")]
+                if let Some(contract) = reified_member_contract.as_ref() {
+                    validate_reified_member_arguments(eg, call, contract)?;
+                }
+                #[cfg(feature = "php-generics-reified")]
+                let has_reified_member_contract = reified_member_contract.is_some();
+                #[cfg(not(feature = "php-generics-reified"))]
+                let reified_member_contract: Option<
+                    std::rc::Rc<crate::generics::ReifiedMethodContract>,
+                > = None;
+                #[cfg(not(feature = "php-generics-reified"))]
+                let has_reified_member_contract = false;
+
                 // ── FastScalar path: tightest call protocol ──
                 // Preconditions guaranteed at compile time: fixed arity, no by-ref,
                 // no variadics, no generator, no globals, no type hints, no return type.
@@ -1671,6 +1687,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // activations. The already-created root frame supplies the
                 // canonical argument ABI; all recursive descendants avoid it.
                 if func_common_fast.fn_type == FunctionType::User
+                    && !has_reified_member_contract
                     && unsafe { (*call).num_args } == 1
                     && !unsafe { (*call).named_args_used }
                     && eg.pending_invoke_this.is_none()
@@ -1824,6 +1841,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 if func_common_fast.fn_type == FunctionType::User
+                    && !has_reified_member_contract
                     && (func_common_fast.plan.call == CallStrategy::FastScalar
                         || (func_common_fast.plan.call == CallStrategy::FastTypedScalar
                             && opline._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0))
@@ -1909,6 +1927,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
                 // ── Fast path for simple user function calls ──
                 if func_common_fast.fn_type == FunctionType::User
+                    && !has_reified_member_contract
                     && matches!(
                         func_common_fast.plan.call,
                         CallStrategy::Fast | CallStrategy::FastTypedScalar
@@ -2014,7 +2033,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
 
                 // ── Full path (handles all edge cases) ──
-                match execute_full_call(eg, frame, op_array, opline, opline_ptr, call)? {
+                match execute_full_call(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    opline_ptr,
+                    call,
+                    reified_member_contract,
+                )? {
                     ColdResult::Done => {
                         unsafe { (*frame).opline = opline_ptr.add(1) };
                         continue 'vm;
@@ -2472,13 +2499,77 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let common = unsafe { &*func_ptr };
                         let num_args = opline.extended_value;
                         let mut scalar_plan_eligible = false;
+                        #[cfg(feature = "php-generics-reified")]
+                        let reified_contract = if ic.method_has_reified_contract() {
+                            let method_name = unsafe {
+                                &*(*frame).get_op_ptr(
+                                    opline.op2 as u32,
+                                    opline.op2_type,
+                                    op_array,
+                                )
+                            };
+                            eg.reified_instance_method_contract(
+                                obj_val,
+                                method_name.as_str().unwrap_or(""),
+                            )
+                        } else {
+                            None
+                        };
+                        #[cfg(feature = "php-generics-reified")]
+                        let has_active_reified_contract = reified_contract.is_some();
+                        #[cfg(feature = "php-generics-reified")]
+                        let reified_long_fast_path = reified_contract
+                            .as_deref()
+                            .is_some_and(|contract| contract.admits_exact_long_call(num_args));
+                        #[cfg(not(feature = "php-generics-reified"))]
+                        let has_active_reified_contract = false;
+                        #[cfg(not(feature = "php-generics-reified"))]
+                        let reified_long_fast_path = false;
+
+                        // A substituted Long→Long contract is already guarded
+                        // by the scalar plan's exact argument representation
+                        // and checked Long result. Successful execution needs
+                        // neither a frame nor pending/active sidecar state.
+                        if reified_long_fast_path
+                            && common.fn_type == FunctionType::User
+                            && num_args == common.sig.public_arity()
+                        {
+                            let user = unsafe { &*(func_ptr as *const UserFunction) };
+                            if let Some(plan) = user.scalar_long_plan.as_deref() {
+                                if let Some((result, do_fcall_ptr)) = unsafe {
+                                    try_execute_direct_scalar_long_call(
+                                        frame,
+                                        op_array,
+                                        opline_ptr.add(1),
+                                        common,
+                                        plan,
+                                    )
+                                } {
+                                    stats::inc_do_fcall_fast();
+                                    stats::inc_return_fast();
+                                    let count = common.call_count.get();
+                                    if count < u32::MAX {
+                                        common.call_count.set(count + 1);
+                                    }
+                                    unsafe {
+                                        complete_direct_scalar_long_call(
+                                            frame,
+                                            do_fcall_ptr,
+                                            result,
+                                        );
+                                    }
+                                    continue 'vm;
+                                }
+                            }
+                        }
 
                         // Public monomorphic methods whose bodies do not use
                         // `$this` can consume adjacent scalar arguments through
                         // the same frame-free ABI as ordinary functions. The
                         // receiver/class cache above still provides normal PHP
                         // virtual-dispatch semantics.
-                        if common.fn_type == FunctionType::User
+                        if !has_active_reified_contract
+                            && common.fn_type == FunctionType::User
                             && num_args == common.sig.public_arity()
                         {
                             let user = unsafe { &*(func_ptr as *const UserFunction) };
@@ -2765,6 +2856,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 frame_set_this(call, obj_val.clone());
                             }
                         }
+                        #[cfg(feature = "php-generics-reified")]
+                        if let Some(contract) = reified_contract {
+                            eg.push_pending_reified_member_call(call as usize, contract);
+                        }
 
                         // Bind the contiguous scalar argument prefix while the
                         // new frame is hot in registers. Nested argument
@@ -2784,7 +2879,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         // fold the adjacent DoFcall into this cache-hit method
                         // setup. This removes one more baseline dispatch from
                         // the ordinary `$object->method(...)` protocol.
-                        if ic.method_fusion_eligible()
+                        if !has_active_reified_contract
+                            && ic.method_fusion_eligible()
                             && bound == num_args as usize
                         {
                             let do_fcall_ptr = unsafe { opline_ptr.add(1 + bound) };
@@ -2894,6 +2990,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::Return => {
                 let func_common_ret = unsafe { &*(*frame).func };
+                #[cfg(feature = "php-generics-reified")]
+                if let Some(contract) = eg.take_active_reified_member_call(frame as usize) {
+                    validate_reified_member_return(eg, frame, op_array, opline, &contract)?;
+                }
 
                 // ── FastScalar return: tightest path ──
                 // No return type check, no globals sync, no dirty_globals propagation.

@@ -157,6 +157,26 @@ fn test_include_validates_cross_unit_parametric_lsp() {
     );
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn test_include_links_reified_instance_method_contracts() {
+    let (_dir, path) = write_temp_php(
+        "generic_reified_method.php",
+        "<?php class IncludedParent<T> { public function id(T $value): T { return $value; } } class IncludedChild<U> extends IncludedParent<U> {}",
+    );
+    let source = format!(
+        "<?php include '{}'; $box = new IncludedChild::<int>(); $box->id('bad');",
+        path
+    );
+    let error = common::run_php_expect_error(&source);
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to IncludedParent::id()"),
+        "{rendered:?}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered:?}");
+}
+
 #[test]
 fn test_require_missing_file_fatal_error() {
     let source = "<?php require '/nonexistent/path/to/file.php';";

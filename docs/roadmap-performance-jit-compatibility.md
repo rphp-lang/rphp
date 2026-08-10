@@ -8488,9 +8488,45 @@ incompatible staticness, arity, parameter contravariance or return covariance.
 Variadic prototypes remain variadic and their substituted tail contract is
 checked against added optional parameters as well as the implementation tail.
 The same validation runs after include metadata is merged. It adds no runtime
-method lookup, frame field or ordinary-call branch. A substituted inherited
-runtime-signature view, method-generic alpha-renaming and deterministic diamond
-contract merging remain the next link-layer slices.
+method lookup, frame field or ordinary-call branch. A general linked runtime
+signature for erased or non-reified concrete descendants, method-generic
+alpha-renaming and deterministic diamond contract merging remain the next
+link-layer slices.
+
+The first receiver-specific runtime-signature slice is now executable in the
+reified branch. A free bit in the existing method inline cache marks only
+methods whose effective own or inherited signature depends on class
+parameters. Object-binding and binding-plus-method L0 caches produce one fully
+substituted contract for direct or transitive inheritance; feature-only LIFO
+sidecars carry it across the canonical call frame and validate fixed,
+positional-variadic, named-variadic and return boundaries. An own override with
+a widened non-parametric signature deliberately stops ancestor lookup. Nested
+calls, caught exceptions and cross-unit inherited methods have permanent
+coverage. Bound-erased methods remain erased and take the pre-existing path;
+no object, `Value`, `FunctionCommon`, frame, instruction or inline-cache layout
+grows.
+
+The initial correct reified method implementation took roughly 0.388 seconds
+for five million `GenericMethodBox<int>::step(int): int` calls because every
+call required a full frame. The final path proves that a scalar Long plan
+guards every substituted argument and produces a checked Long result. A
+successful proof executes frame-free and allocates no pending/active contract;
+argument mismatch, non-Long return and overflow return to the canonical
+reified checks. In 21 order-alternated ARM64 release pairs, the permanent
+method benchmarks report:
+
+- erased generic/manual paired median: +0.544% (0.050232/0.050015 seconds);
+- reified generic/manual paired median: +0.408% (0.049945/0.049647 seconds);
+- reified/erased generic paired median: -0.474%.
+
+The synchronized x86-64 host independently passes the same 21-pair gate:
+erased generic/manual is -0.042% (0.065722/0.065784 seconds), reified
+generic/manual is -0.168% (0.065847/0.065974 seconds), and reified/erased
+generic is +0.032%.
+
+The general non-scalar substituted signature view, constructor contracts,
+method-generic alpha-renaming and deterministic diamond merging remain
+follow-ups rather than weakening this exact fast-path proof.
 
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,

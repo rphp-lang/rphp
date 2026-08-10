@@ -1845,9 +1845,30 @@ types. The cold registration linker composes direct and transitive ancestor
 bindings, substitutes those prototypes and checks staticness, arity,
 contravariant parameters and covariant returns for class, interface and trait
 overrides, including declarations merged from an included unit. Executable
-method bodies and ordinary dispatch remain erased and untouched. Materializing
-a substituted inherited runtime-signature view, method-generic alpha-renaming
-and diamond contract merging remain explicit follow-up link steps.
+method bodies and ordinary dispatch remain erased and untouched.
+
+Reified instance dispatch now adds a receiver-specific runtime view without
+changing those executable signatures. The existing method inline cache uses
+one previously free bit to identify methods whose effective own or inherited
+contract depends on class parameters. A weak object-binding L0 and a
+binding-plus-method L0 resolve direct and transitive ancestor signatures once;
+fixed, variadic and named arguments plus return values are then checked against
+the fully substituted contract. Pending and active contracts use feature-only
+LIFO sidecars keyed by the existing frame identity, so nested calls and
+exception unwinding remain exact without widening `Value`, `PhpObject`,
+`ExecuteData`, `FunctionCommon`, an instruction or its 16-byte inline cache.
+Bound-erased calls retain the original erased dispatch with no instance-method
+probe.
+
+For the common reified `int -> int` method shape, an exact scalar-plan proof
+checks that every substituted boundary admits `int`. The already-guarded
+frame-free Long plan may then discharge the contract without pending/active
+sidecar state; a mismatched argument, non-Long result or arithmetic overflow
+side-exits to the canonical reified call and its full checks. Materializing a
+general substituted signature for non-reified concrete descendants,
+constructor parameter contracts, method-generic alpha-renaming and
+deterministic diamond contract merging remain explicit follow-up link/runtime
+steps.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

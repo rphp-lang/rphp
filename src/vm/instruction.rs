@@ -197,6 +197,7 @@ impl InlineCache {
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
     const METHOD_PROPERTY_GETTER_PLAN: u32 = 4;
+    const METHOD_REIFIED_CONTRACT: u32 = 8;
     const CALLBACK_PIPELINE_METADATA_ARMED: u32 = 1 << 31;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
 
@@ -337,6 +338,7 @@ impl InlineCache {
         fusion_eligible: bool,
         long_property_plan: bool,
         property_getter_plan: bool,
+        reified_contract: bool,
     ) {
         self.func = func;
         self.class_id = class_id;
@@ -350,6 +352,10 @@ impl InlineCache {
             0
         }) | (if property_getter_plan {
             Self::METHOD_PROPERTY_GETTER_PLAN
+        } else {
+            0
+        }) | (if reified_contract {
+            Self::METHOD_REIFIED_CONTRACT
         } else {
             0
         });
@@ -368,6 +374,11 @@ impl InlineCache {
     #[inline(always)]
     pub fn method_has_property_getter_plan(&self) -> bool {
         self.prop_info & Self::METHOD_PROPERTY_GETTER_PLAN != 0
+    }
+
+    #[inline(always)]
+    pub fn method_has_reified_contract(&self) -> bool {
+        self.prop_info & Self::METHOD_REIFIED_CONTRACT != 0
     }
 
     /// InitFcall does not otherwise consume `prop_info`; callback-pipeline

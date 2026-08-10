@@ -345,11 +345,17 @@ fn erased_runtime_validates_bindings_but_erases_substitution_contracts() {
         r#"<?php
 function id<T>(T $value): T { return $value; }
 function wrong<T>(): T { return "still erased"; }
+class Box<T> { public function id(T $value): T { return $value; } }
 echo id::<int>("accepted by mixed erasure");
 echo wrong::<int>();
+$box = new Box::<int>();
+echo $box->id(" through method");
 "#,
     );
-    assert_eq!(output, "accepted by mixed erasurestill erased");
+    assert_eq!(
+        output,
+        "accepted by mixed erasurestill erased through method"
+    );
 }
 
 #[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
@@ -484,6 +490,74 @@ assignBox($ints, "not an int");
             format!("{error:?}").contains("reified property Box::$value"),
             "{error:?}"
         );
+    }
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_instances_enforce_substituted_method_contracts() {
+    let output = common::run_php(
+        r#"<?php
+class ParentBox<T> {
+    public function id(T $value): T { return $value; }
+    public function first(T ...$values): T { return $values[0]; }
+}
+class ChildBox<U> extends ParentBox<U> {}
+class WideBox<V> extends ParentBox<V> {
+    public function id(mixed $value): V { return 10; }
+}
+class ThrowBox<W> {
+    public function id(W $value): W {
+        if ($value === 0) { throw new Exception("expected"); }
+        return $value;
+    }
+}
+class StepBox<X> {
+    public function step(X $value): X { return $value + 1; }
+}
+$box = new ChildBox::<int>();
+echo $box->id($box->id(8));
+echo $box->first(9, 10);
+$wide = new WideBox::<int>();
+echo $wide->id("accepted by contravariance");
+$throw = new ThrowBox::<int>();
+try { $throw->id(0); } catch (Exception $error) {}
+echo $throw->id(11);
+$step = new StepBox::<int>();
+echo $step->step(12);
+"#,
+    );
+    assert_eq!(output, "89101113");
+
+    for (source, expected) in [
+        (
+            "<?php class Box<T> { public function id(T $value): T { return $value; } } $box = new Box::<int>(); $box->id('bad');",
+            "Argument #1 passed to Box::id()",
+        ),
+        (
+            "<?php class ParentBox<T> { public function id(T $value): T { return $value; } } class ChildBox<U> extends ParentBox<U> {} $box = new ChildBox::<int>(); $box->id('bad');",
+            "Argument #1 passed to ParentBox::id()",
+        ),
+        (
+            "<?php class Box<T> { public function wrong(): T { return 'bad'; } } $box = new Box::<int>(); $box->wrong();",
+            "Return value of Box::wrong()",
+        ),
+        (
+            "<?php class Box<T> { public function first(T ...$values): T { return $values[0]; } } $box = new Box::<int>(); $box->first(1, 'bad');",
+            "Variadic argument #2 passed to Box::first()",
+        ),
+        (
+            "<?php class StepBox<T> { public function step(T $value): T { return $value + 1; } } $box = new StepBox::<int>(); $box->step(9223372036854775807);",
+            "Return value of StepBox::step()",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+        assert!(rendered.contains("reified class type"), "{rendered:?}");
     }
 }
 

@@ -256,6 +256,118 @@ fn op_check_reified_return(
     }
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[inline(never)]
+fn validate_reified_member_arguments(
+    eg: &ExecutorGlobals,
+    call: *mut ExecuteData,
+    contract: &crate::generics::ReifiedMethodContract,
+) -> Result<(), VmError> {
+    let common = unsafe { &*(*call).func };
+    let fixed = contract
+        .value_parameters
+        .len()
+        .saturating_sub(usize::from(contract.is_variadic));
+    for index in 0..fixed {
+        let Some(expected) = contract
+            .value_parameters
+            .get(index)
+            .and_then(Option::as_ref)
+        else {
+            continue;
+        };
+        let value = unsafe { &*(*call).cv(common.sig.param_cv_index(index as u32)) };
+        if value.is_undef() {
+            continue;
+        }
+        if !eg.generic_metadata.value_matches_resolved_type(
+            value,
+            expected,
+            |actual, bound| eg.class_is_a(actual, bound),
+        ) {
+            return Err(VmError::Fatal(format!(
+                "Argument #{} passed to {}::{}() does not match its reified class type",
+                index + 1,
+                contract.owner,
+                contract.method
+            )));
+        }
+    }
+
+    if contract.is_variadic {
+        let expected = contract
+            .value_parameters
+            .last()
+            .and_then(Option::as_ref);
+        if let Some(expected) = expected {
+            let public_max = common.sig.public_arity();
+            let extra = unsafe { (*call).num_args }.saturating_sub(public_max);
+            for index in 0..extra {
+                let value = unsafe { &*(*call).cv(common.sig.variadic_cv_index + index) };
+                if !eg.generic_metadata.value_matches_resolved_type(
+                    value,
+                    expected,
+                    |actual, bound| eg.class_is_a(actual, bound),
+                ) {
+                    return Err(VmError::Fatal(format!(
+                        "Variadic argument #{} passed to {}::{}() does not match its reified class type",
+                        fixed + index as usize + 1,
+                        contract.owner,
+                        contract.method
+                    )));
+                }
+            }
+            if let Some(named) = eg.pending_named_variadic.get(&(call as usize)) {
+                for (name, value) in named {
+                    if !eg.generic_metadata.value_matches_resolved_type(
+                        value,
+                        expected,
+                        |actual, bound| eg.class_is_a(actual, bound),
+                    ) {
+                        return Err(VmError::Fatal(format!(
+                            "Named variadic argument ${} passed to {}::{}() does not match its reified class type",
+                            name, contract.owner, contract.method
+                        )));
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[inline(never)]
+fn validate_reified_member_return(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    contract: &crate::generics::ReifiedMethodContract,
+) -> Result<(), VmError> {
+    let Some(expected) = contract.return_type.as_ref() else {
+        return Ok(());
+    };
+    let implicit_null;
+    let value = if opline.op1_type == OpType::Unused {
+        implicit_null = Value::null();
+        &implicit_null
+    } else {
+        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }
+    };
+    if eg.generic_metadata.value_matches_resolved_type(
+        value,
+        expected,
+        |actual, bound| eg.class_is_a(actual, bound),
+    ) {
+        return Ok(());
+    }
+    Err(VmError::Fatal(format!(
+        "Return value of {}::{}() does not match its reified class type",
+        contract.owner, contract.method
+    )))
+}
+
 #[inline(never)]
 fn op_call_user_func_array<'a>(
     eg: &mut ExecutorGlobals,

@@ -4,7 +4,7 @@ use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::compiler::compile::ClassDef;
-use crate::generics::{GenericMetadata, ReifiedBinding};
+use crate::generics::{GenericMetadata, ReifiedBinding, ReifiedMethodContract};
 use crate::parser::Visibility;
 use crate::value::ObjectLayout;
 use crate::vm::frame::ExecuteData;
@@ -18,6 +18,30 @@ struct ReifiedObjectBinding {
     identity: usize,
     object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
     binding: ReifiedBinding,
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[derive(Clone)]
+struct ReifiedMethodContractBinding {
+    binding: ReifiedBinding,
+    contract: std::rc::Rc<ReifiedMethodContract>,
+}
+
+#[cfg(feature = "php-generics-reified")]
+fn take_reified_member_call(
+    entries: &mut Vec<(usize, std::rc::Rc<ReifiedMethodContract>)>,
+    call: usize,
+) -> Option<std::rc::Rc<ReifiedMethodContract>> {
+    if entries
+        .last()
+        .is_some_and(|(candidate, _)| *candidate == call)
+    {
+        return entries.pop().map(|(_, contract)| contract);
+    }
+    let position = entries
+        .iter()
+        .rposition(|(candidate, _)| *candidate == call)?;
+    Some(entries.remove(position).1)
 }
 
 /// Mangle a private property name: `ClassName\0propname`.
@@ -123,6 +147,17 @@ pub struct ExecutorGlobals {
     reified_object_cache: std::cell::RefCell<Option<ReifiedObjectBinding>>,
     #[cfg(feature = "php-generics-reified")]
     reified_object_sweep_at: usize,
+    /// Call-frame identity → substituted instance-method contract. Pending
+    /// entries have not crossed DoFcall yet; active entries are consumed by
+    /// the matching Return. Both remain feature-only cold sidecars.
+    #[cfg(feature = "php-generics-reified")]
+    pending_reified_member_calls: Vec<(usize, std::rc::Rc<ReifiedMethodContract>)>,
+    #[cfg(feature = "php-generics-reified")]
+    active_reified_member_calls: Vec<(usize, std::rc::Rc<ReifiedMethodContract>)>,
+    /// One-entry binding+method cache makes repeated calls on the same
+    /// monomorphic generic receiver allocation-free after warmup.
+    #[cfg(feature = "php-generics-reified")]
+    reified_method_contract_cache: std::cell::RefCell<Option<ReifiedMethodContractBinding>>,
 }
 
 impl ExecutorGlobals {
@@ -144,6 +179,12 @@ impl ExecutorGlobals {
             reified_object_cache: std::cell::RefCell::new(None),
             #[cfg(feature = "php-generics-reified")]
             reified_object_sweep_at: 256,
+            #[cfg(feature = "php-generics-reified")]
+            pending_reified_member_calls: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            active_reified_member_calls: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            reified_method_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -182,6 +223,12 @@ impl ExecutorGlobals {
             reified_object_cache: std::cell::RefCell::new(None),
             #[cfg(feature = "php-generics-reified")]
             reified_object_sweep_at: 256,
+            #[cfg(feature = "php-generics-reified")]
+            pending_reified_member_calls: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            active_reified_member_calls: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            reified_method_contract_cache: std::cell::RefCell::new(None),
             constant_table: std::cell::RefCell::new(HashMap::new()),
             regex_cache: crate::regex::RegexCache::default(),
             exception: None,
@@ -250,6 +297,70 @@ impl ExecutorGlobals {
         let binding = entry.binding;
         self.reified_object_cache.replace(Some(entry.clone()));
         Some(binding)
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn reified_instance_method_contract(
+        &self,
+        object: &crate::value::Value,
+        method: &str,
+    ) -> Option<std::rc::Rc<ReifiedMethodContract>> {
+        let binding = self.reified_object_binding(object)?;
+        if let Some(cached) = self.reified_method_contract_cache.borrow().as_ref() {
+            if cached.binding == binding && cached.contract.method.eq_ignore_ascii_case(method) {
+                return Some(cached.contract.clone());
+            }
+        }
+        let contract = std::rc::Rc::new(
+            self.generic_metadata
+                .reified_instance_method_contract(binding, method)?,
+        );
+        self.reified_method_contract_cache
+            .replace(Some(ReifiedMethodContractBinding {
+                binding,
+                contract: contract.clone(),
+            }));
+        Some(contract)
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn push_pending_reified_member_call(
+        &mut self,
+        call: usize,
+        contract: std::rc::Rc<ReifiedMethodContract>,
+    ) {
+        self.pending_reified_member_calls.push((call, contract));
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn take_pending_reified_member_call(
+        &mut self,
+        call: usize,
+    ) -> Option<std::rc::Rc<ReifiedMethodContract>> {
+        take_reified_member_call(&mut self.pending_reified_member_calls, call)
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn activate_reified_member_call(
+        &mut self,
+        call: usize,
+        contract: std::rc::Rc<ReifiedMethodContract>,
+    ) {
+        self.active_reified_member_calls.push((call, contract));
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn take_active_reified_member_call(
+        &mut self,
+        call: usize,
+    ) -> Option<std::rc::Rc<ReifiedMethodContract>> {
+        take_reified_member_call(&mut self.active_reified_member_calls, call)
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn discard_reified_member_call(&mut self, call: usize) {
+        let _ = take_reified_member_call(&mut self.pending_reified_member_calls, call);
+        let _ = take_reified_member_call(&mut self.active_reified_member_calls, call);
     }
 
     /// Returns the declaration index when this is a generic property and its

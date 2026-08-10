@@ -40,7 +40,7 @@ impl GenericMetadata {
         Ok(())
     }
 
-    fn ancestor_bindings<'a>(
+    pub(super) fn ancestor_bindings<'a>(
         &'a self,
         child: &'a GenericDeclaration,
     ) -> Vec<(&'a GenericDeclaration, Vec<GenericType>)> {
@@ -50,7 +50,7 @@ impl GenericMetadata {
         self.ancestor_bindings_from(child, &identity)
     }
 
-    fn ancestor_bindings_from<'a>(
+    pub(super) fn ancestor_bindings_from<'a>(
         &'a self,
         child: &'a GenericDeclaration,
         binding: &[GenericType],
@@ -376,7 +376,7 @@ fn implementation_parameter(method: &GenericMethodMetadata, index: usize) -> Opt
         .and_then(Option::as_ref)
 }
 
-fn effective_inheritance_arguments(
+pub(super) fn effective_inheritance_arguments(
     ancestor: &GenericDeclaration,
     supplied: &[GenericType],
 ) -> Vec<GenericType> {

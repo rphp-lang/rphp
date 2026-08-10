@@ -166,7 +166,11 @@ fn op_new_obj<'a>(
     } else {
         PhpObject::with_layout(class_id, property_layout, property_values)
     };
-    unsafe { slot_set(result_ptr, Value::object(obj)) };
+    // NewObj writes a compiler-owned TMP/VAR for the first time. Stack reuse
+    // intentionally leaves dead scalar bytes uninitialized, so dropping the
+    // old bytes here is invalid; the tracked TMP writer treats an unset bitmap
+    // bit as no live value and records the new object's ownership.
+    unsafe { frame_tmp_set(frame, result_ptr, Value::object(obj)) };
     #[cfg(feature = "php-generics-reified")]
     if let Some(binding) = eg.reified_bindings.last().copied().filter(|binding| {
         eg.generic_metadata
@@ -667,9 +671,15 @@ fn op_init_method_call<'a>(
         // — avoids class_name.clone() and full method resolution on cache hit.
         let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
         let ic = &op_array.cache[ip];
-        let func_ptr = if !ic.func.is_null() && ic.class_id == obj_class_id && obj_class_id != 0 {
+        let (func_ptr, has_reified_contract) = if !ic.func.is_null()
+            && ic.class_id == obj_class_id
+            && obj_class_id != 0
+        {
             drop(obj); // release borrow — class_name not needed on cache hit
-            ic.func
+            (
+                ic.func,
+                cfg!(feature = "php-generics-reified") && ic.method_has_reified_contract(),
+            )
         } else {
             let target_class_name = obj.class_name.clone();
             drop(obj); // release borrow before lookup
@@ -704,6 +714,10 @@ fn op_init_method_call<'a>(
                     }
                 }
             };
+            let resolved_has_reified_contract = cfg!(feature = "php-generics-reified")
+                && eg
+                    .generic_metadata
+                    .has_reified_instance_method_contract(&target_class_name, method);
 
             // Visibility check
             if let Some((vis, defining_class)) = eg.find_method_visibility(&dispatch_class, method) {
@@ -745,21 +759,38 @@ fn op_init_method_call<'a>(
                     fusion_eligible,
                     long_property_plan,
                     property_getter_plan,
+                    resolved_has_reified_contract,
                 );
             }
-            resolved
+            (resolved, resolved_has_reified_contract)
         };
+        #[cfg(not(feature = "php-generics-reified"))]
+        let _ = has_reified_contract;
 
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
         let common = unsafe { &*func_ptr };
+        #[cfg(feature = "php-generics-reified")]
+        let reified_contract = if has_reified_contract {
+            let method_name = unsafe {
+                &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+            };
+            eg.reified_instance_method_contract(obj_val, method_name.as_str().unwrap_or(""))
+        } else {
+            None
+        };
+        #[cfg(feature = "php-generics-reified")]
+        let has_active_reified_contract = reified_contract.is_some();
+        #[cfg(not(feature = "php-generics-reified"))]
+        let has_active_reified_contract = false;
         if !method_return_dispatch_contract_matches(opline, common) {
             return Err(VmError::Fatal(
                 "Resolved method signature is incompatible with the statically declared receiver contract"
                     .into(),
             ));
         }
-        let scalar_plan_eligible = common.fn_type == FunctionType::User
+        let scalar_plan_eligible = !has_active_reified_contract
+            && common.fn_type == FunctionType::User
             && num_args == common.sig.public_arity()
             && {
                 let user = unsafe { &*(func_ptr as *const UserFunction) };
@@ -795,6 +826,10 @@ fn op_init_method_call<'a>(
             } else {
                 frame_set_this(call, obj_val.clone());
             }
+        }
+        #[cfg(feature = "php-generics-reified")]
+        if let Some(contract) = reified_contract {
+            eg.push_pending_reified_member_call(call as usize, contract);
         }
     } else {
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
