@@ -17,9 +17,10 @@ use super::stream::PhpStream;
 #[cfg(any(
     feature = "csv-errors",
     feature = "stream-contents",
-    feature = "stream-copy"
+    feature = "stream-copy",
+    feature = "file-contents"
 ))]
-mod checked_args;
+pub(super) mod checked_args;
 #[cfg(feature = "stream-contents")]
 mod contents;
 #[cfg(feature = "stream-copy")]

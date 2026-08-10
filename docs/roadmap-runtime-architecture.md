@@ -1320,6 +1320,40 @@ x86-64. The dedicated and combined stream matrices pass 17 and 26 scenarios,
 and both hosts complete all-feature/all-target compilation. The slice is
 standard-library-only and leaves `Cargo.lock` byte-identical.
 
+### Opt-in file-content bridge checkpoint (2026-08-10)
+
+The old default `file_get_contents($filename)` body remains in the composition
+root for exact compatibility and codegen. With `file-contents`, registration
+selects a new five-argument handler in `stdlib/file_contents.rs`. It opens an
+ordinary `PhpStream`, applies absolute or end-relative seeking and calls the
+same fixed-chunk bulk reader used by `stream_get_contents()`. The backend
+method is gated by either feature, so enabling the file surface does not also
+register the stream function.
+
+The extended handler supports current/absolute paths and `file://`, nullable
+or bounded length, positive and negative offsets, weak scalar conversions and
+named parameters. It validates all typed arguments before the empty-path
+`ValueError`, matching PHP's observable error order. Invalid context resources
+and all five parameter types use the probed exact exceptions. Configurable
+include-path search and valid stream-context resources remain future substrate;
+the accepted feature does not pretend those facilities exist.
+
+Results grow fallibly behind one 8 KiB stack chunk rather than from file
+metadata, keeping memory proportional to bytes successfully published. Shared
+integer/error helpers are visible across the stdlib subtree, but the resource-
+specific helper bodies remain feature-gated. This adds the new policy outside
+the 9k-line stdlib composition root without moving the established default
+handler.
+
+ARM64 default codegen remains the exact 2,818,048-byte `f5d4e68` `__TEXT`, hot
+addresses and lockfile. X86-64 text/data/bss and addresses are exact, and its
+pinned runtime gate passes at -0.489%/-0.414%/-0.400%/-0.084%/+0.431%.
+Library matrices pass 195/186/198/299 on ARM64 and 195/186/198/324 on x86-64
+for default/no-default/file/all features. Filesystem E2E passes one default and
+three expanded scenarios; 26 stream scenarios and all-feature/all-target builds
+also pass. The implementation uses only `std` and leaves `Cargo.lock`
+byte-identical.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -7812,6 +7812,46 @@ The combined stream matrix passes 26 scenarios and complete all-feature/all-
 target compilation passes on both hosts. No crate or external buffering
 library was added and `Cargo.lock` remains byte-identical.
 
+### Opt-in bounded `file_get_contents()` bridge (2026-08-10)
+
+The existing one-argument `std::fs::read` implementation remains the default
+handler. The `file-contents` feature replaces only its registration with a
+five-argument handler in a dedicated `stdlib/file_contents.rs` module. That
+handler reuses `PhpStream` and the fixed-chunk `read_contents` backend without
+enabling the PHP-visible `stream-contents` feature, so the file and stream
+surfaces remain independently selectable.
+
+PHP 8.5 differential probes define the expanded contract. Positive offsets
+seek from the start, negative offsets seek from the end, positions beyond EOF
+return an empty string and positions before the start return `false`. A null
+length reads the remainder, zero returns an empty string after seeking and a
+negative length raises the exact `ValueError`. Weak scalar conversions, named
+arguments, `file://`, validation order and exact type errors for all five
+parameters are covered. A non-context resource reproduces PHP's specific
+Stream-Context `TypeError`; RPHP does not yet create valid context resources,
+and `use_include_path=true` currently uses the ordinary current/absolute path
+resolver because no configurable include path exists.
+
+The shared backend grows its result incrementally behind one 8 KiB stack
+chunk, rather than allocating the file's reported or requested size eagerly.
+The common weak-long/error helpers now have stdlib-scoped visibility, while
+stream-resource validation remains compiled only for the features that use it.
+The 9k-line composition root retains the original default handler body
+unchanged and moves all expanded policy into the new domain file.
+
+Default ARM64 remains the exact 2,818,048-byte `f5d4e68` `__TEXT` image with
+identical monitored addresses and lockfile. X86-64 text/data/bss and hot
+addresses are also exact. Its pinned 20-pair runtime gate passes at
+-0.489%/-0.414%/-0.400%/-0.084%/+0.431% for scalar, packed array, String,
+order and ledger.
+
+ARM64 passes 195 default, 186 no-default, 198 `file-contents` and 299
+all-feature library tests; x86-64 passes the same first three counts and 324
+all-feature tests. Filesystem E2E coverage passes one default and three
+expanded scenarios, including a 20,000-byte multi-chunk file. The 26 combined
+stream scenarios and all-feature/all-target compilation pass on both hosts.
+No crate was added and `Cargo.lock` remains byte-identical.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

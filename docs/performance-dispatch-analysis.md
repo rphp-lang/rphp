@@ -2030,3 +2030,18 @@ pinned 20-pair x86 gate passes without a rerun at
 -0.797%/-0.138%/-0.795%/+0.309%/-0.332% for scalar, packed array, String,
 order and ledger. The feature adds no crate, heap-sized copy request or
 lockfile change.
+
+The `file-contents` follow-up keeps the original one-argument
+`file_get_contents()` body as the default symbol and selects the expanded
+handler only through feature-gated registration. The new handler lives in its
+own stdlib domain file and reuses the bulk reader by compiling that backend for
+either `stream-contents` or `file-contents`; it does not register the stream
+surface as an incidental dependency. The default composition and monitored
+hot layout therefore remain unchanged.
+
+ARM64 retains the exact 2,818,048-byte `f5d4e68` text size and addresses.
+X86-64 text/data/bss and addresses are exact as well. Its fresh pinned 20-pair
+gate passes at -0.489%/-0.414%/-0.400%/-0.084%/+0.431% for scalar, packed
+array, String, order and ledger. Expanded file reads still use the 8 KiB stack
+chunk with fallible incremental result growth; no external filesystem,
+buffering dependency or lockfile change is involved.

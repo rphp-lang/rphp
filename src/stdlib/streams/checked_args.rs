@@ -3,7 +3,7 @@ use crate::value::{Value, ValueType};
 use crate::vm::frame::ExecuteData;
 
 #[cold]
-pub(super) fn weak_long_argument(value: &Value) -> Option<i64> {
+pub(in crate::stdlib) fn weak_long_argument(value: &Value) -> Option<i64> {
     match value.value_type() {
         ValueType::Long => value.as_long(),
         ValueType::Double => value.as_double().map(|value| value as i64),
@@ -32,13 +32,13 @@ pub(super) fn weak_long_argument(value: &Value) -> Option<i64> {
 }
 
 #[cold]
-pub(super) fn argument_error(eg: &mut ExecutorGlobals, class: &str, message: String) {
+pub(in crate::stdlib) fn argument_error(eg: &mut ExecutorGlobals, class: &str, message: String) {
     debug_assert!(eg.exception.is_none());
     eg.exception = Some(crate::value::make_error_value(class, &message));
 }
 
 #[cold]
-pub(super) fn given_type_name(value: &Value) -> String {
+pub(in crate::stdlib) fn given_type_name(value: &Value) -> String {
     match value.value_type() {
         ValueType::False => "false".to_string(),
         ValueType::True => "true".to_string(),
@@ -61,6 +61,11 @@ pub(super) fn stream_argument(
 }
 
 #[cold]
+#[cfg(any(
+    feature = "csv-errors",
+    feature = "stream-contents",
+    feature = "stream-copy"
+))]
 pub(super) fn stream_argument_at(
     execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,

@@ -6,7 +6,7 @@ use std::path::Path;
 // Keep the established Linux translation-unit layout. On Apple targets the
 // CSV code is included here so its cold custom section cannot perturb the hot
 // quick-dispatch function layout measured by the performance admission gate.
-#[cfg(feature = "stream-contents")]
+#[cfg(any(feature = "stream-contents", feature = "file-contents"))]
 #[path = "stream/contents.rs"]
 mod contents;
 #[cfg(not(target_vendor = "apple"))]

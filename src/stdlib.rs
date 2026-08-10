@@ -636,7 +636,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Filesystem ---
     streams::register(eg, &mut funcs);
+    #[cfg(not(feature = "file-contents"))]
     reg!("file_get_contents", fn_file_get_contents, 1, 1, "filename");
+    #[cfg(feature = "file-contents")]
+    reg!(
+        "file_get_contents",
+        file_contents::fn_file_get_contents,
+        5,
+        1,
+        "filename",
+        "use_include_path",
+        "context",
+        "offset",
+        "length"
+    );
     reg!(
         "file_put_contents",
         fn_file_put_contents,
@@ -4346,6 +4359,7 @@ fn fn_exit(
 /// file_get_contents($filename): string|false
 /// PHP strings are byte strings. We use Latin-1 (byte→char 1:1) to preserve raw bytes
 /// losslessly inside Rust String, pending a proper byte-string Value backend.
+#[cfg(not(feature = "file-contents"))]
 fn fn_file_get_contents(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -6777,6 +6791,8 @@ fn fn_preg_replace_callback(
     ret!(rv, Value::string(result));
 }
 
+#[cfg(feature = "file-contents")]
+mod file_contents;
 #[path = "resource.rs"]
 pub(crate) mod resource;
 #[path = "stream.rs"]
