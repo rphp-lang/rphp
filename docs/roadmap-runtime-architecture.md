@@ -1487,6 +1487,42 @@ hot group shifts uniformly by `0xc0`. The pinned gate nevertheless passes at
 -0.290%/+0.285%/-0.822%/-0.204%/-0.252%. No manifest, lockfile, feature, crate
 or external library changes.
 
+### Opt-in Stream Context substrate checkpoint (2026-08-10)
+
+Phase 5 now has a request-owned `stream-context` resource behind the independent
+`stream-context` feature. `stream_context_create()` normalizes wrapper options
+into nested PHP arrays and retains the supported `notification` callback
+parameter after validating it through the existing callback resolver.
+`stream_context_get_options()` and `stream_context_get_params()` expose the
+stored state for both Context resources and streams opened with a Context.
+
+The expanded `fopen()`, `file_get_contents()`, `file_put_contents()` and
+`file()` handlers accept only a valid Stream Context resource and preserve PHP
+8.5.9 validation order and exact covered TypeError/ValueError messages. A
+stream receives an owned snapshot at open time, so closing or releasing the
+source Context cannot invalidate the stream. Default handlers, resource layout
+and registration remain compiled exactly as before when the feature is off.
+
+This is deliberately immutable substrate. `stream_context_set_option(s)()`,
+`stream_context_set_params()`, wrapper-specific consumption of stored options
+and configurable include-path lookup remain independent follow-up slices. The
+implementation uses only existing runtime types and the standard library; no
+crate is added and `Cargo.lock` is unchanged.
+
+ARM64 keeps the exact 2,818,048-byte default `__TEXT`, quick-long-loop and
+String-commit addresses. Its noisy full 20-pair gate reported
+-2.007%/-2.011%/+0.273%/+0.491%/+1.610%; because the order workload ranged
+from roughly 65 to 149 ms despite exact static layout, the mandatory isolated
+ledger rerun was used and passed at +0.347%. X86-64 remains exact at
+3388067/51816/3048 text/data/bss, the 0x988-byte `.rphp_cold` section and the
+post-refactor hot addresses. Its pinned 20-pair gate passes at
+-0.287%/+0.217%/-0.693%/-0.694%/+0.049%.
+
+Default/no-default/all-feature library matrices pass 195/186/300 on ARM64 and
+195/186/325 on x86-64. Stream Context-only coverage passes 16 stream scenarios;
+the all-feature surface passes 28 stream and 11 file scenarios, and complete
+all-feature/all-target compilation passes on both hosts.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,

@@ -62,6 +62,7 @@ pub(super) fn fn_file_get_contents(
         return Ok(());
     }
 
+    #[cfg(not(feature = "stream-context"))]
     if let Some(context) = optional_argument(execute_data, 2)
         && context.value_type() != ValueType::Null
     {
@@ -83,6 +84,25 @@ pub(super) fn fn_file_get_contents(
             );
         }
         return Ok(());
+    }
+    #[cfg(feature = "stream-context")]
+    {
+        let context = match super::streams::context::optional_context_resource(
+            execute_data,
+            2,
+            eg,
+            "file_get_contents",
+            3,
+        ) {
+            Ok(context) => context,
+            Err(()) => return Ok(()),
+        };
+        if let Some(context) = context
+            && super::streams::context::context_snapshot(eg, context).is_none()
+        {
+            super::streams::context::invalid_context_error(eg, "file_get_contents");
+            return Ok(());
+        }
     }
 
     let offset = match optional_argument(execute_data, 3) {

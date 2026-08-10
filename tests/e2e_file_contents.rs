@@ -365,3 +365,27 @@ fn extended_file_line_errors_and_validation_order_match_php() {
         )
     );
 }
+
+#[test]
+#[cfg(all(
+    feature = "stream-context",
+    feature = "file-contents",
+    feature = "file-write",
+    feature = "file-lines"
+))]
+fn valid_stream_contexts_flow_through_bounded_file_surfaces() {
+    let path = TemporaryPath::unique("stream-context-file");
+    let source = format!(
+        "<?php
+        $context = stream_context_create();
+        echo file_put_contents('{}', \"one\\ntwo\", 0, $context); echo ':';
+        echo file_get_contents('{}', false, $context); echo ':';
+        $lines = file('{}', FILE_IGNORE_NEW_LINES, $context);
+        echo count($lines); echo ':'; echo $lines[0]; echo ':'; echo $lines[1];
+        ",
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+    );
+    assert_eq!(run_php(&source), "7:one\ntwo:2:one:two");
+}

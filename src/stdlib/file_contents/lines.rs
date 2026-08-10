@@ -49,6 +49,7 @@ pub(in crate::stdlib) fn fn_file(
         None => 0,
     };
 
+    #[cfg(not(feature = "stream-context"))]
     let context_resource = match optional_argument(execute_data, 2) {
         Some(context) if context.value_type() == ValueType::Null => false,
         Some(context) if context.value_type() == ValueType::Resource => true,
@@ -65,6 +66,17 @@ pub(in crate::stdlib) fn fn_file(
         }
         None => false,
     };
+    #[cfg(feature = "stream-context")]
+    let context_resource = match super::super::streams::context::optional_context_resource(
+        execute_data,
+        2,
+        eg,
+        "file",
+        3,
+    ) {
+        Ok(context) => context,
+        Err(()) => return Ok(()),
+    };
 
     if flags & !VALID_FLAGS != 0 {
         argument_error(
@@ -74,12 +86,20 @@ pub(in crate::stdlib) fn fn_file(
         );
         return Ok(());
     }
+    #[cfg(not(feature = "stream-context"))]
     if context_resource {
         argument_error(
             eg,
             "TypeError",
             "file(): supplied resource is not a valid Stream-Context resource".to_string(),
         );
+        return Ok(());
+    }
+    #[cfg(feature = "stream-context")]
+    if let Some(context) = context_resource
+        && super::super::streams::context::context_snapshot(eg, context).is_none()
+    {
+        super::super::streams::context::invalid_context_error(eg, "file");
         return Ok(());
     }
     if filename.is_empty() {

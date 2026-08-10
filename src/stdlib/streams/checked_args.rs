@@ -3,6 +3,14 @@ use crate::value::{Value, ValueType};
 use crate::vm::frame::ExecuteData;
 
 #[cold]
+#[cfg(any(
+    feature = "csv-errors",
+    feature = "stream-contents",
+    feature = "stream-copy",
+    feature = "file-contents",
+    feature = "file-write",
+    feature = "file-lines"
+))]
 pub(in crate::stdlib) fn weak_long_argument(value: &Value) -> Option<i64> {
     match value.value_type() {
         ValueType::Long => value.as_long(),

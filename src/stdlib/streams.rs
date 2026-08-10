@@ -18,6 +18,7 @@ use super::stream::PhpStream;
     feature = "csv-errors",
     feature = "stream-contents",
     feature = "stream-copy",
+    feature = "stream-context",
     feature = "file-contents",
     feature = "file-write",
     feature = "file-lines"
@@ -25,6 +26,8 @@ use super::stream::PhpStream;
 pub(super) mod checked_args;
 #[cfg(feature = "stream-contents")]
 mod contents;
+#[cfg(feature = "stream-context")]
+pub(in crate::stdlib) mod context;
 #[cfg(feature = "stream-copy")]
 mod copy;
 #[cfg(feature = "csv-errors")]
@@ -35,12 +38,45 @@ mod csv_write;
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
     for (name, handler, maximum, required, parameter_names) in [
+        #[cfg(not(feature = "stream-context"))]
         (
             "fopen",
             fn_fopen as InternalFunctionHandler,
             4,
             2,
             &["filename", "mode", "use_include_path", "context"][..],
+        ),
+        #[cfg(feature = "stream-context")]
+        (
+            "fopen",
+            context::fn_fopen as InternalFunctionHandler,
+            4,
+            2,
+            &["filename", "mode", "use_include_path", "context"][..],
+        ),
+        #[cfg(feature = "stream-context")]
+        (
+            "stream_context_create",
+            context::fn_stream_context_create,
+            2,
+            0,
+            &["options", "params"],
+        ),
+        #[cfg(feature = "stream-context")]
+        (
+            "stream_context_get_options",
+            context::fn_stream_context_get_options,
+            1,
+            1,
+            &["stream_or_context"],
+        ),
+        #[cfg(feature = "stream-context")]
+        (
+            "stream_context_get_params",
+            context::fn_stream_context_get_params,
+            1,
+            1,
+            &["context"],
         ),
         ("fread", fn_fread, 2, 2, &["stream", "length"]),
         #[cfg(feature = "stream-contents")]
@@ -273,6 +309,7 @@ pub(super) fn with_stream<R>(
 }
 
 #[cold]
+#[cfg(not(feature = "stream-context"))]
 fn fn_fopen(
     execute_data: *mut ExecuteData,
     return_pointer: *mut Value,

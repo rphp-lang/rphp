@@ -2124,3 +2124,24 @@ Its pinned gate passes at -0.290%/+0.285%/-0.822%/-0.204%/-0.252%, so the
 source-ownership improvement is admitted by behavior and measured runtime
 rather than an unsupported claim of byte-identical executables. No Cargo or
 dependency change is involved.
+
+The Stream Context compatibility slice preserves the same default codegen
+boundary. `stream-context` compiles in a request-owned Context resource,
+normalization of nested wrapper options, validation of the supported
+`notification` callback parameter and checked Context arguments for `fopen()`
+and the three expanded file APIs. Streams retain an owned snapshot rather than
+a borrowed registry reference. When the feature is absent, the original
+handlers and `PhpStream` layout remain selected.
+
+Default ARM64 stays at the exact 2,818,048-byte `__TEXT` with unchanged
+quick-long-loop and String-commit addresses. The full 20-pair run was noisy:
+-2.007%/-2.011%/+0.273%/+0.491%/+1.610% for scalar, packed array, String,
+order and ledger, with order samples ranging from roughly 65 to 149 ms. The
+required isolated ledger rerun passed at +0.347%. X86-64 remains exact at
+3388067/51816/3048 text/data/bss, the 0x988-byte `.rphp_cold` section and the
+post-refactor hot addresses; its pinned gate passes at
+-0.287%/+0.217%/-0.693%/-0.694%/+0.049%.
+
+The slice adds no crate and leaves `Cargo.lock` unchanged. Mutable Context APIs,
+wrapper-specific option effects and include-path lookup remain separate
+compatibility work rather than being folded into a default-runtime change.

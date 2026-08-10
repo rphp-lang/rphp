@@ -7998,6 +7998,35 @@ and the monitored group moves uniformly by `0xc0`; the pinned gate passes at
 -0.290%/+0.285%/-0.822%/-0.204%/-0.252%. Cargo files and external libraries
 remain unchanged.
 
+### Opt-in Stream Context substrate checkpoint (2026-08-10)
+
+The next compatibility slice adds a valid Stream Context substrate behind the
+opt-in `stream-context` feature. It introduces the request-owned
+`stream-context` resource plus `stream_context_create()`,
+`stream_context_get_options()` and `stream_context_get_params()`. Wrapper
+options are normalized into nested PHP arrays; parameters retain a validated
+`notification` callback. The feature-only `fopen()`, `file_get_contents()`,
+`file_put_contents()` and `file()` paths accept this resource and attach an
+owned snapshot to newly opened streams.
+
+PHP 8.5.9 differential tests lock the covered weak types, validation order,
+resource-kind errors, option shape and getter results. Mutation APIs,
+wrapper-specific interpretation of stored options and include-path search are
+not claimed by this slice. The implementation reuses the existing callback,
+array, resource and stream owners and adds no external crate; `Cargo.lock`
+remains unchanged.
+
+With the feature disabled, ARM64 retains the exact 2,818,048-byte `__TEXT` and
+monitored addresses. Its noisy full 20-pair run ended at
+-2.007%/-2.011%/+0.273%/+0.491%/+1.610%; exact static layout and wide timing
+outliers required the isolated ledger gate, which passed at +0.347%. X86-64
+retains the post-refactor 3388067/51816/3048 text/data/bss, 0x988-byte
+`.rphp_cold` and monitored hot addresses. Its pinned gate passes at
+-0.287%/+0.217%/-0.693%/-0.694%/+0.049%. Library matrices pass 195/186/300 on
+ARM64 and 195/186/325 on x86-64, with 16 feature-only stream, 28 all-feature
+stream and 11 all-feature file scenarios plus all-target compilation on both
+hosts.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

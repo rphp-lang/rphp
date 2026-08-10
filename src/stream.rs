@@ -3,6 +3,9 @@ use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
 use std::path::Path;
 
+#[cfg(feature = "stream-context")]
+use crate::value::PhpArray;
+
 // Keep the established Linux translation-unit layout. On Apple targets the
 // CSV code is included here so its cold custom section cannot perturb the hot
 // quick-dispatch function layout measured by the performance admission gate.
@@ -73,6 +76,15 @@ enum StreamBackend {
     Temp(TempStream),
 }
 
+/// Request-owned context data shared by a context resource and streams opened
+/// from it. This type is absent from builds that do not expose stream contexts.
+#[cfg(feature = "stream-context")]
+#[derive(Clone)]
+pub(crate) struct StreamContext {
+    pub(crate) options: PhpArray,
+    pub(crate) params: PhpArray,
+}
+
 /// Initial standard-library stream backend.
 ///
 /// The resource wrapper owns identity and lifecycle; this type owns byte I/O,
@@ -84,6 +96,8 @@ pub struct PhpStream {
     reported_mode: String,
     uri: String,
     eof: bool,
+    #[cfg(feature = "stream-context")]
+    context: Option<StreamContext>,
 }
 
 /// Stable metadata exposed by the currently admitted seekable backends.
@@ -115,6 +129,8 @@ impl PhpStream {
                 reported_mode: php_memory_mode(mode).to_string(),
                 uri: path.to_string(),
                 eof: false,
+                #[cfg(feature = "stream-context")]
+                context: None,
             });
         }
         if let Some(max_memory) = temp_memory_limit(path) {
@@ -124,6 +140,8 @@ impl PhpStream {
                 reported_mode: php_memory_mode(mode).to_string(),
                 uri: path.to_string(),
                 eof: false,
+                #[cfg(feature = "stream-context")]
+                context: None,
             });
         }
 
@@ -153,7 +171,19 @@ impl PhpStream {
             reported_mode: requested_mode.to_string(),
             uri: path.to_string(),
             eof: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
         })
+    }
+
+    #[cfg(feature = "stream-context")]
+    pub(crate) fn attach_context(&mut self, context: StreamContext) {
+        self.context = Some(context);
+    }
+
+    #[cfg(feature = "stream-context")]
+    pub(crate) fn context(&self) -> Option<&StreamContext> {
+        self.context.as_ref()
     }
 
     #[inline]

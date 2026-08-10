@@ -51,6 +51,7 @@ pub(in crate::stdlib) fn fn_file_put_contents(
         None => 0,
     };
 
+    #[cfg(not(feature = "stream-context"))]
     if let Some(context) = optional_argument(execute_data, 3)
         && context.value_type() != ValueType::Null
     {
@@ -72,6 +73,25 @@ pub(in crate::stdlib) fn fn_file_put_contents(
             );
         }
         return Ok(());
+    }
+    #[cfg(feature = "stream-context")]
+    {
+        let context = match super::super::streams::context::optional_context_resource(
+            execute_data,
+            3,
+            eg,
+            "file_put_contents",
+            4,
+        ) {
+            Ok(context) => context,
+            Err(()) => return Ok(()),
+        };
+        if let Some(context) = context
+            && super::super::streams::context::context_snapshot(eg, context).is_none()
+        {
+            super::super::streams::context::invalid_context_error(eg, "file_put_contents");
+            return Ok(());
+        }
     }
 
     let source_resource = if data.value_type() == ValueType::Resource {

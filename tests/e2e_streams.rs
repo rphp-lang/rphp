@@ -102,6 +102,88 @@ fn line_reads_preserve_newlines_limits_cursor_and_eof() {
 }
 
 #[test]
+#[cfg(feature = "stream-context")]
+fn stream_context_resources_round_trip_options_params_and_open_streams() {
+    assert_eq!(
+        run_php(
+            "<?php
+            $context = stream_context_create(
+                [
+                    'file' => ['probe' => 'yes'],
+                    'http' => ['method' => 'POST'],
+                ],
+                ['notification' => 'strlen', 'ignored' => 'strlen']
+            );
+            echo gettype($context); echo ':';
+            echo get_resource_type($context); echo ':';
+            $options = stream_context_get_options($context);
+            echo $options['file']['probe']; echo ':';
+            echo $options['http']['method']; echo ':';
+            $params = stream_context_get_params($context);
+            echo count($params); echo ':';
+            echo $params['notification']; echo ':';
+            echo $params['options']['file']['probe']; echo ':';
+
+            $stream = fopen('php://memory', 'w+', false, $context);
+            echo get_resource_type($stream); echo ':';
+            fwrite($stream, 'ok'); rewind($stream); echo fread($stream, 2); echo ':';
+            $streamOptions = stream_context_get_options($stream);
+            echo $streamOptions['http']['method']; echo ':';
+            $streamParams = stream_context_get_params($stream);
+            echo $streamParams['options']['file']['probe'];
+            "
+        ),
+        "resource:stream-context:yes:POST:2:strlen:yes:stream:ok:POST:yes"
+    );
+}
+
+#[test]
+#[cfg(feature = "stream-context")]
+fn stream_context_argument_errors_match_php_classes_and_messages() {
+    assert_eq!(
+        run_php(
+            "<?php
+            try { stream_context_create(false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_create([], false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_create(['file' => 1]); }
+            catch (ValueError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { stream_context_get_options(false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { fopen('php://memory', 'r', [], null); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            try { fopen('php://memory', 'r', false, false); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            $stream = fopen('php://memory', 'w+');
+            try { fopen('php://memory', 'r', false, $stream); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            echo '|';
+            fclose($stream);
+            try { stream_context_get_params($stream); }
+            catch (TypeError $error) { echo get_class($error); echo ':'; echo $error->getMessage(); }
+            "
+        ),
+        concat!(
+            "TypeError:stream_context_create(): Argument #1 ($options) must be of type ?array, false given",
+            "|TypeError:stream_context_create(): Argument #2 ($params) must be of type ?array, false given",
+            "|ValueError:Options should have the form [\"wrappername\"][\"optionname\"] = $value",
+            "|TypeError:stream_context_get_options(): Argument #1 ($stream_or_context) must be of type resource, false given",
+            "|TypeError:fopen(): Argument #3 ($use_include_path) must be of type bool, array given",
+            "|TypeError:fopen(): Argument #4 ($context) must be of type resource or null, false given",
+            "|TypeError:fopen(): supplied resource is not a valid Stream-Context resource",
+            "|TypeError:stream_context_get_params(): Argument #1 ($context) must be a valid stream/context"
+        )
+    );
+}
+
+#[test]
 #[cfg(feature = "stream-contents")]
 fn stream_contents_preserves_length_offset_cursor_and_eof() {
     assert_eq!(
