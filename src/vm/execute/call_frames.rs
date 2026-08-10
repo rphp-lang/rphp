@@ -195,6 +195,8 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
         pop_call_storage(eg, call);
         call = next;
     }
+    #[cfg(feature = "php-generics-reified")]
+    eg.discard_pending_reified_binding_scopes(frame as usize);
 }
 
 /// Clean up a pending call frame and throw a catchable exception.
@@ -212,7 +214,10 @@ unsafe fn cleanup_call_and_throw<'a>(
     let call_key = call as usize;
     eg.pending_named_variadic.remove(&call_key);
     #[cfg(feature = "php-generics-reified")]
-    eg.discard_reified_member_call(call_key);
+    {
+        eg.discard_reified_member_call(call_key);
+        eg.discard_pending_reified_binding_scopes(frame as usize);
+    }
     let _ = take_pending_invoke_this(eg, call_key);
     (*frame).call = (*call).call;
     cleanup_frame_slots(call);
@@ -335,7 +340,10 @@ fn throw_in_frame<'a>(
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
                     #[cfg(feature = "php-generics-reified")]
-                    eg.discard_reified_member_call(frame as usize);
+                    {
+                        eg.discard_reified_member_call(frame as usize);
+                        eg.discard_active_reified_binding_scope(frame as usize);
+                    }
                     unsafe {
                         cleanup_pending_calls(eg, frame);
                         cleanup_frame_slots(frame);
@@ -356,7 +364,10 @@ fn throw_in_frame<'a>(
                     let prev = unsafe { (*frame).prev_execute_data };
                     eg.current_execute_data.set(prev);
                     #[cfg(feature = "php-generics-reified")]
-                    eg.discard_reified_member_call(frame as usize);
+                    {
+                        eg.discard_reified_member_call(frame as usize);
+                        eg.discard_active_reified_binding_scope(frame as usize);
+                    }
                     unsafe {
                         cleanup_pending_calls(eg, frame);
                         cleanup_frame_slots(frame);

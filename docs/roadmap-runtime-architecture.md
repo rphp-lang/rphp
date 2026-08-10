@@ -1864,11 +1864,25 @@ For the common reified `int -> int` method shape, an exact scalar-plan proof
 checks that every substituted boundary admits `int`. The already-guarded
 frame-free Long plan may then discharge the contract without pending/active
 sidecar state; a mismatched argument, non-Long result or arithmetic overflow
-side-exits to the canonical reified call and its full checks. Materializing a
-general substituted signature for non-reified concrete descendants,
-constructor parameter contracts, method-generic alpha-renaming and
-deterministic diamond contract merging remain explicit follow-up link/runtime
-steps.
+side-exits to the canonical reified call and its full checks.
+
+Explicit reified construction now resolves the effective own or inherited
+`__construct` signature through the same substituted-method cache. Canonical
+calls validate fixed and variadic constructor arguments before entering the
+body. A proven property-initializer constructor can instead validate both the
+substituted parameter and every generic destination property, skip its frame,
+and resume at the existing class-binding return check. Explicit generic
+bindings now also move through caller-owned pending and call-owned active scope
+sidecars; successful completion, abandoned argument evaluation and exception
+unwinding remove the exact binding, preventing a caught generic call from
+reifying a later ordinary call through stale LIFO state.
+
+Materializing a general substituted signature for non-reified concrete
+descendants, method-generic alpha-renaming and deterministic diamond contract
+merging remain explicit follow-up link/runtime steps. Generics-aware JIT
+specialization is deliberately last: it starts only after these semantics and
+both runtimes are closed, and must consume the canonical metadata with exact
+guards and deoptimization back to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

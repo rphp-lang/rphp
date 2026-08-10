@@ -345,16 +345,19 @@ fn erased_runtime_validates_bindings_but_erases_substitution_contracts() {
         r#"<?php
 function id<T>(T $value): T { return $value; }
 function wrong<T>(): T { return "still erased"; }
-class Box<T> { public function id(T $value): T { return $value; } }
+class Box<T> {
+    public function __construct(T $value) { echo $value; }
+    public function id(T $value): T { return $value; }
+}
 echo id::<int>("accepted by mixed erasure");
 echo wrong::<int>();
-$box = new Box::<int>();
+$box = new Box::<int>(" through constructor");
 echo $box->id(" through method");
 "#,
     );
     assert_eq!(
         output,
-        "accepted by mixed erasurestill erased through method"
+        "accepted by mixed erasurestill erased through constructor through method"
     );
 }
 
@@ -447,7 +450,7 @@ $invalid = new Promoted::<int>("not an int");
 "#,
     );
     assert!(
-        format!("{promoted_error:?}").contains("reified property Promoted::$value"),
+        format!("{promoted_error:?}").contains("Argument #1 passed to Promoted::__construct()"),
         "{promoted_error:?}"
     );
 
@@ -558,6 +561,60 @@ echo $step->step(12);
             "{rendered:?} did not contain {expected:?}"
         );
         assert!(rendered.contains("reified class type"), "{rendered:?}");
+    }
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_instances_enforce_substituted_constructor_contracts() {
+    let output = common::run_php(
+        r#"<?php
+class ParentBox<T> {
+    public function __construct(T $value) { echo $value; }
+}
+class ChildBox<U> extends ParentBox<U> {}
+class ThrowBox<V> {
+    public function __construct(V $value) {
+        if ($value === 0) { throw new Exception("expected"); }
+        echo $value;
+    }
+}
+new ParentBox::<int>(12);
+new ChildBox::<string>(" inherited");
+try { new ThrowBox::<int>(0); } catch (Exception $error) {}
+new ThrowBox(" erased after throw");
+"#,
+    );
+    assert_eq!(output, "12 inherited erased after throw");
+
+    for (source, expected) in [
+        (
+            "<?php class Box<T> { public function __construct(T $value) {} } new Box::<int>('bad');",
+            "Argument #1 passed to Box::__construct()",
+        ),
+        (
+            "<?php class ParentBox<T> { public function __construct(T $value) {} } class ChildBox<U> extends ParentBox<U> {} new ChildBox::<int>('bad');",
+            "Argument #1 passed to ParentBox::__construct()",
+        ),
+        (
+            "<?php class Box<T> { public T $value; public function __construct(T $value) { $this->value = $value; } } new Box::<int>(1); new Box::<int>('bad');",
+            "Argument #1 passed to Box::__construct()",
+        ),
+        (
+            "<?php class Box<T> { public T $value; public function __construct(mixed $value) { $this->value = $value; } } new Box::<int>(1); new Box::<int>('bad');",
+            "reified property Box::$value",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+        assert!(
+            rendered.contains("reified class type") || rendered.contains("reified property"),
+            "{rendered:?}"
+        );
     }
 }
 

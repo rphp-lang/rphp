@@ -47,7 +47,7 @@ fn op_check_generic_args(
                 use_site: opline.extended_value,
             };
             #[cfg(feature = "php-generics-reified")]
-            eg.reified_bindings.push(binding);
+            eg.push_reified_binding_scope(frame as usize, binding);
             #[cfg(not(feature = "php-generics-reified"))]
             let _ = binding;
             return Ok(());
@@ -132,7 +132,7 @@ fn op_check_generic_args(
     }
 
     #[cfg(feature = "php-generics-reified")]
-    eg.reified_bindings.push(binding);
+    eg.push_reified_binding_scope(frame as usize, binding);
 
     #[cfg(not(feature = "php-generics-reified"))]
     let _ = binding;
@@ -202,6 +202,7 @@ fn op_check_reified_args(
                 )));
             }
         }
+        eg.activate_reified_binding_scope(frame as usize, call as usize);
         Ok(())
     }
 }
@@ -251,7 +252,7 @@ fn op_check_reified_return(
                 )));
             }
         }
-        eg.reified_bindings.pop();
+        eg.finish_reified_binding_scope(frame as usize);
         Ok(())
     }
 }

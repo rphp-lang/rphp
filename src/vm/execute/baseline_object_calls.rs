@@ -8,6 +8,8 @@ unsafe fn try_execute_property_init_constructor(
     object: &Value,
     callee: &UserFunction,
     plan: &PropertyInitMethodPlan,
+    reified_contract: Option<&crate::generics::ReifiedMethodContract>,
+    reified_protocol: bool,
 ) -> Option<*const Instruction> {
     let common = &callee.common;
     if common.sig.public_arity() != plan.public_args as u32
@@ -58,13 +60,34 @@ unsafe fn try_execute_property_init_constructor(
         ) {
             return None;
         }
+        #[cfg(feature = "php-generics-reified")]
+        if let Some(expected) = reified_contract
+            .and_then(|contract| contract.value_parameters.get(index))
+            .and_then(Option::as_ref)
+            && !eg.generic_metadata.value_matches_resolved_type(
+                value,
+                expected,
+                |actual, bound| eg.class_is_a(actual, bound),
+            )
+        {
+            return None;
+        }
+        #[cfg(not(feature = "php-generics-reified"))]
+        let _ = reified_contract;
         arguments[index] = value as *const Value;
     }
 
-    let do_fcall_ptr = sends.add(plan.public_args as usize);
+    let mut do_fcall_ptr = sends.add(plan.public_args as usize);
+    if reified_protocol {
+        if (*do_fcall_ptr).opcode != OpCode::CheckReifiedArgs {
+            return None;
+        }
+        do_fcall_ptr = do_fcall_ptr.add(1);
+    }
     let do_fcall = &*do_fcall_ptr;
     if do_fcall.opcode != OpCode::DoFcall
         || !matches!(do_fcall.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
+        || (reified_protocol && (*do_fcall_ptr.add(1)).opcode != OpCode::CheckReifiedReturn)
     {
         return None;
     }
@@ -75,8 +98,39 @@ unsafe fn try_execute_property_init_constructor(
     let mut property_slots = [0usize; 8];
     for (index, assignment) in plan.assignments.iter().copied().enumerate() {
         let cache = callee.op_array.cache.get(assignment.cache_ip as usize)?;
-        if cache.class_id != class_id || cache.property_flags() != 3 {
+        if cache.class_id != class_id {
             return None;
+        }
+        if cache.property_flags() != 3 {
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            {
+                let declaration = cache.generic_property_declaration()?;
+                let instruction = callee
+                    .op_array
+                    .instructions
+                    .get(assignment.cache_ip as usize)?;
+                let property = callee
+                    .op_array
+                    .literals
+                    .get(instruction.op2 as usize)?
+                    .as_str()?;
+                let argument = &*arguments[assignment.argument as usize];
+                if eg
+                    .check_cached_generic_property_value(
+                        object,
+                        property,
+                        argument,
+                        declaration,
+                    )
+                    .is_err()
+                {
+                    return None;
+                }
+            }
+            #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+            {
+                return None;
+            }
         }
         property_slots[index] = cache.property_slot();
     }
@@ -217,6 +271,20 @@ fn op_new_obj<'a>(
         }
         resolved
     };
+    #[cfg(feature = "php-generics-reified")]
+    let reified_constructor_contract = if func_ptr.is_null() {
+        None
+    } else {
+        let object = unsafe { &*result_ptr };
+        eg.reified_instance_method_contract(object, "__construct")
+    };
+    #[cfg(feature = "php-generics-reified")]
+    let reified_construction = {
+        let object = unsafe { &*result_ptr };
+        eg.reified_object_binding(object).is_some()
+    };
+    #[cfg(not(feature = "php-generics-reified"))]
+    let reified_construction = false;
     if !func_ptr.is_null() {
         let common = unsafe { &*func_ptr };
         if common.fn_type == FunctionType::User {
@@ -232,6 +300,11 @@ fn op_new_obj<'a>(
                         object,
                         user,
                         plan,
+                        #[cfg(feature = "php-generics-reified")]
+                        reified_constructor_contract.as_deref(),
+                        #[cfg(not(feature = "php-generics-reified"))]
+                        None,
+                        reified_construction,
                     )
                 }
                 .is_some()
@@ -254,6 +327,10 @@ fn op_new_obj<'a>(
             // Write $this directly — cleanup handles it separately.
             let obj_ref = &*result_ptr;
             frame_set_this(call, obj_ref.clone());
+        }
+        #[cfg(feature = "php-generics-reified")]
+        if let Some(contract) = reified_constructor_contract {
+            eg.push_pending_reified_member_call(call as usize, contract);
         }
     } else {
         // No constructor — skip the call protocol through DoFcall. Explicit

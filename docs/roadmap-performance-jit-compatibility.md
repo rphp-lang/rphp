@@ -8524,9 +8524,45 @@ erased generic/manual is -0.042% (0.065722/0.065784 seconds), reified
 generic/manual is -0.168% (0.065847/0.065974 seconds), and reified/erased
 generic is +0.032%.
 
-The general non-scalar substituted signature view, constructor contracts,
-method-generic alpha-renaming and deterministic diamond merging remain
-follow-ups rather than weakening this exact fast-path proof.
+Reified constructors now consume the same effective own/inherited method
+contract. The ordinary path validates the substituted arguments before the
+body; the property-initializer fast path proves both those arguments and every
+generic destination property, then skips the frame while retaining the
+existing class-binding completion check. Binding lifetime is explicit as well:
+caller-owned pending scopes become call-owned active scopes, and success,
+abandoned argument calls plus exception unwinding remove the exact tuple. A
+permanent caught-constructor regression verifies that a later ordinary `new`
+does not inherit stale reification.
+
+The one-million-allocation ARM64 constructor benchmark includes the external
+weak object identity, substituted `int` constructor, generic property write
+and final read. Before the direct proof, the reified path took roughly 0.219
+seconds. In 21 order-alternated release pairs after the proof:
+
+- erased generic/manual paired median: +0.231% (0.069811/0.070089 seconds);
+- reified generic/manual paired median: +87.423% (0.140973/0.075958 seconds);
+- reified/erased generic paired median: +102.506%.
+
+The synchronized x86-64 host independently reports erased generic/manual at
++0.152% (0.066809/0.066967 seconds), reified generic/manual at +89.648%
+(0.145605/0.076640 seconds), and reified/erased generic at +118.178%.
+The remaining reified delta is approximately 65 ns per ARM64 object and 69 ns
+per x86-64 object; it includes the required weak identity insertion plus real
+constructor/property guards and is recorded separately from method dispatch,
+which is at parity.
+The general non-scalar substituted signature view, method-generic
+alpha-renaming and deterministic diamond merging remain follow-ups rather than
+weakening either exact fast-path proof.
+
+Generics-aware JIT work is the final milestone of this interphase, not a
+concurrent semantic shortcut. It begins only after parser/link/runtime/
+Reflection coverage, inheritance merging and both runtime modes are closed.
+The JIT may then consume stable interned declarations and use-site proofs:
+bound-erased specializations must add no generic guard beyond the proven erased
+ABI, while reified specializations require exact tuple/class guards and a
+canonical deoptimization edge to the already-tested reified executor. Final
+admission requires separate erased/reified native benchmarks on ARM64 and
+x86-64 plus unchanged feature-off and non-generic gates.
 
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,

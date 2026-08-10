@@ -13,6 +13,12 @@ use crate::vm::stack::VmStack;
 use crate::vm::stats;
 
 #[cfg(feature = "php-generics-reified")]
+#[path = "generic_scopes.rs"]
+mod generic_scopes;
+#[cfg(feature = "php-generics-reified")]
+use generic_scopes::{ActiveReifiedBindingScope, PendingReifiedBindingScope};
+
+#[cfg(feature = "php-generics-reified")]
 #[derive(Clone)]
 struct ReifiedObjectBinding {
     identity: usize,
@@ -135,6 +141,13 @@ pub struct ExecutorGlobals {
     /// so every pre-existing ExecutorGlobals field keeps the feature-off offset.
     #[cfg(feature = "php-generics-reified")]
     pub reified_bindings: Vec<ReifiedBinding>,
+    /// Explicit generic bindings are born in a caller before its call frame is
+    /// active. Scope sidecars make success, abandoned arguments and exception
+    /// unwinding remove the exact binding instead of leaving stale LIFO state.
+    #[cfg(feature = "php-generics-reified")]
+    pending_reified_binding_scopes: Vec<PendingReifiedBindingScope>,
+    #[cfg(feature = "php-generics-reified")]
+    active_reified_binding_scopes: Vec<ActiveReifiedBindingScope>,
     /// Object identity → canonical type arguments. Weak ownership prevents a
     /// recycled allocation from inheriting a stale binding; periodic
     /// exponential sweeps keep construction amortized O(1).
@@ -173,6 +186,10 @@ impl ExecutorGlobals {
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
             reified_bindings: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            pending_reified_binding_scopes: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            active_reified_binding_scopes: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_objects: HashMap::new(),
             #[cfg(feature = "php-generics-reified")]
@@ -217,6 +234,10 @@ impl ExecutorGlobals {
             generic_metadata: GenericMetadata::default(),
             #[cfg(feature = "php-generics-reified")]
             reified_bindings: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            pending_reified_binding_scopes: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            active_reified_binding_scopes: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_objects: HashMap::new(),
             #[cfg(feature = "php-generics-reified")]
