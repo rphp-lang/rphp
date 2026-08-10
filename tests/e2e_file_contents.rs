@@ -67,6 +67,25 @@ fn file_put_contents_writes_complete_ascii_files() {
 }
 
 #[test]
+fn file_reads_complete_lines_across_stack_sized_boundaries() {
+    let path = TemporaryPath::unique("file-lines-default");
+    let mut payload = vec![b'x'; 9_000];
+    payload.extend_from_slice(b"\n\nlast");
+    std::fs::write(&path.0, payload).unwrap();
+    let source = format!(
+        "<?php
+        $lines = file('{}');
+        echo count($lines); echo ':';
+        echo strlen($lines[0]); echo ':';
+        if ($lines[1] === \"\n\") {{ echo 'blank'; }}
+        echo ':'; echo $lines[2];
+        ",
+        path.php_literal()
+    );
+    assert_eq!(run_php(&source), "3:9001:blank:last");
+}
+
+#[test]
 #[cfg(feature = "file-contents")]
 fn extended_file_contents_matches_php_offsets_lengths_and_file_urls() {
     let path = TemporaryPath::unique("file-contents-offsets");
@@ -259,6 +278,90 @@ fn extended_file_write_argument_errors_and_validation_order_match_php() {
             "|TypeError:file_put_contents(): supplied resource is not a valid stream resource",
             "|ValueError:Path must not be empty",
             "|false:[]"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "file-lines")]
+fn extended_file_lines_match_php_newline_and_empty_line_flags() {
+    let path = TemporaryPath::unique("file-lines-flags");
+    std::fs::write(&path.0, b"a\n\nb\r\n\r\n0\n \n\t\nlast").unwrap();
+    let source = format!(
+        "<?php
+        echo FILE_USE_INCLUDE_PATH; echo ':'; echo FILE_IGNORE_NEW_LINES; echo ':'; echo FILE_SKIP_EMPTY_LINES; echo '|';
+        echo json_encode(file('{}')); echo '|';
+        echo json_encode(file('{}', FILE_IGNORE_NEW_LINES)); echo '|';
+        echo json_encode(file('{}', FILE_SKIP_EMPTY_LINES)); echo '|';
+        echo json_encode(file('{}', 6)); echo '|';
+        echo json_encode(file('file://{}', '2'));
+        ",
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "1:2:4|[\"a\\n\",\"\\n\",\"b\\r\\n\",\"\\r\\n\",\"0\\n\",\" \\n\",\"\\t\\n\",\"last\"]",
+            "|[\"a\",\"\",\"b\",\"\",\"0\",\" \",\"\\t\",\"last\"]",
+            "|[\"a\\n\",\"\\n\",\"b\\r\\n\",\"\\r\\n\",\"0\\n\",\" \\n\",\"\\t\\n\",\"last\"]",
+            "|[\"a\",\"b\",\"0\",\" \",\"\\t\",\"last\"]",
+            "|[\"a\",\"\",\"b\",\"\",\"0\",\" \",\"\\t\",\"last\"]"
+        )
+    );
+}
+
+#[test]
+#[cfg(feature = "file-lines")]
+fn extended_file_line_errors_and_validation_order_match_php() {
+    let path = TemporaryPath::unique("file-lines-errors");
+    std::fs::write(&path.0, b"line\n").unwrap();
+    let source = format!(
+        "<?php
+        try {{ file([]); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file('{}', []); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file('{}', 0, false); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file('', 8, false); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file('', 8); }}
+        catch (ValueError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        $stream = fopen('php://memory', 'r');
+        try {{ file('{}', 8, $stream); }}
+        catch (ValueError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file('{}', 0, $stream); }}
+        catch (TypeError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        echo '|';
+        try {{ file(''); }}
+        catch (ValueError $error) {{ echo get_class($error); echo ':'; echo $error->getMessage(); }}
+        ",
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal(),
+        path.php_literal()
+    );
+    assert_eq!(
+        run_php(&source),
+        concat!(
+            "TypeError:file(): Argument #1 ($filename) must be of type string, array given",
+            "|TypeError:file(): Argument #2 ($flags) must be of type int, array given",
+            "|TypeError:file(): Argument #3 ($context) must be of type resource or null, false given",
+            "|TypeError:file(): Argument #3 ($context) must be of type resource or null, false given",
+            "|ValueError:file(): Argument #2 ($flags) must be a valid flag value",
+            "|ValueError:file(): Argument #2 ($flags) must be a valid flag value",
+            "|TypeError:file(): supplied resource is not a valid Stream-Context resource",
+            "|ValueError:Path must not be empty"
         )
     );
 }

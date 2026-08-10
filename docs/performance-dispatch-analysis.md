@@ -2066,3 +2066,18 @@ addresses. X86-64 text/data/bss and addresses are exact as well. Its fresh
 pinned 20-pair gate passes at +0.001%/-0.126%/+0.446%/+0.500%/-0.618% for
 scalar, packed array, String, order and ledger. The manifest adds only the
 opt-in feature; `Cargo.lock` remains byte-identical.
+
+`file-lines` applies the same boundary to the legacy eager `file()` handler.
+Default builds retain its original one-argument `std::fs::read` body. The
+feature selects a child-module handler that reuses `PhpStream::read_line` and
+one retained line vector, so multi-buffer lines do not create a second
+buffering abstraction. `FILE_IGNORE_NEW_LINES` strips LF and the preceding CR;
+`FILE_SKIP_EMPTY_LINES` then tests the resulting bytes, matching PHP's flag
+ordering.
+
+The new constants, exact invalid-flag/error path and child module compile out
+of default builds. ARM64 therefore keeps the exact 2,818,048-byte `f5d4e68`
+`__TEXT` and monitored addresses; x86-64 keeps its exact text/data/bss and hot
+addresses. A fresh pinned 20-pair x86 gate passes at
+-0.095%/+0.197%/+0.005%/-1.697%/+0.404% for scalar, packed array, String,
+order and ledger. No line-reader crate or lockfile change is involved.

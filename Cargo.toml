@@ -17,6 +17,7 @@ stream-contents = ["value-errors"]
 stream-copy = []
 file-contents = ["value-errors"]
 file-write = ["value-errors"]
+file-lines = ["value-errors"]
 
 [dependencies]
 serde = "1.0.228"

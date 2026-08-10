@@ -7897,6 +7897,42 @@ E2E passes 2 default, 5 writer and 7 combined scenarios; 26 stream scenarios
 and complete all-feature/all-target compilation pass on both hosts. The slice
 adds no crate, and `Cargo.lock` remains byte-identical.
 
+### Opt-in streaming `file()` line arrays (2026-08-10)
+
+The next bounded file slice adds `file-lines` while preserving the old
+one-argument `std::fs::read` handler in default builds. The expanded
+three-argument handler is isolated in `stdlib/file_contents/lines.rs` and
+reuses `PhpStream::read_line`; one retained `Vec<u8>` crosses arbitrary 8 KiB
+backend chunks, and each completed line is published directly to the result
+array. There is no parallel buffered-stream layer or external line-reading
+crate.
+
+Differential PHP 8.5.9 coverage defines the flag interaction precisely.
+`FILE_IGNORE_NEW_LINES` removes LF and an immediately preceding CR;
+`FILE_SKIP_EMPTY_LINES` tests after that removal. Therefore skip-empty by
+itself retains newline-only physical records, while the combined flags omit
+them without dropping space, tab or `"0"` records. Empty files return an empty
+array, a final unterminated line is retained and unknown flag bits raise the
+exact PHP `ValueError`.
+
+Typed flag and context validation occurs before invalid flag values. A stream
+resource is then rejected as a non-Context resource, followed by the empty-path
+check. Current, absolute and `file://` paths are covered; true include-path
+search and valid Stream-Context resources still require shared substrate. A
+separate pre-existing VM issue with adjacent named arguments inside nested
+calls surfaced during testing and remains an independent call-dispatch
+checkpoint rather than being mixed into this filesystem slice.
+
+Default ARM64 codegen remains the exact 2,818,048-byte `f5d4e68` `__TEXT` and
+monitored addresses. X86-64 text/data/bss and addresses are exact, and its
+fresh pinned 20-pair gate passes at
+-0.095%/+0.197%/+0.005%/-1.697%/+0.404% for scalar, packed array, String,
+order and ledger. ARM64 passes 195 default, 186 no-default, 195 `file-lines`
+and 300 all-feature library tests; x86-64 passes 195/186/195/325. File E2E
+passes 3 default, 5 line-feature and 10 combined scenarios; 26 stream scenarios
+and all-feature/all-target compilation pass on both hosts. No dependency was
+added and `Cargo.lock` remains byte-identical.
+
 ## Phase 6: optional numerical computing and accelerator platform
 
 After production-oriented compatibility is broad enough, use the proven typed

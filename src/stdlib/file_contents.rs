@@ -16,6 +16,10 @@ use super::streams::checked_args::{argument_error, given_type_name, weak_long_ar
 mod write;
 #[cfg(feature = "file-write")]
 pub(super) use write::fn_file_put_contents;
+#[cfg(feature = "file-lines")]
+mod lines;
+#[cfg(feature = "file-lines")]
+pub(super) use lines::fn_file;
 
 #[cold]
 #[cfg(feature = "file-contents")]

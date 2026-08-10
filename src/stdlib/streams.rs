@@ -19,7 +19,8 @@ use super::stream::PhpStream;
     feature = "stream-contents",
     feature = "stream-copy",
     feature = "file-contents",
-    feature = "file-write"
+    feature = "file-write",
+    feature = "file-lines"
 ))]
 pub(super) mod checked_args;
 #[cfg(feature = "stream-contents")]

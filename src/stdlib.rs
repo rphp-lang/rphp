@@ -681,7 +681,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("realpath", fn_realpath, 1, 1, "path");
     reg!("pathinfo", fn_pathinfo, 1, 1, "path");
     reg!("getcwd", fn_getcwd, 0, 0);
+    #[cfg(not(feature = "file-lines"))]
     reg!("file", fn_file, 1, 1, "filename");
+    #[cfg(feature = "file-lines")]
+    reg!(
+        "file",
+        file_contents::fn_file,
+        3,
+        1,
+        "filename",
+        "flags",
+        "context"
+    );
     reg!("mkdir", fn_mkdir, 3, 1, "pathname", "mode", "recursive");
     reg!("rmdir", fn_rmdir, 1, 1, "dirname");
     reg!("unlink", fn_unlink, 1, 1, "filename");
@@ -4519,6 +4530,7 @@ fn fn_getcwd(
 
 /// file($filename): array|false — read file into array of lines
 /// Uses Latin-1 mapping to preserve binary content losslessly.
+#[cfg(not(feature = "file-lines"))]
 fn fn_file(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
     match std::fs::read(path.as_ref()) {
@@ -6804,7 +6816,11 @@ fn fn_preg_replace_callback(
     ret!(rv, Value::string(result));
 }
 
-#[cfg(any(feature = "file-contents", feature = "file-write"))]
+#[cfg(any(
+    feature = "file-contents",
+    feature = "file-write",
+    feature = "file-lines"
+))]
 mod file_contents;
 #[path = "resource.rs"]
 pub(crate) mod resource;

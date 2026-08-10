@@ -1390,6 +1390,40 @@ write-only and 7 combined read/write scenarios; the 26 stream scenarios and
 all-feature/all-target builds pass on both hosts. No crate was added and
 `Cargo.lock` remains byte-identical.
 
+### Opt-in streaming `file()` lines checkpoint (2026-08-10)
+
+`file-lines` replaces only the feature build's registration of the old
+one-argument eager `file()` function. Its three-argument handler lives in
+`stdlib/file_contents/lines.rs`, opens the established `PhpStream` backend and
+reuses one line vector across the complete input. Lines longer than 8 KiB use
+the existing fallible `read_line` growth and cursor contract rather than a new
+buffered reader.
+
+PHP 8.5.9 probes define `FILE_USE_INCLUDE_PATH=1`,
+`FILE_IGNORE_NEW_LINES=2` and `FILE_SKIP_EMPTY_LINES=4`. LF is removed first,
+then a preceding CR, and only then does skip-empty test the line. Consequently
+`FILE_SKIP_EMPTY_LINES` alone retains a newline-only record while combining it
+with `FILE_IGNORE_NEW_LINES` removes that record; spaces, tabs and `"0"`
+remain. Unknown bits raise the exact `ValueError`, parameter types precede flag
+value validation, a validly typed but non-context resource follows it, and an
+empty path is checked last.
+
+The feature supports bare/current/absolute paths and `file://`. Configurable
+include-path search and valid Stream-Context resources remain absent. A
+pre-existing general nested-call bug with adjacent named arguments was exposed
+during testing and is deliberately left for its own codegen-gated fix; this
+checkpoint does not alter VM call dispatch to hide it.
+
+Default ARM64 remains the exact 2,818,048-byte `f5d4e68` `__TEXT` and hot
+addresses. X86-64 remains exact at 3384879/51792/2112 text/data/bss and
+`0xce550`/`0xd1c40`; its fresh pinned 20-pair gate passes at
+-0.095%/+0.197%/+0.005%/-1.697%/+0.404%. ARM64 library matrices pass
+195/186/195/300 and x86-64 195/186/195/325 for
+default/no-default/file-lines/all features. File E2E passes 3 default, 5
+line-feature and 10 combined scenarios; 26 stream scenarios and full
+all-feature/all-target compilation pass on both hosts. The implementation adds
+no crate and leaves `Cargo.lock` byte-identical.
+
 ### Performance gates
 
 - Existing non-coroutine benchmark medians may regress by at most one percent,
