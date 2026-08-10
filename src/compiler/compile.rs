@@ -11,7 +11,8 @@ static CLOSURE_COUNTER: AtomicU32 = AtomicU32::new(0);
 use super::OpArray;
 use crate::generics::{
     GenericDeclarationKind, GenericInheritanceKind, GenericMetadata, GenericTypePosition,
-    PendingGenericDeclaration, PendingGenericInheritance, PendingGenericUseSite,
+    PendingGenericDeclaration, PendingGenericInheritance, PendingGenericMethodMetadata,
+    PendingGenericUseSite,
 };
 use crate::parser::{
     BinOp, CallArg, CastType, Expr, GenericAncestor, ListTarget, Param, Stmt, TypeHint, Visibility,
@@ -1184,6 +1185,7 @@ impl Compiler {
             return_type: return_type.cloned(),
             properties: Vec::new(),
             variance_uses,
+            methods: Vec::new(),
         });
     }
 
@@ -1195,9 +1197,6 @@ impl Compiler {
         properties: &[crate::parser::ClassProperty],
         methods: &[crate::parser::ClassMethod],
     ) {
-        if parameters.is_empty() {
-            return;
-        }
         let mut property_types = properties
             .iter()
             .filter_map(|property| {
@@ -1287,6 +1286,28 @@ impl Compiler {
             return_type: None,
             properties: property_types,
             variance_uses,
+            methods: methods
+                .iter()
+                .map(|method| PendingGenericMethodMetadata {
+                    name: method.name.clone(),
+                    value_parameters: method
+                        .params
+                        .iter()
+                        .map(|parameter| parameter.type_hint.clone())
+                        .collect(),
+                    return_type: method.return_type.clone(),
+                    required_parameters: method
+                        .params
+                        .iter()
+                        .filter(|parameter| parameter.default.is_none() && !parameter.is_variadic)
+                        .count() as u16,
+                    is_variadic: method
+                        .params
+                        .last()
+                        .is_some_and(|parameter| parameter.is_variadic),
+                    is_static: method.is_static,
+                })
+                .collect(),
         });
     }
 

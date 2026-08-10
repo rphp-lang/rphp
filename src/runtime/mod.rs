@@ -386,6 +386,11 @@ impl ExecutorGlobals {
                 class_is_a_in_table(class_table, actual, bound)
             })?;
         self.generic_metadata.validate_variance_for(&class_name)?;
+        let class_table = &self.class_table;
+        self.generic_metadata
+            .validate_parametric_lsp(&class_name, |actual, bound| {
+                class_is_a_in_table(class_table, actual, bound)
+            })?;
         // Assign stable class ID
         let id = self.next_class_id;
         self.next_class_id += 1;

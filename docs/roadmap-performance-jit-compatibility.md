@@ -8478,9 +8478,19 @@ Declaration-site variance is also validated from the interned graph. Parameter
 and return positions, read/write versus readonly/promoted properties,
 bounds/defaults, static class context, inheritance forwarding and nested
 generic variance composition all share one polarity walk; merged include units
-re-run it when an ancestor was previously unresolved. Substituted inherited
-members, diamond merging and the resulting parametric-LSP checks remain the
-next link-layer slices.
+re-run it when an ancestor was previously unresolved.
+
+The first parametric-LSP slice now preserves each class-like method's
+pre-erasure parameter and return types plus its required/variadic shape in the
+same cold graph. Registration composes direct and transitive ancestor bindings,
+substitutes every reachable class/interface/trait prototype, and rejects
+incompatible staticness, arity, parameter contravariance or return covariance.
+Variadic prototypes remain variadic and their substituted tail contract is
+checked against added optional parameters as well as the implementation tail.
+The same validation runs after include metadata is merged. It adds no runtime
+method lookup, frame field or ordinary-call branch. A substituted inherited
+runtime-signature view, method-generic alpha-renaming and deterministic diamond
+contract merging remain the next link-layer slices.
 
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,

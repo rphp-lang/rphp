@@ -211,6 +211,98 @@ echo (new UsesDefault()) instanceof DefaultParent ? ":default" : ":missing";
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn parametric_lsp_substitutes_direct_ancestor_method_signatures() {
+    let output = common::run_php(
+        r#"<?php
+interface Transformer<T> { public function apply(T $value): T; }
+class WideTransformer implements Transformer<int> {
+    public function apply(mixed $value): int { return 1; }
+}
+class ParentBox<T> { public function read(): T { return null; } }
+class IntBox extends ParentBox<int> { public function read(): int { return 2; } }
+class ForwardedBox<U : int> extends ParentBox<U> {
+    public function read(): U { return 3; }
+}
+trait Reader<T> { public function traitRead(): T { return null; } }
+class TraitReader { use Reader<int>; public function traitRead(): int { return 4; } }
+interface RootReader<T> { public function rootRead(): T; }
+interface MiddleReader<U> extends RootReader<U> {}
+class TransitiveReader implements MiddleReader<int> {
+    public function rootRead(): int { return 5; }
+}
+class VariadicParent<T> { public function collect(T ...$values): T { return $values[0]; } }
+class VariadicChild extends VariadicParent<int> {
+    public function collect(mixed ...$values): int { return $values[0]; }
+}
+class ResultParent<+T> {}
+class ResultChild<U> extends ResultParent<U> {}
+interface ResultSource<T> { public function result(): ResultParent<T>; }
+class CovariantResult implements ResultSource<int> {
+    public function result(): ResultChild<int> { return null; }
+}
+echo (new WideTransformer())->apply("wide");
+echo (new IntBox())->read();
+echo (new ForwardedBox::<int>())->read();
+echo (new TraitReader())->traitRead();
+echo (new TransitiveReader())->rootRead();
+echo (new VariadicChild())->collect(6, 7);
+"#,
+    );
+    assert_eq!(output, "123456");
+
+    for (source, expected) in [
+        (
+            "<?php interface Source<T> { public function get(): T; } class Bad implements Source<int> { public function get(): string { return 'bad'; } }",
+            "return type",
+        ),
+        (
+            "<?php interface Sink<T> { public function put(T $value); } class Bad implements Sink<int> { public function put(string $value) {} }",
+            "parameter 1",
+        ),
+        (
+            "<?php class ParentBox<T> { public function get(): T { return null; } } class Bad extends ParentBox<int> { public function get(): string { return 'bad'; } }",
+            "return type",
+        ),
+        (
+            "<?php trait Reader<T> { public function get(): T { return null; } } class Bad { use Reader<int>; public function get(): string { return 'bad'; } }",
+            "return type",
+        ),
+        (
+            "<?php interface Root<T> { public function get(): T; } interface Middle<U> extends Root<U> {} class Bad implements Middle<int> { public function get(): string { return 'bad'; } }",
+            "return type",
+        ),
+        (
+            "<?php class ParentPair<T> { public function set(T $first, T $second) {} } class Bad extends ParentPair<int> { public function set(int $first) {} }",
+            "accepts 1 parameters",
+        ),
+        (
+            "<?php class OptionalParent<T> { public function set(T $value = null) {} } class Bad extends OptionalParent<int> { public function set(int $value) {} }",
+            "requires 1 parameters",
+        ),
+        (
+            "<?php class VariadicParent<T> { public function set(T ...$values) {} } class Bad extends VariadicParent<int> { public function set(int $value) {} }",
+            "must remain variadic",
+        ),
+        (
+            "<?php class ResultParent<+T> {} class ResultChild<U> extends ResultParent<U> {} interface Source<T> { public function get(): ResultParent<T>; } class Bad implements Source<int> { public function get(): ResultChild<string> { return null; } }",
+            "return type",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains("Parametric LSP violation"),
+            "{rendered:?}"
+        );
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {
     let statements =
         parse("<?php function id<T : int>(T $value): T { return $value; } echo id::<int>(1);")
@@ -445,6 +537,8 @@ function id<T : Box<Box<int>>>(T $value): T { return $value; }
         boxed.properties[0].value_type,
         GenericType::Parameter(0)
     ));
+    assert_eq!(boxed.methods.len(), 1);
+    assert_eq!(boxed.methods[0].value_parameters.len(), 1);
 
     let inheritance_statements = parse(
         "<?php interface Source<T> {} trait Holder<T> {} class Child<U> implements Source<U> { use Holder<U>; }",

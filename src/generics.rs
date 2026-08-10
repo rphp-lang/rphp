@@ -13,6 +13,8 @@ use crate::value::{Value, ValueType};
 
 #[path = "generics/link.rs"]
 mod link;
+#[path = "generics/lsp.rs"]
+mod lsp;
 #[path = "generics/variance.rs"]
 mod variance;
 
@@ -130,6 +132,16 @@ pub struct GenericVarianceUse {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct GenericMethodMetadata {
+    pub name: GenericSymbol,
+    pub value_parameters: Box<[Option<GenericType>]>,
+    pub return_type: Option<GenericType>,
+    pub required_parameters: u16,
+    pub is_variadic: bool,
+    pub is_static: bool,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct GenericDeclaration {
     pub kind: GenericDeclarationKind,
     pub owner: GenericSymbol,
@@ -138,6 +150,17 @@ pub struct GenericDeclaration {
     pub return_type: Option<GenericType>,
     pub properties: Box<[GenericPropertyMetadata]>,
     pub variance_uses: Box<[GenericVarianceUse]>,
+    pub methods: Box<[GenericMethodMetadata]>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PendingGenericMethodMetadata {
+    pub name: String,
+    pub value_parameters: Vec<Option<TypeHint>>,
+    pub return_type: Option<TypeHint>,
+    pub required_parameters: u16,
+    pub is_variadic: bool,
+    pub is_static: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -149,6 +172,7 @@ pub struct PendingGenericDeclaration {
     pub return_type: Option<TypeHint>,
     pub properties: Vec<(String, TypeHint, bool)>,
     pub variance_uses: Vec<(TypeHint, GenericTypePosition, bool)>,
+    pub methods: Vec<PendingGenericMethodMetadata>,
 }
 
 #[derive(Debug, Clone)]
@@ -282,6 +306,15 @@ impl GenericMetadata {
             for variance_use in &mut declaration.variance_uses {
                 remap_type_symbols(&mut variance_use.value_type, &symbol_relocation);
             }
+            for method in &mut declaration.methods {
+                method.name = symbol_relocation[method.name as usize];
+                for parameter in method.value_parameters.iter_mut().flatten() {
+                    remap_type_symbols(parameter, &symbol_relocation);
+                }
+                if let Some(return_type) = &mut method.return_type {
+                    remap_type_symbols(return_type, &symbol_relocation);
+                }
+            }
             declarations.push(declaration);
         }
 
@@ -346,6 +379,7 @@ impl GenericMetadata {
             .iter()
             .position(|declaration| {
                 declaration.kind == kind
+                    && !declaration.parameters.is_empty()
                     && self
                         .symbol(declaration.owner)
                         .is_some_and(|candidate| candidate.eq_ignore_ascii_case(owner))
@@ -912,9 +946,6 @@ impl GenericMetadataBuilder {
     }
 
     fn push(&mut self, declaration: PendingGenericDeclaration) {
-        if declaration.parameters.is_empty() {
-            return;
-        }
         let owner = self.intern(&declaration.owner);
         let parameter_names: Vec<&str> = declaration
             .parameters
@@ -975,6 +1006,30 @@ impl GenericMetadataBuilder {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let methods = declaration
+            .methods
+            .iter()
+            .map(|method| GenericMethodMetadata {
+                name: self.intern(&method.name),
+                value_parameters: method
+                    .value_parameters
+                    .iter()
+                    .map(|hint| {
+                        hint.as_ref()
+                            .map(|hint| self.compile_type(hint, &parameter_names))
+                    })
+                    .collect::<Vec<_>>()
+                    .into_boxed_slice(),
+                return_type: method
+                    .return_type
+                    .as_ref()
+                    .map(|hint| self.compile_type(hint, &parameter_names)),
+                required_parameters: method.required_parameters,
+                is_variadic: method.is_variadic,
+                is_static: method.is_static,
+            })
+            .collect::<Vec<_>>()
+            .into_boxed_slice();
         self.declarations.push(GenericDeclaration {
             kind: declaration.kind,
             owner,
@@ -983,6 +1038,7 @@ impl GenericMetadataBuilder {
             return_type,
             properties,
             variance_uses,
+            methods,
         });
     }
 

@@ -1839,9 +1839,15 @@ merged from separately compiled units. Runtime class lookup and inheritance
 layout still consume only the erased ancestor name. Declaration-site variance
 now composes through nested generic arguments and inheritance slots, checks
 function/method/property polarity and rejects class parameters in static
-context; cross-unit targets are revalidated after merge. Signature
-substitution, parametric LSP and diamond contract merging remain explicit
-follow-up link steps.
+context; cross-unit targets are revalidated after merge. Class-like metadata
+also retains method arity, variadic shape and pre-erasure parameter/return
+types. The cold registration linker composes direct and transitive ancestor
+bindings, substitutes those prototypes and checks staticness, arity,
+contravariant parameters and covariant returns for class, interface and trait
+overrides, including declarations merged from an included unit. Executable
+method bodies and ordinary dispatch remain erased and untouched. Materializing
+a substituted inherited runtime-signature view, method-generic alpha-renaming
+and diamond contract merging remain explicit follow-up link steps.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

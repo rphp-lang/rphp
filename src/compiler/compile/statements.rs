@@ -919,13 +919,20 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_class = self.resolve_name(name);
-                self.record_generic_class_declaration(
-                    crate::generics::GenericDeclarationKind::Class,
-                    resolved_class.clone(),
-                    generic_params,
-                    properties,
-                    methods,
-                );
+                if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
+                    && (!generic_params.is_empty()
+                        || parent.is_some()
+                        || !implements.is_empty()
+                        || !uses.is_empty())
+                {
+                    self.record_generic_class_declaration(
+                        crate::generics::GenericDeclarationKind::Class,
+                        resolved_class.clone(),
+                        generic_params,
+                        properties,
+                        methods,
+                    );
+                }
                 if let Some(parent) = parent {
                     self.record_generic_inheritances(
                         &resolved_class,
@@ -1122,13 +1129,17 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_iface = self.resolve_name(name);
-                self.record_generic_class_declaration(
-                    crate::generics::GenericDeclarationKind::Interface,
-                    resolved_iface.clone(),
-                    generic_params,
-                    &[],
-                    methods,
-                );
+                if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
+                    && (!generic_params.is_empty() || !extends.is_empty())
+                {
+                    self.record_generic_class_declaration(
+                        crate::generics::GenericDeclarationKind::Interface,
+                        resolved_iface.clone(),
+                        generic_params,
+                        &[],
+                        methods,
+                    );
+                }
                 self.record_generic_inheritances(
                     &resolved_iface,
                     generic_params,
@@ -1246,13 +1257,15 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_trait = self.resolve_name(name);
-                self.record_generic_class_declaration(
-                    crate::generics::GenericDeclarationKind::Trait,
-                    resolved_trait.clone(),
-                    generic_params,
-                    properties,
-                    methods,
-                );
+                if !generic_params.is_empty() {
+                    self.record_generic_class_declaration(
+                        crate::generics::GenericDeclarationKind::Trait,
+                        resolved_trait.clone(),
+                        generic_params,
+                        properties,
+                        methods,
+                    );
+                }
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.
                 let mut compiled_methods = Vec::new();

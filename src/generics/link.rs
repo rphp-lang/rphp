@@ -94,7 +94,10 @@ impl GenericMetadata {
     }
 }
 
-fn substitute_generic_parameters(value: &GenericType, arguments: &[GenericType]) -> GenericType {
+pub(super) fn substitute_generic_parameters(
+    value: &GenericType,
+    arguments: &[GenericType],
+) -> GenericType {
     match value {
         GenericType::Parameter(index) => arguments
             .get(*index as usize)
