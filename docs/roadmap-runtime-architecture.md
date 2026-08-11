@@ -2017,10 +2017,22 @@ removed one stdlib function-table rehash without changing its final capacity.
 Exact release gates against `e9893af` are -6.324% method/+0.281% startup on
 ARM64 and +0.356%/-5.366% on CPU-pinned x86-64.
 
-The next semantic step is `ReflectionFunction` support for generic closure and
-arrow-function values. Generics-aware JIT specialization is deliberately last:
-it starts only after these semantics, complete Reflection and both runtimes are
-closed, and must consume the canonical metadata with exact guards and
+`ReflectionFunction` now supports generic closure and arrow-function values,
+and reified calls validate every positional and named variadic value. Generic
+method turbofish resolution now follows the concrete selected method body by
+pointer identity, so inherited and trait-imported instance/static methods read
+the declaration that actually owns their interned metadata instead of guessing
+from the receiver name. The result is cached at the call site after this cold
+lookup. The warmed cache-hit prefix remains a small separate function; all
+owner recovery and binding work is behind an explicitly cold, non-inlined miss
+helper.
+
+The remaining semantic audit includes omitted default parameter values. They
+are materialized inside the callee after the pre-call reified check, so this
+must be closed without adding a generic branch to ordinary calls. Generics-
+aware JIT specialization remains deliberately last: it starts only after this
+and the rest of parser/link/runtime/Reflection coverage in both runtimes are
+closed, and must consume canonical metadata with exact guards and
 deoptimization back to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte

@@ -121,6 +121,42 @@ echo $closure::<int>(5);
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn generic_method_arguments_follow_the_selected_method_body() {
+    let output = common::run_php(
+        r#"<?php
+trait GenericMethods {
+    public function value<T>(T $value): T { return $value; }
+    public static function staticValue<U>(U $value): U { return $value; }
+}
+class ImportsGenericMethods { use GenericMethods; }
+class GenericParent {
+    public function inherited<T>(T $value): T { return $value; }
+}
+class GenericChild extends GenericParent {}
+$object = new ImportsGenericMethods();
+echo $object->value::<int>(1);
+echo ImportsGenericMethods::staticValue::<string>("s");
+echo (new GenericChild())->inherited::<int>(2);
+"#,
+    );
+    assert_eq!(output, "1s2");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn imported_generic_method_keeps_its_reified_contract() {
+    let error = common::run_php_expect_error(
+        "<?php trait T { public function id<U>(U $v): U { return $v; } } class C { use T; } $c = new C(); $c->id::<int>(\"bad\");",
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("does not match its reified generic type"),
+        "{rendered:?}"
+    );
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn explicit_type_arguments_validate_arity_defaults_and_bounds() {
     let output = common::run_php(
         r#"<?php

@@ -822,6 +822,31 @@ impl ExecutorGlobals {
             .map(|s| s.as_str())
     }
 
+    /// Return the class or trait that owns the concrete method body.
+    ///
+    /// Imported and inherited methods have aliases in `function_table`, while
+    /// their `UserFunction` remains stored exactly once on the declaration
+    /// that compiled the body. Generic metadata follows that original owner,
+    /// so cold generic call resolution uses pointer identity to recover it.
+    #[cold]
+    #[inline(never)]
+    pub fn method_definition_owner(
+        &self,
+        func_ptr: *const FunctionCommon,
+        method_name: &str,
+    ) -> Option<&str> {
+        self.class_table.values().find_map(|class| {
+            class
+                .methods
+                .iter()
+                .any(|(name, _, _, _, function)| {
+                    name.eq_ignore_ascii_case(method_name)
+                        && std::ptr::eq(&function.common, func_ptr)
+                })
+                .then_some(class.name.as_str())
+        })
+    }
+
     /// Collect all required interface method signatures (recursively through interface extends).
     /// Returns Vec of (method_name_lower, visibility, num_args, required_num_args, is_static, interface_name, return_type_hint, param_type_hints).
     fn collect_interface_methods(

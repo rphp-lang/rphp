@@ -8749,6 +8749,34 @@ ARM64 and -7.254% on x86-64; the opposite directions are recorded as fat-LTO
 layout observations, not as an optimization claim. No ordinary-call, object,
 frame, `Value` or function layout changed.
 
+Explicit generic method calls now resolve metadata from the concrete method
+body selected by runtime dispatch. The cold resolver follows the existing
+`function_table` alias to its `FunctionCommon` pointer and recovers the single
+class or trait that owns that body. It therefore covers inherited methods plus
+trait-imported instance and static methods, and cannot accidentally fall
+through from a selected non-generic override to a same-named generic ancestor.
+The existing call-site declaration cache makes this pointer scan a first-hit
+cost only. The warmed prefix returns before an explicitly cold, non-inlined
+miss helper, keeping hierarchy recovery out of its register and stack plan.
+Reified trait methods retain their substituted argument contract; the focused
+matrix grows to 33 dual/reified and 27 erased-only scenarios.
+
+The permanent five-million-call inherited-method turbofish benchmark records
+the warm cache-hit path. Against `b7f5695`, a final order-balanced 20-pair
+all-feature release gate is +0.247% on ARM64 (0.331424/0.331113 seconds) and
++1.505% on CPU-2-pinned x86-64 (0.486045/0.479224 seconds), within the explicit
+five-percent warmed-turbofish ceiling. The corresponding 40-pair ordinary
+method control is -5.276% on ARM64 and +0.980% on x86-64. The favorable ARM64
+movement is treated as binary-layout noise, not an optimization claim. No
+ordinary dispatch branch, runtime layout, dependency or JIT/native lowering
+changed.
+
+Omitted PHP default parameter values remain an explicit semantic follow-up.
+They are assigned by callee bytecode after the current pre-call reified
+boundary; the accepted design must validate them without inserting a feature
+or binding branch into ordinary generic calls. This correctness item precedes
+all generics-aware JIT work under the hard ordering gate below.
+
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked
 arguments before the body; the property-initializer fast path proves both

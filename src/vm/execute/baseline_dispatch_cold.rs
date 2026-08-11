@@ -16,7 +16,7 @@ fn op_check_generic_args(
             as *mut crate::vm::instruction::InlineCache)
     };
 
-    let mut kind = crate::generics::GenericDeclarationKind::from_tag(opline._pad)
+    let kind = crate::generics::GenericDeclarationKind::from_tag(opline._pad)
         .ok_or_else(|| VmError::Fatal("Invalid generic declaration kind".into()))?;
     let raw_owner = unsafe {
         &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
@@ -54,6 +54,28 @@ fn op_check_generic_args(
         }
     }
 
+    resolve_generic_args_cache_miss(
+        eg,
+        frame,
+        op_array,
+        opline,
+        cache,
+        kind,
+        owner_value,
+    )
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_generic_args_cache_miss(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    cache: &mut crate::vm::instruction::InlineCache,
+    mut kind: crate::generics::GenericDeclarationKind,
+    owner_value: &Value,
+) -> Result<(), VmError> {
     let mut cacheable = opline.op1_type == OpType::Const;
     let mut receiver_class_id = 0;
     let mut callable = std::ptr::null();
@@ -69,7 +91,26 @@ fn op_check_generic_args(
             .unwrap_or("");
         cacheable = true;
         receiver_class_id = object.class_id;
-        format!("{}::{}", object.class_name, method)
+        let target_class = object.class_name.to_string();
+        let caller_class = get_caller_class(frame, eg);
+        let dispatch_class = if let Some(ref caller) = caller_class {
+            if let Some((Visibility::Private, defining)) =
+                eg.find_method_visibility(caller, method)
+            {
+                if defining.eq_ignore_ascii_case(caller)
+                    && eg.class_is_a(&target_class, caller)
+                {
+                    caller.clone()
+                } else {
+                    target_class
+                }
+            } else {
+                target_class
+            }
+        } else {
+            target_class
+        };
+        format!("{}::{}", dispatch_class, method)
     } else if let Some(name) = owner_value.as_str() {
         name.to_string()
     } else if let Some(closure) = owner_value.as_closure() {
@@ -88,22 +129,22 @@ fn op_check_generic_args(
         ));
     };
 
-    // Resolve inherited method metadata without storing anything on objects.
-    if kind == crate::generics::GenericDeclarationKind::Method
-        && eg.generic_metadata.find(kind, &owner).is_none()
-    {
-        if let Some((class_name, method)) = owner.split_once("::") {
-            let mut current = class_name;
-            while let Some(class) = eg.class_table.get(current) {
-                let Some(parent) = class.parent.as_deref() else {
-                    break;
-                };
-                let candidate = format!("{}::{}", parent, method);
-                if eg.generic_metadata.find(kind, &candidate).is_some() {
-                    owner = candidate;
-                    break;
+    // Metadata belongs to the concrete body declaration, not to aliases
+    // installed for inheritance or trait composition. Resolve it by the same
+    // function pointer the subsequent method call will execute. This also
+    // prevents a non-generic override from falling through to generic parent
+    // metadata merely because the names match.
+    if kind == crate::generics::GenericDeclarationKind::Method {
+        let method = owner
+            .rsplit_once("::")
+            .map(|(_, method)| method.to_string());
+        if let Some(method) = method {
+            if let Some(function) = eg.find_function(&owner) {
+                if let Some(definition_owner) =
+                    eg.method_definition_owner(function, &method)
+                {
+                    owner = format!("{}::{}", definition_owner, method);
                 }
-                current = parent;
             }
         }
     }
