@@ -26,6 +26,26 @@ unsafe fn prepare_native_mixed_properties(
                 property_slot,
                 ..
             } if property_index == 0 => (receiver, property_slot),
+            QuickResolvedObjectOp::ComposedProperty {
+                outer_receiver,
+                outer_user,
+                outer_plan,
+                inner_receiver,
+                inner_property_slot,
+                ..
+            } => {
+                let outer_plan = &*outer_plan;
+                let outer_user = &*outer_user;
+                if property_index < outer_plan.properties.len() {
+                    let property = outer_plan.properties.get(property_index)?;
+                    let cache = outer_user.op_array.cache.get(property.cache_ip as usize)?;
+                    (outer_receiver, cache.property_slot())
+                } else if property_index == NATIVE_COMPOSED_PROPERTY_INNER_INDEX {
+                    (inner_receiver, inner_property_slot)
+                } else {
+                    return None;
+                }
+            }
             _ => return None,
         };
         if receiver.is_null() {

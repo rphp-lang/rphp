@@ -1,6 +1,7 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 unsafe fn native_quick_long_mixed_kernel(
+    eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
     plan: &QuickLongOpsLoop,
     resolved_object_ops: &[QuickResolvedObjectOp],
@@ -382,12 +383,12 @@ unsafe fn native_quick_long_mixed_kernel(
                 builder.lower_property_method(
                     plan_index,
                     receiver,
-                    target,
                     &*property_plan,
                     &property_slots,
                     property_count,
                     &call,
-                )?;
+                )
+                .and_then(|completion| builder.record_call(target, completion))?;
                 has_property_binding = true;
                 has_typed_method = true;
             }
@@ -414,6 +415,51 @@ unsafe fn native_quick_long_mixed_kernel(
                 // Getter shadows share the same activation binding and final
                 // publication path as property mutators. A read-only binding
                 // writes back the identical checked Long value.
+                has_property_binding = true;
+                has_typed_method = true;
+            }
+            QuickLongOp::ComposedPropertyCall {
+                outer_guard,
+                next_target,
+                resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let QuickResolvedObjectOp::ComposedProperty {
+                    outer_receiver,
+                    outer_target,
+                    outer_user,
+                    outer_plan,
+                    inner_receiver,
+                    inner_target,
+                    inner_property_slot,
+                    ..
+                } = *resolved_object_ops.get(plan_index)?
+                else {
+                    return None;
+                };
+                let (outer_property_slots, outer_property_count) = quick_long_property_slots(
+                    eg,
+                    outer_receiver,
+                    outer_user,
+                    &*outer_plan,
+                )?;
+                builder.lower_composed_property_method(
+                    plan_index,
+                    outer_guard,
+                    outer_receiver,
+                    outer_target,
+                    &*outer_plan,
+                    &outer_property_slots,
+                    outer_property_count,
+                    inner_receiver,
+                    inner_target,
+                    inner_property_slot,
+                    next_target,
+                    resume_ip,
+                )?;
                 has_property_binding = true;
                 has_typed_method = true;
             }

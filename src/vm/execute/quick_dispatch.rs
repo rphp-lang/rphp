@@ -217,7 +217,7 @@ unsafe fn run_quick_long_ops_loop(
     ))]
     if indexed_int_array_mask != 0 && plan.string_input_mask == 0 && plan.object_input_mask == 0 {
         let mut string_state = QuickStringSlotState::new(slot_base, 0);
-        if let Some(kernel) = native_quick_long_mixed_kernel(op_array, plan, &[])
+        if let Some(kernel) = native_quick_long_mixed_kernel(eg, op_array, plan, &[])
             && let Some(outcome) = run_native_quick_long_mixed_kernel(
                 eg,
                 frame,
@@ -325,7 +325,7 @@ unsafe fn run_quick_long_ops_loop(
             all(target_arch = "x86_64", target_os = "linux")
         )
     ))]
-    if let Some(kernel) = native_quick_long_mixed_kernel(op_array, plan, &resolved_object_ops) {
+    if let Some(kernel) = native_quick_long_mixed_kernel(eg, op_array, plan, &resolved_object_ops) {
         if let Some(outcome) = run_native_quick_long_mixed_kernel(
             eg,
             frame,

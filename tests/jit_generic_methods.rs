@@ -145,6 +145,18 @@ fn generic_property_getter_ops_plan<'a>(
     )
 }
 
+fn generic_composed_property_ops_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickLongOpsLoop {
+    generic_ops_plan(
+        functions,
+        function_name,
+        |operation| matches!(operation, QuickLongOp::ComposedPropertyCall { .. }),
+        "compiler should select the generic composed-property ops loop",
+    )
+}
+
 #[test]
 fn exact_generic_long_tuple_enters_one_native_region() {
     let (_, functions, result, output) = compile_and_execute(
@@ -700,6 +712,171 @@ echo genericPropertyPipeline(new GenericPropertyPipelineJitBox::<int>(1));
     assert!(plan.native_jit().is_straight_compiled());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn generic_composed_property_call_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericComposedPropertySource<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+class GenericComposedPropertyTarget<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function add(T $value): void { $this->total = $this->total + $value; }
+}
+function genericComposedPropertyTotal($target, $source) {
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $target->add($source->current());
+        $checksum += $i;
+    }
+    return $i . ':' . $target->total . ':' . $checksum;
+}
+echo genericComposedPropertyTotal(
+    new GenericComposedPropertyTarget::<int>(0),
+    new GenericComposedPropertySource::<int>(7)
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:700000:4999950000");
+
+    let plan = generic_composed_property_ops_plan(&functions, "genericComposedPropertyTotal");
+    assert!(
+        plan.native_jit().is_straight_compiled(),
+        "ops: {:?}",
+        plan.ops
+    );
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn generic_composed_property_call_captures_same_object_getter_before_mutation() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericComposedAliasingBox<T : int> {
+    public T $value;
+    public T $total;
+    public function __construct(T $value, T $total) {
+        $this->value = $value;
+        $this->total = $total;
+    }
+    public function current(): T { return $this->value; }
+    public function advance(T $original): void {
+        $this->value = $this->value + 1;
+        $this->total = $this->total + $original;
+    }
+}
+function genericComposedAliasingTotal($box) {
+    for ($i = 0; $i < 100000; $i++) {
+        $box->advance($box->current());
+    }
+    return $i . ':' . $box->value . ':' . $box->total;
+}
+echo genericComposedAliasingTotal(new GenericComposedAliasingBox::<int>(1, 0));
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:100001:5000050000");
+
+    let plan = generic_composed_property_ops_plan(&functions, "genericComposedAliasingTotal");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn generic_composed_property_overflow_replays_one_transactional_call() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericComposedOverflowSource<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+class GenericComposedOverflowTarget<T : int> {
+    public $large;
+    public $calls;
+    public function __construct($large) {
+        $this->large = $large;
+        $this->calls = 0;
+    }
+    public function add(T $value): void {
+        $this->calls = $this->calls + 1;
+        $this->large = $this->large + $value;
+    }
+}
+function genericComposedOverflow($target, $source) {
+    for ($i = 0; $i < 100000; $i++) {
+        $target->add($source->current());
+    }
+    return $target->calls;
+}
+echo genericComposedOverflow(
+    new GenericComposedOverflowTarget::<int>(9223372036854675808),
+    new GenericComposedOverflowSource::<int>(1)
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000");
+
+    let plan = generic_composed_property_ops_plan(&functions, "genericComposedOverflow");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_composed_property_mismatch_replays_canonical_outer_boundary() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class ReifiedComposedPropertySource<T> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+class ReifiedComposedPropertyTarget<T> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function add(T $value): void { $this->total = $this->total + $value; }
+}
+function reifiedComposedPropertyTotal($target, $source) {
+    for ($i = 0; $i < 100000; $i++) {
+        $target->add($source->current());
+    }
+    return $target->total;
+}
+echo reifiedComposedPropertyTotal(
+    new ReifiedComposedPropertyTarget::<int>(0),
+    new ReifiedComposedPropertySource::<int>(1)
+) . '|';
+reifiedComposedPropertyTotal(
+    new ReifiedComposedPropertyTarget::<int>(0),
+    new ReifiedComposedPropertySource::<string>('wrong')
+);
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "100000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to ReifiedComposedPropertyTarget::add()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+
+    let plan = generic_composed_property_ops_plan(&functions, "reifiedComposedPropertyTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 

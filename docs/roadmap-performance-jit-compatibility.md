@@ -9263,6 +9263,44 @@ scalar-method control by +0.064%. CPU-2-pinned x86-64 reports
 one-percent structural gate, and the complete 11 erased/20 reified focused
 suite passes on both hosts. No dependency or runtime behavior changed.
 
+The remaining `ComposedPropertyCall` object-call holdout now lowers into the
+same native mixed region. Region construction resolves the outer mutator's
+declared Long slots with the existing generic-aware property proof and reuses
+the already guarded inner getter slot. The builder first copies the getter
+shadow into a private native slot, then supplies that captured value to the
+outer property plan. This preserves PHP's argument-evaluation order even when
+the outer method mutates the getter's property before a later plan operation
+uses its argument. Receiver-plus-object-slot binding deduplication still gives
+same-object calls one transactional shadow.
+
+The lowering adds no backend instruction: capture, arithmetic, branches and
+publication use the existing native `Move`, `Binary` and conditional forms.
+Both method counters share the outer plan's final completion operation, so an
+arithmetic side exit publishes neither partial property writes nor a partial
+composed-call count before canonical replay. Outer slots are resolved only
+while building a native kernel; feature-off and quick-only resolution retain
+their previous enum shape and admission behavior.
+
+Against exact checkpoint `84be962`, 40 balanced max-perf pairs improve the new
+ten-million-iteration generic composed-property workload by 99.004% erased and
+99.877% reified on ARM64, and by 98.889%/99.821% on CPU-2-pinned x86-64. The
+ordinary-signature control improves by 89.006%/88.848% on ARM64 and
+93.031%/92.695% on x86-64 because it shares the target-neutral lowering.
+One-hundred-pair unchanged getter, mutator and scalar-method controls have no
+regression above +0.558% on either host or generic mode.
+
+A final cold-boundary cleanup moved outer slot proof construction out of the
+general quick resolver and into native kernel construction. A 200-pair audit
+against the measured candidate keeps all five erased lanes between -0.059%
+and +0.124% on ARM64 and -0.273% to +0.273% on x86-64. Reified lanes are
+-0.508%/-0.616%/-1.208%/-0.472%/-2.804% on ARM64 and
++0.196%/-0.077%/-0.140%/-0.168%/-0.524% on x86-64. The final source passes
+default, erased, reified and all-feature all-target matrices on both hosts;
+focused generic JIT coverage is 14 erased and 24 reified scenarios, including
+same-object capture, transactional overflow replay and canonical reified
+mismatch. No crate, native operation or backend-specific generic path was
+added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

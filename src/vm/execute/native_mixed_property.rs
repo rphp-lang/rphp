@@ -1,5 +1,7 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+const NATIVE_COMPOSED_PROPERTY_INNER_INDEX: usize = 8;
+
 impl NativeMixedBuildState {
     fn property_binding_slot(
         &mut self,
@@ -69,12 +71,11 @@ impl NativeMixedBuildState {
         &mut self,
         op_index: usize,
         receiver: *const Value,
-        target: *const FunctionCommon,
         plan: &LongPropertyMethodPlan,
         property_slots: &[usize; 8],
         property_count: u8,
         call: &QuickTypedMethodCall,
-    ) -> Option<()> {
+    ) -> Option<u8> {
         if plan.public_args != call.argument_count
             || property_count == 0
             || property_count as usize != plan.properties.len()
@@ -183,6 +184,69 @@ impl NativeMixedBuildState {
                 call.resume_ip,
             )?);
         }
-        self.record_call(target, completion?)
+        completion
+    }
+
+    fn lower_composed_property_method(
+        &mut self,
+        op_index: usize,
+        outer_guard: ScalarLongCallGuard,
+        outer_receiver: *const Value,
+        outer_target: *const FunctionCommon,
+        outer_plan: &LongPropertyMethodPlan,
+        outer_property_slots: &[usize; 8],
+        outer_property_count: u8,
+        inner_receiver: *const Value,
+        inner_target: *const FunctionCommon,
+        inner_property_slot: usize,
+        next_target: QuickLongTarget,
+        resume_ip: usize,
+    ) -> Option<()> {
+        if self.call_count + 2 > NATIVE_QUICK_LONG_MAX_CALL_TARGETS {
+            return None;
+        }
+
+        // PHP evaluates the getter before entering the outer method. Capture
+        // the value instead of passing the shared property shadow directly:
+        // the outer plan may mutate that same slot before a later operation
+        // consumes its argument.
+        let inner_shadow = self.property_binding_slot(
+            op_index,
+            inner_receiver,
+            inner_property_slot,
+            NATIVE_COMPOSED_PROPERTY_INNER_INDEX,
+        )?;
+        let captured_argument = self.allocate_slot()?;
+        self.append(
+            NativeStraightLongOperation::Move {
+                source: QuickLongOperand::Slot(inner_shadow),
+                result: captured_argument,
+            },
+            resume_ip,
+        )?;
+
+        let mut arguments = [QuickLongOperand::Const(0); 8];
+        arguments[0] = QuickLongOperand::Slot(captured_argument);
+        let call = QuickTypedMethodCall {
+            guard: outer_guard,
+            arguments,
+            argument_count: 1,
+            next_target,
+            resume_ip,
+        };
+        let completion = self.lower_property_method(
+            op_index,
+            outer_receiver,
+            outer_plan,
+            outer_property_slots,
+            outer_property_count,
+            &call,
+        )?;
+
+        // Canonical quick dispatch records both calls only after the composed
+        // operation succeeds. Giving them one completion point preserves that
+        // behavior when checked arithmetic side-exits and replays the caller.
+        self.record_call(inner_target, completion)?;
+        self.record_call(outer_target, completion)
     }
 }

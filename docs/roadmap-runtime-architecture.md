@@ -2377,6 +2377,35 @@ sizes plus mixed-kernel symbol addresses are unchanged, all six lanes pass the
 one-percent structural gate, and 11 erased/20 reified focused tests pass on
 both hosts.
 
+Nested `propertyMutator(propertyGetter())` calls now use the cohesive native
+property lifecycle as well. The quick resolver continues to prove receiver,
+target, generic boundary and the getter's exact Long property. Native kernel
+construction additionally resolves the outer plan's declared Long slots once.
+The builder seeds both through the existing receiver-plus-object-slot binding,
+captures the getter shadow into a private slot, and lowers the outer plan with
+that captured argument. The capture is required for exact PHP evaluation
+order when a same-object mutator changes the getter property before consuming
+its argument later in the method body.
+
+Both nested targets are recorded at the outer plan's final publication
+operation. Checked arithmetic therefore leaves the current composed call
+unrecorded and all property shadows unmodified, after which canonical replay
+executes both calls once. A successful iteration publishes through the
+existing transactional property commit. No instruction, backend lowering or
+persistent quick-op representation was added; feature-off and quick-only
+builds do not resolve or store outer native property slots.
+
+Against exact checkpoint `84be962`, 40 balanced max-perf pairs improve the
+generic composed-property workload by 99.004%/99.877% on ARM64 and
+98.889%/99.821% on CPU-2-pinned x86-64 in erased/reified mode. Its ordinary
+control improves by 89.006%/88.848% and 93.031%/92.695%, respectively.
+Unchanged 100-pair controls remain below the one-percent regression gate. A
+subsequent 200-pair exact-final audit against the measured candidate stays
+within +0.273% in every regressing lane across both modes and hosts; all larger
+movements are improvements. Default, erased, reified and all-feature
+all-target matrices pass on ARM64 and x86-64, including 14 erased and 24
+reified generic JIT scenarios. No dependency was added.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
