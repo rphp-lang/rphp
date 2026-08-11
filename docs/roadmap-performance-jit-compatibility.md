@@ -9528,6 +9528,55 @@ audit, while retaining ARM64's smaller initializer restored it to +4.412%.
 The full default, erased, reified and all-feature matrices plus all-target
 checks pass on both hosts. No dependency or JIT backend path was added.
 
+Mutable static-property checkpoint (2026-08-11): declared static properties
+now resolve through append-only canonical executor storage rather than cloning
+their declaration default on every read. A per-class property-index map points
+at that storage identity. An inherited declaration therefore shares its
+parent's slot, while an explicit redeclaration receives a fresh slot. Trait
+composition creates storage per consuming class, including a fresh slot when a
+child uses the same trait again as required by PHP 8.3+, and still rejects
+incompatible class/trait or trait/trait declarations.
+
+Statement assignment supports named, `self`, `parent` and late-bound `static`
+owners. Simple and compound forms lower to dedicated ordinary/late-static
+write opcodes; compound assignment deliberately reuses the canonical read
+operation before publishing the write. Read and write inline caches store the
+canonical storage slot and distinguish their validated capabilities, so a
+warmed write performs one called-class check and a direct append-only slot
+update. Missing declarations, visibility failures and enum writes remain
+checked on the cache miss. An existing reference wrapper is updated in place,
+ready for the later general reference-binding surface.
+
+The warmed scalar path copies the compact 16-byte `Value` representation
+directly and retains normal clone/refcount behavior for strings, arrays,
+objects and references. Cache-miss materialization stays cold and out of line.
+The two new executor vectors are appended after all prior fields; an earlier
+placement before reified sidecars measurably perturbed x86-64 instruction/cache
+layout, while the final placement preserves every previous field offset and
+restores the ordinary-call gate. No external library or generic/JIT-specific
+backend operation was added.
+
+Twenty balanced exact-baseline pairs and one hundred candidate-only write
+pairs produced the following final max-perf results. Negative exact deltas are
+improvements; the write column is late-bound `static::$p` relative to lexical
+`self::$p` and retains the existing five-percent equivalence ceiling.
+
+| Host / mode | Ordinary static-call control | Late-static read | Self read | Late/self write |
+|---|---:|---:|---:|---:|
+| ARM64 erased | -1.095% | -2.286% | -5.719% | +1.944% |
+| ARM64 reified | -0.818% | -1.777% | -5.207% | +1.859% |
+| x86-64 erased, CPU 2 | -3.883% | -10.120% | -6.749% | +4.496% |
+| x86-64 reified, CPU 2 | -7.061% | -19.122% | -15.586% | +3.590% |
+
+Default, erased, reified and all-feature all-target matrices and checks pass on
+both hosts after this final layout. The next bounded slice replaces the current
+property-definition tuple with explicit metadata for declared type,
+readonly/uninitialized state and generic substitution, then enforces that
+contract on every static write. General reference binding, assignment
+expressions, increment/decrement and `unset` remain outside this checkpoint.
+Generics-aware JIT specialization stays last, after both erased and reified
+runtime semantics are complete and stable.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
@@ -9610,6 +9659,166 @@ candidate-buffer traffic, collection work, maximum and p99 pause, and
 throughput. Ordinary acyclic scalar/string/array/object controls may regress by
 at most one percent, must add no steady-state allocation, and JIT loops that do
 not create collectable graphs must not gain a per-iteration GC branch.
+
+## Interphase 5.7: architecture-specific runtime intrinsics
+
+Add a small, measured layer of ahead-of-time native kernels for operations
+whose cost is dominated by stable byte, scalar or register work. This layer is
+separate from the dynamic JIT: the JIT specializes a proved PHP region, while a
+runtime intrinsic is a prebuilt implementation of one narrow operation that
+canonical execution, quick regions and generated machine code may all call.
+Do not translate whole PHP built-ins or their observable semantics into
+assembler.
+
+Every intrinsic starts with a portable Rust reference implementation. Prefer
+`core::arch` intrinsics when they produce the intended code and introduce
+handwritten assembler only after disassembly and paired measurements prove a
+material remaining gap. Each native entry accepts plain buffers, lengths,
+indices or fixed scalar state and returns a value, index or status code. It must
+not allocate a PHP value, unwind through foreign assembly, invoke user code or
+hide an exception. A Rust wrapper retains type/shape guards, allocation,
+errors, refcounting and exact PHP behavior.
+
+The first architecture-level candidates are operations that cannot be
+expressed cleanly through ordinary Rust control flow: coroutine register/stack
+handoff where the selected context design requires it, JIT entry/exit
+trampolines, side-exit publication and compact safepoint shims. Data kernels
+follow only from profiles of completed compatible functions. Likely candidates
+include JSON structural/string scanning, escape detection, UTF-8 validation,
+Base64, byte/string search, hashing, integer parse/format, binary-format scans
+and proven packed typed-array validation or reductions. Stored-length
+`strlen()`, network/database waiting, object dispatch, reflection, exception
+semantics and an entire regular-expression engine are not assembler projects.
+Use platform memory primitives when they already beat an RPHP implementation,
+and do not create custom cryptographic assembly.
+
+Provide runtime ISA dispatch for distributed binaries: an ARM64 baseline may
+select measured NEON kernels, while x86-64 selects among its baseline, AVX2 and
+later AVX-512 implementations only when CPU and operating-system state permit
+them. Select instruction-set capabilities rather than branding paths as Intel
+or AMD; add a microarchitecture-specific variant only when reproducible corpus
+measurements justify its code-size and maintenance cost. Native-CPU builds may
+resolve the same choice at build time. Unsupported CPUs always use the portable
+implementation.
+
+JIT backends consume the same internal intrinsic ABI. They may inline a tiny
+operation when profitable or emit one guarded call for a larger kernel, so a
+future `json_decode`, typed stream or array pipeline can combine generated
+scalar/control-flow code with an optimized scanner without teaching the JIT
+the complete PHP function. The intrinsic ABI must publish enough ownership and
+safepoint information that collection, cancellation and side exits see the
+same live values as canonical execution.
+
+Develop this layer in bounded slices:
+
+1. define the portable contract, architecture registry and forced-backend test
+   controls without changing an ordinary call site;
+2. centralize existing JIT/backend trampolines behind that contract;
+3. select one profile-proven data pilot, preferably JSON structural scanning or
+   UTF-8 validation, and keep its Rust implementation as the oracle;
+4. integrate successful kernels with typed-data, string and array planners;
+5. add handwritten assembly only where intrinsics fail a recorded codegen or
+   performance gate;
+6. enable automatic ISA dispatch after ARM64 and x86-64 differential, fuzz and
+   application-corpus gates pass.
+
+Permanent gates compare portable, forced architecture variants and canonical
+PHP output over boundary-aligned, malformed, short and randomized inputs.
+Audit register clobbers, stack alignment, unwind prohibition, sanitizer/fuzz
+results and disassembly. Measure call overhead and retain scalar thresholds so
+small inputs do not lose to SIMD setup. No intrinsic may change PHP output or
+error timing, add an allocation to its wrapper's steady-state path, regress an
+unrelated control by more than one percent or remain merely because a synthetic
+microbenchmark improved.
+
+## Interphase 5.72: native BigInt, BigDecimal and GMP/BCMath family
+
+Build one optional, dependency-free arbitrary-precision family as the first
+substantial numerical consumer of the runtime-intrinsic contract. Native
+`BigInt` and `BigDecimal` types, plus GMP and BCMath compatibility surfaces,
+belong to the same phase and share one magnitude, allocation, conversion and
+architecture-kernel substrate. The compatibility façades must not copy through
+an unrelated representation on every call. This does not change PHP `int`,
+`float`, implicit numeric promotion, overflow, comparison or serialization
+semantics; ordinary programs pay nothing for the opt-in family.
+
+Start with an immutable namespaced API such as `RPHP\Math\BigInt`; decide the
+final public name only after checking userland and extension compatibility.
+Required construction and conversion cover signed decimal and explicit bases,
+checked conversion to PHP `int`, canonical string output and a documented
+binary form. The initial arithmetic surface includes compare, add, subtract,
+multiply, quotient/remainder with defined signed behavior, shifts, power, GCD
+and the modular operations needed by real packages. Operator syntax is a later
+language decision, not a prerequisite; methods keep the first slice additive
+and unambiguous.
+
+Add an immutable `RPHP\Math\BigDecimal` in the same phase. It stores a `BigInt`
+coefficient plus explicit decimal scale and applies a required rounding/context
+contract at operations whose result is not exact. Construction, comparison,
+add/subtract, multiply, divide, quantize/rescale and canonical formatting must
+define trailing-zero, zero-sign and scale behavior before optimization.
+BCMath's string API and process/request `bcscale()` behavior are compatibility
+adapters over this core, not the semantic definition of the native class.
+
+Do not widen the 16-byte `Value` or represent limbs as PHP array entries. The
+shared core stores a normalized unsigned magnitude as little-endian
+machine-word limbs; `BigInt` adds sign and `BigDecimal` adds sign/coefficient,
+scale and rounding context. Both use immutable, reference-counted native
+payloads. Rust owns allocation, normalization, algorithm selection, decimal
+scale rules, exceptions and size limits. The portable oracle implements
+word-vector add/subtract, carry/borrow, shifts, multiply and division first;
+introduce Karatsuba or other large-operand algorithms only at measured crossover
+points rather than as an up-front complexity commitment.
+
+Architecture-specific work stays below the object API. Candidate intrinsic
+contracts include add/subtract vectors with carry, multiply-add by one limb,
+full limb products, shifts and selected normalization/search operations. ARM64
+and x86-64 variants use the shared forced-backend and differential gates from
+Interphase 5.7. Handwritten assembly is admitted only when Rust/intrinsics miss
+the required carry chain or instruction schedule in normalized disassembly.
+The JIT target is stronger than a faster method call. Once it proves exact
+`BigInt`/`BigDecimal` classes, immutable operands, stable scale/rounding context
+and non-escaping intermediates, it should fuse the common arithmetic expression
+into one native region. Fixed small limb counts may remain in registers;
+variable-size loops call or inline the selected machine-code kernels; temporary
+normalization and publication are delayed; and only the final observable result
+is materialized when safe. The goal is for nearly the entire admitted arithmetic
+region to execute as generated or prebuilt ARM64/x86 machine code. Allocation
+failure, division by zero, invalid scale/rounding, guard failure and uncommon
+algorithms return through an exact canonical Rust boundary rather than being
+reimplemented unsafely in assembly.
+
+Develop useful `gmp_*` and `bc*` compatibility adapters in this same phase once
+the shared operations and their edge semantics are covered. Common GMP integer
+values should wrap the native `BigInt` payload directly; BCMath operations
+should route through `BigDecimal` with compatible scale and string behavior.
+Advanced GMP number-theory functions may arrive in measured slices, and the
+project must not claim drop-in extension compatibility from a superficially
+similar API. Typed-data plans may explicitly decode a decimal string or
+compatible integer token into `BigInt` or `BigDecimal`, while ordinary
+`json_decode()` retains PHP's existing number and `JSON_BIGINT_AS_STRING`
+behavior. Never expose the internal limb layout as the portable serialization
+contract.
+
+Permanent correctness gates include zero, sign combinations, leading zeros,
+base boundaries, carry/borrow across every limb, alias-independent immutability,
+division identities, powers, adversarial shifts, conversion overflow and
+generated algebraic properties over thousands of operand sizes. Add explicit
+decimal scale/rounding/quantize matrices and memory/work limits for hostile
+decimal strings, exponents and shifts. Differential lanes cover the admitted
+GMP/BCMath surface as well as the native classes. Compare against an independent
+oracle where available, while keeping the production runtime free of that
+dependency.
+
+Performance gates separate construction, parse/format and arithmetic at small,
+medium and large bit widths and decimal scales. PHP `int`/`float` controls must
+remain unchanged. Small native operations must not be forced through SIMD/ASM
+when call setup wins, while fused non-escaping chains must measure the promised
+allocation and dispatch removal. Large-operation claims include allocation,
+normalization and decimal rescaling, with fair GMP/BCMath comparisons where
+available. Retain a native/JIT path only when it improves end-to-end workloads
+such as counters, financial decimal arithmetic, protocol identifiers or modular
+arithmetic on both reference architectures.
 
 ## Interphase 5.75: first-class typed data interchange and streams
 
@@ -9740,6 +9949,74 @@ while executing through fused native loops. The runtime should provide the
 small set of reusable primitives--typed iteration, reductions, selection,
 sorting, dot products, matrix kernels, random-number state and required special
 functions--rather than embedding a SciPy-sized API in the language core.
+
+### Late Phase 6: native technical-analysis and Trader compatibility library
+
+After the typed CPU numerical path and its statistics primitives are stable,
+ship an optional first-party technical-analysis package with a complete target
+of PHP's documented `trader_*` surface. The PHP extension is based on TA-Lib;
+RPHP must not vendor, translate or mechanically copy TA-Lib source. Implement
+the formulas and state machines independently from public mathematical
+definitions and an RPHP-owned behavioral specification, then use PHP Trader and
+other independent implementations only as differential oracles. Keep a source
+provenance record for every formula, convention and compatibility decision.
+
+The coverage manifest includes vector arithmetic/transforms, overlap studies,
+momentum indicators, price transforms, statistics, volatility, volume, cycle
+indicators and every documented candlestick-pattern function. It also covers
+`trader_errno()`, TA-Lib versus MetaStock compatibility modes, lookback/output
+indexing and configurable unstable periods; matching only the headline formula
+while changing warm-up or starting-index behavior is not compatibility. Newer
+first-party indicators may live in the typed API, but do not silently change a
+documented `trader_*` result.
+
+Expose two surfaces over one implementation. Procedural `trader_*` functions
+accept and return normal PHP arrays with compatible keys/errors. A typed API,
+tentatively `RPHP\Finance\Trader`, accepts contiguous `Float64` buffers or
+proof-carrying iterables and returns typed series without one `Value` allocation
+per sample. Add a stateful streaming form for EMA, RSI, ATR, MACD and other
+incremental indicators so coroutine-fed market data updates bounded state
+rather than recomputing an entire history. The array façade adapts to the same
+plans and never owns a second algorithm implementation.
+
+Build an independent portable Rust oracle first. Share rolling-window sums,
+variance, extrema/deques, EMA/Wilder recurrences, regression, OHLC transforms
+and output/lookback machinery across indicators. Admit families in measured
+slices: vector math and price transforms; moving windows and statistics;
+overlap/momentum/volatility/volume; multi-output and cycle indicators; then the
+large, branch-heavy candlestick catalogue. A generated manifest tracks every
+documented function, signature, defaults, output count, lookback, unstable
+period, compatibility mode, error and test status.
+
+The optimized typed path should lower a complete admitted indicator pipeline to
+machine code wherever its semantics permit. Element-wise transforms, rolling
+sums/min/max, dot products, regression and numeric reductions reuse shared
+NEON/AVX/runtime intrinsic kernels; sequential EMA/Wilder and indicator state
+machines run as tight JIT-generated ARM64/x86 loops; non-escaping pipelines may
+share windows and fuse consecutive indicators without materializing every
+intermediate series. Handwritten assembly is reserved for profile-proven leaf
+kernels whose Rust/intrinsic codegen remains inferior. User-visible arrays,
+errors, mode changes and uncommon side exits remain in the canonical Rust
+wrapper, so “all in ASM” means the proven numerical region rather than copied
+PHP/TA-Lib control code.
+
+Compatibility float paths retain the documented Trader/TA-Lib numerical model;
+do not substitute `BigDecimal` and change rounding merely because the native
+type exists. A separate explicit decimal indicator API may later use the shared
+`BigDecimal` core for exact-price domains. Define NaN/infinity, missing/short
+input, unequal series length, zero denominators, output keys, warm-up and
+floating tolerance function by function. Candlestick thresholds and global
+compatibility/unstable settings need isolated request/coroutine state rather
+than process-global data leaking between tasks.
+
+Permanent gates run known published examples, generated invariants, adversarial
+short/constant/monotonic/NaN series and differential PHP Trader comparisons in
+both compatibility modes across every function. Performance gates measure the
+compatible array API, typed batch API and incremental stream API separately on
+ARM64 and x86-64. They include conversion, allocation, output materialization
+and multi-indicator end-to-end pipelines; no function is declared faster from a
+leaf-only benchmark. Ordinary numerical/PHP programs remain bytecode- and
+allocation-identical when the optional package is unused.
 
 Only after the fused CPU pipeline is competitive should the same
 data-parallel IR gain an optional GPU lowering. Start with explicit

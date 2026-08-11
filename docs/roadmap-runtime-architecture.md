@@ -2554,6 +2554,39 @@ scope rather than creating an isolated partial implementation. Generic JIT
 specialization remains deferred until both runtime modes and the complete
 language surface are stable.
 
+The mutable storage slice is now implemented. `ExecutorGlobals` owns an
+append-only `Vec<Value>` of canonical static values plus a per-class boxed map
+from declaration index to storage slot. Inline caches contain only the numeric
+slot, never a pointer into a reallocating vector. Parent inheritance copies the
+slot identity, a class redeclaration allocates a new identity, and trait
+composition allocates per consumer (including a child that explicitly reuses
+the trait). Class registration completes every mapping before publishing the
+stable `ClassDef` pointer.
+
+Reads and writes share one cold resolver for declared existence, visibility,
+owner and storage identity. Cache capability `1` denotes a checked read and
+`3` a checked write; a late-static cache remains keyed by called-class ID.
+After warmup, reads copy scalar `Value` bits directly or invoke the canonical
+heap/reference clone, while writes replace the slot directly and preserve an
+existing reference cell. The storage and mapping vectors are the final fields
+of `ExecutorGlobals`, preserving all pre-existing field offsets in every
+feature configuration.
+
+The parser currently admits static-property assignment as a statement and
+desugars compound operators to a read plus canonical write. Dedicated ordinary
+and late-static assignment opcodes keep the common dispatch explicit. Missing
+properties, inaccessible declarations and enum mutation fail before cache
+publication. There is no new dependency and no JIT lowering in this slice.
+
+This remains a bounded surface rather than a claim of complete PHP static
+properties. The next metadata refactor replaces the tuple declaration with a
+named `PropertyDefinition` carrying type hints, readonly/uninitialized state
+and generic substitution data. Static setters will then enforce typed and
+generic contracts centrally. General reference-binding syntax, assignment as
+an expression, increment/decrement and `unset` follow that semantic boundary.
+Only after those erased and reified runtime rules are stable does the planned
+generics-aware JIT specialize static-property accesses.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
@@ -2656,6 +2689,123 @@ collection cannot meet those gates, retain explicit/request-boundary collection
 behind a feature flag rather than taxing ordinary PHP or weakening lifecycle
 correctness.
 
+## Planned architecture-specific runtime intrinsic layer
+
+Keep ahead-of-time native runtime kernels distinct from the region JIT. A JIT
+region owns PHP-specific guards, fusion and control flow; an intrinsic owns one
+small architecture-specific operation over already validated buffers or scalar
+state. Canonical Rust execution, quick regions and both JIT backends must be
+able to call the same versioned internal ABI.
+
+The semantic wrapper remains Rust code and owns PHP `Value` lifetimes, type and
+shape checks, allocation, exceptions, cancellation and fallback. Native
+kernels cannot hold an unregistered PHP pointer across a safepoint, call user
+PHP, unwind, or mutate runtime ownership implicitly. Prefer a result/status
+contract such as an index, count, bit mask or parse status; materialization of
+strings, arrays, objects and errors happens after returning to Rust.
+
+Maintain a portable reference path for every operation. The implementation
+ladder is portable Rust, then `core::arch` SIMD/instruction intrinsics, then
+handwritten assembler only when normalized disassembly and paired application
+measurements show that the compiler cannot express the required sequence.
+Architecture modules share fixtures and randomized differential tests rather
+than maintaining separate PHP semantics.
+
+Initial low-level uses may include coroutine register/stack handoff and JIT
+entry, exit, side-exit and safepoint shims. Profile-driven data candidates
+include JSON structural and escaped-string scanning, UTF-8 validation, Base64,
+string search, hashing, numeric conversion, binary-format scanning and packed
+typed-array kernels. Ordinary I/O waiting, database/curl work, reflection,
+object dispatch, exception rules and whole regex/JSON implementations stay in
+the runtime or their dedicated engine. A stored string length is loaded rather
+than rescanned, and existing platform memory routines remain preferred when
+they are already optimal.
+
+Distributed binaries use capability-based multiversioning: portable/NEON on
+ARM64 as measured and baseline/AVX2/later AVX-512 on x86-64 when runtime CPU and
+OS support are both present. Do not equate ISA selection with Intel versus AMD.
+Keep a forced portable and forced supported-backend mode for tests, and cap
+variants when instruction-cache cost outweighs their measured coverage.
+
+The typed-data and collection layers may call these kernels through staged
+plans, while JIT code may either inline a very small operation or call the same
+ABI. This permits a JSON decoder to use native structural scanning while Rust
+still performs schema checks and object construction, and permits fused array
+regions to call a packed reduction without implementing arbitrary PHP callback
+semantics in assembly.
+
+Admission requires byte-for-byte/status-for-status agreement with the portable
+oracle on malformed, boundary, short and randomized inputs; audited clobber and
+stack contracts; no unwind across native code; sanitizer/fuzz coverage; and
+ARM64/x86 application-corpus measurements. Each kernel needs a small-input
+threshold and may remain only if its end-to-end gain survives call overhead.
+Unrelated controls retain the one-percent ceiling and ordinary programs gain
+neither a feature check nor an allocation.
+
+## Planned native BigInt, BigDecimal and GMP/BCMath family
+
+Add opt-in native `BigInt` and `BigDecimal` payloads without changing ordinary
+PHP integer or float semantics. Their namespaced immutable classes, tentatively
+`RPHP\Math\BigInt` and `RPHP\Math\BigDecimal`, and the GMP/BCMath compatibility
+surfaces form one implementation phase. Values can be shared safely across
+calls and coroutines, while common GMP integer wrappers and BCMath decimal
+operations reuse the native payloads instead of translating into a second
+number representation.
+
+The shared magnitude payload stores normalized little-endian machine-word limbs
+behind the existing object/value indirection; limbs are never general PHP array
+elements and `Value` remains 16 bytes. `BigInt` adds sign. `BigDecimal` adds a
+signed integer coefficient, explicit decimal scale and rounding/context state.
+The portable Rust layer owns construction, decimal/base conversion,
+normalization, allocation, algorithm selection, size/work limits, decimal scale
+and rounding rules, and error creation. It defines canonical zero,
+quotient/remainder, shift, conversion, trailing-zero and quantize behavior
+before an optimized backend exists.
+
+Low-level arithmetic uses the runtime-intrinsic ABI for operations over limb
+slices: compare/normalize helpers, add/subtract with carry or borrow,
+multiply-add, full products and shifts. Kernels return counts/carry/status and
+cannot allocate, unwind, retain payload pointers or create PHP errors. The Rust
+wrapper chooses scalar versus architecture-specific paths by operand size and
+completes normalization and publication. More advanced multiplication or
+division algorithms are introduced behind measured crossover thresholds and
+continue to use the same leaf contracts.
+
+Quick/JIT plans may cache the exact built-in classes and method generations,
+prove native immutable operands plus stable decimal context once, and fuse an
+arithmetic expression rather than issuing one runtime call and allocation per
+method. Small fixed limb counts may stay in registers; longer magnitude loops
+execute through the selected ARM64/x86 intrinsic or equivalent inlined machine
+code; publication can be delayed to the final escaping result. The target is
+for nearly the entire common admitted `BigInt`/`BigDecimal` arithmetic region
+to run in machine code. Allocation, division by zero, invalid conversion,
+rounding/scale failure, unsupported algorithms and guard failure remain exact
+Rust side exits. Ordinary PHP arithmetic never produces these native types
+implicitly.
+
+Serialization is semantic rather than layout-based: canonical signed integer
+and decimal strings plus explicitly versioned binary encodings are supported,
+while the internal limb layout is private. Typed JSON/schema ingestion can
+target either native type explicitly from validated input; untyped JSON retains
+standard PHP behavior. Resource limits cover maliciously large inputs,
+exponents, scales and shifts before allocating proportional temporary state.
+
+The same phase maps the compatible subset of `gmp_*` directly to `BigInt` and
+the compatible subset of `bc*`/`bcscale()` to `BigDecimal`. GMP number-theory
+and BCMath formatting/scale edge cases receive explicit slices and differential
+coverage; sharing storage and kernels does not permit claiming compatibility
+before each public function's semantics are implemented.
+
+Differential tests run portable and every supported forced backend over known
+vectors, randomized algebraic identities, decimal scale/rounding matrices,
+conversion boundaries and operand sizes around each algorithm threshold.
+Performance measurements include parse, format, allocation, normalization and
+rescaling rather than timing only a leaf multiply, and separately measure fused
+JIT expression chains against native and GMP/BCMath controls. No production
+dependency is added, normal `int`/`float` programs retain identical code and
+allocation profiles, and the feature becomes default only if its class/API and
+memory-abuse limits are stable.
+
 ## Planned typed-data ingestion and serialization substrate
 
 Once the dual generic runtime and the production stream surface are stable,
@@ -2713,3 +2863,55 @@ only then fused JIT consumers. Each slice needs differential compatibility,
 malformed-input/security, mutation/escape, erased/reified and allocation gates.
 No ordinary program pays for the feature, and no format earns a specialized
 backend opcode when the shared typed IR can express its consumer.
+
+## Planned late numerical Trader and technical-analysis package
+
+Once contiguous typed buffers, rolling statistics and CPU-native numerical
+plans are stable, add an optional first-party technical-analysis package. Its
+compatibility target is the complete documented PHP `trader_*` API, while its
+implementation is independently authored and dependency-free. Do not vendor,
+port or mechanically translate TA-Lib source. Maintain an RPHP behavioral spec
+and formula/provenance manifest; external implementations are test oracles, not
+runtime dependencies or source templates.
+
+One internal `IndicatorPlan` describes required OHLCV/input series, parameters,
+lookback, unstable period, compatibility mode, output count/types, state size
+and batch/stream execution. The procedural compatibility layer maps normal PHP
+arrays, keys, defaults and errors to that plan. A typed
+`RPHP\Finance\Trader` layer maps `Float64` buffers or proof-carrying iterables
+without per-sample `Value` materialization. Stateful streaming instances keep
+only the bounded rolling/recursive state required by their indicator and can be
+fed from coroutine streams without making the numerical kernel scheduler-aware.
+
+Share primitives rather than cloning one loop per public function: rolling
+sum/variance, monotonic extrema queues, EMA and Wilder state, price transforms,
+regression, vector math and lookback/output publication. Build portable Rust
+implementations as the semantic oracle and generate the public registration and
+coverage table from declarative metadata. Vector, overlap, momentum, price,
+statistics, volatility, volume, cycle and candlestick categories are delivered
+in explicit slices until every documented PHP Trader function and control API
+has a tracked status.
+
+Quick/JIT execution proves input buffers, lengths, parameter constants,
+compatibility mode and output ownership once. Element-wise and reduction work
+uses the shared runtime-intrinsic ABI; sequential recurrences become tight
+native loops; a non-escaping multi-indicator pipeline may share lookback windows
+and eliminate intermediate series. Handwritten ARM64/x86 assembly remains a
+measured leaf optimization, not a second indicator implementation. The Rust
+boundary retains array adaptation, allocation, errors, output keys, mode/state
+changes and exact side exits.
+
+Compatibility state such as unstable periods and TA-Lib/MetaStock mode is
+request/task scoped in long-lived servers and inherited explicitly when a child
+coroutine needs it. Streaming cancellation drops indicator state without
+publishing a partial output. Float compatibility paths do not silently switch
+to `BigDecimal`; an explicit decimal API may be added separately with its own
+rounding contract.
+
+Admission requires a generated full-surface manifest, published examples,
+property/invariant tests, adversarial short and non-finite series, and
+differential results for both compatibility modes and unstable-period behavior.
+Measure array-compatible batch, typed batch and incremental streaming paths
+including conversion, allocation and output publication on ARM64 and x86-64.
+The package adds no cost, registration or fixed table capacity to a runtime
+that does not enable it.
