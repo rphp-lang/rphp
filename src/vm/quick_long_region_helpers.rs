@@ -165,40 +165,158 @@ fn fixed_invariant_path_element(
     })
 }
 
-/// Extend a fixed projection rooted in the invariant JSON producer. `false`
-/// means that the fetch belongs to an ordinary PHP array and must be handled
-/// by the caller's canonical array-planning path.
-fn extend_json_projection_fetch(
-    op_array: &OpArray,
-    instruction: crate::vm::instruction::Instruction,
-    array: u16,
-    total_slots: u32,
-    json_paths: &mut [Option<Vec<QuickInvariantPathElement>>],
-    json_fetch_mask: &mut u64,
-    json_parent_mask: &mut u64,
-) -> Option<bool> {
-    let Some(mut path) = json_paths
-        .get(array as usize)
-        .and_then(|path| path.as_ref())
-        .cloned()
-    else {
-        return Some(false);
-    };
-    let element = fixed_invariant_path_element(
-        op_array,
-        instruction.op2_type,
-        instruction.op2,
-    )?;
-    if path.len() == 8 {
-        return None;
+/// Complete planning state for fixed projections rooted in one invariant JSON
+/// producer. Keeping path ownership, reachability and derived String metadata
+/// together prevents standalone and deferred-argument consumers from drifting.
+struct InvariantJsonProjectionState {
+    paths: Vec<Option<Vec<QuickInvariantPathElement>>>,
+    fetch_mask: u64,
+    parent_mask: u64,
+    string_source_mask: u64,
+    string_length_paths: Vec<Option<Vec<QuickInvariantPathElement>>>,
+}
+
+impl InvariantJsonProjectionState {
+    fn new(total_slots: u32) -> Self {
+        Self {
+            paths: vec![None; total_slots as usize],
+            fetch_mask: 0,
+            parent_mask: 0,
+            string_source_mask: 0,
+            string_length_paths: vec![None; total_slots as usize],
+        }
     }
-    path.push(element);
-    json_paths
-        .get_mut(instruction.result as usize)?
-        .replace(path);
-    add_mask_slot(json_fetch_mask, instruction.result, total_slots)?;
-    add_mask_slot(json_parent_mask, array, total_slots)?;
-    Some(true)
+
+    fn start(&mut self, destination: u16) -> Option<()> {
+        self.paths
+            .get_mut(destination as usize)?
+            .replace(Vec::new());
+        Some(())
+    }
+
+    fn tracks(&self, slot: u16) -> bool {
+        self.paths
+            .get(slot as usize)
+            .and_then(|path| path.as_ref())
+            .is_some()
+    }
+
+    /// Extend a fixed projection rooted in the invariant JSON producer.
+    /// `false` means that the fetch belongs to an ordinary PHP array and must
+    /// be handled by the caller's canonical array-planning path.
+    fn extend_fetch(
+        &mut self,
+        op_array: &OpArray,
+        instruction: crate::vm::instruction::Instruction,
+        array: u16,
+        total_slots: u32,
+    ) -> Option<bool> {
+        let Some(mut path) = self
+            .paths
+            .get(array as usize)
+            .and_then(|path| path.as_ref())
+            .cloned()
+        else {
+            return Some(false);
+        };
+        let element = fixed_invariant_path_element(
+            op_array,
+            instruction.op2_type,
+            instruction.op2,
+        )?;
+        if path.len() == 8 {
+            return None;
+        }
+        path.push(element);
+        self.paths
+            .get_mut(instruction.result as usize)?
+            .replace(path);
+        add_mask_slot(&mut self.fetch_mask, instruction.result, total_slots)?;
+        add_mask_slot(&mut self.parent_mask, array, total_slots)?;
+        Some(true)
+    }
+
+    fn derive_string_length(
+        &mut self,
+        instruction: crate::vm::instruction::Instruction,
+        total_slots: u32,
+    ) -> Option<()> {
+        let path = self
+            .paths
+            .get(instruction.op1 as usize)
+            .and_then(|path| path.as_ref())?
+            .clone();
+        if path.is_empty()
+            || self
+                .string_length_paths
+                .get(instruction.result as usize)?
+                .is_some()
+        {
+            return None;
+        }
+        add_mask_slot(
+            &mut self.string_source_mask,
+            instruction.op1,
+            total_slots,
+        )?;
+        self.string_length_paths
+            .get_mut(instruction.result as usize)?
+            .replace(path);
+        Some(())
+    }
+
+    fn retain_projections(
+        &self,
+        source: &mut QuickTypedInvariantSource,
+        long_input_mask: u64,
+    ) -> Option<()> {
+        if self.fetch_mask == 0
+            || self.fetch_mask
+                & !(self.parent_mask | long_input_mask | self.string_source_mask)
+                != 0
+        {
+            return None;
+        }
+        let mut outputs = self.fetch_mask & long_input_mask;
+        while outputs != 0 {
+            let result = outputs.trailing_zeros() as u16;
+            outputs &= outputs - 1;
+            let path = self.paths.get(result as usize)?.as_ref()?.clone();
+            if path.is_empty() {
+                return None;
+            }
+            source.long_output_mask |= 1u64 << result;
+            source.projections.push(QuickTypedInvariantProjection {
+                path: path.into_boxed_slice(),
+                result,
+                kind: QuickInvariantValueKind::Long,
+            });
+        }
+        let mut string_sources = self.string_source_mask;
+        while string_sources != 0 {
+            let result = string_sources.trailing_zeros() as u16;
+            string_sources &= string_sources - 1;
+            let path = self.paths.get(result as usize)?.as_ref()?.clone();
+            source.string_output_mask |= 1u64 << result;
+            source.projections.push(QuickTypedInvariantProjection {
+                path: path.into_boxed_slice(),
+                result,
+                kind: QuickInvariantValueKind::String,
+            });
+        }
+        for (result, path) in self.string_length_paths.iter().enumerate() {
+            let Some(path) = path else {
+                continue;
+            };
+            source.long_output_mask |= 1u64 << result;
+            source.projections.push(QuickTypedInvariantProjection {
+                path: path.clone().into_boxed_slice(),
+                result: result as u16,
+                kind: QuickInvariantValueKind::StringLength,
+            });
+        }
+        (!source.projections.is_empty()).then_some(())
+    }
 }
 
 fn long_add(instruction: crate::vm::instruction::Instruction) -> Option<(u16, u16, u16)> {

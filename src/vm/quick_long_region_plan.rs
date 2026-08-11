@@ -66,13 +66,7 @@ fn detect_long_ops_region_inner(
     let mut string_append_mask = 0u64;
     let mut object_input_mask = 0u64;
     let mut typed_invariant_source = None;
-    let mut json_paths: Vec<Option<Vec<QuickInvariantPathElement>>> =
-        vec![None; total_slots as usize];
-    let mut json_fetch_mask = 0u64;
-    let mut json_parent_mask = 0u64;
-    let mut json_string_source_mask = 0u64;
-    let mut json_string_length_paths: Vec<Option<Vec<QuickInvariantPathElement>>> =
-        vec![None; total_slots as usize];
+    let mut json_projections = InvariantJsonProjectionState::new(total_slots);
     let mut has_add = false;
     let mut has_assign = false;
     let mut has_object_call = false;
@@ -380,9 +374,7 @@ fn detect_long_ops_region_inner(
                 // that source as a string-token input unless another operation
                 // in the region consumes the same CV; native mixed regions
                 // would otherwise try to map arbitrary JSON to a finite token.
-                json_paths
-                    .get_mut(source.destination as usize)?
-                    .replace(Vec::new());
+                json_projections.start(source.destination)?;
                 typed_invariant_source = Some(source);
                 has_assign = true;
                 let resume_ip = ip;
@@ -397,15 +389,7 @@ fn detect_long_ops_region_inner(
                 if instruction.result_type != OpType::Tmp {
                     return None;
                 }
-                if extend_json_projection_fetch(
-                    op_array,
-                    instruction,
-                    array,
-                    total_slots,
-                    &mut json_paths,
-                    &mut json_fetch_mask,
-                    &mut json_parent_mask,
-                )? {
+                if json_projections.extend_fetch(op_array, instruction, array, total_slots)? {
                     let resume_ip = ip;
                     ip += 1;
                     QuickLongOp::JsonProjectionStep {
@@ -466,25 +450,8 @@ fn detect_long_ops_region_inner(
                 {
                     return None;
                 }
-                let Some(path) = json_paths
-                    .get(instruction.op1 as usize)
-                    .and_then(|path| path.as_ref())
-                    .cloned()
-                else {
-                    return None;
-                };
-                if path.is_empty()
-                    || json_string_length_paths
-                        .get(instruction.result as usize)?
-                        .is_some()
-                {
-                    return None;
-                }
-                add_mask_slot(&mut json_string_source_mask, instruction.op1, total_slots)?;
+                json_projections.derive_string_length(instruction, total_slots)?;
                 add_mask_slot(&mut long_input_mask, instruction.result, total_slots)?;
-                json_string_length_paths
-                    .get_mut(instruction.result as usize)?
-                    .replace(path);
                 let resume_ip = ip;
                 ip += 1;
                 QuickLongOp::JsonProjectionStep {
@@ -493,11 +460,7 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::AssignDim => {
-                if json_paths
-                    .get(instruction.op1 as usize)
-                    .and_then(|path| path.as_ref())
-                    .is_some()
-                {
+                if json_projections.tracks(instruction.op1) {
                     // Reusing one decoded array is observable once the loop
                     // mutates it; canonical execution creates a fresh array on
                     // every iteration. Keep all such roots on the baseline.
@@ -569,11 +532,7 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::ArrayPushOp => {
-                if json_paths
-                    .get(instruction.op1 as usize)
-                    .and_then(|path| path.as_ref())
-                    .is_some()
-                {
+                if json_projections.tracks(instruction.op1) {
                     return None;
                 }
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
@@ -1226,14 +1185,11 @@ fn detect_long_ops_region_inner(
                         while send.opcode == OpCode::FetchDimR {
                             let array = long_slot(send.op1_type, send.op1)?;
                             if send.result_type != OpType::Tmp
-                                || !extend_json_projection_fetch(
+                                || !json_projections.extend_fetch(
                                     op_array,
                                     send,
                                     array,
                                     total_slots,
-                                    &mut json_paths,
-                                    &mut json_fetch_mask,
-                                    &mut json_parent_mask,
                                 )?
                             {
                                 return None;
@@ -1617,53 +1573,7 @@ fn detect_long_ops_region_inner(
     long_input_mask &= !(long_output_mask & !cv_mask);
 
     if let Some(source) = typed_invariant_source.as_mut() {
-        if json_fetch_mask == 0
-            || json_fetch_mask & !(json_parent_mask | long_input_mask | json_string_source_mask)
-                != 0
-        {
-            return None;
-        }
-        let mut outputs = json_fetch_mask & long_input_mask;
-        while outputs != 0 {
-            let result = outputs.trailing_zeros() as u16;
-            outputs &= outputs - 1;
-            let path = json_paths.get(result as usize)?.as_ref()?.clone();
-            if path.is_empty() {
-                return None;
-            }
-            source.long_output_mask |= 1u64 << result;
-            source.projections.push(QuickTypedInvariantProjection {
-                path: path.into_boxed_slice(),
-                result,
-                kind: QuickInvariantValueKind::Long,
-            });
-        }
-        let mut string_sources = json_string_source_mask;
-        while string_sources != 0 {
-            let result = string_sources.trailing_zeros() as u16;
-            string_sources &= string_sources - 1;
-            let path = json_paths.get(result as usize)?.as_ref()?.clone();
-            source.string_output_mask |= 1u64 << result;
-            source.projections.push(QuickTypedInvariantProjection {
-                path: path.into_boxed_slice(),
-                result,
-                kind: QuickInvariantValueKind::String,
-            });
-        }
-        for (result, path) in json_string_length_paths.iter().enumerate() {
-            let Some(path) = path else {
-                continue;
-            };
-            source.long_output_mask |= 1u64 << result;
-            source.projections.push(QuickTypedInvariantProjection {
-                path: path.clone().into_boxed_slice(),
-                result: result as u16,
-                kind: QuickInvariantValueKind::StringLength,
-            });
-        }
-        if source.projections.is_empty() {
-            return None;
-        }
+        json_projections.retain_projections(source, long_input_mask)?;
     }
 
     let long_mask = long_input_mask | long_output_mask;
