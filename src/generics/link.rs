@@ -1,6 +1,6 @@
 use super::{
-    GenericDeclaration, GenericDeclarationKind, GenericMetadata, GenericMethodMetadata,
-    GenericType, method_parameter_index,
+    GenericDeclaration, GenericDeclarationKind, GenericInheritanceKind, GenericMetadata,
+    GenericMethodMetadata, GenericSymbol, GenericType, method_parameter_index,
 };
 
 impl GenericMetadata {
@@ -69,7 +69,26 @@ impl GenericMetadata {
                     owner_declaration,
                     owner_declaration.map_or(1, |declaration| declaration.parameters.len() + 1),
                 );
-                if !self.type_satisfies(&actual, &bound, &[], &class_is_a) {
+                let bound_scope = if inheritance.kind == GenericInheritanceKind::Uses {
+                    inheritance.owner
+                } else {
+                    ancestor_declaration.owner
+                };
+                let actual = self.resolve_inheritance_pseudo_types(&actual, inheritance.owner);
+                let bound = self.resolve_inheritance_pseudo_types(&bound, bound_scope);
+                let satisfies = actual.zip(bound).is_some_and(|(actual, bound)| {
+                    let current_owner_is_a = |actual: &str, bound: &str| {
+                        class_is_a(actual, bound)
+                            || self.inheritance_owner_is_a(
+                                inheritance.owner,
+                                actual,
+                                bound,
+                                &class_is_a,
+                            )
+                    };
+                    self.type_satisfies(&actual, &bound, &[], &current_owner_is_a)
+                });
+                if !satisfies {
                     let parameter_name = self.symbol(parameter.name).unwrap_or("?");
                     return Err(format!(
                         "Type argument {} for generic ancestor {} does not satisfy bound of {}",
@@ -81,6 +100,88 @@ impl GenericMetadata {
             }
         }
         Ok(())
+    }
+
+    fn inheritance_owner_is_a<F>(
+        &self,
+        owner: GenericSymbol,
+        actual: &str,
+        bound: &str,
+        class_is_a: &F,
+    ) -> bool
+    where
+        F: Fn(&str, &str) -> bool,
+    {
+        if !self
+            .symbol(owner)
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(actual))
+        {
+            return false;
+        }
+        self.inheritances
+            .iter()
+            .filter(|inheritance| {
+                inheritance.owner == owner
+                    && matches!(
+                        inheritance.kind,
+                        GenericInheritanceKind::Extends | GenericInheritanceKind::Implements
+                    )
+            })
+            .filter_map(|inheritance| self.symbol(inheritance.ancestor))
+            .any(|ancestor| ancestor.eq_ignore_ascii_case(bound) || class_is_a(ancestor, bound))
+    }
+
+    fn resolve_inheritance_pseudo_types(
+        &self,
+        value: &GenericType,
+        scope: GenericSymbol,
+    ) -> Option<GenericType> {
+        match value {
+            GenericType::Named { name, arguments } => {
+                let resolved = match self.symbol(*name)? {
+                    name if name.eq_ignore_ascii_case("self") => scope,
+                    name if name.eq_ignore_ascii_case("parent") => {
+                        self.inheritances
+                            .iter()
+                            .find(|inheritance| {
+                                inheritance.owner == scope
+                                    && inheritance.kind == GenericInheritanceKind::Extends
+                            })?
+                            .ancestor
+                    }
+                    // `static` is late-bound and must not be approximated by
+                    // lexical self during link validation.
+                    name if name.eq_ignore_ascii_case("static") => return None,
+                    _ => *name,
+                };
+                Some(GenericType::Named {
+                    name: resolved,
+                    arguments: arguments
+                        .iter()
+                        .map(|argument| self.resolve_inheritance_pseudo_types(argument, scope))
+                        .collect::<Option<Vec<_>>>()?
+                        .into_boxed_slice(),
+                })
+            }
+            GenericType::Nullable(inner) => Some(GenericType::Nullable(Box::new(
+                self.resolve_inheritance_pseudo_types(inner, scope)?,
+            ))),
+            GenericType::Union(parts) => Some(GenericType::Union(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_inheritance_pseudo_types(part, scope))
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
+            )),
+            GenericType::Intersection(parts) => Some(GenericType::Intersection(
+                parts
+                    .iter()
+                    .map(|part| self.resolve_inheritance_pseudo_types(part, scope))
+                    .collect::<Option<Vec<_>>>()?
+                    .into_boxed_slice(),
+            )),
+            value => Some(value.clone()),
+        }
     }
 
     pub fn find_class_like_index(&self, owner: &str) -> Option<u32> {

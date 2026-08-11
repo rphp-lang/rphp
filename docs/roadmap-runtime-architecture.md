@@ -2073,15 +2073,25 @@ about 31 ns per exact guard. CPU-2-pinned x86-64 measures
 `--all-targets` matrices pass on both architectures; focused generic coverage
 is 35 reified/dual and 28 erased-only scenarios.
 
+Inheritance-site generic bounds now use explicit lexical pseudo-type scopes.
+Class/interface ancestors retain their own `self`; generic traits bind `self`
+and `parent` to the consuming class; forwarded owner bounds are resolved in
+the owner's separate scope before comparison. The cold linker consults the
+interned `extends`/`implements` edges to recognize the class currently being
+registered even though it is not yet in `class_table`. Missing `parent` state
+fails closed, and `static` is deliberately not aliased to `self`. Both hosts
+pass all four all-target matrices. Focused coverage grows to 36 reified/dual
+and 29 erased-only scenarios, while ordinary method and warmed-turbofish gates
+remain within +0.358% and +3.732% of exact checkpoint `27cb47c` on both
+architectures. No hot layout or native tier changed.
+
 `static<T>` remains deliberately open. It needs parser support for the
 reserved `static` token and a real late-static called-scope identity for both
 instance and static calls; aliasing it to lexical `self` would be observably
 wrong. A multi-ancestor diamond containing pseudo-types must likewise retain
 one lexical scope per merged candidate instead of selecting the first
-prototype, and inheritance-site bound checks must use the declaring class
-scope just as method turbofish bounds now do. These items, along with omitted
-dynamic default parameter values, must close before the hard generics-aware
-JIT gate.
+prototype. This and omitted dynamic default parameter values must close before
+the hard generics-aware JIT gate.
 
 The remaining semantic audit includes omitted default parameter values. They
 are materialized inside the callee after the pre-call reified check, so this

@@ -328,6 +328,49 @@ echo (new UsesDefault()) instanceof DefaultParent ? ":default" : ":missing";
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn inheritance_bounds_resolve_lexical_class_pseudo_types() {
+    let output = common::run_php(
+        r#"<?php
+class ScopeRoot {}
+class SelfScoped<T : self> {}
+class SelfGood extends SelfScoped<SelfScoped> {}
+class SelfForwarded<U : self> extends SelfScoped<U> {}
+class ParentScoped<T : parent> extends ScopeRoot {}
+class ParentGood extends ParentScoped<ScopeRoot> {}
+class ParentForwarded<U : self> extends ParentScoped<U> {}
+trait TraitSelfScoped<T : self> {}
+class TraitSelfGood { use TraitSelfScoped<TraitSelfGood>; }
+trait TraitParentScoped<T : parent> {}
+class TraitParentGood extends ScopeRoot { use TraitParentScoped<ScopeRoot>; }
+class TraitParentForwarded<U : self> extends ScopeRoot { use TraitParentScoped<U>; }
+echo (new SelfGood()) instanceof SelfScoped ? "self:" : "bad:";
+echo (new SelfForwarded::<SelfForwarded>()) instanceof SelfScoped ? "forward-self:" : "bad:";
+echo (new ParentGood()) instanceof ParentScoped ? "parent:" : "bad:";
+echo (new ParentForwarded::<ParentForwarded>()) instanceof ParentScoped ? "forward-parent:" : "bad:";
+echo (new TraitSelfGood()) instanceof TraitSelfGood ? "trait-self:" : "bad:";
+echo (new TraitParentGood()) instanceof ScopeRoot ? "trait-parent" : "bad";
+echo (new TraitParentForwarded::<TraitParentForwarded>()) instanceof ScopeRoot ? ":trait-forward" : ":bad";
+"#,
+    );
+    assert_eq!(
+        output,
+        "self:forward-self:parent:forward-parent:trait-self:trait-parent:trait-forward"
+    );
+
+    for source in [
+        "<?php class ScopeRoot {} class Scoped<T : self> {} class Bad extends Scoped<ScopeRoot> {}",
+        "<?php class ScopeRoot {} class Scoped<T : parent> extends ScopeRoot {} class Unrelated {} class Bad extends Scoped<Unrelated> {}",
+        "<?php class ScopeRoot {} trait Scoped<T : self> {} class Bad { use Scoped<ScopeRoot>; }",
+        "<?php class ScopeRoot {} trait Scoped<T : parent> {} class Bad { use Scoped<ScopeRoot>; }",
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("does not satisfy bound"), "{rendered:?}");
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn parametric_lsp_substitutes_direct_ancestor_method_signatures() {
     let output = common::run_php(
         r#"<?php

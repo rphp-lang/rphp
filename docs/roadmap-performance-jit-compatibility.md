@@ -8826,13 +8826,31 @@ All four complete `--all-targets` matrices pass on both architectures; focused
 generic coverage is now 35 scenarios in reified/dual builds and remains 28 in
 erased-only.
 
+Inheritance-site bound validation now resolves class pseudo-types before
+subtype comparison. A class/interface ancestor's `self` remains that ancestor,
+whereas a generic trait's `self` and `parent` bind to the consuming class and
+its direct parent. Forwarded owner parameters retain their own lexical scope,
+so two interned `self` nodes from different declarations cannot compare equal
+by spelling alone. The linker can also prove `extends`/`implements` edges for
+the class currently being registered before it enters the runtime class table.
+An unresolved `parent` fails closed, and `static` is explicitly not
+approximated as lexical `self`.
+
+Permanent coverage includes valid and invalid class/trait `self` and `parent`
+bounds plus forwarded owner bounds. All four complete `--all-targets` matrices
+pass on ARM64 and x86-64; focused generic coverage is now 36 reified/dual and
+29 erased-only scenarios. Against exact checkpoint `27cb47c`, twenty balanced
+ARM64 pairs put the ordinary generic method at -0.019% and warmed turbofish at
++3.732%, below its five-percent ceiling. CPU-2-pinned x86-64 reports +0.358%
+and -0.797%. This is cold link work: no runtime layout, dependency, JIT or
+native lowering changed.
+
 This checkpoint does not implement `static<T>` by treating it as `self<T>`.
 Correct support requires the reserved-token parser path plus late-static
 called-scope state, including static calls and post-return checks. Pseudo-types
-in a diamond also need a scope per merged candidate, and inheritance-site
-bounds need the same lexical resolver already used by method turbofish bounds.
-These semantic items and omitted dynamic defaults precede JIT work; none may
-be papered over by a native specialization.
+in a diamond also need a scope per merged candidate. That semantic item and
+omitted dynamic defaults precede JIT work; neither may be papered over by a
+native specialization.
 
 Omitted PHP default parameter values remain an explicit semantic follow-up.
 They are assigned by callee bytecode after the current pre-call reified
