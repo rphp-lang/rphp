@@ -2217,6 +2217,30 @@ x86-64 reports +0.647%/-0.163% generic and +0.141%/-0.190% ordinary. This is
 the first JIT admission step, not permission for unguarded nested or non-Long
 specializations.
 
+Nested Long call trees are now admitted without routing generic state through
+the native builder. An out-of-line preflight walks the already-recognized
+Init/Send/DoFcall tree once, reuses the direct root proof, and validates every
+nested method against its own IC and receiver tuple. The canonical composed
+fast path performs the same check, so a bad nested receiver cannot be consumed
+during the baseline iterations that precede OSR. Only after that walk succeeds
+does the unchanged target-neutral builder lower the tree.
+
+This separation is a layout invariant, not just organization: an intermediate
+design grew the x86 native wrapper's stack frame from `0x2ee8` to `0x2ef8` and
+failed the control gate. The accepted design restores `0x2ee8`; neither
+`ExecutorGlobals` nor a generic proof is stored in the builder or passed to a
+backend. Permanent tests cover a non-generic outer function with a generic
+method nested in its argument, one native region/multiple chunks, and a
+same-class reified mismatch returning to the canonical `TypeError`.
+
+Against exact checkpoint `1ad13fa`, 100 steady-state ARM64 pairs report
++0.171% erased/+0.025% reified for the nested generic lane and
+-0.144%/-0.064% for its structurally identical non-generic control.
+CPU-2-pinned x86-64 reports +0.636%/+0.212% generic and
++0.730%/-0.118% control. All four lanes remain below the one-percent gate; the
+warmup is outside the measured interval while the per-activation tuple
+preflight remains inside it.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

@@ -568,7 +568,7 @@ pub fn execute_hot_frame(
                         }
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_composed_scalar_long_call(
-                                frame, op_array, opline_ptr, func_ptr, plan,
+                                eg, frame, op_array, opline_ptr, func_ptr, plan,
                             )
                         } {
                             unsafe {
@@ -1540,7 +1540,7 @@ pub fn execute_hot_frame(
                         }
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             super::execute::try_execute_composed_scalar_long_call(
-                                frame, op_array, opline_ptr, func_ptr, plan,
+                                eg, frame, op_array, opline_ptr, func_ptr, plan,
                             )
                         } {
                             unsafe {

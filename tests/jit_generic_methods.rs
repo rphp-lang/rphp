@@ -46,12 +46,13 @@ fn compile_and_execute(
     (main, functions, result, output)
 }
 
-fn generic_accumulate_plan(
-    functions: &[(String, rphp::vm::function::UserFunction)],
-) -> &rphp::vm::quick::QuickLongAccumulateLoop {
+fn generic_accumulate_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickLongAccumulateLoop {
     functions
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case("genericTotal"))
+        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
         .and_then(|(_, function)| {
             function
                 .op_array
@@ -85,7 +86,7 @@ echo genericTotal(new GenericJitBox::<int>());
     result.unwrap();
     assert_eq!(output, "100000:5000050000");
 
-    let plan = generic_accumulate_plan(&functions);
+    let plan = generic_accumulate_plan(&functions, "genericTotal");
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
@@ -119,7 +120,68 @@ genericTotal(new GenericJitBox::<string>());
     );
     assert!(rendered.contains("reified class type"), "{rendered}");
 
-    let plan = generic_accumulate_plan(&functions);
+    let plan = generic_accumulate_plan(&functions, "genericTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn nested_generic_long_tuple_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+function genericJitAdd(int $left, int $right): int { return $left + $right; }
+class NestedGenericJitBox<T> {
+    public function multiply(T $left, T $right): T { return $left * $right; }
+}
+function nestedGenericTotal($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += genericJitAdd($i, $box->multiply($i, 2));
+    }
+    return $i . ':' . $sum;
+}
+echo nestedGenericTotal(new NestedGenericJitBox::<int>());
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:14999850000");
+
+    let plan = generic_accumulate_plan(&functions, "nestedGenericTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn nested_reified_tuple_mismatch_stays_on_canonical_boundary() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+function genericJitAdd(int $left, int $right): int { return $left + $right; }
+class NestedGenericJitBox<T> {
+    public function multiply(T $left, T $right): T { return $left * $right; }
+}
+function nestedGenericTotal($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += genericJitAdd($i, $box->multiply($i, 2));
+    }
+    return $sum;
+}
+echo nestedGenericTotal(new NestedGenericJitBox::<int>()) . '|';
+nestedGenericTotal(new NestedGenericJitBox::<string>());
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "14999850000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to NestedGenericJitBox::multiply()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+
+    let plan = generic_accumulate_plan(&functions, "nestedGenericTotal");
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }

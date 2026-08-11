@@ -514,6 +514,28 @@ unsafe fn run_quick_long_accumulate_loop(
         scalar_call_common = cached;
         scalar_call_plan = method_plan;
     }
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    if let QuickLongTerm::ScalarCallTree {
+        guard, do_fcall_ip, ..
+    } = plan.term
+    {
+        let initializer = op_array.instructions.as_ptr().add(guard.cache_ip());
+        let Some(actual_do_fcall) = guard_quick_scalar_call_tree_generics(
+            eg,
+            frame,
+            op_array,
+            initializer,
+            true,
+            0,
+        ) else {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        };
+        if actual_do_fcall.offset_from(op_array.instructions.as_ptr()) != do_fcall_ip as isize {
+            stats::inc_quick_loop_guard_failed();
+            return Ok(QuickLoopOutcome::GuardFailed);
+        }
+    }
     #[cfg(all(
         feature = "jit-prototype",
         any(
@@ -849,6 +871,7 @@ unsafe fn run_quick_long_accumulate_loop(
                 let mut call_count = 0usize;
                 let initializer = op_array.instructions.as_ptr().add(guard.cache_ip());
                 let evaluated = match evaluate_composed_scalar_call(
+                    eg,
                     frame,
                     op_array,
                     initializer,

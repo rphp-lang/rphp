@@ -9087,6 +9087,32 @@ and -0.646%/+0.149% for the ordinary control. CPU-2-pinned x86-64 is
 therefore hold separately in both runtime modes and on both native backends,
 without a dependency or hot-layout change.
 
+The next admission closes nested scalar call trees. A non-inlined
+`guard_quick_scalar_call_tree_generics()` preflight traverses the planner's
+canonical Init/Send/DoFcall shape once at region entry. The root reuses its
+direct proof; every nested method validates its own warmed class/target/arity
+IC and, only when required, the exact reified tuple. The baseline composed-call
+executor applies the same nested boundary before it can elide the first PHP
+frame, so OSR warmup cannot accidentally discharge an incompatible contract.
+Failure resumes at the original initializer and native code is never entered.
+
+Generic state deliberately does not cross into
+`NativeQuickLongCallTreeBuilder`. A rejected prototype stored an
+`ExecutorGlobals` reference there, growing the x86 wrapper stack from `0x2ee8`
+to `0x2ef8` and moving both generic and non-generic controls by roughly five
+percent. Passing it as a builder argument then destabilized ARM64. The accepted
+preflight restores the exact `0x2ee8` x86 frame and leaves builder, kernel,
+machine-code config and dispatch signatures at checkpoint `1ad13fa`.
+
+Two permanent architecture-specific tests add the important outer-function →
+nested-generic-method shape and its same-class wrong-tuple replay. The nested
+benchmark warms compilation outside the timer but retains the once-per-
+activation proof inside it. In 100 balanced pairs, ARM64 is +0.171% erased and
++0.025% reified for the generic lane, with -0.144%/-0.064% controls. CPU-2-
+pinned x86-64 is +0.636%/+0.212% generic and +0.730%/-0.118% control. All lanes
+remain inside the one-percent admission gate without backend-specific generic
+code.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

@@ -1328,6 +1328,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         if let Some((result, do_fcall_ptr)) = unsafe {
                             try_execute_composed_scalar_long_call(
+                                eg,
                                 frame,
                                 op_array,
                                 opline_ptr,
@@ -2786,6 +2787,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                                 if let Some((result, do_fcall_ptr)) = unsafe {
                                     try_execute_composed_scalar_long_call(
+                                        eg,
                                         frame,
                                         op_array,
                                         opline_ptr,

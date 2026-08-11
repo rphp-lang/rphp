@@ -152,6 +152,49 @@ unsafe fn guarded_cached_scalar_call_target(
     Some((target, user))
 }
 
+/// Validate only the generic part of a frame-free Long method boundary after
+/// normal dispatch identity has already been established. This is shared by
+/// direct regions and every nested call-tree resolver so native lowering never
+/// observes an unproved receiver-specific contract.
+#[inline(always)]
+unsafe fn long_method_generic_contract_matches(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    cache_ip: usize,
+    receiver: &Value,
+    argument_count: usize,
+) -> bool {
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    {
+        let Some(cache) = op_array.cache.get(cache_ip) else {
+            return false;
+        };
+        if !cache.method_has_generic_contract()
+            || cache.method_has_linked_generic_long_contract()
+        {
+            return true;
+        }
+        let Some(method) = op_array
+            .instructions
+            .get(cache_ip)
+            .and_then(|initializer| op_array.literals.get(initializer.op2 as usize))
+            .and_then(Value::as_str)
+        else {
+            return false;
+        };
+        return eg
+            .generic_instance_method_contract(receiver, method)
+            .as_deref()
+            .is_some_and(|contract| contract.admits_exact_long_call(argument_count as u32));
+    }
+
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    {
+        let _ = (eg, op_array, cache_ip, receiver, argument_count);
+        true
+    }
+}
+
 /// Guard one frame-free Long method specialization against the same generic
 /// boundary as the canonical call path. Bound-erased methods normally carry no
 /// receiver-specific contract; concretely linked descendants use the exact
@@ -173,32 +216,15 @@ unsafe fn guarded_quick_long_method_target(
     };
     let (target, user) =
         guarded_cached_user_call_target(op_array, guard, Some(receiver), argument_count)?;
-
-    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-    {
-        let cache = op_array.cache.get(guard.cache_ip())?;
-        if cache.method_has_generic_contract()
-            && !cache.method_has_linked_generic_long_contract()
-        {
-            let initializer = op_array.instructions.get(guard.cache_ip())?;
-            let method = op_array
-                .literals
-                .get(initializer.op2 as usize)?
-                .as_str()?;
-            if !eg
-                .generic_instance_method_contract(receiver, method)
-                .as_deref()
-                .is_some_and(|contract| {
-                    contract.admits_exact_long_call(argument_count as u32)
-                })
-            {
-                return None;
-            }
-        }
+    if !long_method_generic_contract_matches(
+        eg,
+        op_array,
+        guard.cache_ip(),
+        receiver,
+        argument_count,
+    ) {
+        return None;
     }
-
-    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
-    let _ = eg;
 
     Some((target, user))
 }
@@ -739,11 +765,126 @@ unsafe fn composed_scalar_callee(
     Some((func, plan as *const ScalarLongFunctionPlan))
 }
 
+/// Preflight the generic boundaries in an already-recognized scalar call tree
+/// without changing the native builder or its stack layout. The root target is
+/// guarded by `guarded_quick_scalar_call_target()` before this walk; nested
+/// methods consume their own exact erased/reified proof here. Returning the
+/// terminal DoFcall also binds the walk to the planner's canonical resume edge.
+#[cfg(all(
+    feature = "quick-loops",
+    any(feature = "php-generics-erased", feature = "php-generics-reified")
+))]
+#[inline(never)]
+unsafe fn guard_quick_scalar_call_tree_generics(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    initializer_ptr: *const Instruction,
+    root_proof_checked: bool,
+    depth: usize,
+) -> Option<*const Instruction> {
+    if depth >= COMPOSED_SCALAR_MAX_CALLS {
+        return None;
+    }
+    let initializer = &*initializer_ptr;
+    let ip = initializer_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+    let (func, plan) = composed_scalar_callee(caller, caller_op_array, initializer_ptr)?;
+    let common = &*func;
+
+    if !root_proof_checked && initializer.opcode == OpCode::InitMethodCall {
+        let receiver = match initializer.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller).get_op_ptr(
+                initializer.op1 as u32,
+                initializer.op1_type,
+                caller_op_array,
+            ),
+            OpType::Unused => return None,
+        };
+        if !long_method_generic_contract_matches(
+            eg,
+            caller_op_array,
+            ip,
+            receiver,
+            (&*plan).public_args as usize,
+        ) {
+            return None;
+        }
+    }
+
+    let plan = &*plan;
+    let mut cursor = initializer_ptr.add(1);
+    for index in 0..plan.public_args as usize {
+        let destination = common.sig.param_cv_index(index as u32) as u16;
+        let instruction = &*cursor;
+        if matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+            if instruction.op2 != destination {
+                return None;
+            }
+            cursor = cursor.add(1);
+            continue;
+        }
+
+        if matches!(
+            instruction.opcode,
+            OpCode::Add
+                | OpCode::Add_TmpTmp
+                | OpCode::Add_CvTmp
+                | OpCode::Sub
+                | OpCode::Sub_CvConst
+                | OpCode::Sub_TmpTmp
+                | OpCode::Mul
+                | OpCode::Mod
+                | OpCode::Mod_LongLong
+                | OpCode::BitwiseAnd
+                | OpCode::BitwiseOr
+                | OpCode::BitwiseXor
+                | OpCode::BitwiseXor_LongLong
+        ) {
+            if !matches!(instruction.result_type, OpType::Tmp | OpType::Var) {
+                return None;
+            }
+            let send = &*cursor.add(1);
+            if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+                || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+                || send.op1 != instruction.result
+                || send.op2 != destination
+            {
+                return None;
+            }
+            cursor = cursor.add(2);
+            continue;
+        }
+
+        let nested_do_fcall = guard_quick_scalar_call_tree_generics(
+            eg,
+            caller,
+            caller_op_array,
+            cursor,
+            false,
+            depth + 1,
+        )?;
+        let nested_result = &*nested_do_fcall;
+        let send = &*nested_do_fcall.add(1);
+        if !matches!(nested_result.result_type, OpType::Tmp | OpType::Var)
+            || !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
+            || !matches!(send.op1_type, OpType::Tmp | OpType::Var)
+            || send.op1 != nested_result.result
+            || send.op2 != destination
+        {
+            return None;
+        }
+        cursor = nested_do_fcall.add(2);
+    }
+
+    ((*cursor).opcode == OpCode::DoFcall).then_some(cursor)
+}
+
 /// Recursively evaluate a compiler-proven scalar call tree encoded by ordinary
 /// Init/Send/DoFcall instructions. Only already-cached direct functions and
 /// monomorphic methods participate, so failure is read-only and can restart via
 /// the canonical VM protocol.
 unsafe fn evaluate_composed_scalar_call(
+    eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
     initializer_ptr: *const Instruction,
@@ -831,7 +972,31 @@ unsafe fn evaluate_composed_scalar_call(
         }
 
         let (nested_func, nested_plan) = composed_scalar_callee(caller, caller_op_array, cursor)?;
+        let nested_initializer = &*cursor;
+        if nested_initializer.opcode == OpCode::InitMethodCall {
+            let nested_ip = cursor.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+            let receiver = match nested_initializer.op1_type {
+                OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => {
+                    &*(*caller).get_op_ptr(
+                        nested_initializer.op1 as u32,
+                        nested_initializer.op1_type,
+                        caller_op_array,
+                    )
+                }
+                OpType::Unused => return None,
+            };
+            if !long_method_generic_contract_matches(
+                eg,
+                caller_op_array,
+                nested_ip,
+                receiver,
+                (&*nested_plan).public_args as usize,
+            ) {
+                return None;
+            }
+        }
         let (nested_result, nested_do_fcall) = evaluate_composed_scalar_call(
+            eg,
             caller,
             caller_op_array,
             cursor,
@@ -878,6 +1043,7 @@ unsafe fn evaluate_composed_scalar_call(
 
 #[inline(never)]
 pub(crate) unsafe fn try_execute_composed_scalar_long_call(
+    eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
     initializer_ptr: *const Instruction,
@@ -889,9 +1055,31 @@ pub(crate) unsafe fn try_execute_composed_scalar_long_call(
     {
         return None;
     }
+    let initializer = &*initializer_ptr;
+    if initializer.opcode == OpCode::InitMethodCall {
+        let ip = initializer_ptr.offset_from(caller_op_array.instructions.as_ptr()) as usize;
+        let receiver = match initializer.op1_type {
+            OpType::Cv | OpType::Tmp | OpType::Var | OpType::Const => &*(*caller).get_op_ptr(
+                initializer.op1 as u32,
+                initializer.op1_type,
+                caller_op_array,
+            ),
+            OpType::Unused => return None,
+        };
+        if !long_method_generic_contract_matches(
+            eg,
+            caller_op_array,
+            ip,
+            receiver,
+            plan.public_args as usize,
+        ) {
+            return None;
+        }
+    }
     let mut calls = [std::ptr::null(); COMPOSED_SCALAR_MAX_CALLS];
     let mut call_count = 0usize;
     let evaluated = evaluate_composed_scalar_call(
+        eg,
         caller,
         caller_op_array,
         initializer_ptr,
