@@ -4899,6 +4899,15 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
         }
 
         if instruction.opcode == OpCode::Return {
+            // A discarded call result does not erase the observable `void`
+            // contract. Only the compiler's bare/implicit return form may be
+            // represented by a frame-free property mutator; `return expr;`
+            // must stay canonical so PHP emits its normal TypeError.
+            if matches!(common.sig.return_type_hint, ParamTypeHint::Void)
+                && instruction.extended_value != 0
+            {
+                return None;
+            }
             ip += 1;
             continue;
         }

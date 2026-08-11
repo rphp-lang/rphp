@@ -1198,10 +1198,12 @@ pub struct FunctionCommon {
 impl FunctionCommon {
     /// Whether this signature can enter a guarded frame-free Long plan.
     ///
-    /// `Fast` remains the canonical strategy for a return-only `: int`
-    /// declaration so fallback still validates that return. A proven Long
-    /// plan may nevertheless satisfy the same contract when every argument
-    /// is either untyped/mixed or declared int and runtime Long guards pass.
+    /// `Fast` remains the canonical strategy for a return-only `: int` or
+    /// discarded `: void` declaration so fallback still validates that
+    /// boundary. A proven Long plan may nevertheless satisfy the same
+    /// contract when every argument is either untyped/mixed or declared int
+    /// and runtime Long guards pass. Scalar-result planners still reject
+    /// `void`; property mutator plans use it only at unused-result sites.
     #[inline(always)]
     pub fn supports_scalar_long_plan(&self) -> bool {
         if self.plan.call.supports_scalar_long_plan() {
@@ -1217,7 +1219,10 @@ impl FunctionCommon {
             })
             && matches!(
                 self.sig.return_type_hint,
-                ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
+                ParamTypeHint::None
+                    | ParamTypeHint::Mixed
+                    | ParamTypeHint::Int
+                    | ParamTypeHint::Void
             )
     }
 

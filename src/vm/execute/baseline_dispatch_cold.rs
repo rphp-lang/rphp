@@ -648,37 +648,39 @@ fn op_check_reified_return(
             let value = unsafe {
                 &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
             };
-            if !eg.generic_metadata.value_matches_binding_reified(
-                value,
-                expected,
-                binding,
-                |actual, bound| {
-                    let class_id = eg.reified_binding_scope_class_id(frame as usize);
-                    let receiver_scope = eg
-                        .class_by_id(class_id)
-                        .map(|class| class.name.as_str());
-                    let scope =
-                        eg.generic_declaration_scope(declared_scope, receiver_scope);
-                    eg.class_is_a_in_generic_scopes(actual, bound, scope, receiver_scope)
-                },
-                |value, name, arguments, declaration, site| {
-                    let class_id = eg.reified_binding_scope_class_id(frame as usize);
-                    let receiver_scope = eg
-                        .class_by_id(class_id)
-                        .map(|class| class.name.as_str());
-                    let scope =
-                        eg.generic_declaration_scope(declared_scope, receiver_scope);
-                    eg.reified_object_arguments_match_binding(
-                        value,
-                        name,
-                        arguments,
-                        declaration,
-                        site,
-                        scope,
-                        receiver_scope,
-                    )
-                },
-            ) {
+            let matches_return = matches!(expected, crate::generics::GenericType::Void)
+                || eg.generic_metadata.value_matches_binding_reified(
+                    value,
+                    expected,
+                    binding,
+                    |actual, bound| {
+                        let class_id = eg.reified_binding_scope_class_id(frame as usize);
+                        let receiver_scope = eg
+                            .class_by_id(class_id)
+                            .map(|class| class.name.as_str());
+                        let scope =
+                            eg.generic_declaration_scope(declared_scope, receiver_scope);
+                        eg.class_is_a_in_generic_scopes(actual, bound, scope, receiver_scope)
+                    },
+                    |value, name, arguments, declaration, site| {
+                        let class_id = eg.reified_binding_scope_class_id(frame as usize);
+                        let receiver_scope = eg
+                            .class_by_id(class_id)
+                            .map(|class| class.name.as_str());
+                        let scope =
+                            eg.generic_declaration_scope(declared_scope, receiver_scope);
+                        eg.reified_object_arguments_match_binding(
+                            value,
+                            name,
+                            arguments,
+                            declaration,
+                            site,
+                            scope,
+                            receiver_scope,
+                        )
+                    },
+                );
+            if !matches_return {
                 let owner = eg
                     .generic_metadata
                     .symbol(declaration.owner)
@@ -777,6 +779,18 @@ fn validate_generic_member_return(
     let Some(expected) = contract.return_type.as_ref() else {
         return Ok(());
     };
+    if matches!(expected, crate::generics::GenericType::Void) {
+        return if opline.extended_value == 0 {
+            Ok(())
+        } else {
+            Err(VmError::Fatal(format!(
+                "Return value of {}::{}() does not match its {}",
+                contract.owner,
+                contract.method,
+                generic_method_contract_kind(contract.runtime_mode)
+            )))
+        };
+    }
     let implicit_null;
     let value = if opline.op1_type == OpType::Unused {
         implicit_null = Value::null();

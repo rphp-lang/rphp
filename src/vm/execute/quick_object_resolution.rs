@@ -188,6 +188,76 @@ unsafe fn quick_object_method_target(
     Some((receiver, target, user))
 }
 
+/// Resolve every declared Long slot once when a closed typed region is
+/// admitted. Generic property caches deliberately omit the ordinary
+/// write-safe bit so canonical stores repeat their substituted type check.
+/// A current exact Long value proves that the immutable erased/reified
+/// property contract admits every Long written by this plan; the native loop
+/// can then reuse the resolved slot without consulting metadata per call.
+#[cfg(feature = "quick-loops")]
+unsafe fn quick_long_property_slots(
+    eg: &ExecutorGlobals,
+    receiver: *const Value,
+    user: *const UserFunction,
+    plan: &LongPropertyMethodPlan,
+) -> Option<([usize; 8], u8)> {
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    let _ = eg;
+    if plan.properties.len() > 8 {
+        return None;
+    }
+    let receiver = &*receiver;
+    let user = &*user;
+    let class_id = receiver.object_class_id_unchecked();
+    if class_id == 0 {
+        return None;
+    }
+
+    let mut property_slots = [usize::MAX; 8];
+    for (index, property) in plan.properties.iter().enumerate() {
+        let cache_ip = property.cache_ip as usize;
+        let cache = user.op_array.cache.get(cache_ip)?;
+        if cache.class_id != class_id {
+            return None;
+        }
+        let slot = cache.property_slot();
+        let value = &*receiver.object_property_slot_unchecked(slot);
+        if value.value_type() != ValueType::Long || value.is_reference() {
+            return None;
+        }
+        if cache.property_flags() & property.required_flags as u32
+            != property.required_flags as u32
+        {
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            {
+                if property.required_flags != 3 {
+                    return None;
+                }
+                let declaration = cache.generic_property_declaration()?;
+                let instruction = user.op_array.instructions.get(cache_ip)?;
+                let name = user
+                    .op_array
+                    .literals
+                    .get(instruction.op2 as usize)?
+                    .as_str()?;
+                if eg
+                    .check_cached_generic_property_value(receiver, name, value, declaration)
+                    .is_err()
+                {
+                    return None;
+                }
+            }
+            #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+            {
+                return None;
+            }
+        }
+        property_slots[index] = slot;
+    }
+
+    Some((property_slots, plan.properties.len() as u8))
+}
+
 #[cfg(feature = "quick-loops")]
 unsafe fn quick_property_getter_slot(
     receiver: *const Value,
@@ -391,37 +461,20 @@ unsafe fn resolve_quick_object_ops(
                     slot_base,
                     call.guard,
                     call.argument_count as usize,
-                    TypedGenericCallBoundary::Long,
+                    TypedGenericCallBoundary::LongDiscarded,
                 )?;
                 let property_plan = (&*user).long_property_plan.as_deref()?;
-                if property_plan.public_args != call.argument_count
-                    || property_plan.properties.len() > 8
-                {
+                if property_plan.public_args != call.argument_count {
                     return None;
                 }
-                let class_id = (*receiver).object_class_id_unchecked();
-                let mut property_slots = [usize::MAX; 8];
-                for (index, property) in property_plan.properties.iter().enumerate() {
-                    let cache = (&*user).op_array.cache.get(property.cache_ip as usize)?;
-                    if cache.class_id != class_id
-                        || cache.property_flags() & property.required_flags as u32
-                            != property.required_flags as u32
-                    {
-                        return None;
-                    }
-                    let slot = cache.property_slot();
-                    let value = &*(*receiver).object_property_slot_unchecked(slot);
-                    if value.value_type() != ValueType::Long {
-                        return None;
-                    }
-                    property_slots[index] = slot;
-                }
+                let (property_slots, property_count) =
+                    quick_long_property_slots(eg, receiver, user, property_plan)?;
                 QuickResolvedObjectOp::PropertyMethod {
                     receiver,
                     target,
                     plan: property_plan,
                     property_slots,
-                    property_count: property_plan.properties.len() as u8,
+                    property_count,
                 }
             }
             QuickLongOp::PropertyGetterCall { call, .. } => {
@@ -536,7 +589,7 @@ unsafe fn resolve_quick_object_ops(
                         slot_base,
                         outer_guard,
                         1,
-                        TypedGenericCallBoundary::Long,
+                        TypedGenericCallBoundary::LongDiscarded,
                     )?;
                 let outer_plan = (&*outer_user).long_property_plan.as_deref()?;
                 if outer_plan.public_args != 1 {

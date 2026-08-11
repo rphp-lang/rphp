@@ -113,6 +113,32 @@ fn generic_mixed_ops_plan<'a>(
         .expect("compiler should select the generic mixed-method ops loop")
 }
 
+fn generic_property_ops_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickLongOpsLoop {
+    functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
+        .and_then(|(_, function)| {
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickLongOps(plan)
+                        if plan.ops.iter().any(|operation| {
+                            matches!(operation, QuickLongOp::PropertyMethodCall { .. })
+                        }) =>
+                    {
+                        Some(plan)
+                    }
+                    _ => None,
+                })
+        })
+        .expect("compiler should select the generic property-method ops loop")
+}
+
 #[test]
 fn exact_generic_long_tuple_enters_one_native_region() {
     let (_, functions, result, output) = compile_and_execute(
@@ -563,4 +589,103 @@ genericMixedTotal(new GenericMixedJitBox::<int>());
     let plan = generic_mixed_ops_plan(&functions, "genericMixedTotal");
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn bound_generic_property_mutator_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class BoundGenericPropertyJitBox<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function add(T $value): void { $this->total = $this->total + $value; }
+}
+function genericPropertyTotal($box) {
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $box->add(1);
+        $checksum += $i;
+    }
+    return $i . ':' . $box->total . ':' . $checksum;
+}
+echo genericPropertyTotal(new BoundGenericPropertyJitBox::<int>(0));
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:100000:4999950000");
+
+    let plan = generic_property_ops_plan(&functions, "genericPropertyTotal");
+    assert!(
+        plan.native_jit().is_straight_compiled(),
+        "object mask: {}, ops: {:?}",
+        plan.object_input_mask,
+        plan.ops,
+    );
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_property_mismatch_replays_canonical_store_boundary() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericPropertyJitBox<T> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function set(int $value): void { $this->value = $value; }
+}
+function genericPropertySet($box) {
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $box->set($i);
+        $checksum += $i;
+    }
+    return $box->value . ':' . $checksum;
+}
+echo genericPropertySet(new GenericPropertyJitBox::<int>(0)) . '|';
+genericPropertySet(new GenericPropertyJitBox::<string>('seed'));
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "99999:4999950000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Value does not match reified property GenericPropertyJitBox::$value"),
+        "{rendered}"
+    );
+
+    let plan = generic_property_ops_plan(&functions, "genericPropertySet");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn generic_void_property_mutator_with_value_return_stays_canonical() {
+    let (_, _, result, output) = compile_and_execute(
+        r#"<?php
+class InvalidGenericVoidMutator<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function update(T $value): void {
+        $this->value = $value;
+        return 1;
+    }
+}
+$box = new InvalidGenericVoidMutator::<int>(0);
+$box->update(1);
+echo $box->value;
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("A void function must not return a value")
+            || rendered.contains(
+                "Return value of InvalidGenericVoidMutator::update() does not match its reified class type",
+            ),
+        "{rendered}"
+    );
 }

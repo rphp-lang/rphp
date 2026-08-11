@@ -52,6 +52,7 @@ case $only in
         bench_generics_method_composed_long_loop.php | \
         bench_generics_method_composed_string_loop.php | \
         bench_generics_method_mixed_native_loop.php | \
+        bench_generics_property_method_native_loop.php | \
         bench_scalar_method_native_loop.php | \
         bench_scalar_method_nested_native_loop.php | \
         bench_scalar_method_double_native_loop.php | \
@@ -59,6 +60,7 @@ case $only in
         bench_scalar_method_composed_long_loop.php | \
         bench_scalar_method_composed_string_loop.php | \
         bench_scalar_method_mixed_native_loop.php | \
+        bench_scalar_property_method_native_loop.php | \
         bench_generics_method_turbofish.php | \
         bench_generics_default_omitted.php | bench_generics_default_explicit.php | \
         bench_generics_default_manual.php) ;;
@@ -163,6 +165,7 @@ bench_generics_method_double_nested_native_loop.php
 bench_generics_method_composed_long_loop.php
 bench_generics_method_composed_string_loop.php
 bench_generics_method_mixed_native_loop.php
+bench_generics_property_method_native_loop.php
 bench_scalar_method_native_loop.php
 bench_scalar_method_nested_native_loop.php
 bench_scalar_method_double_native_loop.php
@@ -170,6 +173,7 @@ bench_scalar_method_double_nested_native_loop.php
 bench_scalar_method_composed_long_loop.php
 bench_scalar_method_composed_string_loop.php
 bench_scalar_method_mixed_native_loop.php
+bench_scalar_property_method_native_loop.php
 bench_generics_method_turbofish.php
 bench_generics_default_omitted.php
 bench_generics_default_explicit.php
@@ -186,6 +190,7 @@ for workload in \
     bench_generics_method_composed_long_loop.php \
     bench_generics_method_composed_string_loop.php \
     bench_generics_method_mixed_native_loop.php \
+    bench_generics_property_method_native_loop.php \
     bench_scalar_method_native_loop.php \
     bench_scalar_method_nested_native_loop.php \
     bench_scalar_method_double_native_loop.php \
@@ -193,6 +198,7 @@ for workload in \
     bench_scalar_method_composed_long_loop.php \
     bench_scalar_method_composed_string_loop.php \
     bench_scalar_method_mixed_native_loop.php \
+    bench_scalar_property_method_native_loop.php \
     bench_generics_method_turbofish.php \
     bench_generics_default_omitted.php \
     bench_generics_default_explicit.php \

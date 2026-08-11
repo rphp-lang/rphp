@@ -171,6 +171,7 @@ unsafe fn cached_receiver_generic_method_contract(
 #[derive(Clone, Copy)]
 enum TypedGenericCallBoundary {
     Long,
+    LongDiscarded,
     LongStringToLong { string_arguments: u8 },
     LongToString,
 }
@@ -196,7 +197,10 @@ unsafe fn typed_method_generic_contract_matches(
             return false;
         };
         if !cache.method_has_generic_contract()
-            || matches!(boundary, TypedGenericCallBoundary::Long)
+            || matches!(
+                boundary,
+                TypedGenericCallBoundary::Long | TypedGenericCallBoundary::LongDiscarded
+            )
                 && cache.method_has_linked_generic_long_contract()
         {
             return true;
@@ -206,6 +210,9 @@ unsafe fn typed_method_generic_contract_matches(
             .is_some_and(|contract| match boundary {
                 TypedGenericCallBoundary::Long => {
                     contract.admits_exact_long_call(argument_count as u32)
+                }
+                TypedGenericCallBoundary::LongDiscarded => {
+                    contract.admits_exact_long_discarded_call(argument_count as u32)
                 }
                 TypedGenericCallBoundary::LongStringToLong { string_arguments } => contract
                     .admits_exact_long_string_to_long_call(
@@ -222,7 +229,9 @@ unsafe fn typed_method_generic_contract_matches(
     {
         let string_arguments = match boundary {
             TypedGenericCallBoundary::LongStringToLong { string_arguments } => string_arguments,
-            TypedGenericCallBoundary::Long | TypedGenericCallBoundary::LongToString => 0,
+            TypedGenericCallBoundary::Long
+            | TypedGenericCallBoundary::LongDiscarded
+            | TypedGenericCallBoundary::LongToString => 0,
         };
         let _ = (
             eg,

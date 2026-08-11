@@ -206,6 +206,23 @@ impl GenericMethodContract {
                 .is_none_or(generic_type_admits_long)
     }
 
+    /// A frame-free property mutator consumes exact Long arguments but its
+    /// call-site result is unused. The canonical boundary may therefore
+    /// return `void`; a declared value return remains admissible only when a
+    /// skipped reified return check would also accept the produced Long.
+    #[inline]
+    pub fn admits_exact_long_discarded_call(&self, arguments: u32) -> bool {
+        !self.is_variadic
+            && self.value_parameters.len() == arguments as usize
+            && self
+                .value_parameters
+                .iter()
+                .all(|value| value.as_ref().is_none_or(generic_type_admits_long))
+            && self.return_type.as_ref().is_none_or(|value| {
+                matches!(value, GenericType::Void) || generic_type_admits_long(value)
+            })
+    }
+
     /// A direct Double method plan accepts only raw Double arguments and
     /// either produces a Double or side-exits. As with the Long ABI, this can
     /// discharge a substituted receiver contract only when every occupied

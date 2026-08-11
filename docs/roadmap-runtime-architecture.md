@@ -2316,6 +2316,32 @@ are +0.005%/+0.018% on ARM64 and +0.104%/-0.205% on x86-64. The final ARM64
 generic/ordinary comparison is -0.102% erased and -0.040% reified, confirming
 that the receiver proof is outside the native iteration body.
 
+Generic declared-property mutators now join the same native region without
+moving metadata into the backend. `TypedGenericCallBoundary::LongDiscarded`
+models their actual call-site ABI: exact Long arguments with an unused result.
+It accepts no return contract, a canonical bare `void`, or a Long-compatible
+value contract. The compiler rejects an explicit value return from a void
+property plan, while the canonical generic member-return path accepts the
+valid implicit/bare void representation before the ordinary PHP return check.
+
+`quick_long_property_slots()` is the single activation-time slot boundary.
+Ordinary properties require the established read/write-safe flags. A generic
+property deliberately carries only the read-safe bit plus its interned
+declaration ID; the resolver checks the current Long with
+`check_cached_generic_property_value()` and then binds the slot. Because the
+receiver and its erased/reified substitution are immutable for the admitted
+region and the transactional plan writes only checked Longs, the native loop
+does not repeat a metadata lookup. Rejection occurs before native entry and
+overflow still publishes no partial property transaction.
+
+Against exact checkpoint `365c2b6`, the new generic lane improves by
+98.524%/99.367% on ARM64 and 98.555%/99.381% on CPU-2-pinned x86-64 in
+erased/reified mode. One hundred-pair ordinary controls are
++0.289%/+0.051% and +0.211%/-0.123%, respectively. Focused coverage is 17
+dual/reified and 9 erased generic JIT scenarios. No `Value`, function, frame,
+instruction, property-IC, native-context or backend layout changed, and no
+dependency was added.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

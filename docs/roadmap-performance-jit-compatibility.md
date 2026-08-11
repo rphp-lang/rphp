@@ -9194,6 +9194,35 @@ ARM64 comparison of the final generic workload with its ordinary-signature
 control is -0.102% erased and -0.040% reified; the warmed generic contract has
 no measurable per-iteration cost.
 
+The property-mutator admission now separates an unused call result from an
+exact Long result. `LongDiscarded` still requires every occupied argument to
+admit Long, but also accepts a canonical bare `void` return; a declared value
+return remains Long-compatible so skipping its generic return check cannot
+hide an error. The property planner rejects `return expr;` in a void method,
+and the shared generic return boundary now treats a valid bare void return
+consistently in both runtime modes.
+
+At typed-region entry, every declared property slot is resolved once. An
+ordinary write-safe cache keeps its existing proof. A generic cache instead
+uses its interned declaration ID to validate the current exact Long against
+the erased or reified property contract; immutable receiver substitution then
+proves that every Long produced by the transactional property plan is valid
+for the region. Native iterations use only the resolved slot shadows. A
+different class/tuple, non-Long or referenced property, invalid cache, or
+checked-arithmetic failure takes the existing canonical edge before an
+unproved store. No property IC, instruction, frame, native state or backend
+representation grows.
+
+Against exact checkpoint `365c2b6`, 20 balanced max-perf pairs improve the
+ten-million-iteration generic property-mutator lane by 98.524%/99.367% on
+ARM64 and 98.555%/99.381% on CPU-2-pinned x86-64 in erased/reified mode. The
+corresponding 100-pair ordinary controls are +0.289%/+0.051% on ARM64 and
++0.211%/-0.123% on x86-64, all inside the one-percent gate. Permanent tests
+prove one native entry, multiple chunks and zero side exits for a bound
+generic property, canonical replay for a wrong reified property tuple, and no
+plan for an invalid void value return. Focused generic JIT coverage is now 17
+dual/reified and 9 erased scenarios.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
