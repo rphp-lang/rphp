@@ -43,7 +43,7 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
 
     // Tier 2: bitmap-driven — only drop slots with heap bit set.
     if total <= 64 {
-        let bitmap = (*frame).heap_bitmap;
+        let bitmap = (*frame).owned_heap_bitmap();
         if bitmap == 0 {
             stats::inc_cleanup_frame(total, true);
             return;

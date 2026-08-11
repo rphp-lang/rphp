@@ -72,6 +72,128 @@ echo Child::calls();
 }
 
 #[test]
+fn late_static_calls_follow_and_rekey_the_called_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LateRoot {
+    public static function value(): string { return "R"; }
+    public static function dispatch(): string { return static::value(); }
+    public function instanceDispatch(): string { return static::value(); }
+}
+class LateLeft extends LateRoot {
+    public static function value(): string { return "L"; }
+}
+class LateRight extends LateRoot {
+    public static function value(): string { return "X"; }
+}
+
+echo LateRoot::dispatch();
+echo LateLeft::dispatch();
+echo LateRight::dispatch();
+echo LateLeft::dispatch();
+$right = new LateRight();
+echo $right->instanceDispatch();
+"#
+        ),
+        "RLXLX"
+    );
+}
+
+#[test]
+fn closures_capture_the_late_called_class_at_creation() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ClosureRoot {
+    public static function value(): string { return "R"; }
+    public static function makeClosure() {
+        return function(): string { return static::value(); };
+    }
+    public static function makeArrow() {
+        return fn(): string => static::value();
+    }
+    public function makeInstanceClosure() {
+        return function(): string { return static::value(); };
+    }
+}
+class ClosureLeft extends ClosureRoot {
+    public static function value(): string { return "L"; }
+}
+class ClosureRight extends ClosureRoot {
+    public static function value(): string { return "X"; }
+}
+
+$root = ClosureRoot::makeClosure();
+$left = ClosureLeft::makeClosure();
+$arrow = ClosureLeft::makeArrow();
+$rightObject = new ClosureRight();
+$instance = $rightObject->makeInstanceClosure();
+echo $root();
+echo $left();
+echo $root();
+echo $arrow();
+echo $instance();
+"#
+        ),
+        "RLRLX"
+    );
+}
+
+#[test]
+fn late_static_scope_preserves_compact_heap_cleanup() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CompactLateRoot {
+    public static function value(): string { return "root"; }
+    public static function dispatch(): string {
+        $prefix = "value:";
+        $parts = [$prefix, static::value()];
+        return $parts[0] . $parts[1];
+    }
+}
+class CompactLateChild extends CompactLateRoot {
+    public static function value(): string { return "child"; }
+}
+echo CompactLateRoot::dispatch() . ":" . CompactLateChild::dispatch();
+"#
+        ),
+        "value:root:value:child"
+    );
+}
+
+#[test]
+fn wide_late_static_frame_uses_the_sparse_scope_fallback() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class WideLateRoot {
+    public static function value(): string { return "root"; }
+    public static function dispatch(): string {
+        $v00 = 0; $v01 = 1; $v02 = 2; $v03 = 3; $v04 = 4;
+        $v05 = 5; $v06 = 6; $v07 = 7; $v08 = 8; $v09 = 9;
+        $v10 = 10; $v11 = 11; $v12 = 12; $v13 = 13; $v14 = 14;
+        $v15 = 15; $v16 = 16; $v17 = 17; $v18 = 18; $v19 = 19;
+        $v20 = 20; $v21 = 21; $v22 = 22; $v23 = 23; $v24 = 24;
+        $v25 = 25; $v26 = 26; $v27 = 27; $v28 = 28; $v29 = 29;
+        $v30 = 30; $v31 = 31; $v32 = 32; $v33 = 33;
+        return static::value() . ($v00 + $v33);
+    }
+}
+class WideLateChild extends WideLateRoot {
+    public static function value(): string { return "child"; }
+}
+echo WideLateRoot::dispatch() . ":";
+echo WideLateChild::dispatch() . ":";
+echo WideLateRoot::dispatch();
+"#
+        ),
+        "root33:child33:root33"
+    );
+}
+
+#[test]
 fn test_extends_inherits_property_default() {
     assert_eq!(
         run_php(

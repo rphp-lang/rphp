@@ -1625,7 +1625,7 @@ pub fn execute_hot_frame(
                 unsafe {
                     (*frame).call = call;
                     let this_ptr = (call as *mut Value).add(CALL_FRAME_SLOTS);
-                    if func_common.plan.borrow_this {
+                    if func_common.plan.borrow_this() {
                         // The caller owns the object for the complete nested
                         // call; do not add this borrowed slot to cleanup.
                         Value::raw_copy(obj_val as *const Value, this_ptr);

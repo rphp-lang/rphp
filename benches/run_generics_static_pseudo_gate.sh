@@ -1,8 +1,8 @@
 #!/bin/sh
 
-# Candidate-only equivalence gate for the newly supported self:: turbofish
-# call form. The exact baseline cannot execute that syntax, so regressions
-# against it remain covered by run_generics_gate.sh on established workloads.
+# Candidate-only equivalence gates for pseudo-static call forms that the exact
+# baseline cannot parse. Established explicit-owner workloads remain covered
+# against the prior binary by run_generics_gate.sh.
 
 set -eu
 
@@ -50,8 +50,11 @@ if ! printf '%s\n' "$max_regression" | awk '
 fi
 
 script_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
-self_workload="$script_root/benches/bench_generics_static_self_turbofish.php"
-explicit_workload="$script_root/benches/bench_generics_static_explicit_turbofish.php"
+ordinary_late_workload="$script_root/benches/bench_static_late_call.php"
+ordinary_self_workload="$script_root/benches/bench_static_self_call.php"
+generic_late_workload="$script_root/benches/bench_generics_static_late_turbofish.php"
+generic_self_workload="$script_root/benches/bench_generics_static_self_turbofish.php"
+generic_explicit_workload="$script_root/benches/bench_generics_static_explicit_turbofish.php"
 results=$(mktemp "${TMPDIR:-/tmp}/rphp-generics-static-results.XXXXXX")
 trap 'rm -f -- "$results"' EXIT HUP INT TERM
 
@@ -91,47 +94,58 @@ median() {
         '
 }
 
-warmup=1
-while [ "$warmup" -le "$warmups" ]; do
-    if [ $((warmup % 2)) -eq 1 ]; then
-        measure "$self_workload" >/dev/null
-        measure "$explicit_workload" >/dev/null
-    else
-        measure "$explicit_workload" >/dev/null
-        measure "$self_workload" >/dev/null
+run_gate() {
+    label=$1
+    candidate_workload=$2
+    control_workload=$3
+    : >"$results"
+
+    warmup=1
+    while [ "$warmup" -le "$warmups" ]; do
+        if [ $((warmup % 2)) -eq 1 ]; then
+            measure "$candidate_workload" >/dev/null
+            measure "$control_workload" >/dev/null
+        else
+            measure "$control_workload" >/dev/null
+            measure "$candidate_workload" >/dev/null
+        fi
+        warmup=$((warmup + 1))
+    done
+
+    pair=1
+    while [ "$pair" -le "$pairs" ]; do
+        if [ $((pair % 2)) -eq 1 ]; then
+            candidate_time=$(measure "$candidate_workload")
+            control_time=$(measure "$control_workload")
+            order=candidate-first
+        else
+            control_time=$(measure "$control_workload")
+            candidate_time=$(measure "$candidate_workload")
+            order=control-first
+        fi
+        printf '%s\t%s\t%s\t%s\n' \
+            "$order" "$pair" "$candidate_time" "$control_time" >>"$results"
+        pair=$((pair + 1))
+    done
+
+    candidate_first_candidate=$(median candidate-first 3)
+    candidate_first_control=$(median candidate-first 4)
+    control_first_candidate=$(median control-first 3)
+    control_first_control=$(median control-first 4)
+    balanced=$(awk \
+        -v cfc="$candidate_first_candidate" -v cfk="$candidate_first_control" \
+        -v kfc="$control_first_candidate" -v kfk="$control_first_control" \
+        'BEGIN { printf "%.6f", ((((cfc / cfk) - 1) + ((kfc / kfk) - 1)) / 2) * 100 }')
+
+    printf '%-42s %+10.3f%%\n' "$label" "$balanced"
+    if ! awk -v ratio="$balanced" -v limit="$max_regression" \
+        'BEGIN { exit !(ratio <= limit) }'; then
+        echo "$label exceeded ${max_regression}% regression budget" >&2
+        return 1
     fi
-    warmup=$((warmup + 1))
-done
+}
 
-pair=1
-while [ "$pair" -le "$pairs" ]; do
-    if [ $((pair % 2)) -eq 1 ]; then
-        self_time=$(measure "$self_workload")
-        explicit_time=$(measure "$explicit_workload")
-        order=self-first
-    else
-        explicit_time=$(measure "$explicit_workload")
-        self_time=$(measure "$self_workload")
-        order=explicit-first
-    fi
-    printf '%s\t%s\t%s\t%s\n' \
-        "$order" "$pair" "$self_time" "$explicit_time" >>"$results"
-    pair=$((pair + 1))
-done
-
-self_first_self=$(median self-first 3)
-self_first_explicit=$(median self-first 4)
-explicit_first_self=$(median explicit-first 3)
-explicit_first_explicit=$(median explicit-first 4)
-balanced=$(awk \
-    -v sfs="$self_first_self" -v sfe="$self_first_explicit" \
-    -v efs="$explicit_first_self" -v efe="$explicit_first_explicit" \
-    'BEGIN { printf "%.6f", ((((sfs / sfe) - 1) + ((efs / efe) - 1)) / 2) * 100 }')
-
-echo "balanced mean of order-specific self/explicit median ratios:"
-printf '%-42s %+10.3f%%\n' "static self/explicit" "$balanced"
-if ! awk -v ratio="$balanced" -v limit="$max_regression" \
-    'BEGIN { exit !(ratio <= limit) }'; then
-    echo "static self turbofish exceeded ${max_regression}% regression budget" >&2
-    exit 1
-fi
+echo "balanced mean of order-specific candidate/control median ratios:"
+run_gate "ordinary static::/self::" "$ordinary_late_workload" "$ordinary_self_workload"
+run_gate "generic static::/self::" "$generic_late_workload" "$generic_self_workload"
+run_gate "generic self::/explicit" "$generic_self_workload" "$generic_explicit_workload"

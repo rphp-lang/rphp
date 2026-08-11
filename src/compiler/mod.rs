@@ -52,7 +52,7 @@ pub struct OpArray {
     /// Used by include to share the caller's full local scope.
     pub all_cvs: Vec<(u32, String)>,
     /// Inline cache side table — one entry per instruction.
-    /// Only InitFcall/InitMethodCall/InitStaticCall use their entries.
+    /// Call initialization and generic guard opcodes use their own entries.
     pub cache: Vec<InlineCache>,
     /// True if this function or any transitive callee may read/write eg.globals.
     /// Used by DoFcall to skip caller→globals sync when callee can't reach globals.
@@ -655,6 +655,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::Strlen_Cv
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
+                | OpCode::InitLateStaticCall
                 | OpCode::InitDynamicCall
                 | OpCode::SendVal
                 | OpCode::SendRef
@@ -681,6 +682,27 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::IsEqual_CvConst
         )
     })
+}
+
+#[inline]
+fn typed_function_supports_fast_return(
+    op_array: &OpArray,
+    return_type_hint: &ParamTypeHint,
+) -> bool {
+    op_array.global_vars.is_empty()
+        && op_array.static_vars.is_empty()
+        && op_array.try_entries.is_empty()
+        && !op_array.is_generator
+        && matches!(
+            return_type_hint,
+            ParamTypeHint::None
+                | ParamTypeHint::Int
+                | ParamTypeHint::Float
+                | ParamTypeHint::String
+                | ParamTypeHint::Bool
+                | ParamTypeHint::Array
+                | ParamTypeHint::Mixed
+        )
 }
 
 /// Create a UserFunction wrapping an OpArray (no args — for main script).
@@ -719,6 +741,10 @@ pub fn make_user_function_full(
     }
     op_array.compute_blocks();
     op_array.prepare_quick_loops();
+    let needs_late_static_scope = op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::InitLateStaticCall);
     let is_fast_scalar = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -727,7 +753,9 @@ pub fn make_user_function_full(
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.may_access_globals;
-    let call = if is_fast_scalar {
+    let call = if needs_late_static_scope {
+        CallStrategy::Full
+    } else if is_fast_scalar {
         CallStrategy::FastScalar
     } else if !is_variadic && !op_array.is_generator {
         CallStrategy::Fast
@@ -739,7 +767,8 @@ pub fn make_user_function_full(
     } else {
         CleanupMode::ScanAll
     };
-    let ret = if op_array.global_vars.is_empty()
+    let ret = if !needs_late_static_scope
+        && op_array.global_vars.is_empty()
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.is_generator
@@ -770,12 +799,7 @@ pub fn make_user_function_full(
                 num_temps,
                 total_slots,
             },
-            plan: CallPlan {
-                call,
-                ret,
-                cleanup,
-                borrow_this: false,
-            },
+            plan: CallPlan::without_flags(call, ret, cleanup),
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -795,6 +819,14 @@ pub fn make_user_function_full(
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
     };
+    function
+        .common
+        .plan
+        .set_needs_late_static_scope(needs_late_static_scope);
+    function
+        .common
+        .plan
+        .set_has_embedded_late_static_scope(needs_late_static_scope && num_cvs + num_temps <= 32);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -855,7 +887,11 @@ pub fn make_user_function_typed(
         return_type_hint,
         ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
     );
-    let needs_late_static_scope = return_type_hint.uses_late_static();
+    let needs_late_static_scope = return_type_hint.uses_late_static()
+        || op_array
+            .instructions
+            .iter()
+            .any(|instruction| instruction.opcode == OpCode::InitLateStaticCall);
     let has_fast_scalar_shape = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -882,20 +918,9 @@ pub fn make_user_function_typed(
     } else {
         CleanupMode::ScanAll
     };
-    let ret = if op_array.global_vars.is_empty()
-        && op_array.static_vars.is_empty()
-        && op_array.try_entries.is_empty()
-        && !op_array.is_generator
-        && matches!(
-            return_type_hint,
-            ParamTypeHint::None
-                | ParamTypeHint::Int
-                | ParamTypeHint::Float
-                | ParamTypeHint::String
-                | ParamTypeHint::Bool
-                | ParamTypeHint::Array
-                | ParamTypeHint::Mixed
-        ) {
+    let ret = if !needs_late_static_scope
+        && typed_function_supports_fast_return(&op_array, &return_type_hint)
+    {
         ReturnStrategy::Fast
     } else {
         ReturnStrategy::Full
@@ -922,12 +947,7 @@ pub fn make_user_function_typed(
                 num_temps,
                 total_slots,
             },
-            plan: CallPlan {
-                call,
-                ret,
-                cleanup,
-                borrow_this: false,
-            },
+            plan: CallPlan::without_flags(call, ret, cleanup),
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -947,6 +967,14 @@ pub fn make_user_function_typed(
         compact_class_guard: Cell::new(0),
         borrowable_heap_args: 0,
     };
+    function
+        .common
+        .plan
+        .set_needs_late_static_scope(needs_late_static_scope);
+    function
+        .common
+        .plan
+        .set_has_embedded_late_static_scope(needs_late_static_scope && num_cvs + num_temps <= 32);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -4952,16 +4980,15 @@ pub fn make_internal_function(
                 num_temps: 0,
                 total_slots,
             },
-            plan: CallPlan {
-                // Fixed-arity internal functions have no VM-level type hints,
-                // references, or variadic packing. DoFcall can therefore run
-                // the handler after a compact arity/hole check and leave named
-                // or otherwise exceptional calls to the full path.
-                call: CallStrategy::Fast,
-                ret: ReturnStrategy::Full,
-                cleanup: CleanupMode::ScanAll,
-                borrow_this: false,
-            },
+            // Fixed-arity internal functions have no VM-level type hints,
+            // references, or variadic packing. DoFcall can therefore run the
+            // handler after a compact arity/hole check and leave named or
+            // otherwise exceptional calls to the full path.
+            plan: CallPlan::without_flags(
+                CallStrategy::Fast,
+                ReturnStrategy::Full,
+                CleanupMode::ScanAll,
+            ),
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -4986,21 +5013,44 @@ pub fn make_direct_internal_function(
     function
 }
 
-/// Finalize a non-static user method after `$this` has been reserved at CV 0.
+/// Finalize a user method after the hidden method slot has been reserved at CV 0.
 ///
 /// `make_user_function_typed()` cannot classify a method as FastScalar while
 /// `this_offset` is still zero: `num_args` already includes the hidden `$this`
 /// slot while `required_num_args` intentionally counts only public arguments.
 /// Re-run that classification once the public signature is known.
-pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> UserFunction {
+pub fn finalize_user_method(
+    mut function: UserFunction,
+    method_name: &str,
+    is_static: bool,
+) -> UserFunction {
     function.common.sig.this_offset = 1;
+
+    // A non-static method recovers its late-called class directly from the
+    // receiver in CV 0. It never needs the sparse static-call sidecar, so
+    // restore any compact call/return strategy that the body-only constructor
+    // conservatively withheld after seeing InitLateStaticCall.
+    if !is_static {
+        function.common.plan.set_needs_late_static_scope(false);
+        function
+            .common
+            .plan
+            .set_has_embedded_late_static_scope(false);
+        if typed_function_supports_fast_return(
+            &function.op_array,
+            &function.common.sig.return_type_hint,
+        ) {
+            function.common.plan.ret = ReturnStrategy::Fast;
+        }
+    }
 
     // `$this` ownership is independent of the public argument ABI. Every
     // synchronous method executes while its caller still owns the receiver,
     // so the callee can borrow CV 0 unless it directly transfers that slot as
     // its return value. Generators are excluded because their frame outlives
     // the initiating call.
-    function.common.plan.borrow_this = !function.op_array.is_generator
+    let borrow_this = !is_static
+        && !function.op_array.is_generator
         // Borrowed slots are represented by an intentionally-clear ownership
         // bit. Frames wider than the bitmap use full-scan cleanup and must own
         // `$this` conventionally.
@@ -5010,11 +5060,13 @@ pub fn finalize_user_method(mut function: UserFunction, method_name: &str) -> Us
                 && instruction.op1_type == OpType::Cv
                 && instruction.op1 == 0
         });
+    function.common.plan.set_borrow_this(borrow_this);
     function.borrowable_heap_args = build_borrowable_heap_args(&function);
 
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();
     let can_use_fast_scalar = scalar_strategy.is_some()
+        && !common.plan.needs_late_static_scope()
         && !common.sig.is_variadic
         && common.sig.ref_args == 0
         && common.sig.public_arity() == common.sig.required_num_args
@@ -5072,12 +5124,11 @@ pub fn make_internal_method(
                 num_temps: 0,
                 total_slots,
             },
-            plan: CallPlan {
-                call: CallStrategy::Fast,
-                ret: ReturnStrategy::Full,
-                cleanup: CleanupMode::ScanAll,
-                borrow_this: false,
-            },
+            plan: CallPlan::without_flags(
+                CallStrategy::Fast,
+                ReturnStrategy::Full,
+                CleanupMode::ScanAll,
+            ),
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -5114,12 +5165,11 @@ pub fn make_internal_function_ref(
                 num_temps: 0,
                 total_slots,
             },
-            plan: CallPlan {
-                call: CallStrategy::Full,
-                ret: ReturnStrategy::Full,
-                cleanup: CleanupMode::ScanAll,
-                borrow_this: false,
-            },
+            plan: CallPlan::without_flags(
+                CallStrategy::Full,
+                ReturnStrategy::Full,
+                CleanupMode::ScanAll,
+            ),
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },
@@ -5155,12 +5205,11 @@ pub fn make_internal_function_variadic(
                 num_temps: 0,
                 total_slots,
             },
-            plan: CallPlan {
-                call: CallStrategy::Full,
-                ret: ReturnStrategy::Full,
-                cleanup: CleanupMode::ScanAll,
-                borrow_this: false,
-            },
+            plan: CallPlan::without_flags(
+                CallStrategy::Full,
+                ReturnStrategy::Full,
+                CleanupMode::ScanAll,
+            ),
             call_count: Cell::new(0),
             hot_status: Cell::new(HotStatus::Cold),
         },

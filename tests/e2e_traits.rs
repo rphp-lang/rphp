@@ -286,6 +286,29 @@ echo First::selfValue() . ":" . First::parentValue();
     assert_eq!(out, "first:first-base:second:second-base:first:first-base");
 }
 
+#[test]
+fn trait_late_static_calls_follow_each_consuming_class() {
+    let out = run_php(
+        r#"<?php
+trait LateTraitCall {
+    public static function dispatch(): string { return static::value(); }
+}
+class LateTraitFirst {
+    use LateTraitCall;
+    public static function value(): string { return "first"; }
+}
+class LateTraitSecond {
+    use LateTraitCall;
+    public static function value(): string { return "second"; }
+}
+echo LateTraitFirst::dispatch() . ":";
+echo LateTraitSecond::dispatch() . ":";
+echo LateTraitFirst::dispatch();
+"#,
+    );
+    assert_eq!(out, "first:second:first");
+}
+
 // ─── Trait property collision edge cases ──────────────────────────
 
 #[test]

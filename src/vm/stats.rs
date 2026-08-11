@@ -568,6 +568,8 @@ mod inner {
             134 => Some("CheckReifiedArgs"),
             135 => Some("CheckReifiedReturn"),
             136 => Some("CheckGenericDefault"),
+            137 => Some("InitLateStaticCall"),
+            138 => Some("CheckLateStaticGenericArgs"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

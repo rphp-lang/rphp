@@ -138,6 +138,12 @@ pub enum OpCode {
     /// Validate one generic parameter after its omitted default expression has
     /// materialized inside the callee. Explicit arguments jump over this op.
     CheckGenericDefault = 136,
+    /// Late-static method call. Unlike InitStaticCall, its one-entry cache is
+    /// keyed by the runtime called class and cannot affect ordinary dispatch.
+    InitLateStaticCall = 137,
+    /// Generic use-site validation for a late-bound static/trait owner. Its
+    /// declaration cache is likewise keyed by the runtime called class.
+    CheckLateStaticGenericArgs = 138,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

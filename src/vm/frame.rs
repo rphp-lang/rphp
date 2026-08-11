@@ -9,6 +9,8 @@ use crate::value::Value;
 pub const CALL_FRAME_SLOTS: usize =
     (size_of::<ExecuteData>() + size_of::<Value>() - 1) / size_of::<Value>();
 
+const _: [(); 4] = [(); CALL_FRAME_SLOTS];
+
 // ── HeapSlotIter ─────────────────────────────────────────────────────────────
 
 /// Iterator over set bits in a u64 heap bitmap. Yields slot indices.
@@ -75,6 +77,43 @@ pub struct ExecuteData {
 }
 
 impl ExecuteData {
+    const EMBEDDED_LATE_STATIC_SHIFT: u32 = 32;
+
+    /// Recover a late-called class stored in the unused half of the heap
+    /// bitmap for compact frames. Slot ownership uses only the low half when
+    /// a frame has at most 32 CV/TMP slots.
+    #[inline(always)]
+    pub unsafe fn embedded_late_static_class_id(&self) -> u32 {
+        if self.num_cvs + self.num_temps <= Self::EMBEDDED_LATE_STATIC_SHIFT {
+            (self.heap_bitmap >> Self::EMBEDDED_LATE_STATIC_SHIFT) as u32
+        } else {
+            0
+        }
+    }
+
+    /// Store a late-called class without growing ExecuteData. Wide frames
+    /// return false and use the existing sparse ExecutorGlobals sidecar.
+    #[inline(always)]
+    pub unsafe fn try_set_embedded_late_static_class_id(&mut self, class_id: u32) -> bool {
+        if self.num_cvs + self.num_temps > Self::EMBEDDED_LATE_STATIC_SHIFT {
+            return false;
+        }
+        const LOW_SLOT_MASK: u64 = u32::MAX as u64;
+        self.heap_bitmap = (self.heap_bitmap & LOW_SLOT_MASK)
+            | ((class_id as u64) << Self::EMBEDDED_LATE_STATIC_SHIFT);
+        true
+    }
+
+    /// Heap ownership bits with frame-local late-static metadata removed.
+    #[inline(always)]
+    pub unsafe fn owned_heap_bitmap(&self) -> u64 {
+        if self.num_cvs + self.num_temps <= Self::EMBEDDED_LATE_STATIC_SHIFT {
+            self.heap_bitmap & u32::MAX as u64
+        } else {
+            self.heap_bitmap
+        }
+    }
+
     /// Pointer to slot[idx] — unified accessor for both CVs and TMPs.
     /// idx is absolute slot offset: CV if idx < num_cvs, TMP if idx >= num_cvs.
     #[inline(always)]

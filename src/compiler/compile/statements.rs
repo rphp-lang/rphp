@@ -158,6 +158,7 @@ impl Compiler {
                                 | OpCode::CallUserFuncArray
                                 | OpCode::InitMethodCall
                                 | OpCode::InitStaticCall
+                                | OpCode::InitLateStaticCall
                                 | OpCode::Include
                         )
                     });
@@ -1028,10 +1029,11 @@ impl Compiler {
                                 OpCode::InitFcall
                                     | OpCode::InitDynamicCall
                                     | OpCode::InitUserCall
-                                    | OpCode::CallUserFuncArray
-                                    | OpCode::InitMethodCall
-                                    | OpCode::InitStaticCall
-                                    | OpCode::Include
+                                | OpCode::CallUserFuncArray
+                                | OpCode::InitMethodCall
+                                | OpCode::InitStaticCall
+                                | OpCode::InitLateStaticCall
+                                | OpCode::Include
                             )
                         });
                     let op_array = OpArray {
@@ -1069,6 +1071,7 @@ impl Compiler {
                             cp.return_type_hint,
                         ),
                         &method.name,
+                        method.is_static,
                     );
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((
@@ -1203,6 +1206,7 @@ impl Compiler {
                                     | OpCode::CallUserFuncArray
                                     | OpCode::InitMethodCall
                                     | OpCode::InitStaticCall
+                                    | OpCode::InitLateStaticCall
                                     | OpCode::Include
                             )
                         });
@@ -1331,6 +1335,7 @@ impl Compiler {
                                     | OpCode::CallUserFuncArray
                                     | OpCode::InitMethodCall
                                     | OpCode::InitStaticCall
+                                    | OpCode::InitLateStaticCall
                                     | OpCode::Include
                             )
                         });
@@ -1367,6 +1372,7 @@ impl Compiler {
                             cp.return_type_hint,
                         ),
                         &method.name,
+                        method.is_static,
                     );
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((
@@ -1466,6 +1472,7 @@ impl Compiler {
                                     | OpCode::CallUserFuncArray
                                     | OpCode::InitMethodCall
                                     | OpCode::InitStaticCall
+                                    | OpCode::InitLateStaticCall
                                     | OpCode::Include
                             )
                         });
@@ -1502,6 +1509,7 @@ impl Compiler {
                             cp.return_type_hint,
                         ),
                         &method.name,
+                        method.is_static,
                     );
                     self.functions.extend(func_compiler.functions);
                     compiled_methods.push((

@@ -108,6 +108,7 @@ pub(super) fn loop_miss_reason(
             | OpCode::InitMethodCall
             | OpCode::FetchStaticProp
             | OpCode::InitStaticCall
+            | OpCode::InitLateStaticCall
             | OpCode::Instanceof
             | OpCode::AssignObjDim
             | OpCode::NullSafeCheck

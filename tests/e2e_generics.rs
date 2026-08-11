@@ -52,6 +52,19 @@ fn default_build_contains_engine_but_rejects_generic_syntax() {
         "Generic syntax requires php-generics-erased or php-generics-reified"
     );
 
+    let late_static_use_error = parse(
+        "<?php class C { static function id($v) { return $v; } static function call() { return static::id::<int>(1); } }",
+    )
+    .unwrap_err();
+    assert_eq!(
+        late_static_use_error,
+        "Generic syntax requires php-generics-erased or php-generics-reified"
+    );
+    parse(
+        "<?php class C { static function id($v) { return $v; } static function call() { return static::id(1); } }",
+    )
+    .unwrap();
+
     let inheritance_error =
         parse("<?php class Base {} class Child extends Base<int> {}").unwrap_err();
     assert_eq!(
@@ -194,6 +207,136 @@ class Second {
     public static function value<T : string>(): string { return "second"; }
 }
 echo First::call() . ":" . Second::call() . ":" . First::call();
+"#,
+    );
+    assert_eq!(output, "first:second:first");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn late_static_turbofish_rekeys_declaration_and_call_caches() {
+    let output = common::run_php(
+        r#"<?php
+class LateGenericRoot {
+    public static function value<T : string>(): string { return "root"; }
+    public static function dispatch(): string { return static::value::<string>(); }
+}
+class LateGenericFirst extends LateGenericRoot {
+    public static function value<T : string>(): string { return "first"; }
+}
+class LateGenericSecond extends LateGenericRoot {
+    public static function value<T : string>(): string { return "second"; }
+}
+echo LateGenericRoot::dispatch() . ":";
+echo LateGenericFirst::dispatch() . ":";
+echo LateGenericSecond::dispatch() . ":";
+echo LateGenericFirst::dispatch();
+"#,
+    );
+    assert_eq!(output, "root:first:second:first");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn closure_late_static_turbofish_keeps_its_creation_scope() {
+    let output = common::run_php(
+        r#"<?php
+class ClosureGenericRoot {
+    public static function value<T : string>(): string { return "root"; }
+    public static function make() {
+        return function(): string { return static::value::<string>(); };
+    }
+}
+class ClosureGenericChild extends ClosureGenericRoot {
+    public static function value<T : string>(): string { return "child"; }
+}
+$root = ClosureGenericRoot::make();
+$child = ClosureGenericChild::make();
+echo $root() . ":" . $child() . ":" . $root();
+"#,
+    );
+    assert_eq!(output, "root:child:root");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn late_static_turbofish_validates_the_selected_override() {
+    let error = common::run_php_expect_error(
+        r#"<?php
+trait LateBoundDispatch {
+    public static function dispatch() { return static::value::<int>(1); }
+}
+class LateBoundInt {
+    use LateBoundDispatch;
+    public static function value<T : int>(T $value): T { return $value; }
+}
+class LateBoundString {
+    use LateBoundDispatch;
+    public static function value<T : string>(T $value): T { return $value; }
+}
+LateBoundInt::dispatch();
+LateBoundString::dispatch();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("does not satisfy bound"), "{rendered:?}");
+}
+
+#[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+#[test]
+fn erased_late_static_turbofish_keeps_bound_erased_runtime_contract() {
+    let output = common::run_php(
+        r#"<?php
+class LateErased {
+    public static function value<T>(T $value): T { return $value; }
+    public static function dispatch() { return static::value::<int>("erased"); }
+}
+echo LateErased::dispatch();
+"#,
+    );
+    assert_eq!(output, "erased");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_late_static_turbofish_checks_the_explicit_runtime_contract() {
+    let error = common::run_php_expect_error(
+        r#"<?php
+class LateReified {
+    public static function value<T>(T $value): T { return $value; }
+    public static function dispatch() { return static::value::<int>("bad"); }
+}
+LateReified::dispatch();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("does not match its reified generic type"),
+        "{rendered:?}"
+    );
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn trait_late_static_turbofish_follows_each_consuming_class() {
+    let output = common::run_php(
+        r#"<?php
+trait LateGenericTrait {
+    public static function dispatch(): string {
+        return static::value::<string>();
+    }
+}
+class LateGenericTraitFirst {
+    use LateGenericTrait;
+    public static function value<T : string>(): string { return "first"; }
+}
+class LateGenericTraitSecond {
+    use LateGenericTrait;
+    public static function value<T : string>(): string { return "second"; }
+}
+echo LateGenericTraitFirst::dispatch() . ":";
+echo LateGenericTraitSecond::dispatch() . ":";
+echo LateGenericTraitFirst::dispatch();
 "#,
     );
     assert_eq!(output, "first:second:first");

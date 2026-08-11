@@ -223,8 +223,49 @@ fn resolve_static_call_class(
                 .get(caller.as_str())
                 .and_then(|definition| definition.parent.clone())
         })
+    } else if class.eq_ignore_ascii_case("static") {
+        let class_id = late_static_call_class_id(eg, frame);
+        eg.class_by_id(class_id)
+            .map(|definition| definition.name.clone())
     } else {
         Some(class.to_string())
+    }
+}
+
+/// Recover a called class for a participating call site. If the frame already
+/// owns the sparse late-static sidecar required by a relative return contract,
+/// reuse it; otherwise walk the saved call sites without publishing state that
+/// an ordinary return path would have to clean up.
+#[inline(always)]
+fn late_static_call_class_id(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> u32 {
+    let common = unsafe { &*(*frame).func };
+    if common.plan.has_embedded_late_static_scope() {
+        return unsafe { ((*frame).heap_bitmap >> 32) as u32 };
+    }
+    recover_late_static_call_class_id(eg, frame)
+}
+
+#[cold]
+#[inline(never)]
+fn recover_late_static_call_class_id(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> u32 {
+    let cached = eg.late_static_scope_class_id(frame as usize);
+    if cached != 0 {
+        cached
+    } else {
+        called_class_id_for_frame(eg, frame, 0)
+    }
+}
+
+/// Publish called-class state directly in compact participating frames. Only
+/// wide frames fall back to the sparse cold sidecar.
+#[inline(always)]
+fn publish_late_static_call_class_id(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class_id: u32,
+) {
+    if class_id != 0 && !unsafe { (*frame).try_set_embedded_late_static_class_id(class_id) } {
+        eg.push_late_static_scope(frame as usize, class_id);
     }
 }
 
@@ -355,7 +396,7 @@ fn check_return_type_hint(
         None
     };
     let called_scope = receiver_scope.or_else(|| {
-        eg.class_by_id(eg.late_static_scope_class_id(frame as usize))
+        eg.class_by_id(late_static_call_class_id(eg, frame))
             .map(|class| class.name.as_str())
     });
     check_type_hint_in_scopes(value, hint, eg, strict, callee_class, called_scope)
@@ -1642,6 +1683,7 @@ fn call_initializer_before<'a>(
             | OpCode::InitUserCall
             | OpCode::InitMethodCall
             | OpCode::InitStaticCall
+            | OpCode::InitLateStaticCall
             | OpCode::InitDynamicCall
             | OpCode::NewObj => {
                 if nested_calls == 0 {
@@ -1666,7 +1708,11 @@ fn static_site_called_class_id(
     let Some(initializer) = call_initializer_before(caller_op_array, do_fcall_ptr) else {
         return 0;
     };
-    if initializer.opcode != OpCode::InitStaticCall || initializer.op1_type != OpType::Const {
+    if !matches!(
+        initializer.opcode,
+        OpCode::InitStaticCall | OpCode::InitLateStaticCall
+    ) || initializer.op1_type != OpType::Const
+    {
         return 0;
     }
     let Some(class_name) = caller_op_array
@@ -1806,12 +1852,14 @@ fn execute_full_call<'a>(
         }
     }
 
-    if func_common.sig.return_type_hint.uses_late_static() {
+    if func_common.plan.needs_late_static_scope() {
         let receiver_is_object = func_common.sig.this_offset == 1
             && unsafe { (*call).cv(0) }.value_type() == ValueType::Object;
-        if !receiver_is_object {
+        let scope_is_missing = unsafe { (*call).embedded_late_static_class_id() == 0 }
+            && eg.late_static_scope_class_id(call_key) == 0;
+        if !receiver_is_object && scope_is_missing {
             let class_id = static_site_called_class_id(eg, frame, op_array, opline_ptr, 0);
-            eg.push_late_static_scope(call_key, class_id);
+            publish_late_static_call_class_id(eg, call, class_id);
         }
     }
 

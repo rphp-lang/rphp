@@ -498,6 +498,11 @@ impl Parser {
             Token::Enum => self.parse_enum(),
             Token::Interface => self.parse_interface(),
             Token::Trait => self.parse_trait(),
+            Token::Static if self.peek_at(1) == Token::DoubleColon => {
+                let expr = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                Ok(Stmt::ExprStmt(expr))
+            }
             Token::Isset
             | Token::Empty
             | Token::Match

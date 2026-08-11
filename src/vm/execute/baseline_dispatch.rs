@@ -39,8 +39,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    let return_hint = unsafe { &(*(*frame).func).sig.return_type_hint };
-                    if return_hint.uses_late_static() {
+                    let func_common = unsafe { &*(*frame).func };
+                    if func_common.plan.needs_late_static_scope() {
                         eg.discard_late_static_scope(frame as usize);
                     }
                     eg.vm_stack.pop_call_frame(frame);
@@ -2905,7 +2905,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         };
                         unsafe {
                             (*frame).call = call;
-                            if common.plan.borrow_this {
+                            if common.plan.borrow_this() {
                                 frame_set_borrowed_this(call, obj_val as *const Value);
                             } else {
                                 frame_set_this(call, obj_val.clone());
@@ -3002,12 +3002,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::InitLateStaticCall => {
+                match op_init_late_static_call(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue 'vm,
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
+                }
+            }
+
             OpCode::InitDynamicCall => {
                 op_init_dynamic_call(eg, frame, op_array, opline)?;
             }
 
             OpCode::CheckGenericArgs => {
                 op_check_generic_args(eg, frame, op_array, opline)?;
+            }
+
+            OpCode::CheckLateStaticGenericArgs => {
+                op_check_late_static_generic_args(eg, frame, op_array, opline)?;
             }
 
             OpCode::CheckReifiedArgs => {
@@ -3357,7 +3370,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     eg.exception = None;
                 }
 
-                if func_common_ret.sig.return_type_hint.uses_late_static() {
+                if func_common_ret.plan.needs_late_static_scope() {
                     eg.discard_late_static_scope(frame as usize);
                 }
 

@@ -227,6 +227,7 @@ fn refine_function_global_access(functions: &mut [(String, UserFunction)]) {
                 | OpCode::CallUserFuncArray
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
+                | OpCode::InitLateStaticCall
                 | OpCode::Include => {
                     direct_global_access[index] = true;
                 }
@@ -755,6 +756,7 @@ fn propagate_declared_scalar_types(
                 });
             }
             OpCode::InitStaticCall
+            | OpCode::InitLateStaticCall
             | OpCode::InitDynamicCall
             | OpCode::InitUserCall
             | OpCode::NewObj => pending_calls.push(PendingScalarCallFacts {
@@ -1411,6 +1413,7 @@ impl Compiler {
 
     fn emit_generic_check(
         &mut self,
+        opcode: OpCode,
         kind: GenericDeclarationKind,
         arguments: &[crate::parser::TypeHint],
         static_owner: Option<&str>,
@@ -1428,7 +1431,11 @@ impl Compiler {
             return false;
         }
         let use_site = self.record_generic_use_site(arguments);
-        let mut check = Instruction::new(OpCode::CheckGenericArgs);
+        debug_assert!(matches!(
+            opcode,
+            OpCode::CheckGenericArgs | OpCode::CheckLateStaticGenericArgs
+        ));
+        let mut check = Instruction::new(opcode);
         check.op1 = owner_op;
         check.op1_type = owner_type;
         check.op2 = secondary_op;
@@ -2601,6 +2608,7 @@ impl Compiler {
                 };
 
                 let runtime_generic_check = self.emit_generic_check(
+                    OpCode::CheckGenericArgs,
                     GenericDeclarationKind::Function,
                     generic_args,
                     Some(&resolved),
@@ -3006,6 +3014,7 @@ impl Compiler {
                                 | OpCode::CallUserFuncArray
                                 | OpCode::InitMethodCall
                                 | OpCode::InitStaticCall
+                                | OpCode::InitLateStaticCall
                                 | OpCode::Include
                         )
                     });
@@ -3101,6 +3110,7 @@ impl Compiler {
                 let resolved_class = self.resolve_name(class_name);
                 let name_idx = self.add_literal(Value::string(resolved_class.clone()));
                 let runtime_generic_check = self.emit_generic_check(
+                    OpCode::CheckGenericArgs,
                     GenericDeclarationKind::Class,
                     generic_args,
                     Some(&resolved_class),
@@ -3199,6 +3209,7 @@ impl Compiler {
                 let method_idx = self.add_literal(Value::string(method.clone()));
 
                 let runtime_generic_check = self.emit_generic_check(
+                    OpCode::CheckGenericArgs,
                     GenericDeclarationKind::Method,
                     generic_args,
                     None,
@@ -3274,6 +3285,11 @@ impl Compiler {
                     && matches!(pseudo_class.as_str(), "self" | "parent"))
                     || pseudo_class == "static";
                 let runtime_generic_check = self.emit_generic_check(
+                    if dynamic_static_scope {
+                        OpCode::CheckLateStaticGenericArgs
+                    } else {
+                        OpCode::CheckGenericArgs
+                    },
                     GenericDeclarationKind::Method,
                     generic_args,
                     Some(&generic_owner),
@@ -3283,13 +3299,19 @@ impl Compiler {
                     OpType::Unused,
                 );
 
-                let mut init = Instruction::new(OpCode::InitStaticCall);
+                let mut init = Instruction::new(if pseudo_class == "static" {
+                    OpCode::InitLateStaticCall
+                } else {
+                    OpCode::InitStaticCall
+                });
                 init.op1 = class_idx;
                 init.op1_type = OpType::Const;
                 init.op2 = method_idx;
                 init.op2_type = OpType::Const;
                 init.extended_value = args.len() as u32;
-                if dynamic_static_scope {
+                if self.dynamic_static_scope
+                    && matches!(pseudo_class.as_str(), "self" | "parent" | "static")
+                {
                     init._pad |= CALL_FLAG_DYNAMIC_STATIC_SCOPE;
                 }
                 self.instructions.push(init);
@@ -3343,6 +3365,7 @@ impl Compiler {
                 let (callable_op, callable_type) = self.compile_expr(callable);
 
                 let runtime_generic_check = self.emit_generic_check(
+                    OpCode::CheckGenericArgs,
                     GenericDeclarationKind::Function,
                     generic_args,
                     None,

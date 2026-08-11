@@ -520,45 +520,7 @@ impl Parser {
                     });
                 }
                 if self.peek() == Token::DoubleColon {
-                    self.advance();
-                    if let Token::Variable(_) = self.peek() {
-                        let prop = match self.advance() {
-                            Token::Variable(n) => n,
-                            _ => unreachable!(),
-                        };
-                        return Ok(Expr::StaticProperty {
-                            class_name: name,
-                            property: prop,
-                        });
-                    }
-                    let member = match self.advance() {
-                        Token::Identifier(n) => n,
-                        other => {
-                            return Err(format!("Expected member name after ::, got {:?}", other));
-                        }
-                    };
-                    let generic_args = self.parse_optional_turbofish()?;
-                    if self.peek() == Token::LParen {
-                        self.advance();
-                        let args = self.parse_call_args()?;
-                        return Ok(Expr::StaticCall {
-                            class_name: name,
-                            method: member,
-                            args,
-                            generic_args,
-                        });
-                    } else {
-                        if !generic_args.is_empty() {
-                            return Err(
-                                "Generic type arguments must be followed by a method call"
-                                    .into(),
-                            );
-                        }
-                        return Ok(Expr::StaticProperty {
-                            class_name: name,
-                            property: member,
-                        });
-                    }
+                    return self.parse_named_static_access(name, false);
                 }
                 if self.peek() == Token::LParen {
                     self.advance();
@@ -595,50 +557,7 @@ impl Parser {
                 }
                 // Static access: ClassName::method() or ClassName::$prop
                 if self.peek() == Token::DoubleColon {
-                    self.advance(); // consume ::
-                    if let Token::Variable(_) = self.peek() {
-                        let prop = match self.advance() {
-                            Token::Variable(n) => n,
-                            _ => unreachable!(),
-                        };
-                        let expr = Expr::StaticProperty {
-                            class_name: name,
-                            property: prop,
-                        };
-                        return Ok(self.parse_postfix_chain(expr)?);
-                    }
-                    let member = match self.advance() {
-                        Token::Identifier(n) => n,
-                        Token::Class => "class".to_string(),
-                        other => {
-                            return Err(format!("Expected member name after ::, got {:?}", other));
-                        }
-                    };
-                    let generic_args = self.parse_optional_turbofish()?;
-                    if self.peek() == Token::LParen {
-                        self.advance();
-                        let args = self.parse_call_args()?;
-                        let expr = Expr::StaticCall {
-                            class_name: name,
-                            method: member,
-                            args,
-                            generic_args,
-                        };
-                        return Ok(self.parse_postfix_chain(expr)?);
-                    } else {
-                        if !generic_args.is_empty() {
-                            return Err(
-                                "Generic type arguments must be followed by a method call"
-                                    .into(),
-                            );
-                        }
-                        // Static constant/enum case access: ClassName::CONSTANT
-                        let expr = Expr::StaticProperty {
-                            class_name: name,
-                            property: member,
-                        };
-                        return Ok(self.parse_postfix_chain(expr)?);
-                    }
+                    return self.parse_named_static_access(name, false);
                 }
                 // Check if this is a function call (followed by `(`)
                 if self.peek() == Token::LParen {
@@ -653,6 +572,19 @@ impl Parser {
                     // Bare identifier — constant reference (e.g., PHP_INT_MAX, FOO)
                     Ok(Expr::Constant(name))
                 }
+            }
+            Token::Static => {
+                if !self.class_scope_active {
+                    return Err("Cannot use \"static\" when no class scope is active".into());
+                }
+                self.advance();
+                if self.peek() != Token::DoubleColon {
+                    return Err(format!(
+                        "Expected :: after static, got {:?}",
+                        self.peek()
+                    ));
+                }
+                self.parse_named_static_access("static".to_string(), true)
             }
             Token::Match => {
                 return self.parse_match_expr();
@@ -720,6 +652,61 @@ impl Parser {
             }
             other => Err(format!("Expected expression, got {:?}", other)),
         }
+    }
+
+    /// Parse a statically named member after a class-like owner. Keeping the
+    /// fully-qualified, ordinary and late-static entry points here prevents
+    /// their turbofish/postfix grammar from drifting apart.
+    fn parse_named_static_access(
+        &mut self,
+        class_name: String,
+        method_only: bool,
+    ) -> Result<Expr, String> {
+        self.expect(&Token::DoubleColon)?;
+        if let Token::Variable(_) = self.peek() {
+            if method_only {
+                return Err("Late-static property access is not supported yet".into());
+            }
+            let property = match self.advance() {
+                Token::Variable(name) => name,
+                _ => unreachable!(),
+            };
+            let expr = Expr::StaticProperty {
+                class_name,
+                property,
+            };
+            return self.parse_postfix_chain(expr);
+        }
+
+        let member = match self.advance() {
+            Token::Identifier(name) => name,
+            Token::Class => "class".to_string(),
+            other => return Err(format!("Expected member name after ::, got {:?}", other)),
+        };
+        let generic_args = self.parse_optional_turbofish()?;
+        if self.peek() != Token::LParen {
+            if !generic_args.is_empty() {
+                return Err("Generic type arguments must be followed by a method call".into());
+            }
+            if method_only {
+                return Err("Late-static constant access is not supported yet".into());
+            }
+            let expr = Expr::StaticProperty {
+                class_name,
+                property: member,
+            };
+            return self.parse_postfix_chain(expr);
+        }
+
+        self.advance();
+        let args = self.parse_call_args()?;
+        let expr = Expr::StaticCall {
+            class_name,
+            method: member,
+            args,
+            generic_args,
+        };
+        self.parse_postfix_chain(expr)
     }
 
     /// Parse comma-separated array elements until `end_token`.

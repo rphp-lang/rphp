@@ -31,7 +31,7 @@ class Service {
 
     assert_eq!(consume.common.plan.call, CallStrategy::Fast);
     assert_eq!(consume.common.plan.ret, ReturnStrategy::Fast);
-    assert!(consume.common.plan.borrow_this);
+    assert!(consume.common.plan.borrow_this());
     assert!(forward.op_array.instructions.iter().any(|instruction| {
         instruction.opcode == OpCode::DoFcall && instruction._pad & CALL_FLAG_EXACT_SCALAR_ARGS != 0
     }));

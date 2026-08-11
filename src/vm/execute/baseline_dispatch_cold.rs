@@ -8,6 +8,26 @@ fn op_check_generic_args(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<(), VmError> {
+    op_check_generic_args_impl::<false>(eg, frame, op_array, opline)
+}
+
+#[inline(never)]
+fn op_check_late_static_generic_args(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    op_check_generic_args_impl::<true>(eg, frame, op_array, opline)
+}
+
+#[inline(always)]
+fn op_check_generic_args_impl<const LATE_STATIC: bool>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -28,7 +48,10 @@ fn op_check_generic_args(
     };
 
     if let Some(declaration) = cache.generic_declaration() {
-        let cache_hit = if kind == crate::generics::GenericDeclarationKind::Method
+        let cache_hit = if LATE_STATIC {
+            let class_id = late_static_call_class_id(eg, frame);
+            class_id != 0 && cache.class_id == class_id
+        } else if kind == crate::generics::GenericDeclarationKind::Method
             && opline.op2_type == OpType::Const
         {
             owner_value
@@ -65,7 +88,7 @@ fn op_check_generic_args(
         }
     }
 
-    resolve_generic_args_cache_miss(
+    resolve_generic_args_cache_miss::<LATE_STATIC>(
         eg,
         frame,
         op_array,
@@ -78,7 +101,7 @@ fn op_check_generic_args(
 
 #[cold]
 #[inline(never)]
-fn resolve_generic_args_cache_miss(
+fn resolve_generic_args_cache_miss<const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
@@ -134,10 +157,11 @@ fn resolve_generic_args_cache_miss(
                         || class.eq_ignore_ascii_case("static")
                 })
             {
-                // Shared trait bytecode can resolve to multiple declarations.
-                // Keep this exceptional site cold rather than publishing a
-                // cache entry that ordinary constant-owner sites would trust.
-                cacheable = false;
+                // Late-static and shared-trait bytecode can resolve to
+                // multiple declarations. Its dedicated opcode validates the
+                // cached declaration against the recovered called class;
+                // legacy/unmarked pseudo owners remain safely uncached.
+                cacheable = LATE_STATIC;
             }
             let resolved = resolve_static_method_owner(eg, frame, name)
                 .unwrap_or_else(|| name.to_string());
@@ -280,7 +304,10 @@ fn generic_scope_class_id(
         .as_str()
         .map(|name| name.split_once("::").map_or(name, |(class, _)| class));
     class.map_or(0, |class| {
-        if class.eq_ignore_ascii_case("self") || class.eq_ignore_ascii_case("parent") {
+        if class.eq_ignore_ascii_case("self")
+            || class.eq_ignore_ascii_case("parent")
+            || class.eq_ignore_ascii_case("static")
+        {
             resolve_static_call_class(eg, frame, class, true)
                 .map_or(0, |class| eg.class_id_of(&class))
         } else {
@@ -1074,8 +1101,15 @@ fn op_create_closure(
         }
         ptr
     };
+    let common = unsafe { &*func_ptr };
+    let called_scope_class_id = if common.plan.needs_late_static_scope() {
+        late_static_call_class_id(eg, frame)
+    } else {
+        0
+    };
     let closure = PhpClosure {
         func: func_ptr,
+        called_scope_class_id,
         captures: Vec::with_capacity(opline.extended_value as usize),
         has_heap_captures: false,
     };

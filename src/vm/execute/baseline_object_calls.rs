@@ -914,7 +914,7 @@ fn op_init_method_call<'a>(
         };
         unsafe {
             (*frame).call = call;
-            if common.plan.borrow_this {
+            if common.plan.borrow_this() {
                 frame_set_borrowed_this(call, obj_val as *const Value);
             } else {
                 frame_set_this(call, obj_val.clone());
@@ -1051,6 +1051,121 @@ fn op_init_static_call<'a>(
 }
 
 #[inline(never)]
+fn op_init_late_static_call<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<ColdResult<'a>, VmError> {
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let class_id = late_static_call_class_id(eg, frame);
+    let cache = &op_array.cache[ip];
+    let func_ptr = if cache.class_id == class_id && !cache.func.is_null() {
+        cache.func
+    } else {
+        let Some(class_definition) = eg.class_by_id(class_id) else {
+            return Err(VmError::Fatal(
+                "Cannot access \"static\" when no class scope is active".into(),
+            ));
+        };
+        let method_name = unsafe {
+            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+        };
+        let class = class_definition.name.clone();
+        let method = method_name.as_str().unwrap_or("");
+        let full_name = format!("{}::{}", class, method);
+        let resolved = match eg.find_function(&full_name) {
+            Some(pointer) => pointer,
+            None => {
+                let error = make_error_value(
+                    "Error",
+                    &format!("Call to undefined method {}::{}()", class, method),
+                );
+                return Ok(match throw_in_frame(eg, frame, error) {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+                });
+            }
+        };
+
+        if let Some((visibility, defining_class)) = eg.find_method_visibility(&class, method) {
+            if visibility != Visibility::Public {
+                let caller_class = if opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0 {
+                    resolve_static_call_class(eg, frame, "self", true)
+                } else {
+                    get_caller_class(frame, eg)
+                };
+                if !eg.check_visibility(caller_class.as_deref(), &defining_class, visibility) {
+                    let visibility = match visibility {
+                        Visibility::Protected => "protected",
+                        Visibility::Private => "private",
+                        Visibility::Public => "public",
+                    };
+                    return Err(VmError::Fatal(format!(
+                        "Call to {} method {}::{}() from scope {}",
+                        visibility,
+                        defining_class,
+                        method,
+                        caller_class.as_deref().unwrap_or("global")
+                    )));
+                }
+            }
+        }
+
+        unsafe {
+            let cache = &mut *(op_array.cache.as_ptr().add(ip)
+                as *mut crate::vm::instruction::InlineCache);
+            cache.class_id = class_id;
+            cache.func = resolved;
+        }
+        resolved
+    };
+
+    let num_args = opline.extended_value;
+    let common = unsafe { &*func_ptr };
+    if common.fn_type == FunctionType::User && num_args == common.sig.public_arity() {
+        let user = unsafe { &*(func_ptr as *const UserFunction) };
+        if let Some(plan) = user.scalar_long_plan.as_deref()
+            && let Some((result, do_fcall_ptr)) = unsafe {
+                try_execute_direct_scalar_long_call(
+                    frame,
+                    op_array,
+                    (opline as *const Instruction).add(1),
+                    common,
+                    plan,
+                )
+            }
+        {
+            stats::inc_do_fcall_fast();
+            stats::inc_return_fast();
+            let count = common.call_count.get();
+            if count < u32::MAX {
+                common.call_count.set(count + 1);
+            }
+            unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+            return Ok(ColdResult::Continue);
+        }
+    }
+
+    let pending_call = unsafe { (*frame).call };
+    let call = eg.vm_stack.push_call_frame(
+        func_ptr,
+        num_args + 1,
+        num_args,
+        frame,
+        pending_call,
+    );
+    unsafe {
+        (*frame).call = call;
+    }
+    Ok(ColdResult::Done)
+}
+
+#[inline(never)]
 fn op_init_user_call<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -1171,6 +1286,7 @@ fn op_init_dynamic_call(
     if let Some(closure) = callable.as_closure() {
         // Fast path: Closure value — direct function pointer, no string lookup.
         let func_ptr = closure.func;
+        let called_scope_class_id = closure.called_scope_class_id;
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
         let call = eg.vm_stack.push_call_frame(
@@ -1182,6 +1298,9 @@ fn op_init_dynamic_call(
         );
         unsafe {
             (*frame).call = call;
+        }
+        if called_scope_class_id != 0 {
+            publish_late_static_call_class_id(eg, call, called_scope_class_id);
         }
 
         // Copy captured use_vars into CV slots after declared params

@@ -112,6 +112,64 @@ ExternalStaticOpcode::unknown();
 }
 
 #[test]
+fn test_late_static_call_sites_use_a_separate_keyed_opcode() {
+    let compiled = compile_types(
+        r#"<?php
+class LateStaticOpcodeBase {
+    public static function value(): int { return 1; }
+    public static function dispatch(): int { return static::value(); }
+    public static function ordinary(): int { return self::value(); }
+    public function instanceDispatch(): int { return static::value(); }
+}
+"#,
+    );
+    let class = &compiled.class_defs[0];
+    let dispatch = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "dispatch")
+        .map(|method| &method.4)
+        .unwrap();
+    let ordinary = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "ordinary")
+        .map(|method| &method.4)
+        .unwrap();
+    let instance_dispatch = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "instanceDispatch")
+        .map(|method| &method.4)
+        .unwrap();
+
+    assert!(
+        dispatch
+            .op_array
+            .instructions
+            .iter()
+            .any(|instruction| instruction.opcode == OpCode::InitLateStaticCall)
+    );
+    assert!(
+        ordinary
+            .op_array
+            .instructions
+            .iter()
+            .any(|instruction| instruction.opcode == OpCode::InitStaticCall)
+    );
+    assert!(
+        ordinary
+            .op_array
+            .instructions
+            .iter()
+            .all(|instruction| instruction.opcode != OpCode::InitLateStaticCall)
+    );
+    assert!(dispatch.common.plan.needs_late_static_scope());
+    assert!(!ordinary.common.plan.needs_late_static_scope());
+    assert!(!instance_dispatch.common.plan.needs_late_static_scope());
+}
+
+#[test]
 fn test_return_type_float() {
     assert_eq!(
         run_php(

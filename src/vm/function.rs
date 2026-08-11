@@ -1151,11 +1151,66 @@ pub struct CallPlan {
     pub call: CallStrategy,
     pub ret: ReturnStrategy,
     pub cleanup: CleanupMode,
+    /// Packed opt-in properties. Keeping these flags in the existing byte
+    /// preserves the four-byte CallPlan and FunctionCommon layout.
+    flags: u8,
+}
+
+impl CallPlan {
+    const BORROW_THIS: u8 = 1;
+    const LATE_STATIC_SCOPE: u8 = 1 << 1;
+    const EMBEDDED_LATE_STATIC_SCOPE: u8 = 1 << 2;
+
     /// `$this` may be copied into a nested method frame without incrementing
     /// its Rc. The caller owns the object for the entire synchronous call and
     /// the method has no direct `return $this` path.
-    pub borrow_this: bool,
+    #[inline(always)]
+    pub fn borrow_this(&self) -> bool {
+        self.flags & Self::BORROW_THIS != 0
+    }
+
+    #[inline]
+    pub fn set_borrow_this(&mut self, enabled: bool) {
+        self.flags = (self.flags & !Self::BORROW_THIS) | u8::from(enabled) * Self::BORROW_THIS;
+    }
+
+    #[inline(always)]
+    pub fn needs_late_static_scope(&self) -> bool {
+        self.flags & Self::LATE_STATIC_SCOPE != 0
+    }
+
+    #[inline]
+    pub fn set_needs_late_static_scope(&mut self, enabled: bool) {
+        self.flags =
+            (self.flags & !Self::LATE_STATIC_SCOPE) | u8::from(enabled) * Self::LATE_STATIC_SCOPE;
+    }
+
+    #[inline(always)]
+    pub fn has_embedded_late_static_scope(&self) -> bool {
+        self.flags & Self::EMBEDDED_LATE_STATIC_SCOPE != 0
+    }
+
+    #[inline]
+    pub fn set_has_embedded_late_static_scope(&mut self, enabled: bool) {
+        self.flags = (self.flags & !Self::EMBEDDED_LATE_STATIC_SCOPE)
+            | u8::from(enabled) * Self::EMBEDDED_LATE_STATIC_SCOPE;
+    }
+
+    pub const fn without_flags(
+        call: CallStrategy,
+        ret: ReturnStrategy,
+        cleanup: CleanupMode,
+    ) -> Self {
+        Self {
+            call,
+            ret,
+            cleanup,
+            flags: 0,
+        }
+    }
 }
+
+const _: [(); 4] = [(); std::mem::size_of::<CallPlan>()];
 
 /// Hotness state for function-level tiering.
 /// Transitions: Cold → Hot (when call_count crosses threshold).

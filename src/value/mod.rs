@@ -3082,6 +3082,9 @@ mod php_array_tests;
 pub struct PhpClosure {
     /// Direct pointer to the resolved function. No string lookup needed at call time.
     pub func: *const FunctionCommon,
+    /// Late-called class captured when a class-scoped closure is created.
+    /// Zero keeps ordinary closures on the existing path.
+    pub called_scope_class_id: u32,
     /// Captured `use` variable values, in declaration order.
     pub captures: Vec<Value>,
     /// True if any captured value needs cleanup (owned heap values/resources).
@@ -3093,6 +3096,7 @@ impl Clone for PhpClosure {
     fn clone(&self) -> Self {
         Self {
             func: self.func,
+            called_scope_class_id: self.called_scope_class_id,
             captures: self.captures.clone(),
             has_heap_captures: self.has_heap_captures,
         }
@@ -3119,6 +3123,7 @@ impl std::fmt::Debug for PhpClosure {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PhpClosure")
             .field("func", &self.func)
+            .field("called_scope_class_id", &self.called_scope_class_id)
             .field("captures", &self.captures.len())
             .finish()
     }
