@@ -9328,6 +9328,22 @@ regression gate; an initially noisy ARM64 reified lane falls from +1.255% to
 +0.597%. Focused generic JIT coverage is now 16 erased and 26 reified
 scenarios. No dependency was added.
 
+A follow-up coupling cleanup moves the fused update's admission and two-op
+construction into the 38-line `native_conditional_add.rs` include. The legacy
+straight builder and the mixed object/string builder now consume the same
+`BranchUnless`/`BinaryAssign` pair instead of duplicating its condition-kind,
+post-value alias and fallthrough rules. The shared boundary also requires the
+straight plan's true edge to name the immediately following quick operation,
+matching the mixed builder's existing conservative check.
+
+The helper is fully inlined in max-perf builds. ARM64 binary, `__TEXT` and
+`__text` sizes are unchanged; x86-64 loses 64 binary bytes and 72 text bytes,
+while both native runner symbols keep their exact sizes. In 200 balanced
+erased pairs against `f72c984`, the generic/scalar conditional-property lanes
+move -0.120%/-0.473% on ARM64 and -0.058%/-0.121% on CPU-2-pinned x86-64.
+Quick-loop, architecture-native and both generic-mode suites pass on both
+hosts. No runtime operation, persistent layout or dependency changed.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

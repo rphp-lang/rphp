@@ -2432,6 +2432,20 @@ on both hosts and modes; the largest measured positive movement is +0.597%.
 No operation layout, backend representation, generic hot-loop check or
 dependency was added.
 
+Conditional-add construction is subsequently centralized in the 38-line
+`native_conditional_add.rs` include. Both the scalar-only and mixed builders
+obtain the same target-neutral branch/add pair from one admission function;
+the straight builder now shares the mixed builder's explicit immediate-next
+edge proof as well. This removes the duplicated condition mapping and alias
+rules that previously had to be kept synchronized across two large functions.
+
+Release optimization fully inlines the helper. ARM64 binary and text sizes are
+identical to `f72c984`; x86-64 text shrinks by 72 bytes and the two native
+runner symbol sizes remain unchanged. Two-hundred-pair generic/scalar controls
+are -0.120%/-0.473% on ARM64 and -0.058%/-0.121% on CPU-2-pinned x86-64. The
+shared quick-loop and architecture suites plus 16 erased/26 reified generic
+JIT tests pass on both hosts, with no backend or persistent-layout change.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
