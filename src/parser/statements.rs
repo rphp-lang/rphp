@@ -500,8 +500,7 @@ impl Parser {
             Token::Trait => self.parse_trait(),
             Token::Static if self.peek_at(1) == Token::DoubleColon => {
                 let expr = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
-                Ok(Stmt::ExprStmt(expr))
+                self.finish_static_property_statement(expr)
             }
             Token::Isset
             | Token::Empty
@@ -521,8 +520,7 @@ impl Parser {
                     }
                 }
                 let expr = self.parse_expr()?;
-                self.expect(&Token::Semicolon)?;
-                Ok(Stmt::ExprStmt(expr))
+                self.finish_static_property_statement(expr)
             }
             Token::LBracket => {
                 // Try short destructuring: [$a, $b] = expr;
@@ -609,6 +607,47 @@ impl Parser {
             Token::ShiftRightAssign => Some(BinOp::ShiftRight),
             _ => None,
         }
+    }
+
+    /// Finish a named/self/parent/static property expression statement. Basic
+    /// and compound writes share this path so pseudo-class resolution cannot
+    /// drift between their parser branches.
+    fn finish_static_property_statement(&mut self, expr: Expr) -> Result<Stmt, String> {
+        let static_property = match &expr {
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => Some((class_name.clone(), property.clone())),
+            _ => None,
+        };
+        if let Some((class_name, property)) = static_property {
+            if self.peek() == Token::Assign {
+                self.advance();
+                let value = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                return Ok(Stmt::AssignStaticProp {
+                    class_name,
+                    property,
+                    expr: value,
+                });
+            }
+            if let Some(op) = Self::compound_assign_op(&self.peek()) {
+                self.advance();
+                let right = self.parse_expr()?;
+                self.expect(&Token::Semicolon)?;
+                return Ok(Stmt::AssignStaticProp {
+                    class_name,
+                    property,
+                    expr: Expr::BinaryOp {
+                        op,
+                        left: Box::new(expr),
+                        right: Box::new(right),
+                    },
+                });
+            }
+        }
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::ExprStmt(expr))
     }
 
     /// Parse if / elseif / else chain.

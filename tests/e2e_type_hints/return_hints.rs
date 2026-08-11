@@ -122,6 +122,8 @@ class LateStaticOpcodeBase {
     public static function ordinary(): int { return self::value(); }
     public static function propertyDispatch(): int { return static::$number; }
     public static function ordinaryProperty(): int { return self::$number; }
+    public static function propertyWrite(int $value): void { static::$number = $value; }
+    public static function ordinaryPropertyWrite(int $value): void { self::$number = $value; }
     public function instanceDispatch(): int { return static::value(); }
 }
 "#,
@@ -160,6 +162,18 @@ class LateStaticOpcodeBase {
         .find(|(name, ..)| name == "ordinaryProperty")
         .map(|method| &method.4)
         .unwrap();
+    let property_write = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "propertyWrite")
+        .map(|method| &method.4)
+        .unwrap();
+    let ordinary_property_write = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "ordinaryPropertyWrite")
+        .map(|method| &method.4)
+        .unwrap();
 
     assert!(
         dispatch
@@ -193,6 +207,16 @@ class LateStaticOpcodeBase {
         .instructions
         .iter()
         .any(|instruction| instruction.opcode == OpCode::FetchStaticProp));
+    assert!(property_write
+        .op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::AssignLateStaticProp));
+    assert!(ordinary_property_write
+        .op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::AssignStaticProp));
     assert!(property_dispatch.common.plan.needs_late_static_scope());
     assert!(!ordinary_property.common.plan.needs_late_static_scope());
     assert!(!ordinary.common.plan.needs_late_static_scope());

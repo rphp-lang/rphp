@@ -952,6 +952,21 @@ fn op_fetch_late_static_prop(
     op_fetch_static_prop_impl::<true>(eg, frame, op_array, opline)
 }
 
+/// Static storage is commonly scalar. Copy that 16-byte representation
+/// directly and reserve refcount/reference cloning for the uncommon heap path.
+#[inline(always)]
+fn clone_static_property_value(value: &Value) -> Value {
+    if value.needs_cleanup() || value.is_reference() {
+        value.clone()
+    } else {
+        let mut cloned = std::mem::MaybeUninit::<Value>::uninit();
+        unsafe {
+            Value::raw_copy(value as *const Value, cloned.as_mut_ptr());
+            cloned.assume_init()
+        }
+    }
+}
+
 #[inline(always)]
 fn op_fetch_static_prop_impl<const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
@@ -974,7 +989,30 @@ fn op_fetch_static_prop_impl<const LATE_STATIC: bool>(
         &mut *(op_array.cache.as_ptr().add(ip)
             as *mut crate::vm::instruction::InlineCache)
     };
-    let class_id = if LATE_STATIC {
+    let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
+
+    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
+        let value = clone_static_property_value(unsafe {
+            eg.static_property_value_unchecked(cache.property_slot())
+        });
+        unsafe { slot_set(result_ptr, value) };
+        return Ok(());
+    }
+
+    resolve_static_property_read_cache_miss(
+        eg, frame, result_ptr, cache, class_id, raw_class, prop,
+    )
+}
+
+#[inline(always)]
+fn static_property_class_id<const LATE_STATIC: bool>(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+    cache: &crate::vm::instruction::InlineCache,
+    raw_class: &str,
+) -> u32 {
+    if LATE_STATIC {
         if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0
             && !raw_class.eq_ignore_ascii_case("parent")
         {
@@ -990,29 +1028,75 @@ fn op_fetch_static_prop_impl<const LATE_STATIC: bool>(
         } else {
             eg.class_id_of(raw_class)
         }
-    } else if cache.class_id != 0 && cache.property_flags() == 1 {
+    } else if cache.class_id != 0 && cache.property_flags() != 0 {
         cache.class_id
     } else {
         eg.class_id_of(raw_class)
-    };
+    }
+}
 
-    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
-        if let Some(value) = eg
-            .class_by_id(class_id)
-            .and_then(|class| class.static_properties.get(cache.property_slot()))
-            .map(|(_, default, _, _)| default.clone().unwrap_or_else(Value::null))
-        {
-            unsafe { slot_set(result_ptr, value) };
-            return Ok(());
-        }
+#[inline(never)]
+fn op_assign_static_prop(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    op_assign_static_prop_impl::<false>(eg, frame, op_array, opline)
+}
+
+#[inline(never)]
+fn op_assign_late_static_prop(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    op_assign_static_prop_impl::<true>(eg, frame, op_array, opline)
+}
+
+#[inline(always)]
+fn op_assign_static_prop_impl<const LATE_STATIC: bool>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    let class_name =
+        unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+    let property_name =
+        unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
+    let value = clone_static_property_value(unsafe {
+        &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
+    });
+    let raw_class = class_name.as_str().unwrap_or("");
+    let property = property_name.as_str().unwrap_or("");
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let cache = unsafe {
+        &mut *(op_array.cache.as_ptr().add(ip)
+            as *mut crate::vm::instruction::InlineCache)
+    };
+    let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
+    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 3 {
+        unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
+        return Ok(());
     }
 
-    resolve_static_property_cache_miss(eg, frame, result_ptr, cache, class_id, raw_class, prop)
+    let storage_slot = resolve_static_property_storage_slot(
+        eg, frame, class_id, raw_class, property, true,
+    )?;
+    if !eg.set_static_property_value(storage_slot, value) {
+        return Err(VmError::Fatal("Invalid static property storage slot".into()));
+    }
+    cache.set_property(class_id, storage_slot, 3);
+    Ok(())
 }
 
 #[cold]
 #[inline(never)]
-fn resolve_static_property_cache_miss(
+fn resolve_static_property_read_cache_miss(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     result_ptr: *mut Value,
@@ -1021,10 +1105,32 @@ fn resolve_static_property_cache_miss(
     raw_class: &str,
     property: &str,
 ) -> Result<(), VmError> {
+    let storage_slot = resolve_static_property_storage_slot(
+        eg, frame, class_id, raw_class, property, false,
+    )?;
+    let value = eg
+        .static_property_value(storage_slot)
+        .map(clone_static_property_value)
+        .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
+    cache.set_property(class_id, storage_slot, 1);
+    unsafe { slot_set(result_ptr, value) };
+    Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_static_property_storage_slot(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class_id: u32,
+    raw_class: &str,
+    property: &str,
+    for_write: bool,
+) -> Result<usize, VmError> {
     let class = eg.class_by_id(class_id).ok_or_else(|| {
         VmError::Fatal(format!("Class \"{}\" not found", raw_class))
     })?;
-    let Some((slot, (_, default, visibility, declaring))) = class
+    let Some((property_index, (_, _, visibility, declaring))) = class
         .static_properties
         .iter()
         .enumerate()
@@ -1035,6 +1141,12 @@ fn resolve_static_property_cache_miss(
             class.name, property
         )));
     };
+    if for_write && class.is_enum {
+        return Err(VmError::Fatal(format!(
+            "Cannot modify readonly property {}::${}",
+            class.name, property
+        )));
+    }
     let caller = get_caller_class(frame, eg);
     if !eg.check_visibility(caller.as_deref(), declaring, *visibility) {
         let visibility = match visibility {
@@ -1047,10 +1159,8 @@ fn resolve_static_property_cache_miss(
             visibility, declaring, property
         )));
     }
-    let value = default.clone().unwrap_or_else(Value::null);
-    cache.set_property(class_id, slot, 1);
-    unsafe { slot_set(result_ptr, value) };
-    Ok(())
+    eg.static_property_storage_slot(class_id, property_index)
+        .ok_or_else(|| VmError::Fatal("Invalid static property storage mapping".into()))
 }
 
 #[inline(never)]

@@ -349,6 +349,12 @@ pub enum Stmt {
         property: String,
         expr: Expr,
     },
+    AssignStaticProp {
+        // ClassName::$prop = expr
+        class_name: String,
+        property: String,
+        expr: Expr,
+    },
     AssignObjArrayDim {
         // $obj->prop[$key] = expr
         object: Expr,

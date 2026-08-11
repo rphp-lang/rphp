@@ -157,6 +157,119 @@ fn inherit_property_definitions(
     child.extend(inherited);
 }
 
+/// Static declarations additionally carry a storage identity. An inherited
+/// declaration reuses its parent's slot; a redeclaration keeps the child's
+/// independently allocated slot.
+fn inherit_static_property_definitions(
+    child: &mut Vec<PropertyDefinition>,
+    child_slots: &mut Vec<Option<u32>>,
+    parent: &[PropertyDefinition],
+    parent_slots: &[u32],
+) {
+    debug_assert_eq!(child.len(), child_slots.len());
+    debug_assert_eq!(parent.len(), parent_slots.len());
+    let child_names: std::collections::HashSet<&str> =
+        child.iter().map(|(name, _, _, _)| name.as_str()).collect();
+    let mut inherited = Vec::new();
+    for (index, (name, default, visibility, declaring)) in parent.iter().enumerate() {
+        let keep = if child_names.contains(name.as_str()) {
+            *visibility == Visibility::Private
+                && child.iter().any(|(child_name, _, child_visibility, _)| {
+                    child_name == name && *child_visibility == Visibility::Private
+                })
+        } else {
+            true
+        };
+        if keep {
+            inherited.push((
+                (
+                    name.clone(),
+                    default.clone(),
+                    *visibility,
+                    declaring.clone(),
+                ),
+                parent_slots[index],
+            ));
+        }
+    }
+    for (definition, slot) in inherited {
+        child.push(definition);
+        child_slots.push(Some(slot));
+    }
+}
+
+#[inline]
+fn property_definitions_are_compatible(
+    left_default: &Option<Value>,
+    left_visibility: Visibility,
+    right_default: &Option<Value>,
+    right_visibility: Visibility,
+) -> bool {
+    left_visibility == right_visibility
+        && match (left_default, right_default) {
+            (None, None) => true,
+            (Some(left), Some(right)) => left.structurally_equal(right),
+            _ => false,
+        }
+}
+
+/// A trait static property is composed into the consuming class, not shared
+/// with the trait or unrelated consumers. Since PHP 8.3, using the same trait
+/// again in a child also creates storage distinct from the parent's inherited
+/// property. Class/trait and trait/trait declarations still have to be
+/// compatible; a trait declaration simply replaces an inherited declaration.
+fn merge_trait_static_property_definitions(
+    target: &mut Vec<PropertyDefinition>,
+    target_slots: &mut Vec<Option<u32>>,
+    source: &[PropertyDefinition],
+    class_name: &str,
+    trait_name: &str,
+    own_names: &std::collections::HashSet<String>,
+    composed_names: &mut std::collections::HashSet<String>,
+) -> Result<(), String> {
+    debug_assert_eq!(target.len(), target_slots.len());
+    for (name, default, visibility, _) in source {
+        let existing = target
+            .iter()
+            .position(|(candidate, _, _, _)| candidate == name);
+        if own_names.contains(name) || composed_names.contains(name) {
+            let index = existing.expect("own/composed static property definition");
+            let (_, existing_default, existing_visibility, existing_declaring) = &target[index];
+            if !property_definitions_are_compatible(
+                existing_default,
+                *existing_visibility,
+                default,
+                *visibility,
+            ) {
+                return Err(format!(
+                    "{} and {} define the same property (${}) in the composition of {}. \
+                     However, the definition differs and is considered incompatible",
+                    existing_declaring, trait_name, name, class_name
+                ));
+            }
+            continue;
+        }
+
+        let definition = (
+            name.clone(),
+            default.clone(),
+            *visibility,
+            trait_name.to_string(),
+        );
+        if let Some(index) = existing {
+            // A first trait declaration in this class overrides inherited
+            // metadata and receives a fresh storage slot.
+            target[index] = definition;
+            target_slots[index] = None;
+        } else {
+            target.push(definition);
+            target_slots.push(None);
+        }
+        composed_names.insert(name.clone());
+    }
+    Ok(())
+}
+
 /// Merge one trait's declarations into a consuming class. Instance and static
 /// tables both use this exact collision contract, but remain separate storage.
 fn merge_trait_property_definitions(
@@ -174,11 +287,12 @@ fn merge_trait_property_definitions(
                 continue;
             }
             let compatible = existing_visibility == visibility
-                && match (default, existing_default) {
-                    (None, None) => true,
-                    (Some(left), Some(right)) => left.structurally_equal(right),
-                    _ => false,
-                };
+                && property_definitions_are_compatible(
+                    default,
+                    *visibility,
+                    existing_default,
+                    *existing_visibility,
+                );
             if !compatible {
                 return Err(format!(
                     "{} and {} define the same property (${}) in the composition of {}. \
@@ -251,8 +365,7 @@ pub struct ExecutorGlobals {
     /// Stable boxed ClassDef pointers indexed by class ID. Slot zero is
     /// reserved for dynamic/unknown classes.
     class_by_id: Vec<*const ClassDef>,
-    /// LIFO binding sidecar used only by explicit reified calls. It stays last
-    /// so every pre-existing ExecutorGlobals field keeps the feature-off offset.
+    /// LIFO binding sidecar used only by explicit reified calls.
     #[cfg(feature = "php-generics-reified")]
     pub reified_bindings: Vec<ReifiedBinding>,
     /// Explicit generic bindings are born in a caller before its call frame is
@@ -300,6 +413,15 @@ pub struct ExecutorGlobals {
     /// receiver binding/name and validate against this owned type.
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     generic_property_contract_cache: std::cell::RefCell<Option<GenericPropertyContractBinding>>,
+    /// Canonical mutable storage for declared static properties. Appending new
+    /// runtime state here preserves the layout of every pre-existing field.
+    /// Inline caches keep only an index into this vector, so reallocation
+    /// cannot invalidate a warmed site and inherited declarations can share
+    /// one slot exactly.
+    static_property_values: Vec<Value>,
+    /// Per-class property-index → canonical storage-slot mapping. Slot zero in
+    /// this outer vector is reserved alongside `class_by_id`.
+    static_property_slots_by_class: Vec<Box<[u32]>>,
 }
 
 impl ExecutorGlobals {
@@ -312,6 +434,8 @@ impl ExecutorGlobals {
         self.class_table.reserve(64);
         self.method_declaring_class.reserve(96);
         self.class_by_id.reserve(64);
+        self.static_property_slots_by_class.reserve(64);
+        self.static_property_values.reserve(16);
     }
 
     pub fn new() -> Self {
@@ -364,6 +488,8 @@ impl ExecutorGlobals {
             included_functions: Vec::new(),
             next_class_id: 1,
             class_by_id: vec![std::ptr::null()],
+            static_property_values: Vec::new(),
+            static_property_slots_by_class: vec![Box::new([])],
         }
     }
 
@@ -418,6 +544,8 @@ impl ExecutorGlobals {
             included_functions: Vec::new(),
             next_class_id: 1,
             class_by_id: vec![std::ptr::null()],
+            static_property_values: Vec::new(),
+            static_property_slots_by_class: vec![Box::new([])],
         }
     }
 
@@ -710,6 +838,14 @@ impl ExecutorGlobals {
         let id = self.next_class_id;
         self.next_class_id += 1;
         class_def.class_id = id;
+        let own_static_names = class_def
+            .static_properties
+            .iter()
+            .map(|(name, _, _, _)| name.clone())
+            .collect::<std::collections::HashSet<_>>();
+        // `None` denotes a declaration composed by this class and therefore a
+        // fresh slot. Inherited entries carry the parent's canonical slot.
+        let mut static_property_slots = vec![None; class_def.static_properties.len()];
 
         // Check if parent is final — cannot extend a final class
         if let Some(parent_name) = &class_def.parent {
@@ -729,9 +865,15 @@ impl ExecutorGlobals {
                 // Own declarations stay first, so late-static lookup sees a
                 // redeclaration before inherited storage.
                 inherit_property_definitions(&mut class_def.properties, &parent.properties);
-                inherit_property_definitions(
+                let parent_static_slots = self
+                    .static_property_slots_by_class
+                    .get(parent.class_id as usize)
+                    .map_or(&[][..], |slots| slots.as_ref());
+                inherit_static_property_definitions(
                     &mut class_def.static_properties,
+                    &mut static_property_slots,
                     &parent.static_properties,
+                    parent_static_slots,
                 );
 
                 // Inherit readonly property list from parent
@@ -771,6 +913,7 @@ impl ExecutorGlobals {
         // Must happen after parent inheritance so trait methods override inherited ones
         // (matching PHP semantics: trait > parent, class > trait).
         let trait_names = class_def.uses.clone();
+        let mut composed_static_trait_names = std::collections::HashSet::new();
         for trait_name in &trait_names {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
                 merge_trait_property_definitions(
@@ -779,11 +922,14 @@ impl ExecutorGlobals {
                     &class_name,
                     trait_name,
                 )?;
-                merge_trait_property_definitions(
+                merge_trait_static_property_definitions(
                     &mut class_def.static_properties,
+                    &mut static_property_slots,
                     &trait_def.static_properties,
                     &class_name,
                     trait_name,
+                    &own_static_names,
+                    &mut composed_static_trait_names,
                 )?;
 
                 // Merge trait methods: copy function_table pointers
@@ -849,6 +995,24 @@ impl ExecutorGlobals {
             }
         }
 
+        let mut resolved_static_slots = Vec::with_capacity(static_property_slots.len());
+        for (definition, inherited_slot) in class_def
+            .static_properties
+            .iter()
+            .zip(static_property_slots)
+        {
+            let slot = if let Some(slot) = inherited_slot {
+                slot
+            } else {
+                let slot = u32::try_from(self.static_property_values.len())
+                    .map_err(|_| "Too many static property storage slots".to_string())?;
+                self.static_property_values
+                    .push(definition.1.clone().unwrap_or_else(Value::null));
+                slot
+            };
+            resolved_static_slots.push(slot);
+        }
+
         // Property order is now final. Build one shared storage-key → slot
         // layout for every object instance of this class.
         let property_keys = class_def
@@ -888,6 +1052,11 @@ impl ExecutorGlobals {
             self.class_by_id.resize(class_id + 1, std::ptr::null());
         }
         self.class_by_id[class_id] = class_ptr;
+        if self.static_property_slots_by_class.len() <= class_id {
+            self.static_property_slots_by_class
+                .resize_with(class_id + 1, || Box::new([]));
+        }
+        self.static_property_slots_by_class[class_id] = resolved_static_slots.into_boxed_slice();
         // Register child's own method pointers from the stable location
         let class = self.class_table.get(&class_name).unwrap();
         let method_entries: Vec<(String, *const FunctionCommon)> = class
@@ -929,6 +1098,66 @@ impl ExecutorGlobals {
             None
         } else {
             Some(unsafe { &*ptr })
+        }
+    }
+
+    /// Resolve one class-local declaration index to its canonical mutable
+    /// static-storage slot. This is used only on an inline-cache miss.
+    #[inline]
+    pub(crate) fn static_property_storage_slot(
+        &self,
+        class_id: u32,
+        property_index: usize,
+    ) -> Option<usize> {
+        self.static_property_slots_by_class
+            .get(class_id as usize)?
+            .get(property_index)
+            .map(|slot| *slot as usize)
+    }
+
+    #[inline(always)]
+    pub(crate) fn static_property_value(&self, storage_slot: usize) -> Option<&Value> {
+        self.static_property_values.get(storage_slot)
+    }
+
+    /// A warmed static-property cache can skip the bounds branch: storage is
+    /// append-only for the executor lifetime and cache slots are published
+    /// only after checked resolution.
+    #[inline(always)]
+    pub(crate) unsafe fn static_property_value_unchecked(&self, storage_slot: usize) -> &Value {
+        debug_assert!(storage_slot < self.static_property_values.len());
+        unsafe { self.static_property_values.get_unchecked(storage_slot) }
+    }
+
+    /// Update canonical storage while preserving a reference wrapper if one is
+    /// introduced by the general reference surface in a later slice.
+    #[inline(always)]
+    pub(crate) fn set_static_property_value(&mut self, storage_slot: usize, value: Value) -> bool {
+        if storage_slot >= self.static_property_values.len() {
+            return false;
+        }
+        unsafe { self.set_static_property_value_unchecked(storage_slot, value) };
+        true
+    }
+
+    /// Mutable counterpart of `static_property_value_unchecked`; callers must
+    /// hold a cache slot produced by checked static-property resolution.
+    #[inline(always)]
+    pub(crate) unsafe fn set_static_property_value_unchecked(
+        &mut self,
+        storage_slot: usize,
+        value: Value,
+    ) {
+        debug_assert!(storage_slot < self.static_property_values.len());
+        let current = unsafe { self.static_property_values.get_unchecked_mut(storage_slot) };
+        if current.is_reference() {
+            unsafe {
+                let target = current.as_ref_ptr();
+                std::ptr::drop_in_place(target);
+                target.write(value);
+            }
+        } else {
+            *current = value;
         }
     }
 

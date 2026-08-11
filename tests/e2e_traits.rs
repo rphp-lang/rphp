@@ -332,6 +332,65 @@ echo LateTraitPropertyFirst::read();
     assert_eq!(out, "first:second:first");
 }
 
+#[test]
+fn trait_static_property_storage_is_per_consumer_and_per_reuse() {
+    let out = run_php(
+        r#"<?php
+trait MutableTraitStatic {
+    public static $value = "trait";
+    public static function write(string $value): void { static::$value = $value; }
+}
+class MutableTraitFirst { use MutableTraitStatic; }
+class MutableTraitSecond { use MutableTraitStatic; }
+class MutableTraitParent { use MutableTraitStatic; }
+class MutableTraitChild extends MutableTraitParent { use MutableTraitStatic; }
+
+MutableTraitFirst::write("first");
+MutableTraitParent::write("parent");
+echo MutableTraitFirst::$value . ":" . MutableTraitSecond::$value . ":";
+echo MutableTraitParent::$value . ":" . MutableTraitChild::$value . ":";
+MutableTraitChild::write("child");
+echo MutableTraitParent::$value . ":" . MutableTraitChild::$value;
+"#,
+    );
+    assert_eq!(out, "first:trait:parent:trait:parent:child");
+}
+
+#[test]
+fn compatible_trait_static_properties_share_one_composed_class_slot() {
+    let out = run_php(
+        r#"<?php
+trait FirstCompatibleStatic { public static $value = "same"; }
+trait SecondCompatibleStatic { public static $value = "same"; }
+class CompatibleStaticConsumer {
+    use FirstCompatibleStatic, SecondCompatibleStatic;
+}
+CompatibleStaticConsumer::$value = "changed";
+echo CompatibleStaticConsumer::$value;
+"#,
+    );
+    assert_eq!(out, "changed");
+}
+
+#[test]
+fn incompatible_trait_static_properties_are_rejected() {
+    let result = std::panic::catch_unwind(|| {
+        run_php(
+            r#"<?php
+trait FirstIncompatibleStatic { public static $value = "first"; }
+trait SecondIncompatibleStatic { public static $value = "second"; }
+class IncompatibleStaticConsumer {
+    use FirstIncompatibleStatic, SecondIncompatibleStatic;
+}
+"#,
+        )
+    });
+    assert!(
+        result.is_err(),
+        "Expected panic from incompatible trait static property defaults"
+    );
+}
+
 // ─── Trait property collision edge cases ──────────────────────────
 
 #[test]

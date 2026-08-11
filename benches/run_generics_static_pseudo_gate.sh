@@ -16,6 +16,7 @@ cpu=${2-}
 pairs=${RPHP_GENERICS_STATIC_GATE_PAIRS:-20}
 warmups=${RPHP_GENERICS_STATIC_GATE_WARMUPS:-4}
 max_regression=${RPHP_GENERICS_STATIC_GATE_MAX_REGRESSION:-5}
+only=${RPHP_GENERICS_STATIC_GATE_ONLY:-}
 
 if [ ! -x "$candidate" ]; then
     echo "runtime executable not found: $candidate" >&2
@@ -48,12 +49,21 @@ if ! printf '%s\n' "$max_regression" | awk '
     echo "RPHP_GENERICS_STATIC_GATE_MAX_REGRESSION must be a non-negative number" >&2
     exit 2
 fi
+case $only in
+    '' | ordinary | property-read | property-write | generic | generic-control) ;;
+    *)
+        echo "RPHP_GENERICS_STATIC_GATE_ONLY names an unknown lane" >&2
+        exit 2
+        ;;
+esac
 
 script_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ordinary_late_workload="$script_root/benches/bench_static_late_call.php"
 ordinary_self_workload="$script_root/benches/bench_static_self_call.php"
 late_property_workload="$script_root/benches/bench_static_late_property.php"
 self_property_workload="$script_root/benches/bench_static_self_property.php"
+late_property_write_workload="$script_root/benches/bench_static_late_property_write.php"
+self_property_write_workload="$script_root/benches/bench_static_self_property_write.php"
 generic_late_workload="$script_root/benches/bench_generics_static_late_turbofish.php"
 generic_self_workload="$script_root/benches/bench_generics_static_self_turbofish.php"
 generic_explicit_workload="$script_root/benches/bench_generics_static_explicit_turbofish.php"
@@ -147,8 +157,17 @@ run_gate() {
     fi
 }
 
+run_selected_gate() {
+    lane=$1
+    shift
+    if [ -z "$only" ] || [ "$only" = "$lane" ]; then
+        run_gate "$@"
+    fi
+}
+
 echo "balanced mean of order-specific candidate/control median ratios:"
-run_gate "ordinary static::/self::" "$ordinary_late_workload" "$ordinary_self_workload"
-run_gate "property static::/self::" "$late_property_workload" "$self_property_workload"
-run_gate "generic static::/self::" "$generic_late_workload" "$generic_self_workload"
-run_gate "generic self::/explicit" "$generic_self_workload" "$generic_explicit_workload"
+run_selected_gate ordinary "ordinary static::/self::" "$ordinary_late_workload" "$ordinary_self_workload"
+run_selected_gate property-read "property static::/self::" "$late_property_workload" "$self_property_workload"
+run_selected_gate property-write "property write static::/self::" "$late_property_write_workload" "$self_property_write_workload"
+run_selected_gate generic "generic static::/self::" "$generic_late_workload" "$generic_self_workload"
+run_selected_gate generic-control "generic self::/explicit" "$generic_self_workload" "$generic_explicit_workload"

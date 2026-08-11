@@ -774,6 +774,29 @@ impl Compiler {
                 assign.result_type = val_type;
                 self.instructions.push(assign);
             }
+            Stmt::AssignStaticProp {
+                class_name,
+                property,
+                expr,
+            } => {
+                let (val_op, val_type) = self.compile_expr(expr);
+                let (resolved, dynamic_static_scope) =
+                    self.resolve_static_property_owner(class_name);
+                let class_idx = self.add_literal(Value::string(resolved));
+                let prop_idx = self.add_literal(Value::string(property.clone()));
+                let mut assign = Instruction::new(if dynamic_static_scope {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                assign.op1 = class_idx;
+                assign.op1_type = OpType::Const;
+                assign.op2 = prop_idx;
+                assign.op2_type = OpType::Const;
+                assign.result = val_op;
+                assign.result_type = val_type;
+                self.instructions.push(assign);
+            }
             Stmt::AssignObjArrayDim {
                 object,
                 property,

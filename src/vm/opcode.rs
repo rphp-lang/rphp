@@ -147,6 +147,10 @@ pub enum OpCode {
     /// Read a static property through PHP's runtime called class. The cache is
     /// keyed separately from explicit/self/parent property reads.
     FetchLateStaticProp = 139,
+    /// Assign a declared static property through an explicit lexical owner.
+    AssignStaticProp = 140,
+    /// Assign a declared static property through PHP's runtime called class.
+    AssignLateStaticProp = 141,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

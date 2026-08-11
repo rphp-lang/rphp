@@ -85,6 +85,10 @@ fn test_static_return_type_requires_a_real_class_scope() {
         "<?php class C { public static $value = 1; public static function read() { return static::$value; } }",
     )
     .unwrap();
+    parse(
+        "<?php class C { public static $value = 1; public static function write() { static::$value = 2; static::$value += 1; } } C::$value = 3; C::$value .= 'x';",
+    )
+    .unwrap();
     assert_eq!(
         parse(
             "<?php class C { public static function call() { function nested() { return static::value(); } } }",

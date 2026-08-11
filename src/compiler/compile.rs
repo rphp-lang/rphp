@@ -2093,6 +2093,26 @@ impl Compiler {
         compiler.instructions[bind_idx].op2 = skip_label;
     }
 
+    fn resolve_static_property_owner(&self, class_name: &str) -> (String, bool) {
+        let pseudo_class = class_name.to_ascii_lowercase();
+        let dynamic_static_scope = pseudo_class == "static"
+            || (self.dynamic_static_scope && matches!(pseudo_class.as_str(), "self" | "parent"));
+        let resolved = match pseudo_class.as_str() {
+            "static" => class_name.to_string(),
+            "self" if !self.dynamic_static_scope => self
+                .lexical_static_class
+                .clone()
+                .unwrap_or_else(|| class_name.to_string()),
+            "parent" if !self.dynamic_static_scope => self
+                .lexical_static_parent
+                .clone()
+                .unwrap_or_else(|| class_name.to_string()),
+            "self" | "parent" => class_name.to_string(),
+            _ => self.resolve_name(class_name),
+        };
+        (resolved, dynamic_static_scope)
+    }
+
     /// Compile expression. Returns (operand_index, OpType).
     fn compile_expr(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
@@ -3356,23 +3376,8 @@ impl Compiler {
                 class_name,
                 property,
             } => {
-                let pseudo_class = class_name.to_ascii_lowercase();
-                let dynamic_static_scope = pseudo_class == "static"
-                    || (self.dynamic_static_scope
-                        && matches!(pseudo_class.as_str(), "self" | "parent"));
-                let resolved = match pseudo_class.as_str() {
-                    "static" => class_name.clone(),
-                    "self" if !self.dynamic_static_scope => self
-                        .lexical_static_class
-                        .clone()
-                        .unwrap_or_else(|| class_name.clone()),
-                    "parent" if !self.dynamic_static_scope => self
-                        .lexical_static_parent
-                        .clone()
-                        .unwrap_or_else(|| class_name.clone()),
-                    "self" | "parent" => class_name.clone(),
-                    _ => self.resolve_name(class_name),
-                };
+                let (resolved, dynamic_static_scope) =
+                    self.resolve_static_property_owner(class_name);
                 let class_idx = self.add_literal(Value::string(resolved));
                 let prop_idx = self.add_literal(Value::string(property.clone()));
                 let tmp = self.alloc_tmp();

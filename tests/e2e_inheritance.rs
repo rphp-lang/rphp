@@ -194,6 +194,110 @@ PrivatePropertyChild::read();
 }
 
 #[test]
+fn mutable_static_properties_share_only_inherited_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MutableStaticRoot {
+    public static $value = "root";
+}
+class MutableStaticInherited extends MutableStaticRoot {}
+class MutableStaticRedeclared extends MutableStaticRoot {
+    public static $value = "redeclared";
+}
+
+MutableStaticInherited::$value = "shared";
+echo MutableStaticRoot::$value . ":" . MutableStaticInherited::$value . ":";
+MutableStaticRedeclared::$value = "separate";
+echo MutableStaticRoot::$value . ":" . MutableStaticRedeclared::$value;
+"#,
+        ),
+        "shared:shared:shared:separate"
+    );
+}
+
+#[test]
+fn late_static_property_assignment_rekeys_and_self_remains_lexical() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MutableLateRoot {
+    public static $value = "root";
+    public static function lateWrite(string $value): void { static::$value = $value; }
+    public static function selfWrite(string $value): void { self::$value = $value; }
+    public function instanceWrite(string $value): void { static::$value = $value; }
+}
+class MutableLateLeft extends MutableLateRoot { public static $value = "left"; }
+class MutableLateRight extends MutableLateRoot { public static $value = "right"; }
+
+MutableLateRoot::lateWrite("R");
+MutableLateLeft::lateWrite("L");
+MutableLateRight::lateWrite("X");
+MutableLateLeft::lateWrite("L2");
+MutableLateRight::selfWrite("ROOT");
+$right = new MutableLateRight();
+$right->instanceWrite("X2");
+echo MutableLateRoot::$value . ":" . MutableLateLeft::$value . ":" . MutableLateRight::$value;
+"#,
+        ),
+        "ROOT:L2:X2"
+    );
+}
+
+#[test]
+fn static_property_assignment_enforces_visibility_and_declared_existence() {
+    let private = run_php_expect_error(
+        r#"<?php
+class PrivateMutableStatic { private static $value = 1; }
+PrivateMutableStatic::$value = 2;
+"#,
+    );
+    let rendered = format!("{private:?}");
+    assert!(
+        rendered.contains("Cannot access private property PrivateMutableStatic::$value"),
+        "{rendered:?}"
+    );
+
+    let missing = run_php_expect_error(
+        r#"<?php
+class MissingMutableStatic {}
+MissingMutableStatic::$value = 2;
+"#,
+    );
+    let rendered = format!("{missing:?}");
+    assert!(
+        rendered.contains("Access to undeclared static property MissingMutableStatic::$value"),
+        "{rendered:?}"
+    );
+}
+
+#[test]
+fn mutable_static_property_compound_assignments_read_then_write_canonical_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CompoundStaticRoot {
+    public static $number = 1;
+    public static $text = "a";
+    public static function update(): void {
+        static::$number += 4;
+        self::$text .= "b";
+    }
+}
+class CompoundStaticChild extends CompoundStaticRoot {}
+
+CompoundStaticChild::update();
+CompoundStaticRoot::$number *= 3;
+CompoundStaticChild::$text .= "c";
+echo CompoundStaticRoot::$number . ":" . CompoundStaticChild::$number . ":";
+echo CompoundStaticRoot::$text . ":" . CompoundStaticChild::$text;
+"#,
+        ),
+        "15:15:abc:abc"
+    );
+}
+
+#[test]
 fn closures_capture_the_late_called_class_at_creation() {
     assert_eq!(
         run_php(

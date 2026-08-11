@@ -659,6 +659,8 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::InitStaticCall
                 | OpCode::InitLateStaticCall
                 | OpCode::FetchLateStaticProp
+                | OpCode::AssignStaticProp
+                | OpCode::AssignLateStaticProp
                 | OpCode::InitDynamicCall
                 | OpCode::SendVal
                 | OpCode::SendRef
@@ -714,7 +716,10 @@ fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) 
         return;
     }
     for instruction in &mut op_array.instructions {
-        if instruction.opcode == OpCode::FetchLateStaticProp {
+        if matches!(
+            instruction.opcode,
+            OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+        ) {
             instruction._pad |= LATE_STATIC_PROP_EMBEDDED_SCOPE;
         }
     }
@@ -759,7 +764,7 @@ pub fn make_user_function_full(
     let needs_late_static_scope = op_array.instructions.iter().any(|instruction| {
         matches!(
             instruction.opcode,
-            OpCode::InitLateStaticCall | OpCode::FetchLateStaticProp
+            OpCode::InitLateStaticCall | OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
         )
     });
     let is_fast_scalar = !is_variadic
@@ -910,7 +915,9 @@ pub fn make_user_function_typed(
         || op_array.instructions.iter().any(|instruction| {
             matches!(
                 instruction.opcode,
-                OpCode::InitLateStaticCall | OpCode::FetchLateStaticProp
+                OpCode::InitLateStaticCall
+                    | OpCode::FetchLateStaticProp
+                    | OpCode::AssignLateStaticProp
             )
         });
     let has_fast_scalar_shape = !is_variadic
@@ -5060,7 +5067,10 @@ pub fn finalize_user_method(
             .plan
             .set_has_embedded_late_static_scope(false);
         for instruction in &mut function.op_array.instructions {
-            if instruction.opcode == OpCode::FetchLateStaticProp {
+            if matches!(
+                instruction.opcode,
+                OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
+            ) {
                 instruction._pad &= !LATE_STATIC_PROP_EMBEDDED_SCOPE;
             }
         }
