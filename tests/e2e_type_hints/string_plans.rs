@@ -115,6 +115,44 @@ class Scorer {
 }
 
 #[test]
+fn test_mixed_string_use_builds_an_exact_borrowed_input_plan() {
+    let result = compile_types(
+        r#"<?php
+function mixedScore(int $value, mixed $key): int {
+    return $value + strlen($key);
+}
+function ambiguousMixed(mixed $value): int {
+    return strlen($value) + $value;
+}
+"#,
+    );
+    let mixed_score = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "mixedScore")
+        .map(|(_, function)| function)
+        .unwrap();
+    let plan = mixed_score
+        .composed_typed_long_plan
+        .as_deref()
+        .expect("semantic String use should refine the broad mixed signature");
+    assert_eq!(plan.long_argument_mask, 1);
+    assert_eq!(plan.string_argument_mask, 2);
+    assert!(plan.program.operations.iter().any(|operation| matches!(
+        operation,
+        ComposedTypedLongOp::StringLength(ScalarStringSource::Input(1))
+    )));
+
+    let ambiguous = result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "ambiguousMixed")
+        .map(|(_, function)| function)
+        .unwrap();
+    assert!(ambiguous.composed_typed_long_plan.is_none());
+}
+
+#[test]
 fn test_scalar_local_alias_keeps_parameter_mutation_in_canonical_vm() {
     let result = compile_types(
         r#"<?php

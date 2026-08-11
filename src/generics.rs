@@ -241,6 +241,47 @@ impl GenericMethodContract {
                 .as_ref()
                 .is_none_or(generic_type_admits_string)
     }
+
+    /// A mixed typed region retains each positional input as either an exact
+    /// raw Long or a borrowed String and consumes an exact Long result. The
+    /// compact String mask describes that ABI without coupling generic
+    /// metadata to the quick-loop IR.
+    #[inline]
+    pub fn admits_exact_long_string_to_long_call(
+        &self,
+        arguments: u32,
+        string_arguments: u8,
+    ) -> bool {
+        if arguments > u8::BITS
+            || self.is_variadic
+            || self.value_parameters.len() != arguments as usize
+        {
+            return false;
+        }
+        let argument_mask = if arguments == u8::BITS {
+            u8::MAX
+        } else {
+            (1u8 << arguments) - 1
+        };
+        string_arguments & !argument_mask == 0
+            && self
+                .value_parameters
+                .iter()
+                .enumerate()
+                .all(|(index, value)| {
+                    value.as_ref().is_none_or(|value| {
+                        if string_arguments & (1u8 << index) != 0 {
+                            generic_type_admits_string(value)
+                        } else {
+                            generic_type_admits_long(value)
+                        }
+                    })
+                })
+            && self
+                .return_type
+                .as_ref()
+                .is_none_or(generic_type_admits_long)
+    }
 }
 
 fn generic_type_admits_long(value: &GenericType) -> bool {

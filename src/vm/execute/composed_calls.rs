@@ -168,17 +168,27 @@ unsafe fn cached_receiver_generic_method_contract(
     eg.generic_instance_method_contract(receiver, method)
 }
 
-/// Validate only the generic part of a frame-free Long method boundary after
-/// normal dispatch identity has already been established. This is shared by
-/// direct regions and every nested call-tree resolver so native lowering never
-/// observes an unproved receiver-specific contract.
+#[derive(Clone, Copy)]
+enum TypedGenericCallBoundary {
+    Long,
+    LongStringToLong { string_arguments: u8 },
+    LongToString,
+}
+
+/// Validate only the generic part of a frame-free typed method boundary after
+/// normal dispatch identity has already been established. Each call site
+/// describes its exact Long/String ABI once; native lowering never observes an
+/// unproved receiver-specific contract. The existing linked-Long IC proof is
+/// reused only for the matching all-Long shape. Mixed and String-return masks
+/// remain cold call-site facts and do not grow the IC.
 #[inline(always)]
-unsafe fn long_method_generic_contract_matches(
+unsafe fn typed_method_generic_contract_matches(
     eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
     cache_ip: usize,
     receiver: &Value,
     argument_count: usize,
+    boundary: TypedGenericCallBoundary,
 ) -> bool {
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     {
@@ -186,62 +196,82 @@ unsafe fn long_method_generic_contract_matches(
             return false;
         };
         if !cache.method_has_generic_contract()
-            || cache.method_has_linked_generic_long_contract()
+            || matches!(boundary, TypedGenericCallBoundary::Long)
+                && cache.method_has_linked_generic_long_contract()
         {
             return true;
         }
         return cached_receiver_generic_method_contract(eg, op_array, cache_ip, receiver)
             .as_deref()
-            .is_some_and(|contract| contract.admits_exact_long_call(argument_count as u32));
-    }
-
-    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
-    {
-        let _ = (eg, op_array, cache_ip, receiver, argument_count);
-        true
-    }
-}
-
-/// Validate a composed typed method whose exact inputs are Longs while its
-/// borrowed output is a String. There is no linked String IC bit: contracts
-/// that exist are resolved once with the receiver at region admission.
-#[inline(always)]
-unsafe fn long_to_string_method_generic_contract_matches(
-    eg: &ExecutorGlobals,
-    op_array: &crate::compiler::OpArray,
-    cache_ip: usize,
-    receiver: &Value,
-    argument_count: usize,
-) -> bool {
-    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-    {
-        let Some(cache) = op_array.cache.get(cache_ip) else {
-            return false;
-        };
-        if !cache.method_has_generic_contract() {
-            return true;
-        }
-        return cached_receiver_generic_method_contract(eg, op_array, cache_ip, receiver)
-            .as_deref()
-            .is_some_and(|contract| {
-                contract.admits_exact_long_to_string_call(argument_count as u32)
+            .is_some_and(|contract| match boundary {
+                TypedGenericCallBoundary::Long => {
+                    contract.admits_exact_long_call(argument_count as u32)
+                }
+                TypedGenericCallBoundary::LongStringToLong { string_arguments } => contract
+                    .admits_exact_long_string_to_long_call(
+                        argument_count as u32,
+                        string_arguments,
+                    ),
+                TypedGenericCallBoundary::LongToString => {
+                    contract.admits_exact_long_to_string_call(argument_count as u32)
+                }
             });
     }
 
     #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
     {
-        let _ = (eg, op_array, cache_ip, receiver, argument_count);
+        let string_arguments = match boundary {
+            TypedGenericCallBoundary::LongStringToLong { string_arguments } => string_arguments,
+            TypedGenericCallBoundary::Long | TypedGenericCallBoundary::LongToString => 0,
+        };
+        let _ = (
+            eg,
+            op_array,
+            cache_ip,
+            receiver,
+            argument_count,
+            string_arguments,
+        );
         true
     }
 }
 
-/// Guard one frame-free Long method specialization against the same generic
+/// Guard one frame-free typed method specialization against the same generic
 /// boundary as the canonical call path. Bound-erased methods normally carry no
 /// receiver-specific contract; concretely linked descendants use the exact
 /// proof already interned in the method IC. A reified receiver resolves its
 /// class/type tuple once at typed-region entry. The receiver CV cannot be
 /// written by an admitted region, so the proof remains valid until its next
 /// canonical side exit.
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn guarded_quick_typed_method_target(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    guard: ScalarLongCallGuard,
+    receiver: &Value,
+    argument_count: usize,
+    boundary: TypedGenericCallBoundary,
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    let ScalarLongCallGuard::MethodCache { .. } = guard else {
+        return None;
+    };
+    let (target, user) =
+        guarded_cached_user_call_target(op_array, guard, Some(receiver), argument_count)?;
+    if !typed_method_generic_contract_matches(
+        eg,
+        op_array,
+        guard.cache_ip(),
+        receiver,
+        argument_count,
+        boundary,
+    ) {
+        return None;
+    }
+
+    Some((target, user))
+}
+
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
 unsafe fn guarded_quick_long_method_target(
@@ -251,31 +281,17 @@ unsafe fn guarded_quick_long_method_target(
     receiver: &Value,
     argument_count: usize,
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
-    let ScalarLongCallGuard::MethodCache { .. } = guard else {
-        return None;
-    };
-    let (target, user) =
-        guarded_cached_user_call_target(op_array, guard, Some(receiver), argument_count)?;
-    if !long_method_generic_contract_matches(
+    guarded_quick_typed_method_target(
         eg,
         op_array,
-        guard.cache_ip(),
+        guard,
         receiver,
         argument_count,
-    ) {
-        return None;
-    }
-
-    Some((target, user))
+        TypedGenericCallBoundary::Long,
+    )
 }
 
 /// Resolve and guard one IR `CallScalar` against the canonical inline cache.
-#[derive(Clone, Copy)]
-enum TypedGenericCallBoundary {
-    Long,
-    LongToString,
-}
-
 /// A successful result has the exact scalar ABI and arity required by the IR;
 /// every executor backend shares this identity contract.
 unsafe fn guarded_typed_call_target(
@@ -339,25 +355,14 @@ unsafe fn guarded_typed_call_target(
         call.arguments.len(),
     )?;
     if let Some(receiver) = receiver {
-        let contract_matches = match boundary {
-            TypedGenericCallBoundary::Long => long_method_generic_contract_matches(
-                eg,
-                &owner.op_array,
-                ip,
-                receiver,
-                call.arguments.len(),
-            ),
-            TypedGenericCallBoundary::LongToString => {
-                long_to_string_method_generic_contract_matches(
-                    eg,
-                    &owner.op_array,
-                    ip,
-                    receiver,
-                    call.arguments.len(),
-                )
-            }
-        };
-        if !contract_matches {
+        if !typed_method_generic_contract_matches(
+            eg,
+            &owner.op_array,
+            ip,
+            receiver,
+            call.arguments.len(),
+            boundary,
+        ) {
             return None;
         }
     }
@@ -887,12 +892,13 @@ unsafe fn guard_quick_scalar_call_tree_generics(
             ),
             OpType::Unused => return None,
         };
-        if !long_method_generic_contract_matches(
+        if !typed_method_generic_contract_matches(
             eg,
             caller_op_array,
             ip,
             receiver,
             (&*plan).public_args as usize,
+            TypedGenericCallBoundary::Long,
         ) {
             return None;
         }
@@ -1072,12 +1078,13 @@ unsafe fn evaluate_composed_scalar_call(
                 }
                 OpType::Unused => return None,
             };
-            if !long_method_generic_contract_matches(
+            if !typed_method_generic_contract_matches(
                 eg,
                 caller_op_array,
                 nested_ip,
                 receiver,
                 (&*nested_plan).public_args as usize,
+                TypedGenericCallBoundary::Long,
             ) {
                 return None;
             }
@@ -1153,12 +1160,13 @@ pub(crate) unsafe fn try_execute_composed_scalar_long_call(
             ),
             OpType::Unused => return None,
         };
-        if !long_method_generic_contract_matches(
+        if !typed_method_generic_contract_matches(
             eg,
             caller_op_array,
             ip,
             receiver,
             plan.public_args as usize,
+            TypedGenericCallBoundary::Long,
         ) {
             return None;
         }

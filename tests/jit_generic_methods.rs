@@ -16,6 +16,7 @@ use rphp::parser::Parser;
 use rphp::vm::execute;
 use rphp::vm::function::FunctionCommon;
 use rphp::vm::planner::BlockPlan;
+use rphp::vm::quick::QuickLongOp;
 
 fn compile_and_execute(
     source: &str,
@@ -84,6 +85,32 @@ fn generic_double_accumulate_plan<'a>(
                 })
         })
         .expect("compiler should select the generic Double method accumulate loop")
+}
+
+fn generic_mixed_ops_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickLongOpsLoop {
+    functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
+        .and_then(|(_, function)| {
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickLongOps(plan)
+                        if plan.ops.iter().any(|operation| {
+                            matches!(operation, QuickLongOp::ObjectLongMethodCall { .. })
+                        }) =>
+                    {
+                        Some(plan)
+                    }
+                    _ => None,
+                })
+        })
+        .expect("compiler should select the generic mixed-method ops loop")
 }
 
 #[test]
@@ -458,4 +485,82 @@ composedGenericStringTotal(new ComposedGenericStringBox::<string>());
         "{rendered}"
     );
     assert!(rendered.contains("reified class type"), "{rendered}");
+}
+
+#[test]
+fn exact_generic_mixed_tuple_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericMixedJitBox<T> {
+    public function score(int $base, T $route): int {
+        return $base + strlen($route);
+    }
+}
+function genericMixedTotal($box) {
+    $values = ['left' => 0, 'right' => 0];
+    $route = 'left';
+    $needle = -1;
+    for ($i = 0; $i < 100000; $i++) {
+        if (($i % 2) == 0) { $route = 'right'; } else { $route = 'left'; }
+        $score = $box->score($i, $route);
+        $values[$route] = $values[$route] + $score;
+        if ($i === $needle) { echo 'never'; }
+    }
+    return $values['left'] . ':' . $values['right'] . ':' . $i;
+}
+echo genericMixedTotal(new GenericMixedJitBox::<string>());
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "2500200000:2500200000:100000");
+
+    let plan = generic_mixed_ops_plan(&functions, "genericMixedTotal");
+    assert!(
+        plan.native_jit().is_straight_compiled(),
+        "ops: {:?}",
+        plan.ops
+    );
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_generic_mixed_tuple_mismatch_replays_canonical_boundary() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericMixedJitBox<T> {
+    public function score(int $base, T $route): int {
+        return $base + strlen($route);
+    }
+}
+function genericMixedTotal($box) {
+    $values = ['left' => 0, 'right' => 0];
+    $route = 'left';
+    $needle = -1;
+    for ($i = 0; $i < 100000; $i++) {
+        if (($i % 2) == 0) { $route = 'right'; } else { $route = 'left'; }
+        $score = $box->score($i, $route);
+        $values[$route] = $values[$route] + $score;
+        if ($i === $needle) { echo 'never'; }
+    }
+    return $values['left'] . ':' . $values['right'] . ':' . $i;
+}
+echo genericMixedTotal(new GenericMixedJitBox::<string>()) . '|';
+genericMixedTotal(new GenericMixedJitBox::<int>());
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "2500200000:2500200000:100000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #2 passed to GenericMixedJitBox::score()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+
+    let plan = generic_mixed_ops_plan(&functions, "genericMixedTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
 }

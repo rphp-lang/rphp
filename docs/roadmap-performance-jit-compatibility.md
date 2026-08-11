@@ -9166,6 +9166,34 @@ Against exact checkpoint `a72fbcf`, 100 balanced ARM64 pairs are
 positive movement is +0.403%; ARM64's larger movements are improvements shared
 with the corresponding controls.
 
+The next admission closes mixed native methods whose exact call-site ABI is a
+positional combination of raw Longs and borrowed Strings with a Long result.
+Previously the mixed region and backend already carried this representation,
+but a generic receiver was conservatively tested as all-Long and therefore
+remained in the canonical VM. `GenericMethodContract` now consumes the compact
+String-position mask once at region entry. A reified mismatch rejects the
+whole region before its first speculative operation and replays the original
+method call and diagnostic.
+
+Broad executable `mixed`/untyped parameters are refined to String only when
+the compiler observes an operation that semantically requires one (`strlen`
+or the existing literal-concat shape). Any simultaneous numeric use makes plan
+construction fail. The quick resolver then verifies that the call-site source,
+compiler mask, ordinary signature and receiver-specific generic contract all
+describe the same ABI. Long, Long/String and Long-to-String boundaries share
+one resolver, so adding a typed shape no longer duplicates IC/receiver/deopt
+logic. The native IR, either backend, inline cache and hot state are unchanged.
+
+Against exact checkpoint `5ae9284`, 20 balanced max-perf pairs improve the new
+ten-million-iteration generic workload by 93.211%/98.725% in ARM64
+erased/reified builds and 93.946%/98.743% on CPU-2-pinned x86-64. The large
+gain is the intended transition from canonical method frames to the existing
+native mixed region. One hundred-pair ordinary controls move only
++0.005%/+0.018% on ARM64 and +0.104%/-0.205% on x86-64. A separate 100-pair
+ARM64 comparison of the final generic workload with its ordinary-signature
+control is -0.102% erased and -0.040% reified; the warmed generic contract has
+no measurable per-iteration cost.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

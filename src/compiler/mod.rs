@@ -3838,6 +3838,45 @@ fn composed_scalar_argument_masks(function: &UserFunction) -> Option<(u8, u8)> {
     Some((long_mask, object_mask))
 }
 
+/// Infer exact borrowed-String inputs only from operations whose semantics
+/// require a String. This lets an erased `T`/`mixed` parameter participate in
+/// the typed plan without guessing from its broad executable signature; any
+/// incompatible numeric use makes the subsequent plan construction fail.
+fn composed_typed_string_argument_uses(function: &UserFunction) -> u8 {
+    let common = &function.common;
+    let public_args = common.sig.public_arity() as usize;
+    let argument_for_cv = |cv: u16| {
+        (0..public_args).find(|index| common.sig.param_cv_index(*index as u32) == u32::from(cv))
+    };
+    let mut string_mask = 0u8;
+    for instruction in function.op_array.instructions.iter() {
+        let string_cv = if matches!(
+            instruction.opcode,
+            OpCode::Strlen | OpCode::Strlen_Cv | OpCode::Strlen_String
+        ) && instruction.op1_type == OpType::Cv
+        {
+            Some(instruction.op1)
+        } else if matches!(
+            instruction.opcode,
+            OpCode::Concat | OpCode::Concat_StringString
+        ) {
+            if instruction.op1_type == OpType::Cv && instruction.op2_type == OpType::Const {
+                Some(instruction.op1)
+            } else if instruction.op2_type == OpType::Cv && instruction.op1_type == OpType::Const {
+                Some(instruction.op2)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        if let Some(index) = string_cv.and_then(argument_for_cv) {
+            string_mask |= 1u8 << index;
+        }
+    }
+    string_mask
+}
+
 fn composed_typed_argument_masks(function: &UserFunction) -> Option<(u8, u8, u8)> {
     let common = &function.common;
     let public_args = common.sig.public_arity();
@@ -3855,6 +3894,7 @@ fn composed_typed_argument_masks(function: &UserFunction) -> Option<(u8, u8, u8)
     let mut long_mask = 0u8;
     let mut object_mask = 0u8;
     let mut string_mask = 0u8;
+    let inferred_string_mask = composed_typed_string_argument_uses(function);
     for index in 0..public_args as usize {
         let hint = common
             .sig
@@ -3862,6 +3902,11 @@ fn composed_typed_argument_masks(function: &UserFunction) -> Option<(u8, u8, u8)
             .get(index)
             .unwrap_or(&ParamTypeHint::None);
         match hint {
+            ParamTypeHint::None | ParamTypeHint::Mixed
+                if inferred_string_mask & (1u8 << index) != 0 =>
+            {
+                string_mask |= 1u8 << index;
+            }
             ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int => {
                 long_mask |= 1u8 << index;
             }

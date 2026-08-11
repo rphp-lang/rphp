@@ -2291,6 +2291,31 @@ and -0.667%/-0.049% control. CPU-2-pinned x86-64 reports
 lane regresses by one percent; the larger ARM64 movements are improvements
 shared with controls rather than per-call guard cost.
 
+Mixed native method regions now admit receiver-specific generic contracts with
+an exact positional Long/String input mask and Long output. The compiler may
+refine an erased `mixed` parameter to a borrowed String only from an existing
+String-required operation; an ambiguous String-plus-numeric body remains on
+the canonical path. Runtime compares that compiler mask with the quick
+call-site sources and the substituted generic method contract once before
+lowering. A different reified tuple cannot reuse the proof and resumes the
+original method call before any region write.
+
+The generic admission code is also consolidated around
+`TypedGenericCallBoundary`: all-Long, Long/String-to-Long and
+Long-to-String shapes now share cache identity, receiver resolution and the
+canonical rejection edge. The existing linked-Long IC bit is reused only for
+its exact ABI; mixed masks stay cold call-site facts. No instruction, inline
+cache, native state or backend representation changed. Focused generic JIT
+coverage is 14 dual/reified and 7 erased scenarios, including successful native
+entry and a same-class reified tuple mismatch.
+
+Against exact checkpoint `5ae9284`, 20 balanced max-perf pairs improve the new
+generic mixed lane by 93.211%/98.725% on ARM64 and 93.946%/98.743% on
+CPU-2-pinned x86-64 in erased/reified mode. One hundred-pair ordinary controls
+are +0.005%/+0.018% on ARM64 and +0.104%/-0.205% on x86-64. The final ARM64
+generic/ordinary comparison is -0.102% erased and -0.040% reified, confirming
+that the receiver proof is outside the native iteration body.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
