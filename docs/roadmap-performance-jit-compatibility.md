@@ -9141,6 +9141,31 @@ generic, +0.103%/-0.197% nested generic, +0.038%/+0.175% direct control and
 +0.300%/+0.057% nested control. All eight architecture/mode generic lanes and
 all controls remain within the one-percent gate.
 
+The following admission covers compiler-composed scalar bodies whose object
+argument supplies nested monomorphic methods. The previous resolver shared
+class/target/arity identity but did not describe the generic ABI of each IR
+call kind. It now selects one of two cold proofs: exact Long inputs and return
+for `Call`, or exact Long inputs with a borrowed String return for
+`StringCall`. The latter adds
+`GenericMethodContract::admits_exact_long_to_string_call()` and recursively
+admits only String-compatible return unions/intersections.
+
+The check runs once while resolving the composed body, after the existing IC,
+and remains outside the per-iteration evaluator. No call operation, plan,
+inline cache, native context or backend changes size. Permanent tests cover
+compatible Long and String receiver tuples plus same-class reified tuple
+changes. A failed proof replays the outer function and reaches the canonical
+nested method argument error; erased builds retain the same quick body.
+
+Against exact checkpoint `a72fbcf`, 100 balanced ARM64 pairs are
+-1.168%/-0.960% erased/reified for generic composed Long and
+-1.924%/-1.113% for its ordinary control; generic composed String is
+-0.303%/-0.873% with -0.667%/-0.049% controls. CPU-2-pinned x86-64 is
+-0.044%/+0.403% Long generic, +0.048%/+0.196% Long control,
++0.068%/+0.169% String generic and -0.028%/+0.090% String control. The largest
+positive movement is +0.403%; ARM64's larger movements are improvements shared
+with the corresponding controls.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

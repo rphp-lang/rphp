@@ -327,3 +327,135 @@ nestedGenericDoubleTotal(new NestedGenericDoubleJitBox::<string>());
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
+
+#[test]
+fn composed_object_generic_long_tuple_uses_quick_body() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class ComposedGenericLongBox<T> {
+    public function step(T $value): T { return $value + 1; }
+}
+function consumeComposedLong(ComposedGenericLongBox $box, int $value): int {
+    return ($box->step($value) % 97) ^ 13;
+}
+function composedGenericLongTotal($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += consumeComposedLong($box, $i);
+    }
+    return $i . ':' . $sum;
+}
+echo composedGenericLongTotal(new ComposedGenericLongBox::<int>());
+"#,
+    );
+    result.unwrap();
+    assert!(output.starts_with("100000:"), "{output}");
+
+    let plan = generic_accumulate_plan(&functions, "composedGenericLongTotal");
+    assert!(matches!(
+        plan.term,
+        rphp::vm::quick::QuickLongTerm::ScalarFunctionCall { .. }
+    ));
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn composed_object_reified_long_mismatch_replays_canonical_boundary() {
+    let (_, _, result, output) = compile_and_execute(
+        r#"<?php
+class ComposedGenericLongBox<T> {
+    public function step(T $value): T { return $value + 1; }
+}
+function consumeComposedLong(ComposedGenericLongBox $box, int $value): int {
+    return ($box->step($value) % 97) ^ 13;
+}
+function composedGenericLongTotal($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += consumeComposedLong($box, $i);
+    }
+    return $sum;
+}
+echo composedGenericLongTotal(new ComposedGenericLongBox::<int>()) . '|';
+composedGenericLongTotal(new ComposedGenericLongBox::<string>());
+"#,
+    );
+    let error = result.unwrap_err();
+    assert!(output.ends_with('|'), "{output}");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to ComposedGenericLongBox::step()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+}
+
+#[test]
+fn composed_object_generic_string_tuple_uses_quick_body() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class ComposedGenericStringBox<T> {
+    public function label(T $value): string {
+        if (($value & 1) === 0) { return 'even'; }
+        return 'odd';
+    }
+}
+function consumeComposedString(ComposedGenericStringBox $box, int $value): int {
+    return strlen($box->label($value));
+}
+function composedGenericStringTotal($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += consumeComposedString($box, $i);
+    }
+    return $i . ':' . $sum;
+}
+echo composedGenericStringTotal(new ComposedGenericStringBox::<int>());
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:350000");
+
+    let plan = generic_accumulate_plan(&functions, "composedGenericStringTotal");
+    assert!(matches!(
+        plan.term,
+        rphp::vm::quick::QuickLongTerm::ScalarFunctionCall { .. }
+    ));
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn composed_object_reified_string_mismatch_replays_canonical_boundary() {
+    let (_, _, result, output) = compile_and_execute(
+        r#"<?php
+class ComposedGenericStringBox<T> {
+    public function label(T $value): string {
+        if (($value & 1) === 0) { return 'even'; }
+        return 'odd';
+    }
+}
+function consumeComposedString(ComposedGenericStringBox $box, int $value): int {
+    return strlen($box->label($value));
+}
+function composedGenericStringTotal($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += consumeComposedString($box, $i);
+    }
+    return $sum;
+}
+echo composedGenericStringTotal(new ComposedGenericStringBox::<int>()) . '|';
+composedGenericStringTotal(new ComposedGenericStringBox::<string>());
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "350000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to ComposedGenericStringBox::label()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+}

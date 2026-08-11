@@ -223,6 +223,24 @@ impl GenericMethodContract {
                 .as_ref()
                 .is_none_or(generic_type_admits_double)
     }
+
+    /// A borrowed scalar String leaf in the composed typed executor consumes
+    /// raw Long arguments and exposes only a checked String result length.
+    /// Receiver substitution may be elided only when that heterogeneous ABI
+    /// satisfies the complete generic boundary.
+    #[inline]
+    pub fn admits_exact_long_to_string_call(&self, arguments: u32) -> bool {
+        !self.is_variadic
+            && self.value_parameters.len() == arguments as usize
+            && self
+                .value_parameters
+                .iter()
+                .all(|value| value.as_ref().is_none_or(generic_type_admits_long))
+            && self
+                .return_type
+                .as_ref()
+                .is_none_or(generic_type_admits_string)
+    }
 }
 
 fn generic_type_admits_long(value: &GenericType) -> bool {
@@ -252,6 +270,25 @@ fn generic_type_admits_double(value: &GenericType) -> bool {
         GenericType::Intersection(parts) => parts.iter().all(generic_type_admits_double),
         GenericType::Int
         | GenericType::String
+        | GenericType::Bool
+        | GenericType::Array
+        | GenericType::Callable
+        | GenericType::Null
+        | GenericType::Void
+        | GenericType::Never
+        | GenericType::Named { .. }
+        | GenericType::Parameter(_) => false,
+    }
+}
+
+fn generic_type_admits_string(value: &GenericType) -> bool {
+    match value {
+        GenericType::String | GenericType::Mixed => true,
+        GenericType::Nullable(inner) => generic_type_admits_string(inner),
+        GenericType::Union(parts) => parts.iter().any(generic_type_admits_string),
+        GenericType::Intersection(parts) => parts.iter().all(generic_type_admits_string),
+        GenericType::Int
+        | GenericType::Float
         | GenericType::Bool
         | GenericType::Array
         | GenericType::Callable

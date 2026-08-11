@@ -202,6 +202,39 @@ unsafe fn long_method_generic_contract_matches(
     }
 }
 
+/// Validate a composed typed method whose exact inputs are Longs while its
+/// borrowed output is a String. There is no linked String IC bit: contracts
+/// that exist are resolved once with the receiver at region admission.
+#[inline(always)]
+unsafe fn long_to_string_method_generic_contract_matches(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    cache_ip: usize,
+    receiver: &Value,
+    argument_count: usize,
+) -> bool {
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    {
+        let Some(cache) = op_array.cache.get(cache_ip) else {
+            return false;
+        };
+        if !cache.method_has_generic_contract() {
+            return true;
+        }
+        return cached_receiver_generic_method_contract(eg, op_array, cache_ip, receiver)
+            .as_deref()
+            .is_some_and(|contract| {
+                contract.admits_exact_long_to_string_call(argument_count as u32)
+            });
+    }
+
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    {
+        let _ = (eg, op_array, cache_ip, receiver, argument_count);
+        true
+    }
+}
+
 /// Guard one frame-free Long method specialization against the same generic
 /// boundary as the canonical call path. Bound-erased methods normally carry no
 /// receiver-specific contract; concretely linked descendants use the exact
@@ -237,6 +270,12 @@ unsafe fn guarded_quick_long_method_target(
 }
 
 /// Resolve and guard one IR `CallScalar` against the canonical inline cache.
+#[derive(Clone, Copy)]
+enum TypedGenericCallBoundary {
+    Long,
+    LongToString,
+}
+
 /// A successful result has the exact scalar ABI and arity required by the IR;
 /// every executor backend shares this identity contract.
 unsafe fn guarded_typed_call_target(
@@ -244,6 +283,7 @@ unsafe fn guarded_typed_call_target(
     owner: &UserFunction,
     call: &ScalarLongCall,
     object_arguments: &[*const Value; 8],
+    boundary: TypedGenericCallBoundary,
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
     let ip = call.guard.cache_ip();
     let initializer = owner.op_array.instructions.get(ip)?;
@@ -292,7 +332,36 @@ unsafe fn guarded_typed_call_target(
             Some(&*receiver)
         }
     };
-    guarded_cached_user_call_target(&owner.op_array, call.guard, receiver, call.arguments.len())
+    let resolved = guarded_cached_user_call_target(
+        &owner.op_array,
+        call.guard,
+        receiver,
+        call.arguments.len(),
+    )?;
+    if let Some(receiver) = receiver {
+        let contract_matches = match boundary {
+            TypedGenericCallBoundary::Long => long_method_generic_contract_matches(
+                eg,
+                &owner.op_array,
+                ip,
+                receiver,
+                call.arguments.len(),
+            ),
+            TypedGenericCallBoundary::LongToString => {
+                long_to_string_method_generic_contract_matches(
+                    eg,
+                    &owner.op_array,
+                    ip,
+                    receiver,
+                    call.arguments.len(),
+                )
+            }
+        };
+        if !contract_matches {
+            return None;
+        }
+    }
+    Some(resolved)
 }
 
 unsafe fn guarded_scalar_call_target(
@@ -301,7 +370,13 @@ unsafe fn guarded_scalar_call_target(
     call: &ScalarLongCall,
     object_arguments: &[*const Value; 8],
 ) -> Option<(*const FunctionCommon, *const UserFunction)> {
-    let (target, user) = guarded_typed_call_target(eg, owner, call, object_arguments)?;
+    let (target, user) = guarded_typed_call_target(
+        eg,
+        owner,
+        call,
+        object_arguments,
+        TypedGenericCallBoundary::Long,
+    )?;
     guarded_scalar_user_target(target, call.arguments.len())?;
     Some((target, user))
 }
@@ -411,8 +486,13 @@ unsafe fn resolve_quick_composed_typed_body(
         if call_count > COMPOSED_SCALAR_MAX_CALLS || call.arguments.len() > 8 {
             return false;
         }
+        let boundary = if returns_string {
+            TypedGenericCallBoundary::LongToString
+        } else {
+            TypedGenericCallBoundary::Long
+        };
         let Some((target, target_user)) =
-            guarded_typed_call_target(eg, owner, call, object_arguments)
+            guarded_typed_call_target(eg, owner, call, object_arguments, boundary)
         else {
             return false;
         };

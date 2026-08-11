@@ -2266,6 +2266,31 @@ Against exact checkpoint `ff9dc11`, 100 steady-state ARM64 pairs report
 +0.300%/+0.057% nested control. Every lane remains below one percent without
 backend-specific generic lowering.
 
+Composed scalar bodies now carry a typed generic admission for each nested
+method target. Exact Long leaves reuse `admits_exact_long_call`; borrowed
+String leaves use a heterogeneous `admits_exact_long_to_string_call` proof so
+their raw Long inputs and checked String return are validated independently.
+The resolver chooses the boundary from the compiler's existing `Call` versus
+`StringCall` IR variant after the canonical receiver class, target and arity
+cache succeeds.
+
+This closes object-argument shapes such as
+`consume(Box $box, int $value): int` without growing the call IR, inline cache
+or native state. A non-generic outer function can no longer hide a reified
+generic Long or String method from region admission; rejection resumes its
+original call and canonical generic diagnostic. Compatible erased/reified
+tuples retain the established quick composed body. Focused coverage is 12
+dual/reified and 6 erased generic JIT scenarios.
+
+Against exact checkpoint `a72fbcf`, 100 balanced ARM64 pairs report
+-1.168%/-0.960% erased/reified for the generic composed-Long lane and
+-1.924%/-1.113% for its control; composed String is -0.303%/-0.873% generic
+and -0.667%/-0.049% control. CPU-2-pinned x86-64 reports
+-0.044%/+0.403% Long generic, +0.048%/+0.196% Long control,
++0.068%/+0.169% String generic and -0.028%/+0.090% String control. No measured
+lane regresses by one percent; the larger ARM64 movements are improvements
+shared with controls rather than per-call guard cost.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
