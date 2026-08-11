@@ -162,6 +162,7 @@ impl Drop for QuickObjectCallRecorder<'_> {
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
 unsafe fn quick_object_method_target(
+    eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
     slot_base: *mut Value,
     guard: ScalarLongCallGuard,
@@ -175,10 +176,11 @@ unsafe fn quick_object_method_target(
     // arity) is shared by every frame-free user plan.  Do not require the
     // scalar-only ABI here: callers below validate the concrete property,
     // scalar or mixed object/Long/String plan before executing it.
-    let (target, user) = guarded_cached_user_call_target(
+    let (target, user) = guarded_quick_long_method_target(
+        eg,
         op_array,
         guard,
-        Some(&*receiver),
+        &*receiver,
         argument_count,
     )?;
     Some((receiver, target, user))
@@ -381,6 +383,7 @@ unsafe fn resolve_quick_object_ops(
             },
             QuickLongOp::PropertyMethodCall { call } => {
                 let (receiver, target, user) = quick_object_method_target(
+                    eg,
                     op_array,
                     slot_base,
                     call.guard,
@@ -419,6 +422,7 @@ unsafe fn resolve_quick_object_ops(
             }
             QuickLongOp::PropertyGetterCall { call, .. } => {
                 let (receiver, target, user) = quick_object_method_target(
+                    eg,
                     op_array,
                     slot_base,
                     call.guard,
@@ -433,6 +437,7 @@ unsafe fn resolve_quick_object_ops(
             }
             QuickLongOp::ScalarMethodCall { call, .. } => {
                 let (receiver, target, user) = quick_object_method_target(
+                    eg,
                     op_array,
                     slot_base,
                     call.guard,
@@ -466,6 +471,7 @@ unsafe fn resolve_quick_object_ops(
             }
             QuickLongOp::ObjectLongMethodCall { call, .. } => {
                 let (receiver, target, user) = quick_object_method_target(
+                    eg,
                     op_array,
                     slot_base,
                     call.guard,
@@ -507,13 +513,13 @@ unsafe fn resolve_quick_object_ops(
                 ..
             } => {
                 let (outer_receiver, outer_target, outer_user) =
-                    quick_object_method_target(op_array, slot_base, outer_guard, 1)?;
+                    quick_object_method_target(eg, op_array, slot_base, outer_guard, 1)?;
                 let outer_plan = (&*outer_user).long_property_plan.as_deref()?;
                 if outer_plan.public_args != 1 {
                     return None;
                 }
                 let (inner_receiver, inner_target, inner_user) =
-                    quick_object_method_target(op_array, slot_base, inner_guard, 0)?;
+                    quick_object_method_target(eg, op_array, slot_base, inner_guard, 0)?;
                 let inner_property_slot =
                     quick_property_getter_slot(inner_receiver, inner_user)?;
                 QuickResolvedObjectOp::ComposedProperty {

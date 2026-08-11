@@ -382,6 +382,7 @@ unsafe fn run_quick_long_accumulate_loop(
     } = plan.term
     {
         let Some((cached, user)) = guarded_quick_scalar_call_target(
+            eg,
             op_array,
             slot_base,
             guard,
@@ -492,6 +493,7 @@ unsafe fn run_quick_long_accumulate_loop(
     } = plan.term
     {
         let Some((cached, user)) = guarded_quick_scalar_call_target(
+            eg,
             op_array,
             slot_base,
             guard,

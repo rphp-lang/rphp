@@ -45,7 +45,8 @@ if [ -n "$cpu" ] && ! command -v taskset >/dev/null 2>&1; then
     exit 2
 fi
 case $only in
-    '' | bench_generics_method.php | bench_generics_method_turbofish.php | \
+    '' | bench_generics_method.php | bench_generics_method_native_loop.php | \
+        bench_scalar_method_native_loop.php | bench_generics_method_turbofish.php | \
         bench_generics_default_omitted.php | bench_generics_default_explicit.php | \
         bench_generics_default_manual.php) ;;
     *)
@@ -142,6 +143,8 @@ while read -r workload; do
     done
 done <<'WORKLOADS'
 bench_generics_method.php
+bench_generics_method_native_loop.php
+bench_scalar_method_native_loop.php
 bench_generics_method_turbofish.php
 bench_generics_default_omitted.php
 bench_generics_default_explicit.php
@@ -151,6 +154,8 @@ WORKLOADS
 echo "balanced mean of order-specific candidate/baseline median ratios:"
 for workload in \
     bench_generics_method.php \
+    bench_generics_method_native_loop.php \
+    bench_scalar_method_native_loop.php \
     bench_generics_method_turbofish.php \
     bench_generics_default_omitted.php \
     bench_generics_default_explicit.php \

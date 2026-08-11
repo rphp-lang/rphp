@@ -2197,6 +2197,26 @@ and final interphase milestone. It must consume canonical metadata with no
 extra erased guard, an exact class/type-tuple proof for reified receivers, and
 deoptimization to these established erased/reified paths.
 
+The first direct-Long specialization checkpoint is now admitted. One shared
+method-entry guard validates the warmed function/class/arity IC before any
+frame-free quick or native plan is selected. Bound-erased own methods add no
+generic check, and a concretely linked descendant consumes the exact-Long bit
+already stored in the IC. A reified receiver instead resolves its interned
+class/type tuple once per typed-region activation; the admitted object CV is
+immutable for that region, and a mismatch takes the unchanged canonical call
+edge before native code runs. No tuple test, sidecar access or allocation is
+emitted inside the loop, and no `Value`, frame, instruction, function or JIT
+backend layout changed.
+
+Architecture-specific tests prove that `GenericJitBox<int>` enters one native
+region and multiple native chunks, while `GenericJitBox<string>` reaches the
+canonical reified `TypeError`. Against exact checkpoint `6fb757c`, 40 balanced
+ARM64 pairs report -0.340% erased and +0.015% reified for the generic native
+loop; the ordinary native-method controls are -0.646% and +0.149%. CPU-2-pinned
+x86-64 reports +0.647%/-0.163% generic and +0.141%/-0.190% ordinary. This is
+the first JIT admission step, not permission for unguarded nested or non-Long
+specializations.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

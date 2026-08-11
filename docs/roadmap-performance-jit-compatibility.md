@@ -9064,6 +9064,29 @@ canonical deoptimization edge to the already-tested reified executor. Final
 admission requires separate erased/reified native benchmarks on ARM64 and
 x86-64 plus unchanged feature-off and non-generic gates.
 
+The first admitted generics-aware native shape is a direct Long method inside a
+typed accumulate or general mixed region. `guarded_quick_long_method_target()`
+shares the canonical warmed method IC: class, target and arity are checked for
+every activation. Bound-erased own methods keep the existing ABI with no
+generic lookup, and concretely linked descendants consume their interned
+exact-Long IC proof. Only a receiver-specific reified contract resolves the
+interned class/type tuple, once before the quick/native region is entered. The
+region cannot write its receiver CV, so the proof spans the activation; failure
+returns `GuardFailed` or the existing call resume IP and never enters native
+code. Native lowering, machine code and deoptimization publication remain
+target-neutral and unchanged.
+
+Permanent ARM64/x86-64 tests assert one native entry, multiple chunks and zero
+side exits for `GenericJitBox<int>`, plus the canonical reified error for a
+same-class `GenericJitBox<string>` receiver. A dedicated dependency-free
+`bench_generics_method_native_loop.php` lane is paired with the existing
+ordinary native-method control. Relative to exact checkpoint `6fb757c`, 40
+balanced ARM64 pairs are -0.340% erased/+0.015% reified for the generic lane
+and -0.646%/+0.149% for the ordinary control. CPU-2-pinned x86-64 is
++0.647%/-0.163% generic and +0.141%/-0.190% ordinary. The one-percent gates
+therefore hold separately in both runtime modes and on both native backends,
+without a dependency or hot-layout change.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

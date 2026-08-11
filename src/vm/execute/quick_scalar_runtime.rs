@@ -167,6 +167,7 @@ unsafe fn evaluate_quick_fused_scalar_program(
 #[inline(always)]
 #[cfg(feature = "quick-loops")]
 unsafe fn guarded_quick_scalar_call_target(
+    eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
     slot_base: *mut Value,
     guard: ScalarLongCallGuard,
@@ -195,12 +196,16 @@ unsafe fn guarded_quick_scalar_call_target(
             Some(&*slot_base.add(receiver_slot as usize))
         }
     };
-    guarded_cached_scalar_call_target(
+    let receiver = receiver?;
+    let (target, user) = guarded_quick_long_method_target(
+        eg,
         op_array,
         guard,
         receiver,
         argument_count as usize,
-    )
+    )?;
+    guarded_scalar_user_target(target, argument_count as usize)?;
+    Some((target, user))
 }
 
 #[inline(always)]
@@ -283,4 +288,3 @@ unsafe fn quick_long_argument_outputs_are_valid(
             ScalarLongSource::Constant(_) | ScalarLongSource::Temporary(_) => true,
         })
 }
-

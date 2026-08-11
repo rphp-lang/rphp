@@ -152,6 +152,57 @@ unsafe fn guarded_cached_scalar_call_target(
     Some((target, user))
 }
 
+/// Guard one frame-free Long method specialization against the same generic
+/// boundary as the canonical call path. Bound-erased methods normally carry no
+/// receiver-specific contract; concretely linked descendants use the exact
+/// proof already interned in the method IC. A reified receiver resolves its
+/// class/type tuple once at typed-region entry. The receiver CV cannot be
+/// written by an admitted region, so the proof remains valid until its next
+/// canonical side exit.
+#[inline(always)]
+#[cfg(feature = "quick-loops")]
+unsafe fn guarded_quick_long_method_target(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    guard: ScalarLongCallGuard,
+    receiver: &Value,
+    argument_count: usize,
+) -> Option<(*const FunctionCommon, *const UserFunction)> {
+    let ScalarLongCallGuard::MethodCache { .. } = guard else {
+        return None;
+    };
+    let (target, user) =
+        guarded_cached_user_call_target(op_array, guard, Some(receiver), argument_count)?;
+
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    {
+        let cache = op_array.cache.get(guard.cache_ip())?;
+        if cache.method_has_generic_contract()
+            && !cache.method_has_linked_generic_long_contract()
+        {
+            let initializer = op_array.instructions.get(guard.cache_ip())?;
+            let method = op_array
+                .literals
+                .get(initializer.op2 as usize)?
+                .as_str()?;
+            if !eg
+                .generic_instance_method_contract(receiver, method)
+                .as_deref()
+                .is_some_and(|contract| {
+                    contract.admits_exact_long_call(argument_count as u32)
+                })
+            {
+                return None;
+            }
+        }
+    }
+
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    let _ = eg;
+
+    Some((target, user))
+}
+
 /// Resolve and guard one IR `CallScalar` against the canonical inline cache.
 /// A successful result has the exact scalar ABI and arity required by the IR;
 /// every executor backend shares this identity contract.
