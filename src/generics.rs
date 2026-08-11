@@ -205,6 +205,24 @@ impl GenericMethodContract {
                 .as_ref()
                 .is_none_or(generic_type_admits_long)
     }
+
+    /// A direct Double method plan accepts only raw Double arguments and
+    /// either produces a Double or side-exits. As with the Long ABI, this can
+    /// discharge a substituted receiver contract only when every occupied
+    /// boundary admits that exact representation.
+    #[inline]
+    pub fn admits_exact_double_call(&self, arguments: u32) -> bool {
+        !self.is_variadic
+            && self.value_parameters.len() == arguments as usize
+            && self
+                .value_parameters
+                .iter()
+                .all(|value| value.as_ref().is_none_or(generic_type_admits_double))
+            && self
+                .return_type
+                .as_ref()
+                .is_none_or(generic_type_admits_double)
+    }
 }
 
 fn generic_type_admits_long(value: &GenericType) -> bool {
@@ -214,6 +232,25 @@ fn generic_type_admits_long(value: &GenericType) -> bool {
         GenericType::Union(parts) => parts.iter().any(generic_type_admits_long),
         GenericType::Intersection(parts) => parts.iter().all(generic_type_admits_long),
         GenericType::Float
+        | GenericType::String
+        | GenericType::Bool
+        | GenericType::Array
+        | GenericType::Callable
+        | GenericType::Null
+        | GenericType::Void
+        | GenericType::Never
+        | GenericType::Named { .. }
+        | GenericType::Parameter(_) => false,
+    }
+}
+
+fn generic_type_admits_double(value: &GenericType) -> bool {
+    match value {
+        GenericType::Float | GenericType::Mixed => true,
+        GenericType::Nullable(inner) => generic_type_admits_double(inner),
+        GenericType::Union(parts) => parts.iter().any(generic_type_admits_double),
+        GenericType::Intersection(parts) => parts.iter().all(generic_type_admits_double),
+        GenericType::Int
         | GenericType::String
         | GenericType::Bool
         | GenericType::Array

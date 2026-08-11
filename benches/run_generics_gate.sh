@@ -47,8 +47,12 @@ fi
 case $only in
     '' | bench_generics_method.php | bench_generics_method_native_loop.php | \
         bench_generics_method_nested_native_loop.php | \
+        bench_generics_method_double_native_loop.php | \
+        bench_generics_method_double_nested_native_loop.php | \
         bench_scalar_method_native_loop.php | \
         bench_scalar_method_nested_native_loop.php | \
+        bench_scalar_method_double_native_loop.php | \
+        bench_scalar_method_double_nested_native_loop.php | \
         bench_generics_method_turbofish.php | \
         bench_generics_default_omitted.php | bench_generics_default_explicit.php | \
         bench_generics_default_manual.php) ;;
@@ -148,8 +152,12 @@ done <<'WORKLOADS'
 bench_generics_method.php
 bench_generics_method_native_loop.php
 bench_generics_method_nested_native_loop.php
+bench_generics_method_double_native_loop.php
+bench_generics_method_double_nested_native_loop.php
 bench_scalar_method_native_loop.php
 bench_scalar_method_nested_native_loop.php
+bench_scalar_method_double_native_loop.php
+bench_scalar_method_double_nested_native_loop.php
 bench_generics_method_turbofish.php
 bench_generics_default_omitted.php
 bench_generics_default_explicit.php
@@ -161,8 +169,12 @@ for workload in \
     bench_generics_method.php \
     bench_generics_method_native_loop.php \
     bench_generics_method_nested_native_loop.php \
+    bench_generics_method_double_native_loop.php \
+    bench_generics_method_double_nested_native_loop.php \
     bench_scalar_method_native_loop.php \
     bench_scalar_method_nested_native_loop.php \
+    bench_scalar_method_double_native_loop.php \
+    bench_scalar_method_double_nested_native_loop.php \
     bench_generics_method_turbofish.php \
     bench_generics_default_omitted.php \
     bench_generics_default_explicit.php \

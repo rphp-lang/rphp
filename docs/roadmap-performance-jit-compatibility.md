@@ -9113,6 +9113,34 @@ pinned x86-64 is +0.636%/+0.212% generic and +0.730%/-0.118% control. All lanes
 remain inside the one-percent admission gate without backend-specific generic
 code.
 
+Exact Double generic methods are admitted next. A raw-Double contract proof
+accepts only fixed-arity boundaries whose occupied parameters and return can
+carry `float`; the existing Double plan continues to guard the actual values
+and side-exit on non-Double input or invalid arithmetic. Root method admission
+happens after its normal IC proof, and composed same-receiver callees repeat the
+same receiver-specific check while their target-neutral program is flattened.
+A shared out-of-line metadata lookup avoids duplicating method-name resolution
+while leaving the inline cache, plan, native state and both code generators
+unchanged.
+
+The nested regression is intentionally stronger than another generic root: a
+non-generic `composed(float, float): float` wrapper calls generic
+`$this->scale(T, float): T`. Replaying the wrapper on the same class with a
+different reified tuple can therefore be rejected only by the nested resolver.
+Both direct and nested compatible tuples enter exactly one native region with
+zero side exits; incompatible tuples resume the original PHP call and preserve
+its argument diagnostic. Default, erased, reified and all-feature all-target
+matrices pass on both architectures (311 ARM64 and 336 x86-64 all-feature
+library tests).
+
+Against exact checkpoint `ff9dc11`, 100 balanced ARM64 pairs are
+-0.033%/-0.152% erased/reified for the direct generic lane and
+-0.066%/+0.200% for the nested generic lane, with -0.079%/-0.299% and
+-0.067%/+0.135% controls. CPU-2-pinned x86-64 is -0.077%/+0.182% direct
+generic, +0.103%/-0.197% nested generic, +0.038%/+0.175% direct control and
++0.300%/+0.057% nested control. All eight architecture/mode generic lanes and
+all controls remain within the one-percent gate.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

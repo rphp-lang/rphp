@@ -2241,6 +2241,31 @@ CPU-2-pinned x86-64 reports +0.636%/+0.212% generic and
 warmup is outside the measured interval while the per-activation tuple
 preflight remains inside it.
 
+The next generic JIT admission covers exact Double methods and composed Double
+call trees. `GenericMethodContract::admits_exact_double_call()` mirrors the
+existing raw-Long proof: every occupied argument and return boundary must admit
+`float`, the call must be fixed-arity, and the scalar plan remains responsible
+for exact raw-Double representation and arithmetic side exits. A shared cold
+receiver-contract lookup now serves both scalar ABIs without widening the
+method IC.
+
+The Double resolver checks the root after normal class/target/arity identity
+and checks every same-receiver nested method while flattening its composed
+program. Therefore a non-generic wrapper cannot hide an incompatible generic
+`$this` call during baseline frame elision or before native entry. The proof is
+kept out of `ScalarDoubleFunctionPlan`, the native state and both backends.
+Permanent tests cover direct and nested `<float>` success plus same-class
+`<string>` replay to the canonical argument error. The complete default,
+erased, reified and all-feature matrices pass on ARM64 and x86-64.
+
+Against exact checkpoint `ff9dc11`, 100 steady-state ARM64 pairs report
+-0.033% erased/-0.152% reified for the direct generic Double lane and
+-0.066%/+0.200% for the nested lane; their controls are -0.079%/-0.299% and
+-0.067%/+0.135%. CPU-2-pinned x86-64 reports -0.077%/+0.182% direct generic,
++0.103%/-0.197% nested generic, +0.038%/+0.175% direct control and
++0.300%/+0.057% nested control. Every lane remains below one percent without
+backend-specific generic lowering.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

@@ -131,6 +131,37 @@ enum ResolvedDoubleCallee<'a> {
     Composed(ScalarDoubleFunctionPlan),
 }
 
+/// Validate the generic part of an exact Double method boundary after the
+/// canonical monomorphic cache has established receiver and target identity.
+/// The proof stays outside the target-neutral plan and both native backends.
+#[inline(always)]
+unsafe fn double_method_generic_contract_matches(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    cache_ip: usize,
+    receiver: &Value,
+    argument_count: usize,
+) -> bool {
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    {
+        let Some(cache) = op_array.cache.get(cache_ip) else {
+            return false;
+        };
+        if !cache.method_has_generic_contract() {
+            return true;
+        }
+        return cached_receiver_generic_method_contract(eg, op_array, cache_ip, receiver)
+            .as_deref()
+            .is_some_and(|contract| contract.admits_exact_double_call(argument_count as u32));
+    }
+
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    {
+        let _ = (eg, op_array, cache_ip, receiver, argument_count);
+        true
+    }
+}
+
 impl ResolvedDoubleCallee<'_> {
     #[inline(always)]
     fn program(&self) -> ResolvedScalarDoubleProgram<'_> {
@@ -219,6 +250,17 @@ unsafe fn resolve_composed_double_program_inner(
             callee_receiver,
             call.arguments.len(),
         )?;
+        if let ScalarLongCallGuard::MethodCache { .. } = call.guard
+            && !double_method_generic_contract_matches(
+                eg,
+                &owner.op_array,
+                ip,
+                callee_receiver?,
+                call.arguments.len(),
+            )
+        {
+            return None;
+        }
         let user = &*user;
         match call.guard {
             ScalarLongCallGuard::FunctionCache { .. } if user.common.sig.this_offset != 0 => {
@@ -314,6 +356,7 @@ unsafe fn record_quick_double_call_targets(
 /// cache; the caller validates the resolved user's Double ABI and plan.
 #[inline(always)]
 unsafe fn guarded_quick_double_call_target(
+    eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
     slot_base: *mut Value,
     guard: ScalarLongCallGuard,
@@ -328,12 +371,24 @@ unsafe fn guarded_quick_double_call_target(
             Some(&*slot_base.add(receiver_slot as usize))
         }
     };
-    guarded_cached_user_call_target(
+    let resolved = guarded_cached_user_call_target(
         op_array,
         guard,
         receiver,
         argument_count as usize,
-    )
+    )?;
+    if let Some(receiver) = receiver
+        && !double_method_generic_contract_matches(
+            eg,
+            op_array,
+            guard.cache_ip(),
+            receiver,
+            argument_count as usize,
+        )
+    {
+        return None;
+    }
+    Some(resolved)
 }
 
 #[inline(never)]
@@ -526,6 +581,7 @@ unsafe fn run_quick_double_call_accumulate_loop(
     }
 
     let Some((target, user)) = guarded_quick_double_call_target(
+        eg,
         op_array,
         slot_base,
         plan.guard,

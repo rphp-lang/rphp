@@ -66,6 +66,26 @@ fn generic_accumulate_plan<'a>(
         .expect("compiler should select the generic method accumulate loop")
 }
 
+fn generic_double_accumulate_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickDoubleCallAccumulateLoop {
+    functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
+        .and_then(|(_, function)| {
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickDoubleCallAccumulate(plan) => Some(plan),
+                    _ => None,
+                })
+        })
+        .expect("compiler should select the generic Double method accumulate loop")
+}
+
 #[test]
 fn exact_generic_long_tuple_enters_one_native_region() {
     let (_, functions, result, output) = compile_and_execute(
@@ -182,6 +202,128 @@ nestedGenericTotal(new NestedGenericJitBox::<string>());
     assert!(rendered.contains("reified class type"), "{rendered}");
 
     let plan = generic_accumulate_plan(&functions, "nestedGenericTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn exact_generic_double_tuple_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericDoubleJitBox<T> {
+    public function scale(T $value, float $factor): T { return $value * $factor; }
+}
+function genericDoubleTotal($box) {
+    $sum = 0.0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->scale(1.5, 2.0);
+    }
+    return $i . ':' . $sum;
+}
+echo genericDoubleTotal(new GenericDoubleJitBox::<float>());
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:300000");
+
+    let plan = generic_double_accumulate_plan(&functions, "genericDoubleTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_generic_double_tuple_mismatch_stays_on_canonical_boundary() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericDoubleJitBox<T> {
+    public function scale(T $value, float $factor): T { return $value * $factor; }
+}
+function genericDoubleTotal($box) {
+    $sum = 0.0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->scale(1.5, 2.0);
+    }
+    return $sum;
+}
+echo genericDoubleTotal(new GenericDoubleJitBox::<float>()) . '|';
+genericDoubleTotal(new GenericDoubleJitBox::<string>());
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "300000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to GenericDoubleJitBox::scale()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+
+    let plan = generic_double_accumulate_plan(&functions, "genericDoubleTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn nested_generic_double_tuple_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class NestedGenericDoubleJitBox<T> {
+    public function scale(T $value, float $factor): T { return $value * $factor; }
+    public function composed(float $value, float $factor): float {
+        return $this->scale($value, $factor) + 1.0;
+    }
+}
+function nestedGenericDoubleTotal($box) {
+    $sum = 0.0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->composed(1.5, 2.0);
+    }
+    return $i . ':' . $sum;
+}
+echo nestedGenericDoubleTotal(new NestedGenericDoubleJitBox::<float>());
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:400000");
+
+    let plan = generic_double_accumulate_plan(&functions, "nestedGenericDoubleTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn nested_reified_double_tuple_mismatch_stays_on_canonical_boundary() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class NestedGenericDoubleJitBox<T> {
+    public function scale(T $value, float $factor): T { return $value * $factor; }
+    public function composed(float $value, float $factor): float {
+        return $this->scale($value, $factor) + 1.0;
+    }
+}
+function nestedGenericDoubleTotal($box) {
+    $sum = 0.0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->composed(1.5, 2.0);
+    }
+    return $sum;
+}
+echo nestedGenericDoubleTotal(new NestedGenericDoubleJitBox::<float>()) . '|';
+nestedGenericDoubleTotal(new NestedGenericDoubleJitBox::<string>());
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "400000|");
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Argument #1 passed to NestedGenericDoubleJitBox::scale()"),
+        "{rendered}"
+    );
+    assert!(rendered.contains("reified class type"), "{rendered}");
+
+    let plan = generic_double_accumulate_plan(&functions, "nestedGenericDoubleTotal");
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }

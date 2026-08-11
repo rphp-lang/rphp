@@ -152,6 +152,22 @@ unsafe fn guarded_cached_scalar_call_target(
     Some((target, user))
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[inline(always)]
+unsafe fn cached_receiver_generic_method_contract(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    cache_ip: usize,
+    receiver: &Value,
+) -> Option<std::rc::Rc<crate::generics::GenericMethodContract>> {
+    let method = op_array
+        .instructions
+        .get(cache_ip)
+        .and_then(|initializer| op_array.literals.get(initializer.op2 as usize))
+        .and_then(Value::as_str)?;
+    eg.generic_instance_method_contract(receiver, method)
+}
+
 /// Validate only the generic part of a frame-free Long method boundary after
 /// normal dispatch identity has already been established. This is shared by
 /// direct regions and every nested call-tree resolver so native lowering never
@@ -174,16 +190,7 @@ unsafe fn long_method_generic_contract_matches(
         {
             return true;
         }
-        let Some(method) = op_array
-            .instructions
-            .get(cache_ip)
-            .and_then(|initializer| op_array.literals.get(initializer.op2 as usize))
-            .and_then(Value::as_str)
-        else {
-            return false;
-        };
-        return eg
-            .generic_instance_method_contract(receiver, method)
+        return cached_receiver_generic_method_contract(eg, op_array, cache_ip, receiver)
             .as_deref()
             .is_some_and(|contract| contract.admits_exact_long_call(argument_count as u32));
     }
