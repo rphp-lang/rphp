@@ -24,3 +24,17 @@
   only the exact baseline and current candidate needed by an active comparison.
 - Never delete source snapshots, exact baselines used by an active gate, or
   user files as part of automatic cleanup.
+
+## Public repository hygiene
+
+- Treat every tracked file, commit message, diff, test fixture, benchmark log,
+  issue and push as public. Never commit private hosts or addresses, usernames,
+  credentials, tokens, keys, personal filesystem paths, private source data or
+  unredacted diagnostic output.
+- Keep private benchmark connectivity in environment variables such as
+  `RPHP_BENCHMARK_HOST`. Before every commit and push, inspect the staged diff
+  and scan tracked changes for common credential and internal-network markers.
+- Commit and push incrementally after each coherent, reviewed and verified
+  checkpoint. Do not push knowingly failing or half-migrated states; keep a
+  larger refactor local until its compatibility and relevant performance gates
+  pass together.
