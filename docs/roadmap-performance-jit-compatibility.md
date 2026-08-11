@@ -8650,7 +8650,7 @@ declaring `ReflectionClass`; neither is accidentally replaced by its erased
 bound. Interfaces and traits are recognized by `ReflectionClass::isGeneric()`
 through the shared class-like declaration index. Included metadata continues
 to use the same relocated graph. The growing implementation was split again:
-the registration/ancestor façade is 699 lines and the 525-line pre-erasure
+the registration/ancestor façade is 696 lines and the 525-line pre-erasure
 parameter/type model lives in `stdlib/reflection/generic_parameters.rs`.
 
 Final release controls against commit `e9893af` remain comfortably inside the
@@ -8664,12 +8664,34 @@ matrix has 27 dual/reified generic scenarios, 22 erased-only scenarios and the
 two syntax-disabled scenarios, plus 21 include scenarios. The full four-mode
 all-target matrices pass on ARM64 and x86-64.
 
-The next semantic slice should make the RPHP reified extension
-`ReflectionObject::getGenericArguments()` return the same structured
-`ReflectionType` objects instead of provisional strings, then close remaining
-Reflection consistency gaps. Generics-aware JIT specialization remains
-deliberately last, after both runtime models and the complete Reflection surface
-are closed.
+The RPHP reified extension `ReflectionObject::getGenericArguments()` now uses
+that same structured `ReflectionType` model rather than provisional strings.
+Its cold materializer consumes the object's canonical interned `ReifiedBinding`;
+omitted defaults are substituted through the preceding effective arguments, so
+`Pair<T, U = T>` instantiated as `Pair::<int>` reflects `int, int`, and nested
+applications retain their own argument objects. Bound-erased and ordinary
+unbound objects continue to return an empty list. No second runtime type graph
+or per-object payload was introduced, and the cold binding no longer allocates
+an unused owner-name copy.
+
+Fresh release controls against `e9893af` remain within the gate. On ARM64 the
+31-pair five-million-call method control is -6.827% and 101 paired batches of
+20 empty starts are -0.037%; on CPU-2-pinned x86-64 the order-balanced results
+are +0.484% over 101 method pairs and -4.880% over 101 startup batches of 20.
+These are layout/no-regression observations, not optimization claims. The full
+four-mode all-target matrix passes on both architectures. The x86 debug harness
+uses an 8 MiB Rust test-thread stack because the pre-existing Ackermann test
+overflows the default stack identically at the `e9893af` checkpoint; production
+code and stack policy are unchanged.
+
+Reified Reflection lifecycle coverage now proves that clones retain the exact
+structured binding, ordinary non-turbofish instances remain unbound, and an
+object constructed in an included unit resolves its relocated declaration,
+use-site and substituted default through the executor's merged metadata graph.
+The next semantic slice is the final Reflection class-hierarchy and exception-
+behavior audit before runtime-semantics closeout. Generics-aware JIT
+specialization remains deliberately last, after both runtime models and the
+complete Reflection surface are closed.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked

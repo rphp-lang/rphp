@@ -271,7 +271,6 @@ pub struct GenericInheritance {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenericReflectionBinding {
-    pub ancestor: Box<str>,
     pub arguments: Box<[GenericType]>,
 }
 
@@ -704,20 +703,6 @@ impl GenericMetadata {
                 .collect::<Vec<_>>()
                 .join("&"),
         }
-    }
-
-    pub fn format_binding_arguments(&self, binding: ReifiedBinding) -> Option<Vec<String>> {
-        let declaration = self.declaration(binding)?;
-        let use_site = self.use_site(binding.use_site)?;
-        let mut rendered = Vec::with_capacity(declaration.parameters.len());
-        for (index, parameter) in declaration.parameters.iter().enumerate() {
-            let argument = use_site
-                .arguments
-                .get(index)
-                .or(parameter.default.as_ref())?;
-            rendered.push(self.format_type(declaration, argument));
-        }
-        Some(rendered)
     }
 
     fn value_matches_type<F>(

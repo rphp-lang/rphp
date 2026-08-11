@@ -816,8 +816,13 @@ fn reified_instances_enforce_property_bindings_and_clone_identity() {
     let output = common::run_php(
         r#"<?php
 class Box<T> { public T $value; }
+class Pair<T, U = T> {}
+class Nested<T> {}
 $ints = new Box::<int>();
 $strings = new Box::<string>();
+$ordinary = new Box();
+$defaulted = new Pair::<int>();
+$nested = new Nested::<Pair<int, string>>();
 $ints->value = 1;
 $strings->value = "s";
 $clone = clone $ints;
@@ -825,14 +830,27 @@ $clone->value = 2;
 echo $ints->value . $strings->value . $clone->value;
 $intArguments = (new ReflectionObject($ints))->getGenericArguments();
 $stringArguments = (new ReflectionObject($strings))->getGenericArguments();
-echo ":" . $intArguments[0] . ":" . $stringArguments[0];
+echo ":" . get_class($intArguments[0]) . ":" . $intArguments[0]->getName();
+echo ":" . $stringArguments[0]->getName();
+$cloneArguments = (new ReflectionObject($clone))->getGenericArguments();
+echo ":" . $cloneArguments[0]->getName();
+echo ":" . count((new ReflectionObject($ordinary))->getGenericArguments());
+$defaultArguments = (new ReflectionObject($defaulted))->getGenericArguments();
+echo ":" . $defaultArguments[0]->getName() . ":" . $defaultArguments[1]->getName();
+$nestedArgument = (new ReflectionObject($nested))->getGenericArguments()[0];
+echo ":" . $nestedArgument->getName() . ":";
+echo $nestedArgument->getGenericArguments()[0]->getName() . ":";
+echo $nestedArgument->getGenericArguments()[1]->getName();
 function assignBox($box, $value) { $box->value = $value; }
 assignBox($ints, 3);
 assignBox($strings, "t");
 echo ":" . $ints->value . ":" . $strings->value;
 "#,
     );
-    assert_eq!(output, "1s2:int:string:3:t");
+    assert_eq!(
+        output,
+        "1s2:ReflectionNamedType:int:string:int:0:int:int:Pair:int:string:3:t"
+    );
 
     let promoted_error = common::run_php_expect_error(
         r#"<?php

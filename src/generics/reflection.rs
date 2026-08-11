@@ -1,7 +1,25 @@
 use super::lsp::effective_inheritance_arguments;
-use super::{GenericInheritanceKind, GenericMetadata, GenericReflectionBinding, GenericType};
+use super::{
+    GenericInheritanceKind, GenericMetadata, GenericReflectionBinding, GenericType, ReifiedBinding,
+};
 
 impl GenericMetadata {
+    /// Materialize the effective runtime arguments retained by one reified
+    /// object. Defaults are substituted through the arguments that precede
+    /// them, so Reflection observes the concrete binding rather than the
+    /// declaration's parameter references.
+    pub fn reflection_reified_binding(
+        &self,
+        binding: ReifiedBinding,
+    ) -> Option<GenericReflectionBinding> {
+        let declaration = self.declaration(binding)?;
+        let use_site = self.use_site(binding.use_site)?;
+        Some(GenericReflectionBinding {
+            arguments: effective_inheritance_arguments(declaration, &use_site.arguments)
+                .into_boxed_slice(),
+        })
+    }
+
     /// Return one direct inheritance binding exactly as written by the owner,
     /// with omitted defaults materialized. This is a cold Reflection view over
     /// the same interned graph used by the linker.
@@ -27,7 +45,6 @@ impl GenericMetadata {
             |declaration| effective_inheritance_arguments(declaration, &inheritance.arguments),
         );
         Some(GenericReflectionBinding {
-            ancestor: ancestor_name.into(),
             arguments: arguments.into_boxed_slice(),
         })
     }
@@ -52,7 +69,6 @@ impl GenericMetadata {
             .filter_map(|(declaration, binding)| {
                 let candidate = self.symbol(declaration.owner)?;
                 (candidate.eq_ignore_ascii_case(ancestor)).then(|| GenericReflectionBinding {
-                    ancestor: candidate.into(),
                     arguments: binding.into_boxed_slice(),
                 })
             })

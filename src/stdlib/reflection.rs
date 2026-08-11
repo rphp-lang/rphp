@@ -364,15 +364,12 @@ fn generic_arguments(
         .as_ref()
         .and_then(|target| eg.reified_object_binding(target))
     {
-        if let Some(rendered) = eg.generic_metadata.format_binding_arguments(binding) {
-            let mut arguments = PhpArray::with_packed_capacity(rendered.len());
-            for argument in rendered {
-                arguments.push(Value::string(argument));
-            }
-            arguments
-        } else {
-            PhpArray::new()
-        }
+        let declaration = eg.generic_metadata.declaration(binding);
+        eg.generic_metadata
+            .reflection_reified_binding(binding)
+            .map_or_else(PhpArray::new, |binding| {
+                reflected_arguments(&eg.generic_metadata, declaration, &binding)
+            })
     } else {
         PhpArray::new()
     };

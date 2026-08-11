@@ -1989,10 +1989,25 @@ or native lowering changed. All four all-target configurations pass on both
 architectures and the final focused Reflection checks pass with both flags,
 each flag alone and syntax disabled.
 
-The next semantic step is to replace provisional string results from the RPHP
-reified `ReflectionObject::getGenericArguments()` extension with the same
-structured `ReflectionType` model, then close remaining Reflection consistency
-gaps. Generics-aware JIT specialization is deliberately last: it starts only
+The RPHP reified `ReflectionObject::getGenericArguments()` extension now
+materializes the same structured `ReflectionType` graph from the canonical
+object binding. Primitive, substituted-default and nested generic arguments
+retain their exact shape; erased and ordinary unbound objects still expose no
+runtime arguments. The effective-binding helper lives beside ancestor
+Reflection in `generics/reflection.rs`, so the stdlib façade does not duplicate
+default substitution or create a second metadata representation.
+
+All four all-target configurations pass on ARM64 and x86-64. Fresh release
+controls against `e9893af` are -6.827% method/-0.037% startup on ARM64 and
++0.484%/-4.880% order-balanced on CPU-2-pinned x86-64; these remain
+no-regression gates rather than optimization claims. No hot representation,
+external dependency or native lowering changed.
+
+Lifecycle coverage now follows reflected reified bindings through cloning and
+included metadata, including relocated use-site indices and substituted
+defaults; ordinary non-turbofish objects remain intentionally unbound. The next
+semantic step is the final Reflection class-hierarchy and exception-consistency
+audit. Generics-aware JIT specialization is deliberately last: it starts only
 after these semantics, complete Reflection and both runtimes are closed, and
 must consume the canonical metadata with exact guards and deoptimization back
 to the established erased/reified paths.

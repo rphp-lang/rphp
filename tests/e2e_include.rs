@@ -177,6 +177,25 @@ fn test_include_links_reified_instance_method_contracts() {
     assert!(rendered.contains("reified class type"), "{rendered:?}");
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn test_include_reflects_structured_reified_object_arguments() {
+    let (_dir, path) = write_temp_php(
+        "generic_reified_reflection.php",
+        r#"<?php
+class IncludedReflectedPair<T, U = T> {}
+function included_reflected_pair() {
+    return new IncludedReflectedPair::<int>();
+}
+"#,
+    );
+    let source = format!(
+        "<?php include '{}'; $arguments = (new ReflectionObject(included_reflected_pair()))->getGenericArguments(); echo get_class($arguments[0]) . ':' . $arguments[0]->getName() . ':' . $arguments[1]->getName();",
+        path
+    );
+    assert_eq!(run_php(&source), "ReflectionNamedType:int:int");
+}
+
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
 fn test_include_links_inherited_generic_property_contracts() {
