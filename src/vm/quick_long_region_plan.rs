@@ -375,12 +375,11 @@ fn detect_long_ops_region_inner(
                     return None;
                 }
                 let source = detect_json_typed_invariant_source(op_array, region, ip)?;
-                if let QuickTypedInvariantProducer::JsonDecodeAssociative {
-                    input: QuickInvariantInput::StringSlot(slot),
-                } = source.producer
-                {
-                    add_mask_slot(&mut string_input_mask, slot, total_slots)?;
-                }
+                // The invariant-source prelude owns validation of its JSON
+                // input, including the String/reference guard. Do not classify
+                // that source as a string-token input unless another operation
+                // in the region consumes the same CV; native mixed regions
+                // would otherwise try to map arbitrary JSON to a finite token.
                 json_paths
                     .get_mut(source.destination as usize)?
                     .replace(Vec::new());

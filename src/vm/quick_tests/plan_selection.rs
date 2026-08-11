@@ -226,6 +226,7 @@ for ($i = 0; $i < 100; $i++) {
             .expect("stable associative json_decode should become a prelude");
         assert_eq!(source.projections.len(), 3);
         assert_eq!(source.long_output_mask.count_ones(), 3);
+        assert_eq!(plan.string_input_mask, 0);
         assert!(
             plan.ops
                 .iter()
@@ -246,6 +247,33 @@ for ($i = 0; $i < 100; $i++) {
                 ]
             )
         }));
+    }
+
+    #[test]
+    fn retains_json_source_when_another_operation_consumes_it_as_a_string() {
+        let plan = long_ops_plan(
+            "<?php
+$json = '{\"value\":7}';
+$values = ['{\"value\":7}' => 3];
+$sum = 0;
+for ($i = 0; $i < 100; $i++) {
+    $row = json_decode($json, true);
+    $key = $json;
+    $sum = $sum + $row['value'] + $values[$key];
+}
+",
+        );
+        let source = plan
+            .typed_invariant_source
+            .as_ref()
+            .expect("the JSON prelude should remain selected");
+        let QuickTypedInvariantProducer::JsonDecodeAssociative {
+            input: QuickInvariantInput::StringSlot(input),
+        } = source.producer
+        else {
+            panic!("the source should be the reused JSON CV");
+        };
+        assert_ne!(plan.string_input_mask & (1u64 << input), 0);
     }
 
     #[test]

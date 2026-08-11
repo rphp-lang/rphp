@@ -238,6 +238,13 @@ unsafe fn native_quick_long_mixed_kernel(
                     resume_ip,
                 )?;
             }
+            QuickLongOp::JsonProjectionStep { next_target, .. } => {
+                if next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                // The invariant-source prelude has already produced and
+                // validated every projected slot before native entry.
+            }
             QuickLongOp::Assign {
                 destination,
                 source,
