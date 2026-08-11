@@ -13,12 +13,14 @@
 - On a filesystem that cannot retain every feature variant at once, run the
   same hook between matrix configurations. This is an expected automatic
   lifecycle step, not a reason to leave a full disk or skip a configuration.
-- At the end of a benchmark checkpoint, run the same cleanup on both the local
-  workspace and `the configured private benchmark host`, even when the matrix or benchmark failed.
+- At the end of a benchmark checkpoint, run the same cleanup locally and on
+  the private benchmark host named by `RPHP_BENCHMARK_HOST`, when configured,
+  even when the matrix or benchmark failed. Never commit private hostnames,
+  addresses, usernames, or credentials.
 - Put disposable release builds in task-scoped `/tmp/rphp-candidate-*`
   directories rather than accumulating profiles in the workspace `target`.
 - After a benchmark checkpoint is accepted, delete superseded candidate build
-  directories on both the local machine and `the configured private benchmark host`. Retain only
-  the exact baseline and current candidate needed by an active comparison.
+  directories locally and on the configured private benchmark host. Retain
+  only the exact baseline and current candidate needed by an active comparison.
 - Never delete source snapshots, exact baselines used by an active gate, or
   user files as part of automatic cleanup.

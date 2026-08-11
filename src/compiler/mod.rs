@@ -30,7 +30,7 @@ use crate::vm::planner::{BlockInfo, BlockPlan};
 use std::cell::Cell;
 use std::collections::HashMap;
 
-/// Compiled function body — equivalent to zend_op_array.
+/// Compiled function body and its RPHP bytecode metadata.
 pub struct OpArray {
     pub num_cvs: u32,
     pub num_temps: u32,

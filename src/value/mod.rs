@@ -3129,8 +3129,7 @@ impl std::fmt::Debug for PhpClosure {
     }
 }
 
-/// PHP Value — tagged union, 16 bytes.
-/// Layout matches zend_value + type_info.
+/// RPHP's compact 16-byte tagged value.
 #[repr(C)]
 pub struct Value {
     data: ValueData,

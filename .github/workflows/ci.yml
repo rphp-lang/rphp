@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: "0"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  quality:
+    name: Format and all-target check
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Toolchain versions
+        run: |
+          rustc --version --verbose
+          cargo --version
+          rustfmt --version
+      - name: Formatting
+        run: cargo fmt --all -- --check
+      - name: All features and targets
+        run: cargo check --locked --all-features --all-targets
+
+  test:
+    name: Test (${{ matrix.name }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: default
+            command: cargo test --locked
+          - name: no default features
+            command: cargo test --locked --no-default-features
+          - name: erased generics
+            command: cargo test --locked --features php-generics-erased
+          - name: reified generics
+            command: cargo test --locked --features php-generics-reified
+          - name: all features
+            command: cargo test --locked --all-features
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run test configuration
+        run: ${{ matrix.command }}
+
+  native-jit:
+    name: Native JIT (${{ matrix.name }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux x86-64
+            runner: ubuntu-24.04
+            architecture: x86_64
+          - name: macOS ARM64
+            runner: macos-15
+            architecture: arm64
+    steps:
+      - uses: actions/checkout@v5
+      - name: Verify runner architecture
+        run: test "$(uname -m)" = "${{ matrix.architecture }}"
+      - name: Test native backend
+        run: cargo test --locked --features jit-prototype

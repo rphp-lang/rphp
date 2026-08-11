@@ -1,6 +1,6 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
-/// Inner execute loop — equivalent to zend_execute_ex.
+/// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     let mut frame = initial_frame;
     let mut op_array = unsafe { (*frame).op_array() };

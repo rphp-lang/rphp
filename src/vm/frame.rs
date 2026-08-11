@@ -41,8 +41,8 @@ impl Iterator for HeapSlotIter {
 
 // ── ExecuteData ──────────────────────────────────────────────────────────────
 
-/// Call frame — equivalent to zend_execute_data.
-/// Allocated on VM stack, layout: [ExecuteData][CV0][CV1]...[TMPn]
+/// RPHP VM call frame.
+/// Allocated on the VM stack, layout: [ExecuteData][CV0][CV1]...[TMPn]
 #[repr(C)]
 pub struct ExecuteData {
     pub opline: *const Instruction,

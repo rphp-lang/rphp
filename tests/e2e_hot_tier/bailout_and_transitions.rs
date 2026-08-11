@@ -341,8 +341,14 @@ echo counter(15);
 fn test_hot_ackermann() {
     // Ackermann function: deeply recursive, multiple branches.
     // ack(3,4) = 125, ~10K+ calls → exercises hot path thoroughly.
-    assert_eq!(
-        run_php(
+    // Rust's test harness uses a smaller worker stack than the CLI's main
+    // thread. Give this deliberately deep recursion test a production-sized
+    // stack so it measures the VM rather than the harness limit.
+    let output = std::thread::Builder::new()
+        .name("rphp-ackermann-test".to_string())
+        .stack_size(8 * 1024 * 1024)
+        .spawn(|| {
+            run_php(
             "<?php
 function ack($m, $n) {
     if ($m == 0) return $n + 1;
@@ -351,9 +357,12 @@ function ack($m, $n) {
 }
 echo ack(3, 4);
 "
-        ),
-        "125"
-    );
+            )
+        })
+        .expect("spawn Ackermann test thread")
+        .join()
+        .expect("Ackermann test thread panicked");
+    assert_eq!(output, "125");
 }
 
 #[test]

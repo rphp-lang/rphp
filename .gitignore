@@ -3,6 +3,12 @@
 .claude/
 .idea
 docs/*
+!docs/architecture.md
+!docs/benchmarking.md
+!docs/compatibility.md
+!docs/performance-dispatch-analysis.md
+!docs/provenance.md
 !docs/roadmap-performance-jit-compatibility.md
 !docs/roadmap-runtime-architecture.md
+!docs/unsafe-policy.md
 inbox/

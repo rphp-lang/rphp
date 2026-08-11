@@ -1,0 +1,52 @@
+name: Bug report
+description: Report incorrect behavior in RPHP's supported pre-alpha subset
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not report vulnerabilities here. Follow SECURITY.md instead.
+  - type: input
+    id: commit
+    attributes:
+      label: RPHP commit
+      description: Exact commit hash; also state if the tree had local changes.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment and build
+      description: OS, CPU architecture, Rust version, build command, and feature flags.
+    validations:
+      required: true
+  - type: textarea
+    id: reproducer
+    attributes:
+      label: Minimal PHP reproducer
+      render: php
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: Include complete stdout, stderr, and exit status.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: Include the reference PHP version and relevant configuration.
+    validations:
+      required: true
+  - type: checkboxes
+    id: security
+    attributes:
+      label: Security check
+      options:
+        - label: This report contains no confidential vulnerability or exploit details.
+          required: true
