@@ -1015,6 +1015,8 @@ pub(crate) struct CompiledParams {
 }
 
 /// Compiled class definition
+pub type PropertyDefinition = (String, Option<Value>, Visibility, String);
+
 pub struct ClassDef {
     pub name: String,
     pub parent: Option<String>,
@@ -1025,7 +1027,12 @@ pub struct ClassDef {
     pub is_trait: bool,
     pub is_enum: bool,
     pub uses: Vec<String>, // trait names from `use Foo, Bar;`
-    pub properties: Vec<(String, Option<Value>, Visibility, String)>, // (name, default_value, visibility, declaring_class)
+    /// Instance properties: (name, default value, visibility, declaring class).
+    pub properties: Vec<PropertyDefinition>,
+    /// Static properties remain outside every object layout. Mutable static
+    /// storage can build on this separate declaration table without widening
+    /// ordinary objects.
+    pub static_properties: Vec<PropertyDefinition>,
     /// Shared declared-property storage-key → numeric slot layout.
     /// Rebuilt after inheritance and trait properties are merged.
     pub property_layout: std::rc::Rc<ObjectLayout>,
@@ -3298,6 +3305,14 @@ impl Compiler {
                     0,
                     OpType::Unused,
                 );
+                #[cfg(target_arch = "x86_64")]
+                let late_generic_check_ip = (runtime_generic_check && pseudo_class == "static")
+                    .then(|| (self.instructions.len() - 1) as u16);
+                #[cfg(not(target_arch = "x86_64"))]
+                let late_generic_check_ip: Option<u16> = {
+                    let _ = runtime_generic_check;
+                    None
+                };
 
                 let mut init = Instruction::new(if pseudo_class == "static" {
                     OpCode::InitLateStaticCall
@@ -3309,6 +3324,15 @@ impl Compiler {
                 init.op2 = method_idx;
                 init.op2_type = OpType::Const;
                 init.extended_value = args.len() as u32;
+                if let Some(check_ip) = late_generic_check_ip {
+                    // On x86_64 the immediately preceding late-generic guard has
+                    // already proved the current called class. Reuse its keyed
+                    // cache instead of resolving the frame scope a second time.
+                    // ARM keeps the smaller ordinary initializer path because
+                    // this extra marker measurably perturbs its hot-code layout.
+                    init.result = check_ip;
+                    init.result_type = OpType::Const;
+                }
                 if self.dynamic_static_scope
                     && matches!(pseudo_class.as_str(), "self" | "parent" | "static")
                 {
@@ -3332,11 +3356,31 @@ impl Compiler {
                 class_name,
                 property,
             } => {
-                let resolved = self.resolve_name(class_name);
+                let pseudo_class = class_name.to_ascii_lowercase();
+                let dynamic_static_scope = pseudo_class == "static"
+                    || (self.dynamic_static_scope
+                        && matches!(pseudo_class.as_str(), "self" | "parent"));
+                let resolved = match pseudo_class.as_str() {
+                    "static" => class_name.clone(),
+                    "self" if !self.dynamic_static_scope => self
+                        .lexical_static_class
+                        .clone()
+                        .unwrap_or_else(|| class_name.clone()),
+                    "parent" if !self.dynamic_static_scope => self
+                        .lexical_static_parent
+                        .clone()
+                        .unwrap_or_else(|| class_name.clone()),
+                    "self" | "parent" => class_name.clone(),
+                    _ => self.resolve_name(class_name),
+                };
                 let class_idx = self.add_literal(Value::string(resolved));
                 let prop_idx = self.add_literal(Value::string(property.clone()));
                 let tmp = self.alloc_tmp();
-                let mut fetch = Instruction::new(OpCode::FetchStaticProp);
+                let mut fetch = Instruction::new(if dynamic_static_scope {
+                    OpCode::FetchLateStaticProp
+                } else {
+                    OpCode::FetchStaticProp
+                });
                 fetch.op1 = class_idx;
                 fetch.op1_type = OpType::Const;
                 fetch.op2 = prop_idx;

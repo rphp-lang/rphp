@@ -1086,6 +1086,12 @@ impl Compiler {
                 // Evaluate property defaults (constant expressions only)
                 let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
                     Vec::new();
+                let mut compiled_static_props: Vec<(
+                    String,
+                    Option<Value>,
+                    Visibility,
+                    String,
+                )> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
@@ -1094,15 +1100,20 @@ impl Compiler {
                         })?),
                         None => None,
                     };
-                    if prop.is_readonly {
+                    if prop.is_readonly && !prop.is_static {
                         readonly_props.push(prop.name.clone());
                     }
-                    compiled_props.push((
+                    let definition = (
                         prop.name.clone(),
                         default,
                         prop.visibility,
                         name.clone(),
-                    ));
+                    );
+                    if prop.is_static {
+                        compiled_static_props.push(definition);
+                    } else {
+                        compiled_props.push(definition);
+                    }
                 }
 
                 // Add promoted properties
@@ -1129,6 +1140,7 @@ impl Compiler {
                     is_enum: false,
                     uses: resolved_uses,
                     properties: compiled_props,
+                    static_properties: compiled_static_props,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props,
@@ -1265,6 +1277,7 @@ impl Compiler {
                     is_enum: false,
                     uses: vec![],
                     properties: vec![],
+                    static_properties: vec![],
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
@@ -1386,6 +1399,12 @@ impl Compiler {
 
                 let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
                     Vec::new();
+                let mut compiled_static_props: Vec<(
+                    String,
+                    Option<Value>,
+                    Visibility,
+                    String,
+                )> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
@@ -1393,12 +1412,17 @@ impl Compiler {
                         })?),
                         None => None,
                     };
-                    compiled_props.push((
+                    let definition = (
                         prop.name.clone(),
                         default,
                         prop.visibility,
                         name.clone(),
-                    ));
+                    );
+                    if prop.is_static {
+                        compiled_static_props.push(definition);
+                    } else {
+                        compiled_props.push(definition);
+                    }
                 }
 
                 self.class_defs.push(ClassDef {
@@ -1412,6 +1436,7 @@ impl Compiler {
                     is_enum: false,
                     uses: vec![],
                     properties: compiled_props,
+                    static_properties: compiled_static_props,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],
@@ -1561,7 +1586,8 @@ impl Compiler {
                     is_trait: false,
                     is_enum: true,
                     uses: vec![],
-                    properties: compiled_props,
+                    properties: vec![],
+                    static_properties: compiled_props,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
                     readonly_props: vec![],

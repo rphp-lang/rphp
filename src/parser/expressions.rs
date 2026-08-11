@@ -660,13 +660,10 @@ impl Parser {
     fn parse_named_static_access(
         &mut self,
         class_name: String,
-        method_only: bool,
+        late_static_owner: bool,
     ) -> Result<Expr, String> {
         self.expect(&Token::DoubleColon)?;
         if let Token::Variable(_) = self.peek() {
-            if method_only {
-                return Err("Late-static property access is not supported yet".into());
-            }
             let property = match self.advance() {
                 Token::Variable(name) => name,
                 _ => unreachable!(),
@@ -688,7 +685,7 @@ impl Parser {
             if !generic_args.is_empty() {
                 return Err("Generic type arguments must be followed by a method call".into());
             }
-            if method_only {
+            if late_static_owner {
                 return Err("Late-static constant access is not supported yet".into());
             }
             let expr = Expr::StaticProperty {

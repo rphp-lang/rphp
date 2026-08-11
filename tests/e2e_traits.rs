@@ -309,6 +309,29 @@ echo LateTraitFirst::dispatch();
     assert_eq!(out, "first:second:first");
 }
 
+#[test]
+fn trait_late_static_properties_follow_each_consuming_class() {
+    let out = run_php(
+        r#"<?php
+trait LateTraitProperty {
+    public static function read(): string { return static::$value; }
+}
+class LateTraitPropertyFirst {
+    use LateTraitProperty;
+    public static $value = "first";
+}
+class LateTraitPropertySecond {
+    use LateTraitProperty;
+    public static $value = "second";
+}
+echo LateTraitPropertyFirst::read() . ":";
+echo LateTraitPropertySecond::read() . ":";
+echo LateTraitPropertyFirst::read();
+"#,
+    );
+    assert_eq!(out, "first:second:first");
+}
+
 // ─── Trait property collision edge cases ──────────────────────────
 
 #[test]

@@ -116,14 +116,20 @@ fn test_late_static_call_sites_use_a_separate_keyed_opcode() {
     let compiled = compile_types(
         r#"<?php
 class LateStaticOpcodeBase {
+    public static $number = 1;
     public static function value(): int { return 1; }
     public static function dispatch(): int { return static::value(); }
     public static function ordinary(): int { return self::value(); }
+    public static function propertyDispatch(): int { return static::$number; }
+    public static function ordinaryProperty(): int { return self::$number; }
     public function instanceDispatch(): int { return static::value(); }
 }
 "#,
     );
     let class = &compiled.class_defs[0];
+    assert!(class.properties.is_empty());
+    assert_eq!(class.static_properties.len(), 1);
+    assert_eq!(class.static_properties[0].0, "number");
     let dispatch = class
         .methods
         .iter()
@@ -140,6 +146,18 @@ class LateStaticOpcodeBase {
         .methods
         .iter()
         .find(|(name, ..)| name == "instanceDispatch")
+        .map(|method| &method.4)
+        .unwrap();
+    let property_dispatch = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "propertyDispatch")
+        .map(|method| &method.4)
+        .unwrap();
+    let ordinary_property = class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "ordinaryProperty")
         .map(|method| &method.4)
         .unwrap();
 
@@ -165,6 +183,18 @@ class LateStaticOpcodeBase {
             .all(|instruction| instruction.opcode != OpCode::InitLateStaticCall)
     );
     assert!(dispatch.common.plan.needs_late_static_scope());
+    assert!(property_dispatch
+        .op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::FetchLateStaticProp));
+    assert!(ordinary_property
+        .op_array
+        .instructions
+        .iter()
+        .any(|instruction| instruction.opcode == OpCode::FetchStaticProp));
+    assert!(property_dispatch.common.plan.needs_late_static_scope());
+    assert!(!ordinary_property.common.plan.needs_late_static_scope());
     assert!(!ordinary.common.plan.needs_late_static_scope());
     assert!(!instance_dispatch.common.plan.needs_late_static_scope());
 }

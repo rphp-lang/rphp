@@ -22,7 +22,9 @@ use crate::vm::function::{
     ScalarLongProgram, ScalarLongSelect, ScalarLongSource, ScalarStringFunctionPlan,
     ScalarStringSelect, ScalarStringSource, SignatureInfo, UserFunction,
 };
-use crate::vm::instruction::{InlineCache, Instruction, KnownScalarType, OpType};
+use crate::vm::instruction::{
+    InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OpType,
+};
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
 use std::cell::Cell;
@@ -656,6 +658,7 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::InitMethodCall
                 | OpCode::InitStaticCall
                 | OpCode::InitLateStaticCall
+                | OpCode::FetchLateStaticProp
                 | OpCode::InitDynamicCall
                 | OpCode::SendVal
                 | OpCode::SendRef
@@ -705,6 +708,18 @@ fn typed_function_supports_fast_return(
         )
 }
 
+#[inline]
+fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) {
+    if !embedded {
+        return;
+    }
+    for instruction in &mut op_array.instructions {
+        if instruction.opcode == OpCode::FetchLateStaticProp {
+            instruction._pad |= LATE_STATIC_PROP_EMBEDDED_SCOPE;
+        }
+    }
+}
+
 /// Create a UserFunction wrapping an OpArray (no args — for main script).
 pub fn make_user_function(op_array: OpArray) -> UserFunction {
     make_user_function_with_args(op_array, 0)
@@ -741,10 +756,12 @@ pub fn make_user_function_full(
     }
     op_array.compute_blocks();
     op_array.prepare_quick_loops();
-    let needs_late_static_scope = op_array
-        .instructions
-        .iter()
-        .any(|instruction| instruction.opcode == OpCode::InitLateStaticCall);
+    let needs_late_static_scope = op_array.instructions.iter().any(|instruction| {
+        matches!(
+            instruction.opcode,
+            OpCode::InitLateStaticCall | OpCode::FetchLateStaticProp
+        )
+    });
     let is_fast_scalar = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -779,6 +796,8 @@ pub fn make_user_function_full(
     };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
+    let has_embedded_late_static_scope = needs_late_static_scope && num_cvs + num_temps <= 32;
+    mark_embedded_late_static_properties(&mut op_array, has_embedded_late_static_scope);
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
     let mut function = UserFunction {
         common: FunctionCommon {
@@ -826,7 +845,7 @@ pub fn make_user_function_full(
     function
         .common
         .plan
-        .set_has_embedded_late_static_scope(needs_late_static_scope && num_cvs + num_temps <= 32);
+        .set_has_embedded_late_static_scope(has_embedded_late_static_scope);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -888,10 +907,12 @@ pub fn make_user_function_typed(
         ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
     );
     let needs_late_static_scope = return_type_hint.uses_late_static()
-        || op_array
-            .instructions
-            .iter()
-            .any(|instruction| instruction.opcode == OpCode::InitLateStaticCall);
+        || op_array.instructions.iter().any(|instruction| {
+            matches!(
+                instruction.opcode,
+                OpCode::InitLateStaticCall | OpCode::FetchLateStaticProp
+            )
+        });
     let has_fast_scalar_shape = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -927,6 +948,8 @@ pub fn make_user_function_typed(
     };
     let num_cvs = op_array.num_cvs;
     let num_temps = op_array.num_temps;
+    let has_embedded_late_static_scope = needs_late_static_scope && num_cvs + num_temps <= 32;
+    mark_embedded_late_static_properties(&mut op_array, has_embedded_late_static_scope);
     let total_slots = crate::vm::frame::CALL_FRAME_SLOTS as u32 + num_cvs + num_temps;
     let mut function = UserFunction {
         common: FunctionCommon {
@@ -974,7 +997,7 @@ pub fn make_user_function_typed(
     function
         .common
         .plan
-        .set_has_embedded_late_static_scope(needs_late_static_scope && num_cvs + num_temps <= 32);
+        .set_has_embedded_late_static_scope(has_embedded_late_static_scope);
     let self_name = function.op_array.name.clone();
     function.binary_long_recursion_plan = build_binary_long_recursion_plan(&function, &self_name);
     function.scalar_long_plan = build_scalar_long_function_plan(&function);
@@ -5029,13 +5052,18 @@ pub fn finalize_user_method(
     // A non-static method recovers its late-called class directly from the
     // receiver in CV 0. It never needs the sparse static-call sidecar, so
     // restore any compact call/return strategy that the body-only constructor
-    // conservatively withheld after seeing InitLateStaticCall.
+    // conservatively withheld after seeing a late-static operation.
     if !is_static {
         function.common.plan.set_needs_late_static_scope(false);
         function
             .common
             .plan
             .set_has_embedded_late_static_scope(false);
+        for instruction in &mut function.op_array.instructions {
+            if instruction.opcode == OpCode::FetchLateStaticProp {
+                instruction._pad &= !LATE_STATIC_PROP_EMBEDDED_SCOPE;
+            }
+        }
         if typed_function_supports_fast_return(
             &function.op_array,
             &function.common.sig.return_type_hint,

@@ -107,6 +107,7 @@ pub(super) fn loop_miss_reason(
             | OpCode::AssignObjProp
             | OpCode::InitMethodCall
             | OpCode::FetchStaticProp
+            | OpCode::FetchLateStaticProp
             | OpCode::InitStaticCall
             | OpCode::InitLateStaticCall
             | OpCode::Instanceof

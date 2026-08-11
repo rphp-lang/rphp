@@ -3036,7 +3036,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchStaticProp => {
-                op_fetch_static_prop(eg, frame, op_array, opline);
+                op_fetch_static_prop(eg, frame, op_array, opline)?;
+            }
+
+            OpCode::FetchLateStaticProp => {
+                op_fetch_late_static_prop(eg, frame, op_array, opline)?;
             }
 
             OpCode::Instanceof => {

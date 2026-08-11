@@ -570,6 +570,7 @@ mod inner {
             136 => Some("CheckGenericDefault"),
             137 => Some("InitLateStaticCall"),
             138 => Some("CheckLateStaticGenericArgs"),
+            139 => Some("FetchLateStaticProp"),
             200 => Some("Add_TmpTmp"),
             201 => Some("Sub_CvConst"),
             202 => Some("IsSmaller_CvConst"),

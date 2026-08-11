@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::compiler::compile::ClassDef;
+use crate::compiler::compile::{ClassDef, PropertyDefinition};
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
@@ -119,6 +119,84 @@ pub fn resolve_property_key(
         return mangle_private_prop(&defining_class, prop_name);
     }
     prop_name.to_string()
+}
+
+/// Merge inherited declarations while preserving PHP's private-slot rule.
+/// The same rule applies to instance and static properties; keeping it here
+/// prevents their registration paths from drifting.
+fn inherit_property_definitions(
+    child: &mut Vec<PropertyDefinition>,
+    parent: &[PropertyDefinition],
+) {
+    let child_names: std::collections::HashSet<&str> =
+        child.iter().map(|(name, _, _, _)| name.as_str()).collect();
+    let mut inherited = Vec::new();
+    for (name, default, visibility, declaring) in parent {
+        if child_names.contains(name.as_str()) {
+            if *visibility == Visibility::Private
+                && child.iter().any(|(child_name, _, child_visibility, _)| {
+                    child_name == name && *child_visibility == Visibility::Private
+                })
+            {
+                inherited.push((
+                    name.clone(),
+                    default.clone(),
+                    *visibility,
+                    declaring.clone(),
+                ));
+            }
+        } else {
+            inherited.push((
+                name.clone(),
+                default.clone(),
+                *visibility,
+                declaring.clone(),
+            ));
+        }
+    }
+    child.extend(inherited);
+}
+
+/// Merge one trait's declarations into a consuming class. Instance and static
+/// tables both use this exact collision contract, but remain separate storage.
+fn merge_trait_property_definitions(
+    target: &mut Vec<PropertyDefinition>,
+    source: &[PropertyDefinition],
+    class_name: &str,
+    trait_name: &str,
+) -> Result<(), String> {
+    let mut additions = Vec::new();
+    for (name, default, visibility, _) in source {
+        if let Some((_, existing_default, existing_visibility, existing_declaring)) =
+            target.iter().find(|(candidate, _, _, _)| candidate == name)
+        {
+            if existing_declaring == class_name {
+                continue;
+            }
+            let compatible = existing_visibility == visibility
+                && match (default, existing_default) {
+                    (None, None) => true,
+                    (Some(left), Some(right)) => left.structurally_equal(right),
+                    _ => false,
+                };
+            if !compatible {
+                return Err(format!(
+                    "{} and {} define the same property (${}) in the composition of {}. \
+                     However, the definition differs and is considered incompatible",
+                    existing_declaring, trait_name, name, class_name
+                ));
+            }
+            continue;
+        }
+        additions.push((
+            name.clone(),
+            default.clone(),
+            *visibility,
+            trait_name.to_string(),
+        ));
+    }
+    target.extend(additions);
+    Ok(())
 }
 
 /// Minimal ExecutorGlobals for vertical slice.
@@ -648,43 +726,13 @@ impl ExecutorGlobals {
         // Resolve inheritance — merge parent's properties and methods
         if let Some(parent_name) = &class_def.parent {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
-                // Inherit properties: child's own props first, then parent's.
-                // This ensures find_property_visibility finds the class's own
-                // declaration before inherited ones with the same name.
-                // Private properties with the same name in parent and child are BOTH kept
-                // (they occupy separate mangled slots). For public/protected, child overrides.
-                let child_prop_names: std::collections::HashSet<&str> = class_def
-                    .properties
-                    .iter()
-                    .map(|(n, _, _, _)| n.as_str())
-                    .collect();
-                let mut parent_props = Vec::new();
-                for (name, default, vis, declaring) in &parent.properties {
-                    if child_prop_names.contains(name.as_str()) {
-                        // Child has same name — only keep parent's if both are private
-                        // (separate slots). Otherwise child overrides.
-                        if *vis == Visibility::Private {
-                            let child_also_private = class_def
-                                .properties
-                                .iter()
-                                .any(|(n, _, v, _)| n == name && *v == Visibility::Private);
-                            if child_also_private {
-                                parent_props.push((
-                                    name.clone(),
-                                    default.clone(),
-                                    *vis,
-                                    declaring.clone(),
-                                ));
-                            }
-                        }
-                    } else {
-                        parent_props.push((name.clone(), default.clone(), *vis, declaring.clone()));
-                    }
-                }
-                // Own props first, then inherited (so lookups find own first)
-                let mut merged_props: Vec<_> = class_def.properties.drain(..).collect();
-                merged_props.extend(parent_props);
-                class_def.properties = merged_props;
+                // Own declarations stay first, so late-static lookup sees a
+                // redeclaration before inherited storage.
+                inherit_property_definitions(&mut class_def.properties, &parent.properties);
+                inherit_property_definitions(
+                    &mut class_def.static_properties,
+                    &parent.static_properties,
+                );
 
                 // Inherit readonly property list from parent
                 for ro in &parent.readonly_props {
@@ -725,46 +773,18 @@ impl ExecutorGlobals {
         let trait_names = class_def.uses.clone();
         for trait_name in &trait_names {
             if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
-                // Merge trait properties (class's own props take precedence)
-                // Check for incompatible trait property collisions
-                let mut new_props = Vec::new();
-                for (name, default, vis, _declaring) in &trait_def.properties {
-                    // Check if this property already exists (from class itself or another trait)
-                    let existing = class_def.properties.iter().find(|(n, _, _, _)| n == name);
-                    if let Some((_, _existing_default, existing_vis, existing_declaring)) = existing
-                    {
-                        // If declared by the class itself (not a trait), class takes precedence
-                        if existing_declaring == &class_name {
-                            continue;
-                        }
-                        // Two traits define the same property — check compatibility
-                        // PHP checks both visibility and default value compatibility.
-                        if existing_vis != vis {
-                            return Err(format!(
-                                "{} and {} define the same property (${}) in the composition of {}. \
-                                 However, the definition differs and is considered incompatible",
-                                existing_declaring, trait_name, name, class_name
-                            ));
-                        }
-                        // Check default value compatibility
-                        let defaults_compatible = match (default, _existing_default) {
-                            (None, None) => true,
-                            (Some(a), Some(b)) => a.structurally_equal(b),
-                            _ => false, // one has default, other doesn't
-                        };
-                        if !defaults_compatible {
-                            return Err(format!(
-                                "{} and {} define the same property (${}) in the composition of {}. \
-                                 However, the definition differs and is considered incompatible",
-                                existing_declaring, trait_name, name, class_name
-                            ));
-                        }
-                        // Same visibility and default — compatible, skip duplicate
-                        continue;
-                    }
-                    new_props.push((name.clone(), default.clone(), *vis, trait_name.clone()));
-                }
-                class_def.properties.extend(new_props);
+                merge_trait_property_definitions(
+                    &mut class_def.properties,
+                    &trait_def.properties,
+                    &class_name,
+                    trait_name,
+                )?;
+                merge_trait_property_definitions(
+                    &mut class_def.static_properties,
+                    &trait_def.static_properties,
+                    &class_name,
+                    trait_name,
+                )?;
 
                 // Merge trait methods: copy function_table pointers
                 let child_method_names: std::collections::HashSet<String> = class_def

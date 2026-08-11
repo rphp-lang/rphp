@@ -1,6 +1,6 @@
 /// Tests for class inheritance (extends)
 mod common;
-use common::run_php;
+use common::{run_php, run_php_expect_error};
 
 #[test]
 fn test_extends_basic() {
@@ -97,6 +97,99 @@ echo $right->instanceDispatch();
 "#
         ),
         "RLXLX"
+    );
+}
+
+#[test]
+fn late_static_properties_follow_and_rekey_the_called_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace LateProperties;
+
+class Root {
+    public static $value = "R";
+    public static function late(): string { return static::$value; }
+    public static function lexical(): string { return self::$value; }
+    public function instanceLate(): string { return static::$value; }
+}
+class Left extends Root {
+    public static $value = "L";
+}
+class Right extends Root {
+    public static $value = "X";
+}
+
+echo Root::late();
+echo Left::late();
+echo Right::late();
+echo Left::late();
+echo Right::lexical();
+$right = new Right();
+echo $right->instanceLate();
+"#
+        ),
+        "RLXLRX"
+    );
+}
+
+#[test]
+fn closures_capture_late_static_property_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class PropertyClosureRoot {
+    public static $value = "R";
+    public static function make() {
+        return fn(): string => static::$value;
+    }
+}
+class PropertyClosureChild extends PropertyClosureRoot {
+    public static $value = "C";
+}
+$root = PropertyClosureRoot::make();
+$child = PropertyClosureChild::make();
+echo $root() . $child() . $root();
+"#
+        ),
+        "RCR"
+    );
+}
+
+#[test]
+fn late_static_property_visibility_uses_lexical_caller_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ProtectedPropertyRoot {
+    protected static $value = "root";
+    public static function read(): string { return static::$value; }
+}
+class ProtectedPropertyChild extends ProtectedPropertyRoot {
+    protected static $value = "child";
+}
+echo ProtectedPropertyRoot::read() . ":" . ProtectedPropertyChild::read();
+"#
+        ),
+        "root:child"
+    );
+
+    let error = run_php_expect_error(
+        r#"<?php
+class PrivatePropertyRoot {
+    private static $value = "root";
+    public static function read(): string { return static::$value; }
+}
+class PrivatePropertyChild extends PrivatePropertyRoot {
+    private static $value = "child";
+}
+PrivatePropertyChild::read();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Cannot access private property PrivatePropertyChild::$value"),
+        "{rendered:?}"
     );
 }
 

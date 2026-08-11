@@ -1060,6 +1060,20 @@ fn op_init_late_static_call<'a>(
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
+    #[cfg(target_arch = "x86_64")]
+    let class_id = {
+        if opline.result_type == OpType::Const {
+            let validated = &op_array.cache[opline.result as usize];
+            if validated.class_id != 0 {
+                validated.class_id
+            } else {
+                late_static_call_class_id(eg, frame)
+            }
+        } else {
+            late_static_call_class_id(eg, frame)
+        }
+    };
+    #[cfg(not(target_arch = "x86_64"))]
     let class_id = late_static_call_class_id(eg, frame);
     let cache = &op_array.cache[ip];
     let func_ptr = if cache.class_id == class_id && !cache.func.is_null() {

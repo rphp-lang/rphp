@@ -7,6 +7,8 @@ use rphp::generics::{GenericDeclarationKind, GenericType, GenericVariance};
 use rphp::lexer::Lexer;
 use rphp::parser::Parser;
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+use rphp::vm::instruction::OpType;
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 use rphp::vm::opcode::OpCode;
 
 fn parse(source: &str) -> Result<Vec<rphp::parser::Stmt>, String> {
@@ -234,6 +236,62 @@ echo LateGenericFirst::dispatch();
 "#,
     );
     assert_eq!(output, "root:first:second:first");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn late_static_turbofish_initializer_tracks_its_adjacent_guard_on_x86_64() {
+    let statements = parse(
+        r#"<?php
+class LateGenericOpcodes {
+    public static function value<T : string>(): string { return "value"; }
+    public static function checked(): string { return static::value::<string>(); }
+    public static function ordinary(): string { return static::value(); }
+}
+"#,
+    )
+    .unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let class = &result.class_defs[0];
+    let checked = &class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "checked")
+        .unwrap()
+        .4
+        .op_array
+        .instructions;
+    let init_ip = checked
+        .iter()
+        .position(|instruction| instruction.opcode == OpCode::InitLateStaticCall)
+        .unwrap();
+    assert!(init_ip > 0);
+    assert_eq!(
+        checked[init_ip - 1].opcode,
+        OpCode::CheckLateStaticGenericArgs
+    );
+
+    #[cfg(target_arch = "x86_64")]
+    {
+        assert_eq!(checked[init_ip].result_type, OpType::Const);
+        assert_eq!(checked[init_ip].result as usize, init_ip - 1);
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    assert_eq!(checked[init_ip].result_type, OpType::Unused);
+
+    let ordinary = &class
+        .methods
+        .iter()
+        .find(|(name, ..)| name == "ordinary")
+        .unwrap()
+        .4
+        .op_array
+        .instructions;
+    let ordinary_init = ordinary
+        .iter()
+        .find(|instruction| instruction.opcode == OpCode::InitLateStaticCall)
+        .unwrap();
+    assert_eq!(ordinary_init.result_type, OpType::Unused);
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

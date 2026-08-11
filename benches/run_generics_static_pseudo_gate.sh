@@ -52,6 +52,8 @@ fi
 script_root=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 ordinary_late_workload="$script_root/benches/bench_static_late_call.php"
 ordinary_self_workload="$script_root/benches/bench_static_self_call.php"
+late_property_workload="$script_root/benches/bench_static_late_property.php"
+self_property_workload="$script_root/benches/bench_static_self_property.php"
 generic_late_workload="$script_root/benches/bench_generics_static_late_turbofish.php"
 generic_self_workload="$script_root/benches/bench_generics_static_self_turbofish.php"
 generic_explicit_workload="$script_root/benches/bench_generics_static_explicit_turbofish.php"
@@ -147,5 +149,6 @@ run_gate() {
 
 echo "balanced mean of order-specific candidate/control median ratios:"
 run_gate "ordinary static::/self::" "$ordinary_late_workload" "$ordinary_self_workload"
+run_gate "property static::/self::" "$late_property_workload" "$self_property_workload"
 run_gate "generic static::/self::" "$generic_late_workload" "$generic_self_workload"
 run_gate "generic self::/explicit" "$generic_self_workload" "$generic_explicit_workload"

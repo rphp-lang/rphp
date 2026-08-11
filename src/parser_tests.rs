@@ -81,6 +81,10 @@ fn test_static_return_type_requires_a_real_class_scope() {
         "Cannot use \"static\" when no class scope is active"
     );
     parse("<?php class C { public static function call() { return static::value(); } }").unwrap();
+    parse(
+        "<?php class C { public static $value = 1; public static function read() { return static::$value; } }",
+    )
+    .unwrap();
     assert_eq!(
         parse(
             "<?php class C { public static function call() { function nested() { return static::value(); } } }",

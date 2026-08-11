@@ -74,6 +74,8 @@ case $only in
         bench_scalar_property_json_projection_native_loop.php | \
         bench_scalar_property_method_native_loop.php | \
         bench_generics_static_explicit_turbofish.php | \
+        bench_generics_static_late_turbofish.php | \
+        bench_generics_static_self_turbofish.php | \
         bench_generics_method_turbofish.php | \
         bench_generics_default_omitted.php | bench_generics_default_explicit.php | \
         bench_generics_default_manual.php) ;;
@@ -200,6 +202,8 @@ bench_scalar_property_json_derived_argument_native_loop.php
 bench_scalar_property_json_projection_native_loop.php
 bench_scalar_property_method_native_loop.php
 bench_generics_static_explicit_turbofish.php
+bench_generics_static_late_turbofish.php
+bench_generics_static_self_turbofish.php
 bench_generics_method_turbofish.php
 bench_generics_default_omitted.php
 bench_generics_default_explicit.php
@@ -238,6 +242,8 @@ for workload in \
     bench_scalar_property_json_projection_native_loop.php \
     bench_scalar_property_method_native_loop.php \
     bench_generics_static_explicit_turbofish.php \
+    bench_generics_static_late_turbofish.php \
+    bench_generics_static_self_turbofish.php \
     bench_generics_method_turbofish.php \
     bench_generics_default_omitted.php \
     bench_generics_default_explicit.php \

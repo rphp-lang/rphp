@@ -144,6 +144,9 @@ pub enum OpCode {
     /// Generic use-site validation for a late-bound static/trait owner. Its
     /// declaration cache is likewise keyed by the runtime called class.
     CheckLateStaticGenericArgs = 138,
+    /// Read a static property through PHP's runtime called class. The cache is
+    /// keyed separately from explicit/self/parent property reads.
+    FetchLateStaticProp = 139,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

@@ -934,34 +934,123 @@ fn op_call_user_func_array<'a>(
 
 #[inline(never)]
 fn op_fetch_static_prop(
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) {
+) -> Result<(), VmError> {
+    op_fetch_static_prop_impl::<false>(eg, frame, op_array, opline)
+}
+
+#[inline(never)]
+fn op_fetch_late_static_prop(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    op_fetch_static_prop_impl::<true>(eg, frame, op_array, opline)
+}
+
+#[inline(always)]
+fn op_fetch_static_prop_impl<const LATE_STATIC: bool>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
     let class_name_val =
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let prop_name_val =
         unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
 
-    let cls = class_name_val.as_str().unwrap_or("");
+    let raw_class = class_name_val.as_str().unwrap_or("");
     let prop = prop_name_val.as_str().unwrap_or("");
-    let mut found = false;
-    if let Some(class_def) = eg.class_table.get(cls) {
-        for (pname, default, _vis, _declaring) in &class_def.properties {
-            if pname == prop {
-                if let Some(val) = default {
-                    unsafe { slot_set(result_ptr, val.clone()) };
-                    found = true;
-                }
-                break;
-            }
+    let ip = unsafe {
+        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    };
+    let cache = unsafe {
+        &mut *(op_array.cache.as_ptr().add(ip)
+            as *mut crate::vm::instruction::InlineCache)
+    };
+    let class_id = if LATE_STATIC {
+        if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0
+            && !raw_class.eq_ignore_ascii_case("parent")
+        {
+            unsafe { ((*frame).heap_bitmap >> 32) as u32 }
+        } else if raw_class.eq_ignore_ascii_case("parent") {
+            eg.class_by_id(late_static_call_class_id(eg, frame))
+                .and_then(|class| class.parent.as_deref())
+                .map_or(0, |parent| eg.class_id_of(parent))
+        } else if raw_class.eq_ignore_ascii_case("static")
+            || raw_class.eq_ignore_ascii_case("self")
+        {
+            late_static_call_class_id(eg, frame)
+        } else {
+            eg.class_id_of(raw_class)
+        }
+    } else if cache.class_id != 0 && cache.property_flags() == 1 {
+        cache.class_id
+    } else {
+        eg.class_id_of(raw_class)
+    };
+
+    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 1 {
+        if let Some(value) = eg
+            .class_by_id(class_id)
+            .and_then(|class| class.static_properties.get(cache.property_slot()))
+            .map(|(_, default, _, _)| default.clone().unwrap_or_else(Value::null))
+        {
+            unsafe { slot_set(result_ptr, value) };
+            return Ok(());
         }
     }
-    if !found {
-        unsafe { slot_set(result_ptr, Value::null()) };
+
+    resolve_static_property_cache_miss(eg, frame, result_ptr, cache, class_id, raw_class, prop)
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_static_property_cache_miss(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    result_ptr: *mut Value,
+    cache: &mut crate::vm::instruction::InlineCache,
+    class_id: u32,
+    raw_class: &str,
+    property: &str,
+) -> Result<(), VmError> {
+    let class = eg.class_by_id(class_id).ok_or_else(|| {
+        VmError::Fatal(format!("Class \"{}\" not found", raw_class))
+    })?;
+    let Some((slot, (_, default, visibility, declaring))) = class
+        .static_properties
+        .iter()
+        .enumerate()
+        .find(|(_, (name, _, _, _))| name == property)
+    else {
+        return Err(VmError::Fatal(format!(
+            "Access to undeclared static property {}::${}",
+            class.name, property
+        )));
+    };
+    let caller = get_caller_class(frame, eg);
+    if !eg.check_visibility(caller.as_deref(), declaring, *visibility) {
+        let visibility = match visibility {
+            Visibility::Private => "private",
+            Visibility::Protected => "protected",
+            Visibility::Public => unreachable!(),
+        };
+        return Err(VmError::Fatal(format!(
+            "Cannot access {} property {}::${}",
+            visibility, declaring, property
+        )));
     }
+    let value = default.clone().unwrap_or_else(Value::null);
+    cache.set_property(class_id, slot, 1);
+    unsafe { slot_set(result_ptr, value) };
+    Ok(())
 }
 
 #[inline(never)]
