@@ -2526,9 +2526,33 @@ their existing heap bitmap, and wide frames fall back to the existing sparse
 executor sidecar. Closures and arrows capture the scope explicitly so escaped
 calls retain PHP late-static semantics. Ordinary `static::method()` remains
 available with both generic syntax flags off; only turbofish syntax is gated.
-Late-static property and constant access remain separate compatibility slices.
 Generic-specific JIT specialization stays deferred until the language/runtime
 surface is complete, as required by the generics phase order.
+
+The first late-static property slice adds read-only `static::$property` without
+changing the call/frame layouts. `ClassDef` now stores static definitions apart
+from instance definitions, preventing static declarations, enum cases and
+built-in reflection cases from consuming object slots. Shared inheritance and
+trait-merge helpers enforce the same declaration collision rules for each
+table, but never merge the two storage domains.
+
+A dedicated `FetchLateStaticProp` cache is keyed by runtime called-class ID and
+resolved property slot. Alternating inherited classes, shared trait bodies and
+escaped closures rekey safely, while lexical `self`, `parent` and named-class
+reads stay on the existing explicit-owner opcode. Compact static methods use
+the called-class ID embedded in their existing heap bitmap; wide frames and
+instance methods fall back to the executor's established scope resolver.
+Ordinary objects, `CallPlan`, `ExecuteData` and `Value` do not grow.
+
+This checkpoint deliberately exposes immutable declared defaults only. The
+next slice must introduce canonical mutable static-property storage with PHP's
+shared inheritance identity, assignment/reference semantics, visibility and
+typed/generic write validation before advertising a complete static-property
+surface. Late-static constants remain separate as well: general class
+constants must exist first, after which `static::CONST` can reuse the called
+scope rather than creating an isolated partial implementation. Generic JIT
+specialization remains deferred until both runtime modes and the complete
+language surface are stable.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
@@ -2568,6 +2592,69 @@ in even when its syntax is disabled.
 If these gates cannot be met without adding overhead to normal PHP, keep the
 primitive opt-in and continue compatibility work rather than weakening the
 pay-for-use contract.
+
+## Planned production memory lifecycle and cycle collector
+
+The current `Value` contract uses deterministic reference counting and Rust
+`Drop`; strings and arrays detach through COW and ordinary acyclic graphs are
+freed as soon as their last owner disappears. Preserve that hot path. Before a
+long-lived server reuses one process for unbounded requests, layer a
+non-moving, candidate-driven cycle collector over containers that can own PHP
+values. Rust ownership protects the implementation but does not collect an
+`Rc` graph such as a self-referencing object.
+
+Do not widen the 16-byte `Value`. Keep collector state in collectable container
+headers or sparse side metadata and record a possible root only when a
+decrement remains non-zero or a graph mutation can create a cycle. Scalars,
+unique values and programs that never create candidate graphs must retain their
+existing instruction stream and allocation profile. Request-local arenas and
+batch release are optional optimizations above this semantic layer, not a
+replacement for cycles that escape their original request.
+
+The root registry must cover canonical and optimized execution uniformly:
+
+```text
+active VM frames and globals
+pending calls, arguments, exceptions and destructors
+closures, generators and resource registries
+suspended coroutine frames, queues, channels and waiters
+typed decoder/encoder state
+published quick/JIT slots and transactional shadows
+persistent application and interned runtime roots
+```
+
+Native code may trigger collection only at publishing safepoints. A compiled
+region that borrows a raw string, array or object pointer must keep its owner in
+the root registry and either finish, publish or side-exit before collection can
+observe the graph. Coroutine suspension is a mandatory publishing boundary;
+cancellation and unwind remove task-owned roots once, after canonical resource
+and destructor behavior completes. The first collector is non-moving so cache,
+slot and native pointers remain stable.
+
+Model request/task, persistent-runtime and externally owned resources as
+explicit lifetime domains. A value stored into a global cache, passed to
+another task or retained by a resource must be promoted/registered before its
+originating arena or task is reclaimed. Weak internal metadata should not keep
+user objects alive. PHP-visible weak references/maps, destructor resurrection
+and exceptions during destruction require dedicated state transitions rather
+than relying on Rust drop order accidentally matching PHP.
+
+The first feature-gated vertical slice implements candidate registration,
+forced collection and graph diagnostics for cyclic arrays and objects. Extend
+it to closures, references, generators, coroutines and resources, then add
+request-end and threshold-driven collection plus the compatible GC control
+functions. Generated graph tests must distinguish externally reachable cycles
+from garbage, permute destruction order and force collection at every legal
+safepoint. Long-running request/cancellation corpus tests must reach a stable
+RSS plateau.
+
+Admission requires no additional steady-state allocation and no more than one
+percent movement in acyclic clone/drop, call, property and array controls.
+Record candidate-buffer insertions, graph nodes visited, bytes reclaimed,
+collection count, maximum/p99 pause and request throughput. If automatic cycle
+collection cannot meet those gates, retain explicit/request-boundary collection
+behind a feature flag rather than taxing ordinary PHP or weakening lifecycle
+correctness.
 
 ## Planned typed-data ingestion and serialization substrate
 

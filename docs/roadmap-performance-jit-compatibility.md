@@ -9490,6 +9490,44 @@ on both hosts. No external dependency or JIT backend path was added, and
 generic-specific JIT optimization remains the final step after the runtime
 surface is developed.
 
+Late-static property-read checkpoint (2026-08-11): class metadata now keeps
+instance and static property definitions in separate tables. Static defaults,
+enum cases and built-in reflection cases therefore no longer widen every
+object instance. Inheritance and trait composition apply the same centralized
+visibility/collision rules to both tables while preserving their separate
+storage domains.
+
+`static::$property` lowers to a dedicated keyed fetch opcode. Its warmed cache
+is keyed by the runtime called-class ID and stores only the resolved property
+slot, so alternating base/child classes, shared trait bodies and escaped
+closures cannot reuse another class's metadata. Compact static frames read the
+called scope from their existing embedded metadata; wide and instance frames
+use the established fallback. Lexical `self::$property`, `parent::$property`
+and explicit-owner reads retain the ordinary static-property opcode and now
+benefit from its own keyed lookup cache. Visibility failures remain exact.
+
+This slice reads immutable declared defaults only. Mutable static storage,
+assignment, shared inherited storage identity and typed/generic write checks
+remain the next property milestone. `static::CONST` also remains rejected until
+general class constants have a canonical parser/compiler/runtime surface; it
+will not be introduced through a late-static-only bypass.
+
+The four-lane dependency-free gate compares five million warmed operations.
+ARM64 erased (40 balanced pairs) records `static`/`self` overhead of +2.117%
+ordinary, +3.200% property and +1.280% generic, with the established generic
+`self`/explicit control at +0.214%. ARM64 reified (100 pairs) records
++4.412%, +2.204%, +1.087% and -0.106%. CPU-2-pinned x86-64 erased (40 pairs)
+records +0.819%, +1.021%, +0.795% and -0.014%; reified records +2.166%,
++1.166%, +0.126% and +0.321%. All lanes stay below the five-percent ceiling.
+
+The immediately adjacent late-generic guard can additionally lend its already
+validated called-class cache to the initializer on x86-64, removing a second
+frame-scope resolution. This is intentionally target-gated: enabling the
+marker on ARM64 perturbed the ordinary hot layout to +5.748% in a 100-pair
+audit, while retaining ARM64's smaller initializer restored it to +4.412%.
+The full default, erased, reified and all-feature matrices plus all-target
+checks pass on both hosts. No dependency or JIT backend path was added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
@@ -9497,6 +9535,81 @@ the upstream RFC implementation tests that fit RPHP's supported PHP surface.
 Add dedicated cold-compile, link, ordinary-call, generic-call and turbofish hot
 benchmarks on ARM64 and x86-64. Use no parser, type-system or collection crate;
 the implementation remains within the standard library and existing runtime.
+
+## Interphase 5.6: production memory lifecycle and cycle collection
+
+Before a long-lived coroutine/API process is called production-ready, complete
+the PHP value lifecycle beyond the current deterministic `Rc`/`Drop` and
+string/array COW substrate. The common acyclic path must remain immediate and
+cheap: the last reference frees its value without a tracing pass. Add cycle
+collection only for graphs that can remain alive after their external owners
+disappear. This milestone is not required for short-lived CLI compatibility,
+but it is a release gate for request reuse, persistent workers and servers.
+
+Keep the 16-byte `Value` and do not add a per-value tracing header or branch to
+scalars and non-participating programs. Collectable arrays, objects, closures,
+generators and references should enter a bounded candidate/root buffer only
+when a reference decrement leaves a non-zero count or another operation makes
+a cycle possible. Evaluate a trial-deletion/root-color algorithm compatible
+with PHP's observable lifecycle, but admit the concrete implementation only
+after it beats broader alternatives on real object graphs. Internal metadata
+must continue to use weak or interned ownership where that avoids creating
+artificial user-visible cycles.
+
+Define the complete root model before collecting anything. Live roots include
+VM frames and globals, static variables, pending arguments and exceptions,
+closures, generators, resources, suspended coroutine stacks, channels and
+waiters, scheduler queues, in-flight typed decoder state, and values published
+or shadowed by quick/JIT regions. Persistent class/function metadata, interned
+schemas and explicitly persistent application state form a separate lifetime
+domain and must not be reclaimed at a request boundary. Cancellation and
+exception unwind must unregister task-owned roots exactly once.
+
+Collection may run only at explicit VM safepoints where native regions have
+published every live PHP value and retain no untracked movable/borrowed pointer.
+A JIT region may elide refcount traffic for a proven borrowed value, but the
+owner remains a visible root until the region exits or reaches a publishing
+safepoint. Side exits, overflow replay and coroutine suspension must expose the
+same root set as canonical execution. The first collector may be non-moving;
+introducing relocation before all raw-pointer and inline-cache lifetimes are
+audited is out of scope.
+
+Support PHP-compatible control surfaces once their underlying semantics are
+available: automatic collection, `gc_enable()`, `gc_disable()`,
+`gc_collect_cycles()` and useful status/counter reporting. Candidate recording
+while collection is disabled, destructor order, object resurrection, weak
+references/maps and exceptions thrown during destruction require explicit
+differential coverage. Cyclic arrays, mutually linked objects, self-capturing
+closures, generator/coroutine cycles and resources reachable from cycles are
+permanent corpus cases.
+
+A request/task arena may bulk-release proven request-local allocations and is a
+planned optimization, not the semantic collector. Any value escaping into a
+global, persistent cache, another coroutine or an external resource must be
+promoted or registered in the correct lifetime domain before the source task
+ends. Typed streaming should avoid materializing record graphs where possible,
+thereby reducing collector pressure, but it must remain correct when a record
+escapes and becomes an ordinary cyclic-capable PHP object.
+
+Implement this interphase in measured slices:
+
+1. audit every owning `Value` edge, destructor and raw-pointer lifetime;
+2. add debug root/provenance accounting and generated cyclic-graph tests;
+3. introduce a feature-gated candidate buffer and explicit collection call;
+4. integrate request completion, coroutine suspension/cancellation and
+   persistent-root separation;
+5. add compatible automatic thresholds and memory-pressure triggers;
+6. optimize candidate recording and enable the collector by default only after
+   the performance and pause gates hold on both architectures.
+
+Permanent gates include zero leaks in generated reachable/unreachable cyclic
+graphs, exact destructor/resurrection behavior, stable RSS across repeated
+request and coroutine-cancellation loops, and no use-after-free under forced
+collection at every legal safepoint. Measure allocation count, retained bytes,
+candidate-buffer traffic, collection work, maximum and p99 pause, and
+throughput. Ordinary acyclic scalar/string/array/object controls may regress by
+at most one percent, must add no steady-state allocation, and JIT loops that do
+not create collectable graphs must not gain a per-iteration GC branch.
 
 ## Interphase 5.75: first-class typed data interchange and streams
 
