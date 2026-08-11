@@ -156,7 +156,7 @@ class ScopedChild<U> extends ScopedParent<U> {
 $child = new ScopedChild::<int>();
 $child->peer = $child;
 echo $child->same($child) instanceof ScopedChild ? "self:" : "bad:";
-echo $child->ancestor(new ScopedParent()) instanceof ScopedParent ? "parent:" : "bad:";
+echo $child->ancestor(new ScopedParent::<int>()) instanceof ScopedParent ? "parent:" : "bad:";
 echo $child->peer instanceof ScopedChild ? "property:" : "bad:";
 
 class InheritedParent<T> {
@@ -183,10 +183,10 @@ echo $traitChild->same($traitBase) instanceof TraitBase ? "trait:" : "bad:";
 trait ScopedMethodTrait {
     public function sameGeneric<V>(self<V> $value): self<V> { return $value; }
 }
-class MethodTraitBase { use ScopedMethodTrait; }
-class MethodTraitChild extends MethodTraitBase {}
-$methodTraitChild = new MethodTraitChild();
-$methodTraitBase = new MethodTraitBase();
+class MethodTraitBase<X> { use ScopedMethodTrait; }
+class MethodTraitChild<Y> extends MethodTraitBase<Y> {}
+$methodTraitChild = new MethodTraitChild::<int>();
+$methodTraitBase = new MethodTraitBase::<int>();
 echo $methodTraitChild->sameGeneric::<int>($methodTraitBase) instanceof MethodTraitBase
     ? "method-trait:"
     : "bad";
@@ -676,22 +676,26 @@ fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {
 #[cfg(feature = "php-generics-reified")]
 #[test]
 fn reified_substitution_that_differs_from_erasure_keeps_boundary_checks() {
-    let statements =
-        parse("<?php function id<T>(T $value): T { return $value; } echo id::<int>(1);").unwrap();
-    let result = Compiler::new().compile(&statements).unwrap();
-    for opcode in [
-        OpCode::CheckGenericArgs,
-        OpCode::CheckReifiedArgs,
-        OpCode::CheckReifiedReturn,
+    for source in [
+        "<?php function id<T>(T $value): T { return $value; } echo id::<int>(1);",
+        "<?php class Box<T> {} function id<T>(Box<T> $value): Box<T> { return $value; } id::<int>(new Box::<int>());",
     ] {
-        assert!(
-            result
-                .main
-                .instructions
-                .iter()
-                .any(|instruction| instruction.opcode == opcode),
-            "missing {opcode:?}"
-        );
+        let statements = parse(source).unwrap();
+        let result = Compiler::new().compile(&statements).unwrap();
+        for opcode in [
+            OpCode::CheckGenericArgs,
+            OpCode::CheckReifiedArgs,
+            OpCode::CheckReifiedReturn,
+        ] {
+            assert!(
+                result
+                    .main
+                    .instructions
+                    .iter()
+                    .any(|instruction| instruction.opcode == opcode),
+                "missing {opcode:?} for {source:?}"
+            );
+        }
     }
 }
 
@@ -925,6 +929,86 @@ echo outer::<int>(inner::<int>(9));
 "#,
     );
     assert_eq!(output, "9");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_runtime_enforces_nested_named_type_arguments() {
+    let output = common::run_php(
+        r#"<?php
+class NestedBox<T> {}
+class NestedChild<U> extends NestedBox<U> {}
+class NestedInt extends NestedBox<int> {}
+function accept<T>(T $value): T { return $value; }
+function acceptNested<T>(NestedBox<T> $value): NestedBox<T> { return $value; }
+class Holder<T> {
+    public T $value;
+    public function take(T $value): T { return $value; }
+}
+class ExplicitHost {
+    public function take<T>(NestedBox<T> $value): NestedBox<T> { return $value; }
+}
+
+$int = new NestedBox::<int>();
+$child = new NestedChild::<int>();
+$concrete = new NestedInt();
+$holder = new Holder::<NestedBox<int>>();
+$holder->value = $concrete;
+echo accept::<NestedBox<int>>($int) instanceof NestedBox ? "direct:" : "bad:";
+echo accept::<NestedBox<int>>($child) instanceof NestedBox ? "ancestor:" : "bad:";
+echo accept::<NestedBox<int>>($concrete) instanceof NestedBox ? "concrete:" : "bad:";
+echo acceptNested::<int>($int) instanceof NestedBox ? "parameter:" : "bad:";
+echo $holder->take($concrete) instanceof NestedBox ? "method:" : "bad:";
+echo (new ExplicitHost())->take::<int>($int) instanceof NestedBox ? "explicit:" : "bad:";
+echo $holder->value instanceof NestedBox ? "property" : "bad";
+"#,
+    );
+    assert_eq!(
+        output,
+        "direct:ancestor:concrete:parameter:method:explicit:property"
+    );
+
+    for (source, expected) in [
+        (
+            "<?php class NestedBox<T> {} function accept<T>(T $value): T { return $value; } accept::<NestedBox<int>>(new NestedBox::<string>());",
+            "does not match its reified generic type",
+        ),
+        (
+            "<?php class NestedBox<T> {} function accept<T>(T $value): T { return $value; } accept::<NestedBox<int>>(new NestedBox());",
+            "does not match its reified generic type",
+        ),
+        (
+            "<?php class NestedBox<T> {} function accept<T>(NestedBox<T> $value): NestedBox<T> { return $value; } accept::<int>(new NestedBox::<string>());",
+            "does not match its reified generic type",
+        ),
+        (
+            "<?php class NestedBox<T> {} class NestedString extends NestedBox<string> {} function accept<T>(T $value): T { return $value; } accept::<NestedBox<int>>(new NestedString());",
+            "does not match its reified generic type",
+        ),
+        (
+            "<?php class NestedBox<T> {} function wrong<T>(): T { return new NestedBox::<string>(); } wrong::<NestedBox<int>>();",
+            "Return value of wrong",
+        ),
+        (
+            "<?php class NestedBox<T> {} class Holder<T> { public T $value; } $holder = new Holder::<NestedBox<int>>(); $holder->value = new NestedBox::<string>();",
+            "reified property Holder::$value",
+        ),
+        (
+            "<?php class NestedBox<T> {} class Holder<T> { public function take(T $value): T { return $value; } } $holder = new Holder::<NestedBox<int>>(); $holder->take(new NestedBox::<string>());",
+            "Argument #1 passed to Holder::take()",
+        ),
+        (
+            "<?php class NestedBox<T> {} class NestedHost { public function take<T>(NestedBox<T> $value): NestedBox<T> { return $value; } } $host = new NestedHost(); $host->take::<int>(new NestedBox::<string>());",
+            "does not match its reified generic type",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(
+            rendered.contains(expected),
+            "{rendered:?} did not contain {expected:?}"
+        );
+    }
 }
 
 #[cfg(feature = "php-generics-reified")]

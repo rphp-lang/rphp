@@ -1464,6 +1464,12 @@ impl Compiler {
             effective.push(default);
         }
         let same_runtime_contract = |hint: &TypeHint| {
+            // Erasing a named application hides relationships such as
+            // `Box<T>` -> `Box<int>`. Reified mode must retain the call-site
+            // check even though the executable PHP hint remains `Box`.
+            if Self::generic_application_depends_on_parameter(hint) {
+                return false;
+            }
             let erased = self.convert_type_hint(&Some(hint.clone()));
             let substituted =
                 self.substitute_generic_hint(hint, &declaration.parameters, &effective);
@@ -1478,6 +1484,32 @@ impl Compiler {
                 .return_type
                 .as_ref()
                 .is_none_or(same_runtime_contract)
+    }
+
+    fn generic_application_depends_on_parameter(hint: &TypeHint) -> bool {
+        match hint {
+            TypeHint::GenericApplication { arguments, .. } => arguments
+                .iter()
+                .any(Self::type_hint_contains_generic_parameter),
+            TypeHint::Nullable(inner) => Self::generic_application_depends_on_parameter(inner),
+            TypeHint::Union(parts) | TypeHint::Intersection(parts) => parts
+                .iter()
+                .any(Self::generic_application_depends_on_parameter),
+            _ => false,
+        }
+    }
+
+    fn type_hint_contains_generic_parameter(hint: &TypeHint) -> bool {
+        match hint {
+            TypeHint::GenericParameter { .. } => true,
+            TypeHint::GenericApplication { arguments, .. }
+            | TypeHint::Union(arguments)
+            | TypeHint::Intersection(arguments) => arguments
+                .iter()
+                .any(Self::type_hint_contains_generic_parameter),
+            TypeHint::Nullable(inner) => Self::type_hint_contains_generic_parameter(inner),
+            _ => false,
+        }
     }
 
     fn substitute_generic_hint(

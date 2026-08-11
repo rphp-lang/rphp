@@ -68,13 +68,7 @@ unsafe fn try_execute_property_init_constructor(
                 .and_then(Option::as_ref)
                 .map(|expected| (contract, expected))
         })
-            && !eg.generic_metadata.value_matches_resolved_type(
-                value,
-                expected,
-                |actual, bound| {
-                    eg.class_is_a_in_generic_scope(actual, bound, &contract.scope)
-                },
-            )
+            && !eg.value_matches_generic_method_contract(value, expected, contract)
         {
             return None;
         }

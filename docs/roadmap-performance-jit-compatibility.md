@@ -8797,15 +8797,42 @@ guard—about 32 ns and 42 ns per iteration—not inheritance traversal or a
 redundant method sidecar; RPHP's manually typed property path does not yet
 enforce that write contract.
 
+Reified named applications now enforce their complete canonical argument
+tuple instead of accepting only the erased outer class. Thus `Box<int>`
+rejects a `Box<string>` and an ordinary unbound `Box`, while a reified child is
+matched through its substituted generic ancestor binding and a zero-parameter
+`IntBox extends Box<int>` uses its canonical link-time tuple. The same recursive
+matcher covers explicit function/method arguments and returns, variadics,
+substituted instance-method/constructor contracts and generic properties.
+Named classes compare case-insensitively and union/intersection members are
+order-independent. The compiler also retains the reified boundary opcode for
+`Box<T>` -> `Box<int>` even though both executable PHP hints erase to `Box`.
+
+The target object's tuple stays in the existing weak identity sidecar. A
+feature-only one-entry L0 caches the effective direct/ancestor tuple and a
+stable metadata-site proof; include-time metadata rebuilding explicitly
+invalidates the address proof. Warm monomorphic checks neither traverse
+inheritance nor allocate, and no `Value`, object, frame, function, instruction
+or property-IC layout changes. The first correct cached ARM64 path measured
+about 0.342 seconds for two million argument-plus-return calls; the final L0
+reduces that to 0.283361 versus 0.160790 seconds for the otherwise identical
+outer-class-only control. The real exact-tuple cost is therefore about 61.3 ns
+per complete call, or 31 ns per guard. CPU-2-pinned x86-64 independently
+records 0.360606/0.201027 seconds, 79.8 ns per call or 39.9 ns per guard. Against
+exact checkpoint `fb29df2`, ordinary generic method and warmed turbofish
+controls move -5.097%/-4.490% on ARM64 and -23.511%/-8.647% on x86-64; these
+favorable movements are binary-layout observations, not optimization claims.
+All four complete `--all-targets` matrices pass on both architectures; focused
+generic coverage is now 35 scenarios in reified/dual builds and remains 28 in
+erased-only.
+
 This checkpoint does not implement `static<T>` by treating it as `self<T>`.
 Correct support requires the reserved-token parser path plus late-static
-called-scope state, including static calls and post-return checks. Nested named
-applications remain interned exactly for Reflection, but the reified runtime
-must still compare the nested object's canonical type tuple. Pseudo-types in a
-diamond also need a scope per merged candidate, and inheritance-site bounds
-need the same lexical resolver already used by method turbofish bounds. These
-semantic items and omitted dynamic defaults precede JIT work; none may be
-papered over by a native specialization.
+called-scope state, including static calls and post-return checks. Pseudo-types
+in a diamond also need a scope per merged candidate, and inheritance-site
+bounds need the same lexical resolver already used by method turbofish bounds.
+These semantic items and omitted dynamic defaults precede JIT work; none may
+be papered over by a native specialization.
 
 Omitted PHP default parameter values remain an explicit semantic follow-up.
 They are assigned by callee bytecode after the current pre-call reified

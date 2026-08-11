@@ -272,6 +272,37 @@ fn generic_call_class_is_a(
     eg.class_is_a_in_generic_scope(actual, expected, scope)
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[inline]
+fn generic_call_reified_arguments_match(
+    eg: &ExecutorGlobals,
+    call: *mut ExecuteData,
+    value: &Value,
+    expected: &str,
+    arguments: &[crate::generics::GenericType],
+    declaration: &crate::generics::GenericDeclaration,
+    site: &crate::generics::GenericUseSite,
+    declared_scope: &str,
+) -> bool {
+    let common = unsafe { &*(*call).func };
+    let receiver_scope = if common.sig.this_offset == 1 {
+        let receiver = unsafe { &*(*call).cv(0) };
+        (receiver.value_type() == ValueType::Object)
+            .then(|| unsafe { receiver.object_class_name_unchecked() })
+    } else {
+        None
+    };
+    let scope = eg.generic_declaration_scope(declared_scope, receiver_scope);
+    eg.reified_object_arguments_match_binding(
+        value,
+        expected,
+        arguments,
+        declaration,
+        site,
+        scope,
+    )
+}
+
 #[inline(never)]
 fn op_check_reified_args(
     eg: &mut ExecutorGlobals,
@@ -326,12 +357,24 @@ fn op_check_reified_args(
             if value.is_undef() {
                 continue;
             }
-            if !eg.generic_metadata.value_matches_binding(
+            if !eg.generic_metadata.value_matches_binding_reified(
                 value,
                 expected,
                 binding,
                 |actual, bound| {
                     generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                },
+                |value, name, arguments, declaration, site| {
+                    generic_call_reified_arguments_match(
+                        eg,
+                        call,
+                        value,
+                        name,
+                        arguments,
+                        declaration,
+                        site,
+                        declared_scope,
+                    )
                 },
             ) {
                 let owner = eg
@@ -355,12 +398,24 @@ fn op_check_reified_args(
             let extra = unsafe { (*call).num_args }.saturating_sub(public_max);
             for index in 0..extra {
                 let value = unsafe { &*(*call).cv(common.sig.variadic_cv_index + index) };
-                if !eg.generic_metadata.value_matches_binding(
+                if !eg.generic_metadata.value_matches_binding_reified(
                     value,
                     expected,
                     binding,
                     |actual, bound| {
                         generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                    },
+                    |value, name, arguments, declaration, site| {
+                        generic_call_reified_arguments_match(
+                            eg,
+                            call,
+                            value,
+                            name,
+                            arguments,
+                            declaration,
+                            site,
+                            declared_scope,
+                        )
                     },
                 ) {
                     let owner = eg
@@ -376,12 +431,24 @@ fn op_check_reified_args(
             }
             if let Some(named) = eg.pending_named_variadic.get(&(call as usize)) {
                 for (name, value) in named {
-                    if !eg.generic_metadata.value_matches_binding(
+                    if !eg.generic_metadata.value_matches_binding_reified(
                         value,
                         expected,
                         binding,
                         |actual, bound| {
                             generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                        },
+                        |value, name, arguments, declaration, site| {
+                            generic_call_reified_arguments_match(
+                                eg,
+                                call,
+                                value,
+                                name,
+                                arguments,
+                                declaration,
+                                site,
+                                declared_scope,
+                            )
                         },
                     ) {
                         let owner = eg
@@ -434,7 +501,7 @@ fn op_check_reified_return(
             let value = unsafe {
                 &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
             };
-            if !eg.generic_metadata.value_matches_binding(
+            if !eg.generic_metadata.value_matches_binding_reified(
                 value,
                 expected,
                 binding,
@@ -446,6 +513,22 @@ fn op_check_reified_return(
                     let scope =
                         eg.generic_declaration_scope(declared_scope, receiver_scope);
                     eg.class_is_a_in_generic_scope(actual, bound, scope)
+                },
+                |value, name, arguments, declaration, site| {
+                    let class_id = eg.reified_binding_scope_class_id(frame as usize);
+                    let receiver_scope = eg
+                        .class_by_id(class_id)
+                        .map(|class| class.name.as_str());
+                    let scope =
+                        eg.generic_declaration_scope(declared_scope, receiver_scope);
+                    eg.reified_object_arguments_match_binding(
+                        value,
+                        name,
+                        arguments,
+                        declaration,
+                        site,
+                        scope,
+                    )
                 },
             ) {
                 let owner = eg
@@ -488,11 +571,7 @@ fn validate_generic_member_arguments(
         if value.is_undef() {
             continue;
         }
-        if !eg.generic_metadata.value_matches_resolved_type(
-            value,
-            expected,
-            |actual, bound| eg.class_is_a_in_generic_scope(actual, bound, &contract.scope),
-        ) {
+        if !eg.value_matches_generic_method_contract(value, expected, contract) {
             return Err(VmError::Fatal(format!(
                 "Argument #{} passed to {}::{}() does not match its {}",
                 index + 1,
@@ -513,13 +592,7 @@ fn validate_generic_member_arguments(
             let extra = unsafe { (*call).num_args }.saturating_sub(public_max);
             for index in 0..extra {
                 let value = unsafe { &*(*call).cv(common.sig.variadic_cv_index + index) };
-                if !eg.generic_metadata.value_matches_resolved_type(
-                    value,
-                    expected,
-                    |actual, bound| {
-                        eg.class_is_a_in_generic_scope(actual, bound, &contract.scope)
-                    },
-                ) {
+                if !eg.value_matches_generic_method_contract(value, expected, contract) {
                     return Err(VmError::Fatal(format!(
                         "Variadic argument #{} passed to {}::{}() does not match its {}",
                         fixed + index as usize + 1,
@@ -531,13 +604,7 @@ fn validate_generic_member_arguments(
             }
             if let Some(named) = eg.pending_named_variadic.get(&(call as usize)) {
                 for (name, value) in named {
-                    if !eg.generic_metadata.value_matches_resolved_type(
-                        value,
-                        expected,
-                        |actual, bound| {
-                            eg.class_is_a_in_generic_scope(actual, bound, &contract.scope)
-                        },
-                    ) {
+                    if !eg.value_matches_generic_method_contract(value, expected, contract) {
                         return Err(VmError::Fatal(format!(
                             "Named variadic argument ${} passed to {}::{}() does not match its {}",
                             name, contract.owner, contract.method, contract_kind
@@ -569,11 +636,7 @@ fn validate_generic_member_return(
     } else {
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) }
     };
-    if eg.generic_metadata.value_matches_resolved_type(
-        value,
-        expected,
-        |actual, bound| eg.class_is_a_in_generic_scope(actual, bound, &contract.scope),
-    ) {
+    if eg.value_matches_generic_method_contract(value, expected, contract) {
         return Ok(());
     }
     Err(VmError::Fatal(format!(

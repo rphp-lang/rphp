@@ -95,6 +95,8 @@ fn op_include(
     let generic_use_site_base = eg
         .generic_metadata
         .merge(std::mem::take(&mut compile_result.generic_metadata));
+    #[cfg(feature = "php-generics-reified")]
+    eg.clear_reified_nested_arguments_cache();
     compile_result
         .relocate_generic_use_sites(generic_use_site_base)
         .map_err(VmError::Fatal)?;

@@ -19,11 +19,19 @@ impl ExecutorGlobals {
                     && cached.use_site == Some(binding.use_site)
                     && cached.property.as_ref() == name
                 {
-                    return Some(self.generic_metadata.value_matches_resolved_type(
+                    return Some(self.generic_metadata.value_matches_resolved_type_reified(
                         value,
                         &cached.expected,
                         |actual, bound| {
                             self.class_is_a_in_generic_scope(actual, bound, &cached.scope)
+                        },
+                        |value, expected, arguments| {
+                            self.reified_object_arguments_match_resolved(
+                                value,
+                                expected,
+                                arguments,
+                                &cached.scope,
+                            )
                         },
                     ));
                 }
@@ -33,11 +41,14 @@ impl ExecutorGlobals {
             .generic_metadata
             .reified_instance_property_type(binding, name)?;
         let scope: Box<str> = self.generic_property_scope(receiver_scope, name).into();
-        let matches =
-            self.generic_metadata
-                .value_matches_resolved_type(value, &expected, |actual, bound| {
-                    self.class_is_a_in_generic_scope(actual, bound, &scope)
-                });
+        let matches = self.generic_metadata.value_matches_resolved_type_reified(
+            value,
+            &expected,
+            |actual, bound| self.class_is_a_in_generic_scope(actual, bound, &scope),
+            |value, expected, arguments| {
+                self.reified_object_arguments_match_resolved(value, expected, arguments, &scope)
+            },
+        );
         self.generic_property_contract_cache
             .replace(Some(GenericPropertyContractBinding {
                 declaration: binding.declaration,

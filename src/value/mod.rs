@@ -3376,6 +3376,15 @@ impl Value {
         (*refcell.as_ptr()).class_id
     }
 
+    /// Read the stable Rc allocation identity without taking a `RefCell`
+    /// borrow or adjusting the reference count.
+    /// SAFETY: Only valid when `value_type() == ValueType::Object`.
+    #[inline(always)]
+    pub unsafe fn object_identity_unchecked(&self) -> usize {
+        debug_assert!(self.value_type() == ValueType::Object);
+        self.data.ptr as usize
+    }
+
     /// Read the immutable class name for Object values without taking a
     /// `RefCell` borrow. This is needed by boundary checks that may run while
     /// the same object's property storage is already mutably borrowed.

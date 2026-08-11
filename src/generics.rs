@@ -21,6 +21,9 @@ mod methods;
 mod properties;
 #[path = "generics/reflection.rs"]
 mod reflection;
+#[cfg(feature = "php-generics-reified")]
+#[path = "generics/reified_values.rs"]
+mod reified_values;
 #[path = "generics/variance.rs"]
 mod variance;
 

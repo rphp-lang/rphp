@@ -2051,13 +2051,32 @@ the ordinary five-million-call generic method at -0.261% on ARM64 and -0.120%
 on CPU-2-pinned x86-64. The warmed inherited turbofish path remains below its
 five-percent ceiling at +1.927% and +2.744%, respectively.
 
+Nested named applications are now a real reified boundary rather than
+Reflection-only metadata. `Box<int>` verifies the target object's canonical
+tuple, fails closed for an ordinary unbound object and maps a reified child
+through its substituted ancestor tuple. A zero-parameter concrete descendant
+uses the corresponding link-time ancestor tuple without inventing an object
+binding. The recursive comparison is shared by explicit function/method
+arguments and returns, variadics, substituted class method/constructor
+contracts and generic properties. A `Box<T>` signature can no longer lose its
+runtime opcode merely because its outer executable hint and `Box<int>` both
+erase to `Box`.
+
+The implementation remains off all hot layouts: the existing weak object
+identity is paired with a feature-only tuple/proof L0, warm monomorphic checks
+allocate nothing, and include-time metadata merging clears its immutable-slice
+address proof. No external dependency or JIT/native lowering changed. Twenty
+balanced ARM64 pairs measure 0.283361 seconds for two million nested
+argument-plus-return calls versus 0.160790 for an outer-only reified control,
+about 31 ns per exact guard. CPU-2-pinned x86-64 measures
+0.360606/0.201027 seconds, about 39.9 ns per guard. All four complete
+`--all-targets` matrices pass on both architectures; focused generic coverage
+is 35 reified/dual and 28 erased-only scenarios.
+
 `static<T>` remains deliberately open. It needs parser support for the
 reserved `static` token and a real late-static called-scope identity for both
 instance and static calls; aliasing it to lexical `self` would be observably
-wrong. Reified matching of nested named arguments is also still a semantic
-item: the metadata preserves them, but a later runtime check must compare the
-target object's canonical binding rather than accepting only its erased outer
-class. A multi-ancestor diamond containing pseudo-types must likewise retain
+wrong. A multi-ancestor diamond containing pseudo-types must likewise retain
 one lexical scope per merged candidate instead of selecting the first
 prototype, and inheritance-site bound checks must use the declaring class
 scope just as method turbofish bounds now do. These items, along with omitted

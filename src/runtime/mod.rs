@@ -15,8 +15,14 @@ use crate::vm::stack::VmStack;
 use crate::vm::stats;
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[path = "generic_contracts.rs"]
+mod generic_contracts;
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[path = "generic_properties.rs"]
 mod generic_properties;
+#[cfg(feature = "php-generics-reified")]
+#[path = "generic_reified_values.rs"]
+mod generic_reified_values;
 #[cfg(feature = "php-generics-reified")]
 #[path = "generic_scopes.rs"]
 mod generic_scopes;
@@ -29,6 +35,19 @@ struct ReifiedObjectBinding {
     identity: usize,
     object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
     binding: ReifiedBinding,
+}
+
+#[cfg(feature = "php-generics-reified")]
+struct ReifiedNestedArgumentsBinding {
+    identity: usize,
+    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    owner_name_identity: usize,
+    owner_name_len: usize,
+    arguments: Box<[GenericType]>,
+    binding_expected_arguments: usize,
+    binding_expected_len: usize,
+    binding_site: usize,
+    binding_matches: bool,
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -179,6 +198,11 @@ pub struct ExecutorGlobals {
     /// ordinary build or changes the object itself.
     #[cfg(feature = "php-generics-reified")]
     reified_object_cache: std::cell::RefCell<Option<ReifiedObjectBinding>>,
+    /// One-entry cache of the concrete generic arguments that one object
+    /// exposes through reification or a linked concrete ancestor. Nested checks are
+    /// allocation-free after the first monomorphic hit.
+    #[cfg(feature = "php-generics-reified")]
+    reified_nested_arguments_cache: std::cell::RefCell<Option<ReifiedNestedArgumentsBinding>>,
     #[cfg(feature = "php-generics-reified")]
     reified_object_sweep_at: usize,
     /// Call-frame identity → substituted instance-method contract. Pending
@@ -234,6 +258,8 @@ impl ExecutorGlobals {
             #[cfg(feature = "php-generics-reified")]
             reified_object_cache: std::cell::RefCell::new(None),
             #[cfg(feature = "php-generics-reified")]
+            reified_nested_arguments_cache: std::cell::RefCell::new(None),
+            #[cfg(feature = "php-generics-reified")]
             reified_object_sweep_at: 256,
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             pending_generic_member_calls: Vec::new(),
@@ -285,6 +311,8 @@ impl ExecutorGlobals {
             reified_objects: HashMap::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_object_cache: std::cell::RefCell::new(None),
+            #[cfg(feature = "php-generics-reified")]
+            reified_nested_arguments_cache: std::cell::RefCell::new(None),
             #[cfg(feature = "php-generics-reified")]
             reified_object_sweep_at: 256,
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -829,16 +857,25 @@ impl ExecutorGlobals {
         target: &str,
         scope: &str,
     ) -> bool {
+        self.generic_type_name_in_scope(target, scope)
+            .is_some_and(|target| self.class_is_a(class_name, target))
+    }
+
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub(crate) fn generic_type_name_in_scope<'a>(
+        &'a self,
+        target: &'a str,
+        scope: &'a str,
+    ) -> Option<&'a str> {
         let scope = scope.split_once("::").map_or(scope, |(class, _)| class);
         if target.eq_ignore_ascii_case("self") {
-            self.class_is_a(class_name, scope)
+            Some(scope)
         } else if target.eq_ignore_ascii_case("parent") {
             self.class_table
                 .get(scope)
                 .and_then(|class| class.parent.as_deref())
-                .is_some_and(|parent| self.class_is_a(class_name, parent))
         } else {
-            self.class_is_a(class_name, target)
+            Some(target)
         }
     }
 
