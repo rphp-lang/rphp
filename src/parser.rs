@@ -8,6 +8,9 @@ pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
     in_class_body: bool,
+    /// Whether relative return types such as `static` have an active PHP
+    /// class scope. Closures inherit it; named functions do not.
+    class_scope_active: bool,
     generic_scopes: Vec<Vec<GenericParameter>>,
 }
 

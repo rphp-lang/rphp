@@ -165,6 +165,7 @@ impl Parser {
                 | Token::Question
                 | Token::ArrayKw
                 | Token::Null
+                | Token::Static
                 | Token::Identifier(_)
                 | Token::Public
                 | Token::Protected
@@ -219,13 +220,17 @@ impl Parser {
         if self.peek() == Token::Colon {
             self.advance(); // consume ':'
             // Handle nullable return types: ?: type
-            if self.peek() == Token::Question {
+            let hint = if self.peek() == Token::Question {
                 self.advance(); // consume '?'
                 let inner = self.parse_base_type_hint()?;
-                return Ok(Some(TypeHint::Nullable(Box::new(inner))));
+                TypeHint::Nullable(Box::new(inner))
+            } else {
+                let hint = self.parse_base_type_hint()?;
+                self.maybe_parse_compound_type(hint)?
+            };
+            if Self::type_hint_uses_static(&hint) && !self.class_scope_active {
+                return Err("Cannot use \"static\" when no class scope is active".to_string());
             }
-            let hint = self.parse_base_type_hint()?;
-            let hint = self.maybe_parse_compound_type(hint)?;
             Ok(Some(hint))
         } else {
             Ok(None)
@@ -254,7 +259,10 @@ impl Parser {
         while self.peek() == Token::Ampersand
             && matches!(
                 self.tokens.get(self.pos + 1),
-                Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
+                Some(Token::Identifier(_))
+                    | Some(Token::ArrayKw)
+                    | Some(Token::Null)
+                    | Some(Token::Static)
             )
         {
             self.advance();
@@ -273,7 +281,10 @@ impl Parser {
             Token::Question => {
                 matches!(
                     self.tokens.get(self.pos + 1),
-                    Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
+                    Some(Token::Identifier(_))
+                        | Some(Token::ArrayKw)
+                        | Some(Token::Null)
+                        | Some(Token::Static)
                 )
             }
             Token::Identifier(_) => {
@@ -291,6 +302,17 @@ impl Parser {
                     Some(Token::Variable(_)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
+            // `static` is a return-only PHP type. Parameter/property parsing
+            // enters the parameter parser only so it can emit the precise
+            // return-only diagnostic. Class-member modifiers are consumed
+            // before this lookahead runs.
+            Token::Static => matches!(
+                self.tokens.get(self.pos + 1),
+                Some(Token::Less)
+                    | Some(Token::Variable(_))
+                    | Some(Token::Pipe)
+                    | Some(Token::Ampersand)
+            ),
             _ => false,
         }
     }
@@ -303,6 +325,9 @@ impl Parser {
             // Peek ahead: ?$var or ?... means ternary/other, not type hint
             // In param context, ?Identifier or ?ArrayKw means nullable type
             let next = self.tokens.get(self.pos + 1);
+            if matches!(next, Some(Token::Static)) {
+                return Err("static is only allowed as a return type".to_string());
+            }
             let is_type = matches!(
                 next,
                 Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
@@ -331,6 +356,9 @@ impl Parser {
                 if is_type_context {
                     let hint = self.parse_base_type_hint()?;
                     let hint = self.maybe_parse_compound_type(hint)?;
+                    if Self::type_hint_uses_static(&hint) {
+                        return Err("static is only allowed as a return type".to_string());
+                    }
                     return Ok(Some(hint));
                 }
                 Ok(None)
@@ -347,10 +375,14 @@ impl Parser {
                 if is_type_context {
                     self.advance(); // consume 'array'
                     let hint = self.maybe_parse_compound_type(TypeHint::Array)?;
+                    if Self::type_hint_uses_static(&hint) {
+                        return Err("static is only allowed as a return type".to_string());
+                    }
                     return Ok(Some(hint));
                 }
                 Ok(None)
             }
+            Token::Static => Err("static is only allowed as a return type".to_string()),
             _ => Ok(None),
         }
     }
@@ -393,7 +425,43 @@ impl Parser {
             },
             Token::ArrayKw => Ok(TypeHint::Array),
             Token::Null => Ok(TypeHint::Null),
+            Token::Static => {
+                if self.peek() == Token::Less {
+                    if !cfg!(any(
+                        feature = "php-generics-erased",
+                        feature = "php-generics-reified"
+                    )) {
+                        return Err(
+                            "Generic syntax requires php-generics-erased or php-generics-reified"
+                                .to_string(),
+                        );
+                    }
+                    let arguments = self.parse_generic_type_arguments()?;
+                    Ok(TypeHint::GenericApplication {
+                        base: "static".to_string(),
+                        arguments,
+                    })
+                } else {
+                    Ok(TypeHint::ClassName("static".to_string()))
+                }
+            }
             other => Err(format!("Expected type hint, got {:?}", other)),
+        }
+    }
+
+    fn type_hint_uses_static(hint: &TypeHint) -> bool {
+        match hint {
+            TypeHint::ClassName(name) => name.eq_ignore_ascii_case("static"),
+            TypeHint::GenericApplication { base, arguments } => {
+                base.eq_ignore_ascii_case("static")
+                    || arguments.iter().any(Self::type_hint_uses_static)
+            }
+            TypeHint::Nullable(inner) => Self::type_hint_uses_static(inner),
+            TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                parts.iter().any(Self::type_hint_uses_static)
+            }
+            TypeHint::GenericParameter { erased, .. } => Self::type_hint_uses_static(erased),
+            _ => false,
         }
     }
 

@@ -10,9 +10,12 @@ impl ExecutorGlobals {
         expected_arguments: &[GenericType],
         declaration: &GenericDeclaration,
         site: &GenericUseSite,
-        scope: &str,
+        lexical_scope: &str,
+        called_scope: Option<&str>,
     ) -> bool {
-        let Some(expected_owner) = self.generic_type_name_in_scope(expected_name, scope) else {
+        let Some(expected_owner) =
+            self.generic_type_name_in_scopes(expected_name, lexical_scope, called_scope)
+        else {
             return false;
         };
         if value.value_type() != crate::value::ValueType::Object {
@@ -77,9 +80,12 @@ impl ExecutorGlobals {
         value: &Value,
         expected_name: &str,
         expected_arguments: &[GenericType],
-        scope: &str,
+        lexical_scope: &str,
+        called_scope: Option<&str>,
     ) -> bool {
-        let Some(expected_owner) = self.generic_type_name_in_scope(expected_name, scope) else {
+        let Some(expected_owner) =
+            self.generic_type_name_in_scopes(expected_name, lexical_scope, called_scope)
+        else {
             return false;
         };
         if value.value_type() != crate::value::ValueType::Object {

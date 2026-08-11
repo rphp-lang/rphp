@@ -86,11 +86,19 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
 
 #[inline(always)]
 unsafe fn pop_call_storage(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
+    eg.discard_late_static_scope(call as usize);
     if (*call).deferred_scalar_call {
         eg.pending_call_stack.pop_call_frame(call);
     } else {
         eg.vm_stack.pop_call_frame(call);
     }
+}
+
+#[cold]
+#[inline(never)]
+unsafe fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
+    eg.discard_late_static_scope(call as usize);
+    eg.vm_stack.pop_call_frame(call);
 }
 
 /// Append one dynamically resolved `__invoke` receiver to the packed internal
@@ -350,7 +358,7 @@ fn throw_in_frame<'a>(
                         cleanup_pending_calls(eg, frame);
                         cleanup_frame_slots(frame);
                     };
-                    eg.vm_stack.pop_call_frame(frame);
+                    unsafe { pop_vm_call_frame(eg, frame) };
                     frame = prev;
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
@@ -375,7 +383,7 @@ fn throw_in_frame<'a>(
                         cleanup_pending_calls(eg, frame);
                         cleanup_frame_slots(frame);
                     };
-                    eg.vm_stack.pop_call_frame(frame);
+                    unsafe { pop_vm_call_frame(eg, frame) };
                     frame = prev;
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };

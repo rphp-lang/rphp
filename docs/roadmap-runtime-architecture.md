@@ -2154,13 +2154,44 @@ an untyped generator so the old binary completes identical work rather than
 entering the corrected typed-completion loop. Both hosts pass all four
 production all-targets matrices.
 
-`static<T>` remains deliberately open. It needs parser support for the
-reserved `static` token and a real late-static called-scope identity for both
-instance and static calls; aliasing it to lexical `self` would be observably
-wrong. Generics-aware JIT specialization remains deliberately last: no JIT
-work starts until those parser/runtime semantics and the complete acceptance
-matrix are closed, after which it must consume canonical metadata with exact
-guards and deoptimization back to the established erased/reified paths.
+Late-bound generic return types are now implemented as real `static<T>`, not
+as a spelling of lexical `self<T>`. The parser accepts ordinary PHP `: static`
+in every build and accepts its generic application only under either
+`php-generics-erased` or `php-generics-reified`; with both syntax flags off the
+shared metadata, linker and runtime logic remain compiled in while `<...>` is
+rejected. Parameters and properties reject `static`, and a return declaration
+without an active class scope fails before compilation. The parser tracks the
+class scope separately from the class-member loop so method bodies and nested
+named functions are not conflated.
+
+Interned method contracts now carry lexical and called scope independently.
+`self` and `parent` are resolved against the declaration/trait consumer before
+diamond merging, while `static` remains interned until an actual receiver is
+known. Instance returns recover that class directly from `$this`. A static
+method whose return contract contains `static` recovers the called class only
+at the cold full-call boundary and stores a high-bit-tagged `(call frame,
+class id)` pair in the existing packed pending-call state. This avoids a new
+executor field as well as any `ExecuteData`, `Value`, function or instruction
+layout change. The pair has complete normal return, finally, generator,
+abandoned-call and exception-unwind cleanup. Bound-erased mode enforces the
+late-bound outer class, while reified mode additionally compares the canonical
+nested arguments of `static<T>`.
+
+Permanent coverage now includes syntax-disabled rejection, ordinary PHP
+`static`, inherited instance and static generic methods, trait consumers,
+namespaces, wrong called classes, wrong reified arguments and interned
+`static<T>` metadata. A dedicated ordinary static-method workload joins the
+runtime gate so the late-static state remains pay-for-use. Warm scalar static
+calls reuse the existing target-neutral frame-free plan without adding native
+or generics-aware specialization. On ARM64, 20 balanced release pairs improve
+that static workload by 33.472%; the ordinary instance control is +0.963%, the
+erased generic-method control -0.200%, and explicit method turbofish -1.699%
+against exact checkpoint `3e5a507`. CPU-2-pinned x86-64 reports -44.599%,
+-0.014%, -1.418% and +3.255% for the same four controls, respectively.
+Generics-aware JIT specialization is still deliberately last: it starts only
+after the remaining parser/link/runtime/Reflection acceptance work is complete
+and must consume canonical metadata with exact guards and deoptimization to
+these established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

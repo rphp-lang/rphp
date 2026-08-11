@@ -959,6 +959,19 @@ pub enum ParamTypeHint {
 }
 
 impl ParamTypeHint {
+    /// Whether this return contract needs PHP's late-static called class.
+    #[inline]
+    pub fn uses_late_static(&self) -> bool {
+        match self {
+            ParamTypeHint::ClassName(name) => name.eq_ignore_ascii_case("static"),
+            ParamTypeHint::Nullable(inner) => inner.uses_late_static(),
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+                parts.iter().any(ParamTypeHint::uses_late_static)
+            }
+            _ => false,
+        }
+    }
+
     /// Human-readable name for error messages.
     pub fn display_name(&self) -> std::string::String {
         match self {

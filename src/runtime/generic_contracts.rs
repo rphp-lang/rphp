@@ -13,7 +13,14 @@ impl ExecutorGlobals {
             GenericRuntimeMode::BoundErased => self.generic_metadata.value_matches_resolved_type(
                 value,
                 expected,
-                |actual, bound| self.class_is_a_in_generic_scope(actual, bound, &contract.scope),
+                |actual, bound| {
+                    self.class_is_a_in_generic_scopes(
+                        actual,
+                        bound,
+                        &contract.scope,
+                        Some(&contract.called_scope),
+                    )
+                },
             ),
             GenericRuntimeMode::Reified => {
                 #[cfg(feature = "php-generics-reified")]
@@ -22,7 +29,12 @@ impl ExecutorGlobals {
                         value,
                         expected,
                         |actual, bound| {
-                            self.class_is_a_in_generic_scope(actual, bound, &contract.scope)
+                            self.class_is_a_in_generic_scopes(
+                                actual,
+                                bound,
+                                &contract.scope,
+                                Some(&contract.called_scope),
+                            )
                         },
                         |value, name, arguments| {
                             self.reified_object_arguments_match_resolved(
@@ -30,6 +42,7 @@ impl ExecutorGlobals {
                                 name,
                                 arguments,
                                 &contract.scope,
+                                Some(&contract.called_scope),
                             )
                         },
                     )

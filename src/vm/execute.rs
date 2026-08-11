@@ -207,6 +207,18 @@ fn check_type_hint(
     strict: bool,
     callee_class: Option<&str>,
 ) -> bool {
+    check_type_hint_in_scopes(val, hint, eg, strict, callee_class, callee_class)
+}
+
+/// Check a type hint with distinct lexical and late-static class scopes.
+fn check_type_hint_in_scopes(
+    val: &Value,
+    hint: &crate::vm::function::ParamTypeHint,
+    eg: &ExecutorGlobals,
+    strict: bool,
+    callee_class: Option<&str>,
+    called_class: Option<&str>,
+) -> bool {
     use crate::vm::function::ParamTypeHint;
     match hint {
         ParamTypeHint::None => true,
@@ -236,9 +248,10 @@ fn check_type_hint(
                 if class_name.eq_ignore_ascii_case("object") {
                     return true;
                 }
-                // Resolve `self`, `parent`, `static` pseudo-types using callee's declaring class
+                // `self`/`parent` are lexical; `static` is the runtime called class.
                 let resolved = match class_name.as_str() {
-                    "self" | "static" => callee_class.unwrap_or(class_name.as_str()),
+                    "self" => callee_class.unwrap_or(class_name.as_str()),
+                    "static" => called_class.unwrap_or(class_name.as_str()),
                     "parent" => {
                         if let Some(decl) = callee_class {
                             if let Some(class_def) = eg.class_table.get(decl) {
@@ -261,7 +274,7 @@ fn check_type_hint(
             if val.value_type() == ValueType::Null {
                 true
             } else {
-                check_type_hint(val, inner, eg, strict, callee_class)
+                check_type_hint_in_scopes(val, inner, eg, strict, callee_class, called_class)
             }
         }
         ParamTypeHint::Void => false,
@@ -269,11 +282,38 @@ fn check_type_hint(
         ParamTypeHint::Never => false,
         ParamTypeHint::Union(types) => types
             .iter()
-            .any(|t| check_type_hint(val, t, eg, strict, callee_class)),
+            .any(|t| check_type_hint_in_scopes(val, t, eg, strict, callee_class, called_class)),
         ParamTypeHint::Intersection(types) => types
             .iter()
-            .all(|t| check_type_hint(val, t, eg, strict, callee_class)),
+            .all(|t| check_type_hint_in_scopes(val, t, eg, strict, callee_class, called_class)),
     }
+}
+
+#[inline]
+fn check_return_type_hint(
+    value: &Value,
+    hint: &crate::vm::function::ParamTypeHint,
+    eg: &ExecutorGlobals,
+    strict: bool,
+    frame: *mut ExecuteData,
+    callee_class: Option<&str>,
+) -> bool {
+    if !hint.uses_late_static() {
+        return check_type_hint(value, hint, eg, strict, callee_class);
+    }
+    let common = unsafe { &*(*frame).func };
+    let receiver_scope = if common.sig.this_offset == 1 {
+        let receiver = unsafe { &*(*frame).cv(0) };
+        (receiver.value_type() == ValueType::Object)
+            .then(|| unsafe { receiver.object_class_name_unchecked() })
+    } else {
+        None
+    };
+    let called_scope = receiver_scope.or_else(|| {
+        eg.class_by_id(eg.late_static_scope_class_id(frame as usize))
+            .map(|class| class.name.as_str())
+    });
+    check_type_hint_in_scopes(value, hint, eg, strict, callee_class, called_scope)
 }
 
 /// Validate hints supported by the compact scalar call/return protocol.
@@ -1530,6 +1570,118 @@ fn execute_fast_scalar_method_call<'a>(
     }
 }
 
+/// Find the call initializer paired with one DoFcall while ignoring complete
+/// nested calls used to build its arguments.
+#[cold]
+fn call_initializer_before<'a>(
+    op_array: &'a crate::compiler::OpArray,
+    do_fcall_ptr: *const Instruction,
+) -> Option<&'a Instruction> {
+    let instructions = &op_array.instructions;
+    let base = instructions.as_ptr();
+    let boundary = unsafe { do_fcall_ptr.offset_from(base) };
+    if boundary <= 0 || boundary as usize >= instructions.len() {
+        return None;
+    }
+
+    let mut index = boundary as usize;
+    let mut nested_calls = 0usize;
+    while index > 0 {
+        index -= 1;
+        let instruction = &instructions[index];
+        match instruction.opcode {
+            OpCode::DoFcall => nested_calls += 1,
+            OpCode::InitFcall
+            | OpCode::InitUserCall
+            | OpCode::InitMethodCall
+            | OpCode::InitStaticCall
+            | OpCode::InitDynamicCall
+            | OpCode::NewObj => {
+                if nested_calls == 0 {
+                    return Some(instruction);
+                }
+                nested_calls -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+#[cold]
+fn static_site_called_class_id(
+    eg: &ExecutorGlobals,
+    caller: *mut ExecuteData,
+    caller_op_array: &crate::compiler::OpArray,
+    do_fcall_ptr: *const Instruction,
+    depth: usize,
+) -> u32 {
+    let Some(initializer) = call_initializer_before(caller_op_array, do_fcall_ptr) else {
+        return 0;
+    };
+    if initializer.opcode != OpCode::InitStaticCall || initializer.op1_type != OpType::Const {
+        return 0;
+    }
+    let Some(class_name) = caller_op_array
+        .literals
+        .get(initializer.op1 as usize)
+        .and_then(Value::as_str)
+    else {
+        return 0;
+    };
+    if matches!(
+        class_name.to_ascii_lowercase().as_str(),
+        "self" | "parent" | "static"
+    ) {
+        called_class_id_for_frame(eg, caller, depth + 1)
+    } else {
+        eg.class_id_of(class_name)
+    }
+}
+
+/// Recover forwarding `self`/`parent`/`static` calls only when a callee has an
+/// actual late-static return contract. This walks saved call sites lazily, so
+/// ordinary static frames need no called-scope field or side-table entry.
+#[cold]
+fn called_class_id_for_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData, depth: usize) -> u32 {
+    if frame.is_null() || depth >= 64 {
+        return 0;
+    }
+    let common = unsafe { &*(*frame).func };
+    if common.sig.this_offset == 1 {
+        let receiver = unsafe { &*(*frame).cv(0) };
+        if receiver.value_type() == ValueType::Object {
+            return unsafe { receiver.object_class_id_unchecked() };
+        }
+    }
+
+    let lexical_class_id = eg
+        .declaring_class_of(unsafe { (*frame).func })
+        .map_or(0, |class| eg.class_id_of(class));
+    let previous = unsafe { (*frame).prev_execute_data };
+    if previous.is_null() {
+        return lexical_class_id;
+    }
+    let previous_op_array = unsafe { (*previous).op_array() };
+    let resume_ptr = unsafe { (*previous).opline };
+    let base = previous_op_array.instructions.as_ptr();
+    let resume_index = unsafe { resume_ptr.offset_from(base) };
+    if resume_index <= 0 || resume_index as usize > previous_op_array.instructions.len() {
+        return lexical_class_id;
+    }
+    let do_fcall_ptr = unsafe { resume_ptr.sub(1) };
+    if unsafe { (*do_fcall_ptr).opcode } != OpCode::DoFcall {
+        return lexical_class_id;
+    }
+    let resolved =
+        static_site_called_class_id(eg, previous, previous_op_array, do_fcall_ptr, depth + 1);
+    if resolved == 0 {
+        lexical_class_id
+    } else {
+        resolved
+    }
+}
+
 /// Complete a call that could not use one of the compact DoFcall protocols.
 ///
 /// Argument diagnostics, named variadics, dynamic `__invoke`, generators and
@@ -1607,6 +1759,15 @@ fn execute_full_call<'a>(
         }
     }
 
+    if func_common.sig.return_type_hint.uses_late_static() {
+        let receiver_is_object = func_common.sig.this_offset == 1
+            && unsafe { (*call).cv(0) }.value_type() == ValueType::Object;
+        if !receiver_is_object {
+            let class_id = static_site_called_class_id(eg, frame, op_array, opline_ptr, 0);
+            eg.push_late_static_scope(call_key, class_id);
+        }
+    }
+
     let callee_class = eg
         .declaring_class_of(unsafe { (*call).func })
         .map(str::to_string);
@@ -1641,7 +1802,7 @@ fn execute_full_call<'a>(
         }
         if let Some(err) = type_error {
             unsafe { cleanup_frame_slots(call) };
-            eg.vm_stack.pop_call_frame(call);
+            unsafe { pop_vm_call_frame(eg, call) };
             return Ok(match throw_in_frame(eg, frame, err) {
                 ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                 ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
@@ -1674,7 +1835,7 @@ fn execute_full_call<'a>(
                             ),
                         );
                         unsafe { cleanup_frame_slots(call) };
-                        eg.vm_stack.pop_call_frame(call);
+                        unsafe { pop_vm_call_frame(eg, call) };
                         return Ok(match throw_in_frame(eg, frame, type_err) {
                             ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
                             ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
@@ -1742,7 +1903,7 @@ fn execute_full_call<'a>(
                     #[cfg(feature = "php-generics-reified")]
                     eg.discard_active_reified_binding_scope(call as usize);
                     unsafe { cleanup_frame_slots(call) };
-                    eg.vm_stack.pop_call_frame(call);
+                    unsafe { pop_vm_call_frame(eg, call) };
                     let error = make_error_value(
                         "TypeError",
                         &format!(
@@ -1768,7 +1929,7 @@ fn execute_full_call<'a>(
                     };
                 }
                 unsafe { cleanup_frame_slots(call) };
-                eg.vm_stack.pop_call_frame(call);
+                unsafe { pop_vm_call_frame(eg, call) };
                 Ok(ColdResult::Done)
             } else {
                 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1814,7 +1975,7 @@ fn execute_full_call<'a>(
                 };
             }
             unsafe { cleanup_frame_slots(call) };
-            eg.vm_stack.pop_call_frame(call);
+            unsafe { pop_vm_call_frame(eg, call) };
             if let Some(exc) = eg.exception.take() {
                 return Ok(match throw_in_frame(eg, frame, exc) {
                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),

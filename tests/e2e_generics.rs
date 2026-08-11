@@ -30,6 +30,13 @@ fn default_build_contains_engine_but_rejects_generic_syntax() {
         "Generic syntax requires php-generics-erased or php-generics-reified"
     );
 
+    let static_type_error =
+        parse("<?php class Box { public function copy(): static<int> {} }").unwrap_err();
+    assert_eq!(
+        static_type_error,
+        "Generic syntax requires php-generics-erased or php-generics-reified"
+    );
+
     let use_error = parse("<?php id::<int>(1);").unwrap_err();
     assert_eq!(
         use_error,
@@ -218,6 +225,113 @@ echo $boundTraitChild->traitBound::<BoundTraitBase>($boundTraitBase) instanceof 
         output,
         "self:parent:property:inherited:trait:method-trait:bounds:trait-bound"
     );
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn generic_static_application_uses_the_late_called_class() {
+    let output = common::run_php(
+        r#"<?php
+class StaticGenericBase<T> {
+    public function copy(): static<T> { return $this; }
+    public function wrongClass(): static<T> { return new StaticGenericBase::<int>(); }
+    public static function factory<U>(): static<U> {
+        return new StaticGenericChild::<int>();
+    }
+    public static function wrongFactory<U>(): static<U> {
+        return new StaticGenericBase::<int>();
+    }
+}
+class StaticGenericChild<V> extends StaticGenericBase<V> {}
+
+$value = new StaticGenericChild::<int>();
+echo $value->copy() instanceof StaticGenericChild ? "instance:" : "bad:";
+echo StaticGenericChild::factory::<int>() instanceof StaticGenericChild ? "static" : "bad";
+
+trait StaticGenericTrait<T> {
+    public function traitCopy(): static<T> { return $this; }
+}
+class StaticTraitBase<U> { use StaticGenericTrait<U>; }
+class StaticTraitChild<V> extends StaticTraitBase<V> {}
+$trait = new StaticTraitChild::<int>();
+echo $trait->traitCopy() instanceof StaticTraitChild ? ":trait" : ":bad";
+"#,
+    );
+    assert_eq!(output, "instance:static:trait");
+
+    for source in [
+        r#"<?php
+class StaticGenericBase<T> {
+    public function wrongClass(): static<T> { return new StaticGenericBase::<int>(); }
+}
+class StaticGenericChild<V> extends StaticGenericBase<V> {}
+$value = new StaticGenericChild::<int>();
+$value->wrongClass();
+"#,
+        r#"<?php
+class StaticGenericBase<T> {
+    public static function wrongFactory<U>(): static<U> {
+        return new StaticGenericBase::<int>();
+    }
+}
+class StaticGenericChild<V> extends StaticGenericBase<V> {}
+StaticGenericChild::wrongFactory::<int>();
+"#,
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("Return value"), "{rendered:?}");
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn generic_static_application_is_not_namespace_resolved() {
+    let output = common::run_php(
+        r#"<?php
+namespace StaticScope;
+class Base<T> {
+    public function copy(): static<T> { return $this; }
+}
+class Child<U> extends Base<U> {}
+$value = new Child::<int>();
+echo $value->copy() instanceof Child ? "yes" : "no";
+"#,
+    );
+    assert_eq!(output, "yes");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_static_application_checks_called_class_arguments() {
+    let error = common::run_php_expect_error(
+        r#"<?php
+class ReifiedStaticBase<T> {
+    public function wrongArguments(): static<T> {
+        return new ReifiedStaticChild::<string>();
+    }
+}
+class ReifiedStaticChild<U> extends ReifiedStaticBase<U> {}
+$value = new ReifiedStaticChild::<int>();
+$value->wrongArguments();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("reified"), "{rendered:?}");
+
+    let static_error = common::run_php_expect_error(
+        r#"<?php
+class ReifiedStaticFactory<T> {
+    public static function wrongArguments<U>(): static<U> {
+        return new ReifiedStaticFactoryChild::<string>();
+    }
+}
+class ReifiedStaticFactoryChild<V> extends ReifiedStaticFactory<V> {}
+ReifiedStaticFactoryChild::wrongArguments::<int>();
+"#,
+    );
+    let rendered = format!("{static_error:?}");
+    assert!(rendered.contains("reified"), "{rendered:?}");
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -1673,6 +1787,7 @@ trait Holder<T : object> {}
 class Box<T : object = stdClass> {
     public T $value;
     public function pair<-L, +R : Box<stdClass>>(L $left): R { return $left; }
+    public function copy(): static<T> { return $this; }
 }
 function id<T : Box<Box<int>>>(T $value): T { return $value; }
 "#,
@@ -1713,8 +1828,18 @@ function id<T : Box<Box<int>>>(T $value): T { return $value; }
         boxed.properties[0].value_type,
         GenericType::Parameter(0)
     ));
-    assert_eq!(boxed.methods.len(), 1);
+    assert_eq!(boxed.methods.len(), 2);
     assert_eq!(boxed.methods[0].value_parameters.len(), 1);
+    let copy = boxed
+        .methods
+        .iter()
+        .find(|method| metadata.symbol(method.name) == Some("copy"))
+        .unwrap();
+    let Some(GenericType::Named { name, arguments }) = copy.return_type.as_ref() else {
+        panic!("expected static<T> method metadata");
+    };
+    assert_eq!(metadata.symbol(*name), Some("static"));
+    assert!(matches!(arguments.as_ref(), [GenericType::Parameter(0)]));
 
     let inheritance_statements = parse(
         "<?php interface Source<T> {} trait Holder<T> {} class Child<U> implements Source<U> { use Holder<U>; }",
@@ -1944,12 +2069,20 @@ fn parser_enforces_declaration_invariants() {
             "<?php class C { public static $value; } C::value::<int>;",
             "must be followed by a method call",
         ),
+        (
+            "<?php class C<T> { public function bad(static<T> $value) {} }",
+            "static is only allowed as a return type",
+        ),
+        (
+            "<?php class C<T> { public function bad(C<T>|static<T> $value) {} }",
+            "static is only allowed as a return type",
+        ),
     ];
     for (source, expected) in cases {
         let error = parse(source).unwrap_err();
         assert!(
             error.contains(expected),
-            "{error:?} did not contain {expected:?}"
+            "{error:?} did not contain {expected:?} for {source:?}"
         );
     }
 

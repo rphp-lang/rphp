@@ -252,7 +252,7 @@ fn op_yield<'a>(
     }
     eg.current_execute_data.set(prev);
     unsafe { cleanup_frame_slots(frame) };
-    eg.vm_stack.pop_call_frame(frame);
+    unsafe { pop_vm_call_frame(eg, frame) };
     Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }))
 }
 
@@ -346,7 +346,7 @@ fn op_yield_from<'a>(
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
-                    eg.vm_stack.pop_call_frame(frame);
+                    unsafe { pop_vm_call_frame(eg, frame) };
                     return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
                 }
             }
@@ -413,7 +413,7 @@ fn op_yield_from<'a>(
             }
             eg.current_execute_data.set(prev);
             unsafe { cleanup_frame_slots(frame) };
-            eg.vm_stack.pop_call_frame(frame);
+            unsafe { pop_vm_call_frame(eg, frame) };
             return Ok(ColdResult::NewFrame(prev, unsafe { (*prev).op_array() }));
         } else {
             eg.active_generator = Some(gen_ref);

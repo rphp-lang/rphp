@@ -137,6 +137,27 @@ impl GenericMetadata {
         value: &GenericType,
         scope: GenericSymbol,
     ) -> Option<GenericType> {
+        self.resolve_class_pseudo_types(value, scope, false)
+    }
+
+    /// Resolve the lexical pseudo-types in an executable method contract while
+    /// retaining `static` for the runtime called-scope check. Link validation
+    /// cannot do this because it has no concrete invocation receiver.
+    #[inline(never)]
+    pub(super) fn resolve_method_contract_class_pseudo_types(
+        &self,
+        value: &GenericType,
+        scope: GenericSymbol,
+    ) -> Option<GenericType> {
+        self.resolve_class_pseudo_types(value, scope, true)
+    }
+
+    fn resolve_class_pseudo_types(
+        &self,
+        value: &GenericType,
+        scope: GenericSymbol,
+        retain_late_static: bool,
+    ) -> Option<GenericType> {
         match value {
             GenericType::Named { name, arguments } => {
                 let resolved = match self.symbol(*name)? {
@@ -150,34 +171,42 @@ impl GenericMetadata {
                             })?
                             .ancestor
                     }
-                    // `static` is late-bound and must not be approximated by
-                    // lexical self during link validation.
-                    name if name.eq_ignore_ascii_case("static") => return None,
+                    symbol_name if symbol_name.eq_ignore_ascii_case("static") => {
+                        if retain_late_static {
+                            *name
+                        } else {
+                            // Link validation has no concrete invocation and
+                            // must not approximate late `static` as `self`.
+                            return None;
+                        }
+                    }
                     _ => *name,
                 };
                 Some(GenericType::Named {
                     name: resolved,
                     arguments: arguments
                         .iter()
-                        .map(|argument| self.resolve_lexical_class_pseudo_types(argument, scope))
+                        .map(|argument| {
+                            self.resolve_class_pseudo_types(argument, scope, retain_late_static)
+                        })
                         .collect::<Option<Vec<_>>>()?
                         .into_boxed_slice(),
                 })
             }
             GenericType::Nullable(inner) => Some(GenericType::Nullable(Box::new(
-                self.resolve_lexical_class_pseudo_types(inner, scope)?,
+                self.resolve_class_pseudo_types(inner, scope, retain_late_static)?,
             ))),
             GenericType::Union(parts) => Some(GenericType::Union(
                 parts
                     .iter()
-                    .map(|part| self.resolve_lexical_class_pseudo_types(part, scope))
+                    .map(|part| self.resolve_class_pseudo_types(part, scope, retain_late_static))
                     .collect::<Option<Vec<_>>>()?
                     .into_boxed_slice(),
             )),
             GenericType::Intersection(parts) => Some(GenericType::Intersection(
                 parts
                     .iter()
-                    .map(|part| self.resolve_lexical_class_pseudo_types(part, scope))
+                    .map(|part| self.resolve_class_pseudo_types(part, scope, retain_late_static))
                     .collect::<Option<Vec<_>>>()?
                     .into_boxed_slice(),
             )),

@@ -1352,7 +1352,10 @@ impl Compiler {
                 erased: Box::new(self.resolve_generic_type_names(erased)),
             },
             TypeHint::GenericApplication { base, arguments } => TypeHint::GenericApplication {
-                base: self.resolve_name(base),
+                base: match base.as_str() {
+                    "self" | "parent" | "static" => base.clone(),
+                    _ => self.resolve_name(base),
+                },
                 arguments: arguments
                     .iter()
                     .map(|argument| self.resolve_generic_type_names(argument))
@@ -2005,7 +2008,10 @@ impl Compiler {
                 self.convert_type_hint(&Some(*erased.clone()))
             }
             Some(TypeHint::GenericApplication { base, .. }) => {
-                ParamTypeHint::ClassName(self.resolve_name(base))
+                ParamTypeHint::ClassName(match base.as_str() {
+                    "self" | "parent" | "static" | "object" | "iterable" => base.clone(),
+                    _ => self.resolve_name(base),
+                })
             }
         }
     }

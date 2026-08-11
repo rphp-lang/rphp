@@ -80,6 +80,29 @@ fn test_include_function_declaration() {
     assert_eq!(output, "Hello World");
 }
 
+#[test]
+fn test_included_static_return_contract_uses_runtime_called_class() {
+    let (_dir, path) = write_temp_php(
+        "late_static.php",
+        r#"<?php
+class IncludedStaticBase {
+    public static function factory(): static { return new IncludedStaticChild(); }
+    public static function wrong(): static { return new IncludedStaticBase(); }
+}
+class IncludedStaticChild extends IncludedStaticBase {}
+"#,
+    );
+    let source = format!(
+        r#"<?php
+include '{}';
+echo IncludedStaticChild::factory() instanceof IncludedStaticChild ? "yes:" : "no:";
+try {{ IncludedStaticChild::wrong(); }} catch (TypeError $error) {{ echo "caught"; }}
+"#,
+        path
+    );
+    assert_eq!(run_php(&source), "yes:caught");
+}
+
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
 fn test_include_merges_and_relocates_generic_metadata() {

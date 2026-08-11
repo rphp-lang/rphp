@@ -143,6 +143,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
+                let previous_class_scope = self.class_scope_active;
+                self.class_scope_active = true;
                 let generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&generic_params);
                 self.expect(&Token::LParen)?;
@@ -156,6 +158,7 @@ impl Parser {
                 }
                 self.expect(&Token::RBrace)?;
                 self.pop_generic_scope();
+                self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
                     visibility: vis,
                     name: method_name,
@@ -235,6 +238,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
+                let previous_class_scope = self.class_scope_active;
+                self.class_scope_active = true;
                 let method_generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&method_generic_params);
                 self.expect(&Token::LParen)?;
@@ -248,6 +253,7 @@ impl Parser {
                 }
                 self.expect(&Token::RBrace)?;
                 self.pop_generic_scope();
+                self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
                     visibility: vis,
                     name: method_name,
@@ -331,6 +337,8 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected method name, got {:?}", other)),
                 };
+                let previous_class_scope = self.class_scope_active;
+                self.class_scope_active = true;
                 let method_generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&method_generic_params);
                 // Interface methods must be public (PHP rule)
@@ -351,6 +359,7 @@ impl Parser {
                 let return_type = self.parse_return_type()?;
                 self.expect(&Token::Semicolon)?; // interface methods end with ;
                 self.pop_generic_scope();
+                self.class_scope_active = previous_class_scope;
                 methods.push(ClassMethod {
                     visibility: vis,
                     name: method_name,
@@ -425,6 +434,8 @@ impl Parser {
                         Token::Identifier(n) => n,
                         other => return Err(format!("Expected method name, got {:?}", other)),
                     };
+                    let previous_class_scope = self.class_scope_active;
+                    self.class_scope_active = true;
                     let generic_params = self.parse_generic_parameters()?;
                     self.push_generic_scope(&generic_params);
                     self.expect(&Token::LParen)?;
@@ -438,6 +449,7 @@ impl Parser {
                     }
                     self.expect(&Token::RBrace)?;
                     self.pop_generic_scope();
+                    self.class_scope_active = previous_class_scope;
                     methods.push(ClassMethod {
                         visibility: vis,
                         name: method_name,

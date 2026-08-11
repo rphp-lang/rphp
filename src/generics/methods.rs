@@ -137,6 +137,7 @@ impl GenericMetadata {
         Some(GenericMethodContract {
             owner: self.symbol(candidates[0].0.owner).unwrap_or("?").into(),
             scope: self.symbol(candidates[0].3).unwrap_or("?").into(),
+            called_scope: self.symbol(candidates[0].0.owner).unwrap_or("?").into(),
             method: self.symbol(candidates[0].1.name).unwrap_or(method).into(),
             value_parameters,
             return_type,
@@ -272,6 +273,7 @@ impl GenericMetadata {
         Some(GenericMethodContract {
             owner: self.symbol(child.owner).unwrap_or("?").into(),
             scope: self.symbol(candidates[0].3).unwrap_or("?").into(),
+            called_scope: self.symbol(child.owner).unwrap_or("?").into(),
             method: method.into(),
             value_parameters,
             return_type,
@@ -305,6 +307,7 @@ impl GenericMetadata {
         Some(GenericMethodContract {
             owner: self.symbol(declaration.owner).unwrap_or("?").into(),
             scope: self.symbol(declaration.owner).unwrap_or("?").into(),
+            called_scope: self.symbol(declaration.owner).unwrap_or("?").into(),
             method: self.symbol(method.name).unwrap_or("?").into(),
             value_parameters: method
                 .value_parameters
@@ -330,12 +333,12 @@ impl GenericMetadata {
     }
 
     /// Resolve `self`/`parent` while each diamond candidate still owns its
-    /// lexical scope. An invalid or currently unsupported pseudo-type becomes
+    /// lexical scope. `static` remains interned until the concrete method call
+    /// supplies its separate called scope. Invalid pseudo state becomes
     /// `never`, which keeps argument unions neutral and makes return
-    /// intersections fail closed. Supported contracts therefore enter the hot
-    /// runtime matcher with no candidate-specific scope left to recover.
+    /// intersections fail closed.
     fn resolve_contract_type(&self, value: GenericType, scope: GenericSymbol) -> GenericType {
-        self.resolve_lexical_class_pseudo_types(&value, scope)
+        self.resolve_method_contract_class_pseudo_types(&value, scope)
             .unwrap_or(GenericType::Never)
     }
 }

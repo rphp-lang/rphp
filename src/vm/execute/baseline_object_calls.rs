@@ -995,6 +995,30 @@ fn op_init_static_call<'a>(
     };
 
     let num_args = opline.extended_value;
+    let common = unsafe { &*func_ptr };
+    if common.fn_type == FunctionType::User && num_args == common.sig.public_arity() {
+        let user = unsafe { &*(func_ptr as *const UserFunction) };
+        if let Some(plan) = user.scalar_long_plan.as_deref()
+            && let Some((result, do_fcall_ptr)) = unsafe {
+                try_execute_direct_scalar_long_call(
+                    frame,
+                    op_array,
+                    (opline as *const Instruction).add(1),
+                    common,
+                    plan,
+                )
+            }
+        {
+            stats::inc_do_fcall_fast();
+            stats::inc_return_fast();
+            let count = common.call_count.get();
+            if count < u32::MAX {
+                common.call_count.set(count + 1);
+            }
+            unsafe { complete_direct_scalar_long_call(frame, do_fcall_ptr, result) };
+            return Ok(ColdResult::Continue);
+        }
+    }
     // +1 for $this at CV 0 (compiler allocates $this even for static calls)
     let pending_call = unsafe { (*frame).call };
     let call = eg.vm_stack.push_call_frame(

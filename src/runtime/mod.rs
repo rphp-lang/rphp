@@ -8,7 +8,7 @@ use crate::compiler::compile::ClassDef;
 use crate::generics::GenericType;
 use crate::generics::{GenericMetadata, GenericMethodContract, ReifiedBinding};
 use crate::parser::Visibility;
-use crate::value::ObjectLayout;
+use crate::value::{ObjectLayout, PhpArray, Value};
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::FunctionCommon;
 use crate::vm::stack::VmStack;
@@ -184,7 +184,8 @@ pub struct ExecutorGlobals {
     pending_reified_binding_scopes: Vec<PendingReifiedBindingScope>,
     #[cfg(feature = "php-generics-reified")]
     active_reified_binding_scopes: Vec<ActiveReifiedBindingScope>,
-    /// Sparse class scope for explicit signatures containing `self`/`parent`.
+    /// Sparse called-class scope for explicit signatures containing relative
+    /// class types such as `self`, `parent`, or late-bound `static`.
     /// Ordinary generic calls never allocate or push into this sidecar.
     #[cfg(feature = "php-generics-reified")]
     reified_binding_scope_classes: Vec<(usize, u32)>,
@@ -342,6 +343,79 @@ impl ExecutorGlobals {
         }
     }
 
+    /// Reuse the existing cold packed call-side state so ordinary builds do
+    /// not grow or reorder ExecutorGlobals. The high-bit tag cannot collide
+    /// with a valid Rust allocation pointer on supported targets.
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn push_late_static_scope(&mut self, call: usize, class_id: u32) {
+        if class_id == 0 {
+            return;
+        }
+        const TAG: usize = 1usize << (usize::BITS - 1);
+        debug_assert_eq!(call & TAG, 0);
+        let pending = self
+            .pending_invoke_this
+            .get_or_insert_with(|| Value::array(PhpArray::with_packed_capacity(4)));
+        let stack = pending
+            .as_array_mut()
+            .expect("pending call side state must remain a packed array");
+        stack.push(Value::long((call | TAG) as i64));
+        stack.push(Value::long(class_id as i64));
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn late_static_scope_class_id(&self, call: usize) -> u32 {
+        const TAG: usize = 1usize << (usize::BITS - 1);
+        let Some(stack) = self.pending_invoke_this.as_ref().and_then(Value::as_array) else {
+            return 0;
+        };
+        let Some(key_index) = stack.len().checked_sub(2) else {
+            return 0;
+        };
+        if stack
+            .get_value_at(key_index)
+            .and_then(Value::as_long)
+            .map(|key| key as usize)
+            != Some(call | TAG)
+        {
+            return 0;
+        }
+        stack
+            .get_value_at(key_index + 1)
+            .and_then(Value::as_long)
+            .map_or(0, |class_id| class_id as u32)
+    }
+
+    #[cold]
+    #[inline(never)]
+    pub(crate) fn discard_late_static_scope(&mut self, call: usize) {
+        const TAG: usize = 1usize << (usize::BITS - 1);
+        let Some(pending) = self.pending_invoke_this.as_mut() else {
+            return;
+        };
+        let stack = pending
+            .as_array_mut()
+            .expect("pending call side state must remain a packed array");
+        let Some(key_index) = stack.len().checked_sub(2) else {
+            return;
+        };
+        if stack
+            .get_value_at(key_index)
+            .and_then(Value::as_long)
+            .map(|key| key as usize)
+            != Some(call | TAG)
+        {
+            return;
+        }
+        let _class_id = stack.pop();
+        let _call = stack.pop();
+        if stack.is_empty() {
+            self.pending_invoke_this = None;
+        }
+    }
+
     #[cfg(feature = "php-generics-reified")]
     pub(crate) fn bind_reified_object(
         &mut self,
@@ -436,6 +510,9 @@ impl ExecutorGlobals {
                 if scope != contract.scope.as_ref() {
                     contract.scope = scope.into();
                 }
+                if class_name.as_ref() != contract.called_scope.as_ref() {
+                    contract.called_scope = class_name.as_ref().into();
+                }
                 let contract = std::rc::Rc::new(contract);
                 self.generic_method_contract_cache
                     .replace(Some(GenericMethodContractBinding {
@@ -463,6 +540,9 @@ impl ExecutorGlobals {
         let scope = self.generic_declaration_scope(&contract.scope, Some(&class_name));
         if scope != contract.scope.as_ref() {
             contract.scope = scope.into();
+        }
+        if class_name.as_ref() != contract.called_scope.as_ref() {
+            contract.called_scope = class_name.as_ref().into();
         }
         let contract = std::rc::Rc::new(contract);
         self.generic_method_contract_cache
@@ -854,10 +934,9 @@ impl ExecutorGlobals {
         false
     }
 
-    /// Match a class name used by interned generic metadata in its concrete
-    /// class scope. Type applications retain `self` and `parent` before
-    /// erasure, so runtime sidecar checks must resolve those pseudo-types just
-    /// like the executable signature does.
+    /// Match a class name used by interned property metadata in one concrete
+    /// class scope. Properties cannot declare `static`, so lexical and called
+    /// scope are intentionally identical here.
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     pub(crate) fn class_is_a_in_generic_scope(
         &self,
@@ -865,23 +944,40 @@ impl ExecutorGlobals {
         target: &str,
         scope: &str,
     ) -> bool {
-        self.generic_type_name_in_scope(target, scope)
+        self.generic_type_name_in_scopes(target, scope, Some(scope))
             .is_some_and(|target| self.class_is_a(class_name, target))
     }
 
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-    pub(crate) fn generic_type_name_in_scope<'a>(
+    pub(crate) fn class_is_a_in_generic_scopes(
+        &self,
+        class_name: &str,
+        target: &str,
+        lexical_scope: &str,
+        called_scope: Option<&str>,
+    ) -> bool {
+        self.generic_type_name_in_scopes(target, lexical_scope, called_scope)
+            .is_some_and(|target| self.class_is_a(class_name, target))
+    }
+
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub(crate) fn generic_type_name_in_scopes<'a>(
         &'a self,
         target: &'a str,
-        scope: &'a str,
+        lexical_scope: &'a str,
+        called_scope: Option<&'a str>,
     ) -> Option<&'a str> {
-        let scope = scope.split_once("::").map_or(scope, |(class, _)| class);
+        let scope = lexical_scope
+            .split_once("::")
+            .map_or(lexical_scope, |(class, _)| class);
         if target.eq_ignore_ascii_case("self") {
             Some(scope)
         } else if target.eq_ignore_ascii_case("parent") {
             self.class_table
                 .get(scope)
                 .and_then(|class| class.parent.as_deref())
+        } else if target.eq_ignore_ascii_case("static") {
+            called_scope.map(|scope| scope.split_once("::").map_or(scope, |(class, _)| class))
         } else {
             Some(target)
         }

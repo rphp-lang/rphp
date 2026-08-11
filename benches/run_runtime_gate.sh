@@ -43,6 +43,7 @@ if [ -n "$cpu" ] && ! command -v taskset >/dev/null 2>&1; then
 fi
 case $only in
     '' | bench_scalar_loop.php | bench_array.php | bench_string.php | \
+        bench_scalar_method.php | bench_static_method.php | \
         corpus_order_pipeline.php | corpus_ledger_pipeline.php) ;;
     *)
         echo "RPHP_RUNTIME_GATE_ONLY names an unknown workload" >&2
@@ -191,6 +192,8 @@ done <<'WORKLOADS'
 bench_scalar_loop.php 1
 bench_array.php 8
 bench_string.php 20
+bench_scalar_method.php 1
+bench_static_method.php 1
 corpus_order_pipeline.php 1
 corpus_ledger_pipeline.php 2
 WORKLOADS
@@ -202,6 +205,8 @@ for workload in \
     bench_scalar_loop.php \
     bench_array.php \
     bench_string.php \
+    bench_scalar_method.php \
+    bench_static_method.php \
     corpus_order_pipeline.php \
     corpus_ledger_pipeline.php
 do

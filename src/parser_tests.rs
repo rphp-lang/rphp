@@ -53,6 +53,31 @@ fn test_parse_function_call() {
 }
 
 #[test]
+fn test_static_return_type_requires_a_real_class_scope() {
+    let parse = |source: &str| {
+        let tokens = Lexer::new(source).tokenize().unwrap();
+        Parser::new(tokens).parse()
+    };
+
+    assert_eq!(
+        parse("<?php function invalid(): static {}").unwrap_err(),
+        "Cannot use \"static\" when no class scope is active"
+    );
+    parse("<?php class C { public function valid(): static { return $this; } }").unwrap();
+    parse(
+        "<?php class C { public function valid(): static { $f = function(): static { return $this; }; return $f(); } }",
+    )
+    .unwrap();
+    assert_eq!(
+        parse(
+            "<?php class C { public function invalid(): static { function nested(): static {} return $this; } }",
+        )
+        .unwrap_err(),
+        "Cannot use \"static\" when no class scope is active"
+    );
+}
+
+#[test]
 fn test_parse_if() {
     let tokens = Lexer::new("<?php if (1) echo 42;").tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();

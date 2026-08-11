@@ -31,6 +31,7 @@ impl ExecutorGlobals {
                                 expected,
                                 arguments,
                                 &cached.scope,
+                                Some(&cached.scope),
                             )
                         },
                     ));
@@ -46,7 +47,13 @@ impl ExecutorGlobals {
             &expected,
             |actual, bound| self.class_is_a_in_generic_scope(actual, bound, &scope),
             |value, expected, arguments| {
-                self.reified_object_arguments_match_resolved(value, expected, arguments, &scope)
+                self.reified_object_arguments_match_resolved(
+                    value,
+                    expected,
+                    arguments,
+                    &scope,
+                    Some(&scope),
+                )
             },
         );
         self.generic_property_contract_cache

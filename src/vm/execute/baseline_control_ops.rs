@@ -169,7 +169,7 @@ fn op_include(
 
     eg.current_execute_data.set(prev_ed);
     unsafe { cleanup_frame_slots(inc_frame) };
-    eg.vm_stack.pop_call_frame(inc_frame);
+    unsafe { pop_vm_call_frame(eg, inc_frame) };
 
     for (cv_idx, var_name) in &scope_vars {
         if var_name == "this" { continue; }

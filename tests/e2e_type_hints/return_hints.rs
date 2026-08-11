@@ -53,6 +53,65 @@ echo count(makeArr());
 }
 
 #[test]
+fn test_static_return_type_uses_the_instance_and_static_called_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class StaticReturnBase {
+    public function copy(): static { return $this; }
+    public function wrongInstance(): static { return new StaticReturnBase(); }
+    public static function childFactory(): static { return new StaticReturnChild(); }
+    public static function wrongFactory(): static { return new StaticReturnBase(); }
+    public static function finallyFactory(): static {
+        try { return new StaticReturnChild(); } finally { echo "finally:"; }
+    }
+    public static function fail(): static { throw new Exception("expected"); }
+}
+class StaticReturnChild extends StaticReturnBase {}
+$value = new StaticReturnChild();
+echo $value->copy() instanceof StaticReturnChild ? "instance:" : "bad:";
+try { $value->wrongInstance(); } catch (TypeError $error) { echo "instance-error:"; }
+echo StaticReturnChild::childFactory() instanceof StaticReturnChild ? "static:" : "bad:";
+try { StaticReturnChild::wrongFactory(); } catch (TypeError $error) { echo "static-error"; }
+echo ":";
+echo StaticReturnChild::finallyFactory() instanceof StaticReturnChild ? "finally-return:" : "bad:";
+try { StaticReturnChild::fail(); } catch (Exception $error) { echo "throw-cleanup"; }
+"#
+        ),
+        "instance:instance-error:static:static-error:finally:finally-return:throw-cleanup"
+    );
+}
+
+#[test]
+fn test_static_call_sites_keep_the_shared_static_call_opcode() {
+    let compiled = compile_types(
+        r#"<?php
+class StaticOpcodeBase {
+    public static function ordinary() { return 1; }
+    public static function late(): static { return new StaticOpcodeChild(); }
+}
+class StaticOpcodeChild extends StaticOpcodeBase {}
+StaticOpcodeBase::ordinary();
+StaticOpcodeChild::late();
+ExternalStaticOpcode::unknown();
+"#,
+    );
+    let opcodes = compiled
+        .main
+        .instructions
+        .iter()
+        .map(|instruction| instruction.opcode)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        opcodes
+            .iter()
+            .filter(|opcode| **opcode == OpCode::InitStaticCall)
+            .count(),
+        3
+    );
+}
+
+#[test]
 fn test_return_type_float() {
     assert_eq!(
         run_php(

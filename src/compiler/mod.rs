@@ -855,6 +855,7 @@ pub fn make_user_function_typed(
         return_type_hint,
         ParamTypeHint::None | ParamTypeHint::Mixed | ParamTypeHint::Int
     );
+    let needs_late_static_scope = return_type_hint.uses_late_static();
     let has_fast_scalar_shape = !is_variadic
         && !op_array.is_generator
         && ref_args == 0
@@ -863,7 +864,11 @@ pub fn make_user_function_typed(
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.may_access_globals;
-    let call = if has_fast_scalar_shape && has_no_type_hints && has_no_return_type {
+    let call = if needs_late_static_scope {
+        // Late-static scope is recovered lazily in the already-cold full call
+        // boundary. Ordinary static calls retain their exact compact path.
+        CallStrategy::Full
+    } else if has_fast_scalar_shape && has_no_type_hints && has_no_return_type {
         CallStrategy::FastScalar
     } else if has_fast_scalar_shape && has_exact_long_params && has_exact_long_return {
         CallStrategy::FastTypedScalar

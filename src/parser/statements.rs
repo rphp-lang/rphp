@@ -4,6 +4,7 @@ impl Parser {
             tokens,
             pos: 0,
             in_class_body: false,
+            class_scope_active: false,
             generic_scopes: Vec::new(),
         }
     }
@@ -428,6 +429,10 @@ impl Parser {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected function name, got {:?}", other)),
                 };
+                // A named function never inherits the surrounding method's
+                // class scope. Closures deliberately do.
+                let previous_class_scope = self.class_scope_active;
+                self.class_scope_active = false;
                 let generic_params = self.parse_generic_parameters()?;
                 self.push_generic_scope(&generic_params);
                 self.expect(&Token::LParen)?;
@@ -441,6 +446,7 @@ impl Parser {
                 }
                 self.expect(&Token::RBrace)?;
                 self.pop_generic_scope();
+                self.class_scope_active = previous_class_scope;
                 Ok(Stmt::Function {
                     name,
                     params,

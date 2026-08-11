@@ -188,7 +188,12 @@ fn resolve_generic_args_cache_miss(
     let binding = eg
         .generic_metadata
         .resolve_binding(kind, &owner, opline.extended_value, |actual, bound| {
-            eg.class_is_a_in_generic_scope(actual, bound, declaration_scope)
+            eg.class_is_a_in_generic_scopes(
+                actual,
+                bound,
+                declaration_scope,
+                receiver_scope,
+            )
         })
         .map_err(VmError::Fatal)?;
     #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
@@ -253,6 +258,7 @@ fn generic_scope_class_id(
 fn generic_call_class_is_a(
     eg: &ExecutorGlobals,
     call: *mut ExecuteData,
+    scope_owner: usize,
     actual: &str,
     expected: &str,
     declared_scope: &str,
@@ -268,8 +274,12 @@ fn generic_call_class_is_a(
     } else {
         None
     };
-    let scope = eg.generic_declaration_scope(declared_scope, receiver_scope);
-    eg.class_is_a_in_generic_scope(actual, expected, scope)
+    let called_scope = receiver_scope.or_else(|| {
+        eg.class_by_id(eg.reified_binding_scope_class_id(scope_owner))
+            .map(|class| class.name.as_str())
+    });
+    let scope = eg.generic_declaration_scope(declared_scope, called_scope);
+    eg.class_is_a_in_generic_scopes(actual, expected, scope, called_scope)
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -277,6 +287,7 @@ fn generic_call_class_is_a(
 fn generic_call_reified_arguments_match(
     eg: &ExecutorGlobals,
     call: *mut ExecuteData,
+    scope_owner: usize,
     value: &Value,
     expected: &str,
     arguments: &[crate::generics::GenericType],
@@ -292,7 +303,11 @@ fn generic_call_reified_arguments_match(
     } else {
         None
     };
-    let scope = eg.generic_declaration_scope(declared_scope, receiver_scope);
+    let called_scope = receiver_scope.or_else(|| {
+        eg.class_by_id(eg.reified_binding_scope_class_id(scope_owner))
+            .map(|class| class.name.as_str())
+    });
+    let scope = eg.generic_declaration_scope(declared_scope, called_scope);
     eg.reified_object_arguments_match_binding(
         value,
         expected,
@@ -300,6 +315,7 @@ fn generic_call_reified_arguments_match(
         declaration,
         site,
         scope,
+        called_scope,
     )
 }
 
@@ -320,7 +336,9 @@ fn value_matches_reified_default(
         value,
         expected,
         binding,
-        |actual, bound| eg.class_is_a_in_generic_scope(actual, bound, scope),
+        |actual, bound| {
+            eg.class_is_a_in_generic_scopes(actual, bound, scope, receiver_scope)
+        },
         |value, name, arguments, declaration, site| {
             eg.reified_object_arguments_match_binding(
                 value,
@@ -329,6 +347,7 @@ fn value_matches_reified_default(
                 declaration,
                 site,
                 scope,
+                receiver_scope,
             )
         },
     )
@@ -393,12 +412,20 @@ fn op_check_reified_args(
                 expected,
                 binding,
                 |actual, bound| {
-                    generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                    generic_call_class_is_a(
+                        eg,
+                        call,
+                        frame as usize,
+                        actual,
+                        bound,
+                        declared_scope,
+                    )
                 },
                 |value, name, arguments, declaration, site| {
                     generic_call_reified_arguments_match(
                         eg,
                         call,
+                        frame as usize,
                         value,
                         name,
                         arguments,
@@ -434,12 +461,20 @@ fn op_check_reified_args(
                     expected,
                     binding,
                     |actual, bound| {
-                        generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                        generic_call_class_is_a(
+                            eg,
+                            call,
+                            frame as usize,
+                            actual,
+                            bound,
+                            declared_scope,
+                        )
                     },
                     |value, name, arguments, declaration, site| {
                         generic_call_reified_arguments_match(
                             eg,
                             call,
+                            frame as usize,
                             value,
                             name,
                             arguments,
@@ -467,12 +502,20 @@ fn op_check_reified_args(
                         expected,
                         binding,
                         |actual, bound| {
-                            generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                            generic_call_class_is_a(
+                                eg,
+                                call,
+                                frame as usize,
+                                actual,
+                                bound,
+                                declared_scope,
+                            )
                         },
                         |value, name, arguments, declaration, site| {
                             generic_call_reified_arguments_match(
                                 eg,
                                 call,
+                                frame as usize,
                                 value,
                                 name,
                                 arguments,
@@ -616,7 +659,7 @@ fn op_check_reified_return(
                         .map(|class| class.name.as_str());
                     let scope =
                         eg.generic_declaration_scope(declared_scope, receiver_scope);
-                    eg.class_is_a_in_generic_scope(actual, bound, scope)
+                    eg.class_is_a_in_generic_scopes(actual, bound, scope, receiver_scope)
                 },
                 |value, name, arguments, declaration, site| {
                     let class_id = eg.reified_binding_scope_class_id(frame as usize);
@@ -632,6 +675,7 @@ fn op_check_reified_return(
                         declaration,
                         site,
                         scope,
+                        receiver_scope,
                     )
                 },
             ) {

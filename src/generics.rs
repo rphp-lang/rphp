@@ -177,6 +177,9 @@ pub struct GenericMethodContract {
     /// Lexical class/trait that gives `self` and `parent` their meaning. This
     /// may differ from `owner`, which names the concrete receiver contract.
     pub scope: Box<str>,
+    /// Runtime receiver class that gives late-bound `static` its meaning.
+    /// Inherited methods deliberately keep this separate from lexical scope.
+    pub called_scope: Box<str>,
     pub method: Box<str>,
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,

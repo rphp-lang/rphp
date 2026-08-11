@@ -655,7 +655,7 @@ fn cleanup_detached_generator_frames(eg: &mut ExecutorGlobals, root: *mut Execut
             cleanup_pending_calls(eg, frame);
             cleanup_frame_slots(frame);
         }
-        eg.vm_stack.pop_call_frame(frame);
+        unsafe { pop_vm_call_frame(eg, frame) };
         if frame == root {
             break;
         }

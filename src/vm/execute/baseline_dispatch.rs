@@ -39,6 +39,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
+                    let return_hint = unsafe { &(*(*frame).func).sig.return_type_hint };
+                    if return_hint.uses_late_static() {
+                        eg.discard_late_static_scope(frame as usize);
+                    }
                     eg.vm_stack.pop_call_frame(frame);
                     frame = prev;
                     op_array = unsafe { (*frame).op_array() };
@@ -65,7 +69,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     let prev = unsafe { (*frame).prev_execute_data };
                                     eg.current_execute_data.set(prev);
                                     unsafe { cleanup_frame_slots(frame) };
-                                    eg.vm_stack.pop_call_frame(frame);
+                                    unsafe { pop_vm_call_frame(eg, frame) };
                                     frame = prev;
                                 }
                                 let base_ptr = sf_op_array.instructions.as_ptr();
@@ -2989,6 +2993,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::InitStaticCall => {
                 match op_init_static_call(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue 'vm,
                     ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
                     ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
                     _ => {}
@@ -3284,7 +3289,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
                                 let ret_callee_class = eg.declaring_class_of(unsafe { (*frame).func });
-                                if !check_type_hint(retval, hint, eg, op_array.strict_types, ret_callee_class) {
+                                if !check_return_type_hint(
+                                    retval,
+                                    hint,
+                                    eg,
+                                    op_array.strict_types,
+                                    frame,
+                                    ret_callee_class,
+                                ) {
                                     let err = make_error_value("TypeError", &format!(
                                         "Return value must be of type {}, {} returned",
                                         hint.display_name(),
@@ -3341,6 +3353,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // is pending, the return suppresses the exception (PHP semantics).
                 if eg.exception.is_some() {
                     eg.exception = None;
+                }
+
+                if func_common_ret.sig.return_type_hint.uses_late_static() {
+                    eg.discard_late_static_scope(frame as usize);
                 }
 
                 // Generator return — save return value and mark completed

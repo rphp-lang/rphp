@@ -8869,12 +8869,34 @@ non-inlined, while the small resolver stays non-inlined without forcing a
 separate cold section. No hot representation, dependency, JIT or native tier
 changed.
 
-This checkpoint does not implement `static<T>` by treating it as `self<T>`.
-Correct support requires the reserved-token parser path plus late-static
-called-scope state, including static calls and post-return checks. Pseudo-types
-in a diamond are now closed, and dynamic defaults are closed below. Real
-`static<T>` semantics still precede JIT work and may not be papered over by a
-native specialization.
+The late-static checkpoint is now closed without treating `static<T>` as
+`self<T>`. Ordinary `: static` semantics live in the shared feature-off PHP
+runtime, while `<...>` remains controlled independently by the erased and
+reified syntax flags. Executable contracts keep lexical `self`/`parent` scope
+separate from the actual called class. Bound-erased checks retain the outer
+late-bound class; reified checks also retain and compare nested canonical type
+arguments. Namespace resolution never prefixes the pseudo base.
+
+Instance methods obtain the called class from `$this`. Static methods recover
+it lazily at the existing full-call boundary and publish one tagged `(call
+frame, class id)` pair in the already-existing packed pending-call storage only
+when their return type actually uses `static`; no new executor field or hot
+layout is added. All return, finally, generator, setup-error and unwind exits
+remove that pair. `ExecuteData`, `Value`, function and instruction layouts do
+not grow. The ordinary scalar and fast-return paths still pop their call frame
+directly, and the full-return checker performs called-scope recovery only for
+a matching contract. Warm ordinary static scalar methods reuse the existing
+frame-free target-neutral plan from the non-inlined opcode helper. On ARM64,
+20 balanced pairs improve the permanent static-method control by 33.472%,
+while the ordinary instance-method control remains within its one-percent
+gate at +0.963%. The erased generic method and explicit method-turbofish
+controls are -0.200% and -1.699% against exact checkpoint `3e5a507`.
+CPU-2-pinned x86-64 independently reports -44.599% static, -0.014% instance,
+-1.418% erased generic method and +3.255% method turbofish, keeping both
+ordinary and explicit-generic controls inside their admission ceilings. This
+semantic checkpoint does not change native lowering or add a generic JIT
+specialization: generics-aware JIT work remains the final interphase milestone
+after the full acceptance surface is closed.
 
 Omitted PHP default parameter values now have an explicit callee boundary.
 Only a default whose declared type contains a generic parameter receives
