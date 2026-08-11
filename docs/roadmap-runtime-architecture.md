@@ -1968,12 +1968,34 @@ Before/after release controls keep the five-million-call ordinary method at
 -0.017% ARM64 and -0.073% CPU-pinned x86-64; 101 batches of 20 empty starts are
 +0.559% and +0.497%, respectively. All four all-target matrices pass on both
 architectures. No hot representation, dependency or native lowering changed.
-The next semantic step is the remaining RFC Reflection object surface for
-generic parameter declarations, variance and type-parameter references.
-Generics-aware JIT specialization is deliberately last: it starts only after
-these semantics, complete Reflection and both runtimes are closed, and must
-consume the canonical metadata with exact guards and deoptimization back to
-the established erased/reified paths.
+
+The RFC generic-parameter surface is now complete. Interned declarations
+materialize final `ReflectionGenericTypeParameter` objects, unit-enum variance
+singletons, typed bounds/defaults and `ReflectionTypeParameterReference`
+back-links. Method types retain both scopes: class parameters resolve to their
+`ReflectionClass` declaration and method-local parameters to their
+`ReflectionMethod`, including nested bounds/defaults. Public `name` properties,
+missing-bound/default exceptions, interface/trait discovery, included metadata
+and static `ReflectionGenericVariance::{Invariant,Covariant,Contravariant}`
+identity all have executable coverage. The pre-erasure implementation is
+isolated in `stdlib/reflection/generic_parameters.rs`; the parent unit now
+contains only registration, common type accessors and ancestor/object façades.
+
+Against the exact `e9893af` checkpoint, final 31-pair ordinary-method controls
+are -4.049% ARM64 and -1.720% CPU-2-pinned x86-64; 101 paired batches of 20
+empty starts are +0.162% and -7.132%. These are gate results, not an optimization
+claim: no object, frame, `Value`, function/opcode/IC representation, dependency
+or native lowering changed. All four all-target configurations pass on both
+architectures and the final focused Reflection checks pass with both flags,
+each flag alone and syntax disabled.
+
+The next semantic step is to replace provisional string results from the RPHP
+reified `ReflectionObject::getGenericArguments()` extension with the same
+structured `ReflectionType` model, then close remaining Reflection consistency
+gaps. Generics-aware JIT specialization is deliberately last: it starts only
+after these semantics, complete Reflection and both runtimes are closed, and
+must consume the canonical metadata with exact guards and deoptimization back
+to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

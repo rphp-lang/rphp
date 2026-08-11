@@ -105,7 +105,7 @@ echo (new IncludedCaller())->call();
 $reflection = new ReflectionFunction("included_id");
 $parameters = $reflection->getGenericParameters();
 echo $reflection->isGeneric() ? ":yes:" : ":no:";
-echo $parameters[0]["name"] . ":" . $parameters[0]["bound"];
+echo $parameters[0]->getName() . ":" . $parameters[0]->getBound()->getName();
 echo (new IncludedChild::<int>()) instanceof IncludedParent ? ":linked" : ":missing";
 "#,
     );

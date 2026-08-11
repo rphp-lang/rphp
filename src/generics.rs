@@ -33,7 +33,7 @@ pub(super) const fn method_parameter(index: u8) -> u8 {
 }
 
 #[inline]
-pub(super) const fn method_parameter_index(index: u8) -> Option<usize> {
+pub(crate) const fn method_parameter_index(index: u8) -> Option<usize> {
     if index & METHOD_PARAMETER_FLAG == 0 {
         None
     } else {

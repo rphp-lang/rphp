@@ -4,14 +4,24 @@
 //! cold handlers outside the main stdlib unit prevents metadata-facing API
 //! growth from obscuring unrelated built-ins or entering their hot paths.
 
+mod generic_parameters;
+
 use std::collections::HashMap;
+
+use generic_parameters::{
+    generic_parameter_bound, generic_parameter_declaring_entity, generic_parameter_default,
+    generic_parameter_has_bound, generic_parameter_has_default, generic_parameter_name,
+    generic_parameter_position, generic_parameter_variance, generic_parameters,
+    generic_variance_cases, is_generic, reflected_type, type_parameter_reference_parameter,
+};
 
 use crate::compiler::compile::ClassDef;
 use crate::compiler::make_internal_method;
 use crate::generics::{
     GenericDeclaration, GenericDeclarationKind, GenericInheritanceKind, GenericMetadata,
-    GenericReflectionBinding, GenericRuntimeCapabilities, GenericType, GenericVariance,
+    GenericReflectionBinding, GenericRuntimeCapabilities,
 };
+use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, PhpObject, Value, make_error_value};
 use crate::vm::execute::VmError;
@@ -53,78 +63,6 @@ fn object_value(
         .map(|(name, value)| (name.to_string(), value))
         .collect::<HashMap<_, _>>();
     Value::object(PhpObject::dynamic(class_name.to_string(), 0, properties))
-}
-
-fn reflected_type(
-    metadata: &GenericMetadata,
-    declaration: &GenericDeclaration,
-    value: &GenericType,
-) -> Value {
-    let rendered = metadata.format_type(declaration, value);
-    match value {
-        GenericType::Parameter(index) => {
-            let name = declaration
-                .parameters
-                .get(*index as usize)
-                .and_then(|parameter| metadata.symbol(parameter.name))
-                .unwrap_or("?");
-            object_value(
-                "ReflectionTypeParameterReference",
-                [
-                    ("__generic_name", Value::string(name)),
-                    ("__generic_string", Value::string(rendered)),
-                ],
-            )
-        }
-        GenericType::Union(parts) | GenericType::Intersection(parts) => {
-            let mut types = PhpArray::with_packed_capacity(parts.len());
-            for part in parts.iter() {
-                types.push(reflected_type(metadata, declaration, part));
-            }
-            let class_name = if matches!(value, GenericType::Union(_)) {
-                "ReflectionUnionType"
-            } else {
-                "ReflectionIntersectionType"
-            };
-            object_value(
-                class_name,
-                [
-                    ("__generic_types", Value::array(types)),
-                    ("__generic_string", Value::string(rendered)),
-                ],
-            )
-        }
-        GenericType::Named { name, arguments } => {
-            let mut reflected_arguments = PhpArray::with_packed_capacity(arguments.len());
-            for argument in arguments.iter() {
-                reflected_arguments.push(reflected_type(metadata, declaration, argument));
-            }
-            object_value(
-                "ReflectionNamedType",
-                [
-                    (
-                        "__generic_name",
-                        Value::string(metadata.symbol(*name).unwrap_or("?")),
-                    ),
-                    ("__generic_arguments", Value::array(reflected_arguments)),
-                    ("__generic_string", Value::string(rendered)),
-                ],
-            )
-        }
-        GenericType::Nullable(inner) => {
-            let mut types = PhpArray::with_packed_capacity(2);
-            types.push(reflected_type(metadata, declaration, inner));
-            types.push(named_reflected_type("null"));
-            object_value(
-                "ReflectionUnionType",
-                [
-                    ("__generic_types", Value::array(types)),
-                    ("__generic_string", Value::string(rendered)),
-                ],
-            )
-        }
-        _ => named_reflected_type(&rendered),
-    }
 }
 
 fn named_reflected_type(name: &str) -> Value {
@@ -393,60 +331,6 @@ fn generic_arguments_for_used_trait(
     return_value(rv, Value::array(arguments))
 }
 
-fn is_generic(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let found = generic_target(ed)
-        .is_some_and(|(kind, owner)| eg.generic_metadata.find(kind, &owner).is_some());
-    return_value(rv, Value::bool(found))
-}
-
-fn generic_parameters(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-) -> Result<(), VmError> {
-    let Some((kind, owner)) = generic_target(ed) else {
-        return return_value(rv, Value::array(PhpArray::new()));
-    };
-    let Some(declaration) = eg.generic_metadata.find(kind, &owner) else {
-        return return_value(rv, Value::array(PhpArray::new()));
-    };
-    let mut result = PhpArray::with_packed_capacity(declaration.parameters.len());
-    for parameter in declaration.parameters.iter() {
-        let mut reflected = PhpArray::with_hash_capacity(4);
-        reflected.set_str(
-            "name",
-            Value::string(eg.generic_metadata.symbol(parameter.name).unwrap_or("?")),
-        );
-        let variance = match parameter.variance {
-            GenericVariance::Invariant => "invariant",
-            GenericVariance::Covariant => "covariant",
-            GenericVariance::Contravariant => "contravariant",
-        };
-        reflected.set_str("variance", Value::string(variance));
-        reflected.set_str(
-            "bound",
-            parameter.bound.as_ref().map_or_else(Value::null, |bound| {
-                Value::string(eg.generic_metadata.format_type(declaration, bound))
-            }),
-        );
-        reflected.set_str(
-            "default",
-            parameter
-                .default
-                .as_ref()
-                .map_or_else(Value::null, |default| {
-                    Value::string(eg.generic_metadata.format_type(declaration, default))
-                }),
-        );
-        result.push(Value::array(reflected));
-    }
-    return_value(rv, Value::array(result))
-}
-
 fn generic_runtime_modes(
     _ed: *mut ExecuteData,
     rv: *mut Value,
@@ -507,6 +391,17 @@ fn register_reflection_class(
     is_abstract: bool,
     is_final: bool,
 ) {
+    register_reflection_class_kind(eg, name, parent, is_abstract, is_final, false);
+}
+
+fn register_reflection_class_kind(
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    parent: Option<&str>,
+    is_abstract: bool,
+    is_final: bool,
+    is_enum: bool,
+) {
     eg.register_class(ClassDef {
         name: name.to_string(),
         parent: parent.map(str::to_owned),
@@ -515,9 +410,43 @@ fn register_reflection_class(
         is_abstract,
         is_final,
         is_trait: false,
-        is_enum: false,
+        is_enum,
         uses: vec![],
         properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+}
+
+fn register_generic_variance(eg: &mut ExecutorGlobals) {
+    let cases = generic_variance_cases();
+    let properties = ["Invariant", "Covariant", "Contravariant"]
+        .into_iter()
+        .zip(cases)
+        .map(|(name, value)| {
+            (
+                name.to_string(),
+                Some(value),
+                Visibility::Public,
+                "ReflectionGenericVariance".to_string(),
+            )
+        })
+        .collect();
+    eg.register_class(ClassDef {
+        name: "ReflectionGenericVariance".to_string(),
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: true,
+        is_trait: false,
+        is_enum: true,
+        uses: vec![],
+        properties,
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
         property_defaults: std::rc::Rc::from([]),
         readonly_props: vec![],
@@ -561,6 +490,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     register_reflection_class(eg, "ReflectionException", Some("Exception"), false, false);
     register_reflection_class(eg, "ReflectionType", None, true, false);
+    register_reflection_class(eg, "ReflectionGenericTypeParameter", None, false, true);
+    register_generic_variance(eg);
     for class in [
         "ReflectionNamedType",
         "ReflectionUnionType",
@@ -665,6 +596,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         register_method!(class, "getname", reflection_type_name, 1, 0, []);
     }
     register_method!(
+        "ReflectionTypeParameterReference",
+        "gettypeparameter",
+        type_parameter_reference_parameter,
+        1,
+        0,
+        []
+    );
+    register_method!(
         "ReflectionNamedType",
         "hasgenericarguments",
         reflection_type_has_generic_arguments,
@@ -683,6 +622,78 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     for class in ["ReflectionUnionType", "ReflectionIntersectionType"] {
         register_method!(class, "gettypes", reflection_compound_types, 1, 0, []);
     }
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "getname",
+        generic_parameter_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "getposition",
+        generic_parameter_position,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "getvariance",
+        generic_parameter_variance,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "hasbound",
+        generic_parameter_has_bound,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "getbound",
+        generic_parameter_bound,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "hasdefault",
+        generic_parameter_has_default,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "getdefault",
+        generic_parameter_default,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "getdeclaringentity",
+        generic_parameter_declaring_entity,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionGenericTypeParameter",
+        "__tostring",
+        reflection_type_to_string,
+        1,
+        0,
+        []
+    );
 
     functions
 }

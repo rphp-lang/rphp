@@ -439,7 +439,8 @@ $trait = (new ReflectionClass("StringHolder"))->getGenericArgumentsForUsedTrait(
 echo $trait[0]->getName() . ":";
 
 $forward = (new ReflectionClass("Forward"))->getGenericArgumentsForParentClass();
-echo get_class($forward[0]) . ":" . $forward[0]->getName() . ":";
+echo get_class($forward[0]) . ":" . $forward[0]->name . ":" . $forward[0]->getName() . ":";
+echo get_class($forward[0]->getTypeParameter()) . ":" . $forward[0]->getTypeParameter()->getName() . ":";
 
 $nested = (new ReflectionClass("Nested"))->getGenericArgumentsForParentClass();
 echo $nested[0]->getName() . ":";
@@ -460,7 +461,7 @@ try {
     );
     assert_eq!(
         output,
-        "ReflectionNamedType:int:2:string:int:string:ReflectionTypeParameterReference:U:Foo:yes:int:ReflectionIntersectionType:Renderable:Cacheable:caught"
+        "ReflectionNamedType:int:2:string:int:string:ReflectionTypeParameterReference:U:U:ReflectionGenericTypeParameter:U:Foo:yes:int:ReflectionIntersectionType:Renderable:Cacheable:caught"
     );
 }
 
@@ -1182,19 +1183,75 @@ class Box<T : object = stdClass> {
 $function = new ReflectionFunction("id");
 $functionParameters = $function->getGenericParameters();
 echo $function->isGeneric() ? "yes:" : "no:";
-echo $functionParameters[0]["name"] . ":" . $functionParameters[0]["bound"] . ":";
+echo $functionParameters[0]->getName() . ":" . $functionParameters[0]->getBound()->getName() . ":";
 $class = new ReflectionClass("Box");
 $classParameters = $class->getGenericParameters();
-echo $classParameters[0]["default"] . ":";
+echo $classParameters[0]->getDefault()->getName() . ":";
 $method = new ReflectionMethod("Box", "map");
 $methodParameters = $method->getGenericParameters();
-echo $methodParameters[0]["variance"] . ":";
+echo $methodParameters[0]->getVariance()->name . ":";
 echo count($method->getGenericRuntimeModes());
 "#,
     );
     let mode_count = usize::from(cfg!(feature = "php-generics-erased"))
         + usize::from(cfg!(feature = "php-generics-reified"));
-    assert_eq!(output, format!("yes:T:int:stdClass:covariant:{mode_count}"));
+    assert_eq!(output, format!("yes:T:int:stdClass:Covariant:{mode_count}"));
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn reflection_generic_parameter_objects_follow_the_rfc_surface() {
+    let output = common::run_php(
+        r#"<?php
+interface ReflectedInterface<+T : object = stdClass> {}
+trait ReflectedTrait<-U> {}
+class ReflectedClass<+A : object = stdClass, +B : object = stdClass> {}
+function reflectedFunction<F>() {}
+class ReflectedMethodHost<C : object> {
+    public function run<V : C, W : V = V>() {}
+}
+
+$class = new ReflectionClass("ReflectedClass");
+$parameters = $class->getGenericParameters();
+$parameter = $parameters[0];
+echo get_class($parameter) . ":" . $parameter->name . ":";
+echo $parameter->getName() . ":" . $parameter->getPosition() . ":";
+echo get_class($parameter->getVariance()) . ":" . $parameter->getVariance()->name . ":";
+echo $parameter->hasBound() ? $parameter->getBound()->getName() . ":" : "missing:";
+echo $parameter->hasDefault() ? $parameter->getDefault()->getName() . ":" : "missing:";
+echo get_class($parameter->getDeclaringEntity()) . ":" . $parameter->__toString() . ":";
+echo ($parameters[0]->getVariance() === $parameters[1]->getVariance()) ? "singleton:" : "split:";
+echo ($parameter->getVariance() === ReflectionGenericVariance::Covariant) ? "case:" : "missing:";
+
+$interface = new ReflectionClass("ReflectedInterface");
+$trait = new ReflectionClass("ReflectedTrait");
+echo $interface->isGeneric() ? "interface:" : "missing:";
+echo $trait->isGeneric() ? $trait->getGenericParameters()[0]->getVariance()->name . ":" : "missing:";
+
+$function = new ReflectionFunction("reflectedFunction");
+$functionParameter = $function->getGenericParameters()[0];
+echo get_class($functionParameter->getDeclaringEntity()) . ":";
+$method = new ReflectionMethod("ReflectedMethodHost", "run");
+$methodParameters = $method->getGenericParameters();
+$methodParameter = $methodParameters[0];
+echo get_class($methodParameter->getDeclaringEntity()) . ":";
+$classBound = $methodParameter->getBound();
+echo $classBound->name . ":" . get_class($classBound->getTypeParameter()->getDeclaringEntity()) . ":";
+$methodBound = $methodParameters[1]->getBound();
+echo $methodBound->name . ":" . get_class($methodBound->getTypeParameter()->getDeclaringEntity()) . ":";
+echo $methodParameters[1]->getDefault()->getName();
+
+try {
+    $functionParameter->getDefault();
+} catch (ReflectionException $error) {
+    echo ":caught";
+}
+"#,
+    );
+    assert_eq!(
+        output,
+        "ReflectionGenericTypeParameter:A:A:0:ReflectionGenericVariance:Covariant:object:stdClass:ReflectionClass:A:singleton:case:interface:Contravariant:ReflectionFunction:ReflectionMethod:C:ReflectionClass:V:ReflectionMethod:V:caught"
+    );
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

@@ -8631,10 +8631,43 @@ Against the pre-API refactor commit, final release controls report:
 No object, frame, `Value`, function/opcode/IC layout, external dependency or
 JIT/native lowering changed. All four `--all-targets` configurations pass on
 both architectures; focused dual/reified coverage is now 26 generics and 21
-include scenarios, erased-only 21 and 20, and default remains 2 and 12. The
-next Reflection slice replaces the provisional generic-parameter arrays with
-RFC `ReflectionGenericTypeParameter` objects, variance cases and exact
-type-parameter back-references. Generics-aware JIT specialization remains
+include scenarios, erased-only 21 and 20, and default remains 2 and 12.
+
+The provisional generic-parameter arrays have now been replaced by the exact
+[RFC v0.22 Reflection surface](https://wiki.php.net/rfc/bound_erased_generic_types).
+`getGenericParameters()` returns final `ReflectionGenericTypeParameter`
+objects with public `name`, position, variance, bound/default presence and
+typed accessors, declaring entity and string form. Missing bounds/defaults
+raise `ReflectionException`. `ReflectionGenericVariance` is a unit enum with
+stable `Invariant`, `Covariant` and `Contravariant` singleton cases, including
+identity through static case access. `ReflectionTypeParameterReference` now
+has its public `name` and exact `getTypeParameter()` back-reference.
+
+Method Reflection resolves the class-like and method-local generic scopes
+separately, so a method parameter such as `W : V = V` points back to the
+declaring `ReflectionMethod`, while `V : C` inside `Host<C>` points back to the
+declaring `ReflectionClass`; neither is accidentally replaced by its erased
+bound. Interfaces and traits are recognized by `ReflectionClass::isGeneric()`
+through the shared class-like declaration index. Included metadata continues
+to use the same relocated graph. The growing implementation was split again:
+the registration/ancestor façade is 699 lines and the 525-line pre-erasure
+parameter/type model lives in `stdlib/reflection/generic_parameters.rs`.
+
+Final release controls against commit `e9893af` remain comfortably inside the
+one-percent regression gate: the ordinary five-million-call method is -4.049%
+on ARM64 and -1.720% on CPU-2-pinned x86-64 over 31 order-alternated pairs;
+101 order-alternated batches of 20 empty starts are +0.162% and -7.132%,
+respectively. The improvements are recorded only as an absence-of-regression
+control because cold Reflection symbol layout can perturb the final binary;
+no hot-path optimization is attributed to this slice. The final focused
+matrix has 27 dual/reified generic scenarios, 22 erased-only scenarios and the
+two syntax-disabled scenarios, plus 21 include scenarios. The full four-mode
+all-target matrices pass on ARM64 and x86-64.
+
+The next semantic slice should make the RPHP reified extension
+`ReflectionObject::getGenericArguments()` return the same structured
+`ReflectionType` objects instead of provisional strings, then close remaining
+Reflection consistency gaps. Generics-aware JIT specialization remains
 deliberately last, after both runtime models and the complete Reflection surface
 are closed.
 
