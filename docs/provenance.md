@@ -30,8 +30,14 @@ behavioral tests described as inspired by selected `php-src` test cases; it
 did not find vendored third-party source or a foreign license header. This is
 an automated review, not proof of authorship.
 
-Before the first public push, the maintainer must attest that the lexer,
-parser, compiler, VM, JIT backends, standard library, test fixtures, and
-benchmarks were written originally or that every exception is documented and
-license-compatible. Dependency provenance is tracked separately in
-`THIRD_PARTY.md` and `Cargo.lock`.
+## Maintainer attestation
+
+On 2026-08-12, the project maintainer attested that the current RPHP codebase
+was developed specifically for RPHP by its maintainers with AI assistance,
+under human direction and review. To the maintainer's knowledge, no
+third-party implementation source was copied or mechanically translated into
+the project. Any exception discovered later must be documented and confirmed
+as license-compatible before the affected code is distributed.
+
+Dependency provenance is tracked separately in `THIRD_PARTY.md` and
+`Cargo.lock`.
