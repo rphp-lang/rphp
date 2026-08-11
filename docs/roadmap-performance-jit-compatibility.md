@@ -9371,6 +9371,27 @@ JIT coverage is now 18 erased and 28 reified scenarios. Default, erased,
 reified and all-feature all-target matrices pass on ARM64 and x86-64. No
 backend operation, persistent layout or dependency was added.
 
+Fixed invariant JSON projections can also remain deferred method arguments.
+The planner now walks the compiler's `FetchDimR` chain between
+`InitMethodCall` and each `SendVal`/`SendVarEx`, extends the same bounded
+projection paths used by standalone fetches, and gives the resulting typed
+slots to the existing property-call operation. Nested paths and multiple
+arguments therefore stay in one transactional native region without adding a
+JSON call opcode or materializing an intermediate PHP variable. Any dynamic,
+over-depth or untracked fetch still rejects the region, while invalid/missing
+values fail the prelude and replay the call canonically before property state
+is published.
+
+Against exact checkpoint `b31934b`, 40 balanced max-perf pairs improve the new
+two-million-iteration direct two-argument JSON/property workload by
+99.637%/99.700% on ARM64 and 99.669%/99.744% on CPU-2-pinned x86-64 in
+erased/reified mode. Its ordinary-signature control improves by
+99.561%/99.568% on ARM64 and 99.541%/99.548% on x86-64. One-hundred-pair
+materialized-JSON and scalar property-call controls remain between -0.285%
+and +0.346% across both hosts and modes. Focused generic JIT coverage is now
+19 erased and 29 reified scenarios. No backend operation, persistent layout
+or dependency was added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

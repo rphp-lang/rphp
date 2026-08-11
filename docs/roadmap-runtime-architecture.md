@@ -2461,6 +2461,21 @@ token ABI without weakening reused-string guards. A failed projection returns
 to canonical execution before property seeding or native entry. The change
 adds no decoder-specific native opcode, persistent metadata or dependency.
 
+Deferred method arguments now use that same producer/consumer boundary. A
+shared projection helper recognizes only fixed, bounded `FetchDimR` chains
+rooted in the invariant JSON source while the planner advances from
+`InitMethodCall` to the corresponding send operations. The existing
+`PropertyMethodCall` then consumes the proved Long slots directly, including
+multiple nested arguments, so source code does not need temporary variables
+to preserve native-region admission. Unsupported argument expressions reject
+the region, and prelude failure resumes at the initializer so canonical PHP
+argument evaluation and the call occur exactly once. This is planner-only
+composition: no new native operation, persistent representation or external
+dependency is introduced. Focused generic coverage is 19 erased and 29
+reified scenarios; direct JSON argument gates improve by 99.541% to 99.744%
+across both modes and reference architectures, while unchanged controls remain
+inside one percent.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
