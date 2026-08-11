@@ -953,16 +953,20 @@ fn op_init_static_call<'a>(
     let func_ptr = if !cached.is_null() {
         cached
     } else {
+        let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
         let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-        let class = class_name.as_str().unwrap_or("");
+        let raw_class = class_name.as_str().unwrap_or("");
         let method = method_name.as_str().unwrap_or("");
+
+        let class = resolve_static_call_class(eg, frame, raw_class, dynamic_scope)
+            .unwrap_or_else(|| raw_class.to_string());
 
         let full_name = format!("{}::{}", class, method);
         let resolved = match eg.find_function(&full_name) {
             Some(ptr) => ptr,
             None => {
-                let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", class, method));
+                let err = make_error_value("Error", &format!("Call to undefined method {}::{}()", raw_class, method));
                 match throw_in_frame(eg, frame, err) {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         return Ok(ColdResult::NewFrame(new_frame, new_op_array));
@@ -974,10 +978,14 @@ fn op_init_static_call<'a>(
             }
         };
 
-        // Visibility check on first resolve
-        if let Some((vis, defining_class)) = eg.find_method_visibility(class, method) {
+        // Visibility check on first resolve for each dynamic class.
+        if let Some((vis, defining_class)) = eg.find_method_visibility(&class, method) {
             if vis != Visibility::Public {
-                let caller_class = get_caller_class(frame, eg);
+                let caller_class = if dynamic_scope {
+                    resolve_static_call_class(eg, frame, "self", true)
+                } else {
+                    get_caller_class(frame, eg)
+                };
                 if !eg.check_visibility(caller_class.as_deref(), &defining_class, vis) {
                     let vis_str = match vis { Visibility::Protected => "protected", Visibility::Private => "private", _ => "public" };
                     return Err(VmError::Fatal(format!(
@@ -989,8 +997,16 @@ fn op_init_static_call<'a>(
             }
         }
 
-        // Cache for subsequent calls
-        unsafe { (*(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache)).func = resolved; }
+        // Shared trait op arrays can be entered through different consuming
+        // classes. Leaving their call cache empty keeps ordinary static calls'
+        // exact one-load hot path and makes the exceptional scope explicit.
+        if !dynamic_scope {
+            unsafe {
+                let cache = &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache);
+                cache.func = resolved;
+            }
+        }
         resolved
     };
 

@@ -40,6 +40,11 @@ pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST: u16 = 1 << 7;
 /// Callback-pipeline metadata: two dead assigned arrays are omitted.
 pub const CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA: u16 = 1 << 8;
 
+/// InitStaticCall flag: a pseudo-class target belongs to a shared trait body
+/// (or another late-bound scope), so it must resolve against the recovered
+/// called class instead of reusing the ordinary unqualified call cache.
+pub const CALL_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 9;
+
 /// NewObj flag: a constructor-initialized object is assigned once, passed to
 /// an immediately scalar-consumed ObjectArray method, and otherwise does not
 /// escape. Runtime may represent its declared properties virtually for that

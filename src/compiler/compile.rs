@@ -22,8 +22,8 @@ use crate::value::{
     canonical_decimal_array_key as canonical_string_literal_array_key,
 };
 use crate::vm::instruction::{
-    ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_EXACT_SCALAR_ARGS,
-    InlineCache, Instruction, KnownScalarType, OpType,
+    ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
+    CALL_FLAG_EXACT_SCALAR_ARGS, InlineCache, Instruction, KnownScalarType, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1084,6 +1084,13 @@ pub struct Compiler {
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
     use_map: HashMap<String, String>,
+    /// Lexical class targets used only by generic owner metadata. Static-call
+    /// bytecode keeps the original pseudo name for PHP forwarding semantics.
+    lexical_static_class: Option<String>,
+    lexical_static_parent: Option<String>,
+    /// Trait method op arrays are shared by every consuming class, so their
+    /// self/parent targets must remain dynamically keyed.
+    dynamic_static_scope: bool,
     /// True if this function body contains a yield expression (makes it a generator)
     contains_yield: bool,
     /// CVs bound to global variables
@@ -1133,6 +1140,9 @@ impl Compiler {
             strict_types: false,
             current_namespace: None,
             use_map: HashMap::new(),
+            lexical_static_class: None,
+            lexical_static_parent: None,
+            dynamic_static_scope: false,
             contains_yield: false,
             global_vars: Vec::new(),
             static_vars: Vec::new(),
@@ -1144,6 +1154,16 @@ impl Compiler {
     fn child_compiler(&self) -> Self {
         let mut child = Self::new();
         child.generic_use_sites = Rc::clone(&self.generic_use_sites);
+        // Nested op arrays still compile in the same file scope. Keeping this
+        // context here prevents methods and closures from silently losing
+        // namespace aliases or strict-types semantics when their bytecode is
+        // emitted by a fresh compiler instance.
+        child.strict_types = self.strict_types;
+        child.current_namespace = self.current_namespace.clone();
+        child.use_map = self.use_map.clone();
+        child.lexical_static_class = self.lexical_static_class.clone();
+        child.lexical_static_parent = self.lexical_static_parent.clone();
+        child.dynamic_static_scope = self.dynamic_static_scope;
         child
     }
 
@@ -3225,12 +3245,34 @@ impl Compiler {
                 args,
                 generic_args,
             } => {
-                let resolved_class = self.resolve_name(class_name);
-                let generic_owner = format!("{}::{}", resolved_class, method);
+                // Pseudo-class names are runtime call-scope tokens, not names
+                // that can be namespace-qualified. Their spelling is also
+                // needed later to recover forwarding late-static scope.
+                let pseudo_class = class_name.to_ascii_lowercase();
+                let resolved_class =
+                    if matches!(pseudo_class.as_str(), "self" | "parent" | "static") {
+                        class_name.clone()
+                    } else {
+                        self.resolve_name(class_name)
+                    };
+                let generic_class = match pseudo_class.as_str() {
+                    "self" if !self.dynamic_static_scope => self
+                        .lexical_static_class
+                        .as_ref()
+                        .unwrap_or(&resolved_class),
+                    "parent" if !self.dynamic_static_scope => self
+                        .lexical_static_parent
+                        .as_ref()
+                        .unwrap_or(&resolved_class),
+                    _ => &resolved_class,
+                };
+                let generic_owner = format!("{}::{}", generic_class, method);
                 let class_idx = self.add_literal(Value::string(resolved_class));
                 let method_idx = self.add_literal(Value::string(method.clone()));
                 let generic_owner_idx = self.add_literal(Value::string(generic_owner.clone()));
-
+                let dynamic_static_scope = (self.dynamic_static_scope
+                    && matches!(pseudo_class.as_str(), "self" | "parent"))
+                    || pseudo_class == "static";
                 let runtime_generic_check = self.emit_generic_check(
                     GenericDeclarationKind::Method,
                     generic_args,
@@ -3247,6 +3289,9 @@ impl Compiler {
                 init.op2 = method_idx;
                 init.op2_type = OpType::Const;
                 init.extended_value = args.len() as u32;
+                if dynamic_static_scope {
+                    init._pad |= CALL_FLAG_DYNAMIC_STATIC_SCOPE;
+                }
                 self.instructions.push(init);
 
                 self.emit_call_args(args, 1, 0, true, true);

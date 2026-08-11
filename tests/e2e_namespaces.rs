@@ -113,6 +113,27 @@ echo $u->name;
     assert_eq!(out, "Dave");
 }
 
+#[test]
+fn namespace_and_use_aliases_are_preserved_inside_method_compilers() {
+    let output = run_php(
+        r#"<?php
+namespace Library;
+class Service {
+    public static function value(): string { return "resolved"; }
+}
+
+namespace Application;
+use Library\Service as Alias;
+class Runner {
+    public static function run(): string { return Alias::value(); }
+}
+
+echo Runner::run();
+"#,
+    );
+    assert_eq!(output, "resolved");
+}
+
 // ─── Global function fallback ─────────────────────────────────────
 
 #[test]

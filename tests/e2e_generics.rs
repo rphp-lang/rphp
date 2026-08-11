@@ -43,6 +43,15 @@ fn default_build_contains_engine_but_rejects_generic_syntax() {
         "Generic syntax requires php-generics-erased or php-generics-reified"
     );
 
+    let pseudo_static_use_error = parse(
+        "<?php class C { static function id($v) { return $v; } static function call() { return self::id::<int>(1); } }",
+    )
+    .unwrap_err();
+    assert_eq!(
+        pseudo_static_use_error,
+        "Generic syntax requires php-generics-erased or php-generics-reified"
+    );
+
     let inheritance_error =
         parse("<?php class Base {} class Child extends Base<int> {}").unwrap_err();
     assert_eq!(
@@ -124,6 +133,131 @@ echo $closure::<int>(5);
 "#,
     );
     assert_eq!(output, "12m345");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn explicit_type_arguments_cover_nullsafe_self_and_parent_calls() {
+    let output = common::run_php(
+        r#"<?php
+namespace GenericCalls;
+
+class Base {
+    public function instance<T : int>(T $value): T { return $value; }
+    public static function inherited<T : int>(T $value): T { return $value; }
+    public static function factory<T>(): static { return new Child(); }
+}
+
+class Child extends Base {
+    public static function own<T : string>(T $value): T { return $value; }
+    public static function calls(): string {
+        return self::own::<string>("s")
+            . self::inherited::<int>(2)
+            . parent::inherited::<int>(3);
+    }
+    public static function selfFactory(): static {
+        return self::factory::<int>();
+    }
+    public static function parentFactory(): static {
+        return parent::factory::<int>();
+    }
+}
+
+$missing = null;
+$present = new Child();
+echo ($missing?->instance::<int>(4) ?? "n") . ":";
+echo $present?->instance::<int>(5) . ":";
+echo Child::calls() . ":";
+echo Child::selfFactory() instanceof Child ? "self:" : "bad:";
+echo Child::parentFactory() instanceof Child ? "parent" : "bad";
+"#,
+    );
+    assert_eq!(output, "n:5:s23:self:parent");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn trait_self_turbofish_resolves_each_consuming_class() {
+    let output = common::run_php(
+        r#"<?php
+trait CallsGenericScope {
+    public static function call(): string {
+        return self::value::<string>();
+    }
+}
+class First {
+    use CallsGenericScope;
+    public static function value<T : string>(): string { return "first"; }
+}
+class Second {
+    use CallsGenericScope;
+    public static function value<T : string>(): string { return "second"; }
+}
+echo First::call() . ":" . Second::call() . ":" . First::call();
+"#,
+    );
+    assert_eq!(output, "first:second:first");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn self_and_parent_turbofish_validate_the_selected_declaration() {
+    for source in [
+        r#"<?php
+class Scoped {
+    public static function value<T : int>(T $value): T { return $value; }
+    public static function invalid() { return self::value::<string>(1); }
+}
+Scoped::invalid();
+"#,
+        r#"<?php
+class ScopedBase {
+    public static function value<T : int>(T $value): T { return $value; }
+}
+class ScopedChild extends ScopedBase {
+    public static function invalid() { return parent::value::<string>(1); }
+}
+ScopedChild::invalid();
+"#,
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains("does not satisfy bound"), "{rendered:?}");
+    }
+}
+
+#[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+#[test]
+fn erased_self_turbofish_keeps_bound_erased_runtime_contract() {
+    let output = common::run_php(
+        r#"<?php
+class Scoped {
+    public static function value<T>(T $value): T { return $value; }
+    public static function call() { return self::value::<int>("erased"); }
+}
+echo Scoped::call();
+"#,
+    );
+    assert_eq!(output, "erased");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_self_turbofish_checks_the_explicit_runtime_contract() {
+    let error = common::run_php_expect_error(
+        r#"<?php
+class Scoped {
+    public static function value<T>(T $value): T { return $value; }
+    public static function call() { return self::value::<int>("bad"); }
+}
+Scoped::call();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("does not match its reified generic type"),
+        "{rendered:?}"
+    );
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

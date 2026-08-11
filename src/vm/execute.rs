@@ -22,9 +22,10 @@ use super::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
     CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK,
     CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
-    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, Instruction,
-    KnownScalarType, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
+    CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, Instruction, KnownScalarType,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
 use super::quick::{
@@ -193,6 +194,50 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
         return None;
     }
     eg.declaring_class_of(func).map(|s| s.to_string())
+}
+
+/// Resolve the class part of a static call without rewriting its bytecode
+/// literal. The literal must stay `self`/`parent`: late-static return checks
+/// recover forwarding call scope from that exact call-site spelling.
+#[cold]
+fn resolve_static_call_class(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class: &str,
+    dynamic_scope: bool,
+) -> Option<String> {
+    let lexical_or_dynamic_scope = || {
+        if dynamic_scope {
+            let class_id = called_class_id_for_frame(eg, frame, 0);
+            eg.class_by_id(class_id)
+                .map(|definition| definition.name.clone())
+        } else {
+            get_caller_class(frame, eg)
+        }
+    };
+    if class.eq_ignore_ascii_case("self") {
+        lexical_or_dynamic_scope()
+    } else if class.eq_ignore_ascii_case("parent") {
+        lexical_or_dynamic_scope().and_then(|caller| {
+            eg.class_table
+                .get(caller.as_str())
+                .and_then(|definition| definition.parent.clone())
+        })
+    } else {
+        Some(class.to_string())
+    }
+}
+
+#[cold]
+fn resolve_static_method_owner(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    owner: &str,
+) -> Option<String> {
+    let (class, method) = owner.rsplit_once("::")?;
+    // A pseudo owner reaches this path only when the compiler could not bind
+    // it lexically (currently shared trait bytecode).
+    resolve_static_call_class(eg, frame, class, true).map(|class| format!("{}::{}", class, method))
 }
 
 /// Check a value against a parameter type hint. Returns true if the value satisfies the hint.

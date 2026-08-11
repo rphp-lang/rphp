@@ -47,6 +47,31 @@ echo $c->hello();
 }
 
 #[test]
+fn static_self_and_parent_calls_use_lexical_class_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace StaticScope;
+
+class Base {
+    public static function value(): int { return 1; }
+}
+
+class Child extends Base {
+    public static function own(): int { return 2; }
+    public static function calls(): int {
+        return self::own() + self::value() + parent::value();
+    }
+}
+
+echo Child::calls();
+"#
+        ),
+        "4"
+    );
+}
+
+#[test]
 fn test_extends_inherits_property_default() {
     assert_eq!(
         run_php(

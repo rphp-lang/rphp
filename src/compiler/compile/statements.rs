@@ -117,6 +117,11 @@ impl Compiler {
             } => {
                 // Compile function body into a separate OpArray
                 let mut func_compiler = self.child_compiler();
+                // A named function declared from class code does not inherit
+                // the declaring method's self/parent scope.
+                func_compiler.lexical_static_class = None;
+                func_compiler.lexical_static_parent = None;
+                func_compiler.dynamic_static_scope = false;
                 func_compiler.known_ref_args = self.build_known_ref_args();
                 let resolved_name = self.resolve_name(name);
                 self.record_generic_declaration(
@@ -919,6 +924,7 @@ impl Compiler {
                 generic_params,
             } => {
                 let resolved_class = self.resolve_name(name);
+                let resolved_parent = parent.as_ref().map(|p| self.resolve_name(&p.name));
                 if crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
                     && (!generic_params.is_empty()
                         || parent.is_some()
@@ -970,6 +976,9 @@ impl Compiler {
                         method.return_type.as_ref(),
                     );
                     let mut func_compiler = self.child_compiler();
+                    func_compiler.lexical_static_class = Some(resolved_class.clone());
+                    func_compiler.lexical_static_parent = resolved_parent.clone();
+                    func_compiler.dynamic_static_scope = false;
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     // $this is always CV 0 in methods
                     func_compiler.resolve_cv("this");
@@ -1102,7 +1111,6 @@ impl Compiler {
                 }
 
                 // Store class definition for runtime
-                let resolved_parent = parent.as_ref().map(|p| self.resolve_name(&p.name));
                 let resolved_implements: Vec<String> =
                     implements.iter().map(|i| self.resolve_name(&i.name)).collect();
                 let resolved_uses: Vec<String> =
@@ -1167,6 +1175,9 @@ impl Compiler {
                     );
                     // Create a minimal op_array that just returns null
                     let mut func_compiler = self.child_compiler();
+                    func_compiler.lexical_static_class = Some(resolved_iface.clone());
+                    func_compiler.lexical_static_parent = None;
+                    func_compiler.dynamic_static_scope = false;
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("interface method {}::{}", name, method.name);
@@ -1289,6 +1300,9 @@ impl Compiler {
                         method.return_type.as_ref(),
                     );
                     let mut func_compiler = self.child_compiler();
+                    func_compiler.lexical_static_class = Some(resolved_trait.clone());
+                    func_compiler.lexical_static_parent = None;
+                    func_compiler.dynamic_static_scope = true;
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("trait method {}::{}", name, method.name);
@@ -1421,6 +1435,9 @@ impl Compiler {
                         method.return_type.as_ref(),
                     );
                     let mut func_compiler = self.child_compiler();
+                    func_compiler.lexical_static_class = Some(resolved_enum.clone());
+                    func_compiler.lexical_static_parent = None;
+                    func_compiler.dynamic_static_scope = false;
                     func_compiler.known_ref_args = self.build_known_ref_args();
                     func_compiler.resolve_cv("this");
                     let context = format!("enum method {}::{}", name, method.name);

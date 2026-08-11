@@ -256,6 +256,36 @@ App::count_to(3);
     assert_eq!(out, "123");
 }
 
+#[test]
+fn trait_static_pseudo_calls_resolve_for_each_consuming_class() {
+    let out = run_php(
+        r#"<?php
+trait CallsScope {
+    public static function selfValue(): string { return self::value(); }
+    public static function parentValue(): string { return parent::value(); }
+}
+class FirstBase {
+    public static function value(): string { return "first-base"; }
+}
+class First extends FirstBase {
+    use CallsScope;
+    public static function value(): string { return "first"; }
+}
+class SecondBase {
+    public static function value(): string { return "second-base"; }
+}
+class Second extends SecondBase {
+    use CallsScope;
+    public static function value(): string { return "second"; }
+}
+echo First::selfValue() . ":" . First::parentValue() . ":";
+echo Second::selfValue() . ":" . Second::parentValue() . ":";
+echo First::selfValue() . ":" . First::parentValue();
+"#,
+    );
+    assert_eq!(out, "first:first-base:second:second-base:first:first-base");
+}
+
 // ─── Trait property collision edge cases ──────────────────────────
 
 #[test]

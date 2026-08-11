@@ -49,7 +49,7 @@ fn op_check_generic_args(
             #[cfg(feature = "php-generics-reified")]
             {
                 if cache.generic_signature_uses_class_scope() {
-                    let class_id = generic_scope_class_id(eg, kind, owner_value);
+                    let class_id = generic_scope_class_id(eg, frame, kind, owner_value);
                     eg.push_reified_binding_scope_with_class(
                         frame as usize,
                         binding,
@@ -91,6 +91,8 @@ fn resolve_generic_args_cache_miss(
     let mut receiver_class_id = 0;
     let mut callable = std::ptr::null();
 
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    let mut static_receiver_scope = None;
     let mut owner = if kind == crate::generics::GenericDeclarationKind::Method
         && opline.op2_type == OpType::Const
     {
@@ -123,7 +125,35 @@ fn resolve_generic_args_cache_miss(
         };
         format!("{}::{}", dispatch_class, method)
     } else if let Some(name) = owner_value.as_str() {
-        name.to_string()
+        if kind == crate::generics::GenericDeclarationKind::Method {
+            if name
+                .rsplit_once("::")
+                .is_some_and(|(class, _)| {
+                    class.eq_ignore_ascii_case("self")
+                        || class.eq_ignore_ascii_case("parent")
+                        || class.eq_ignore_ascii_case("static")
+                })
+            {
+                // Shared trait bytecode can resolve to multiple declarations.
+                // Keep this exceptional site cold rather than publishing a
+                // cache entry that ordinary constant-owner sites would trust.
+                cacheable = false;
+            }
+            let resolved = resolve_static_method_owner(eg, frame, name)
+                .unwrap_or_else(|| name.to_string());
+            receiver_class_id = resolved
+                .rsplit_once("::")
+                .map_or(0, |(class, _)| eg.class_id_of(class));
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            {
+                static_receiver_scope = resolved
+                    .rsplit_once("::")
+                    .map(|(class, _)| class.to_string());
+            }
+            resolved
+        } else {
+            name.to_string()
+        }
     } else if let Some(closure) = owner_value.as_closure() {
         let Some(user) = closure.user_function() else {
             return Err(VmError::Fatal(
@@ -176,9 +206,7 @@ fn resolve_generic_args_cache_miss(
     {
         Some(unsafe { owner_value.object_class_name_unchecked() })
     } else if kind == crate::generics::GenericDeclarationKind::Method {
-        owner_value
-            .as_str()
-            .map(|name| name.split_once("::").map_or(name, |(class, _)| class))
+        static_receiver_scope.as_deref()
     } else {
         None
     };
@@ -221,7 +249,7 @@ fn resolve_generic_args_cache_miss(
     #[cfg(feature = "php-generics-reified")]
     {
         if uses_class_scope {
-            let class_id = generic_scope_class_id(eg, kind, owner_value);
+            let class_id = generic_scope_class_id(eg, frame, kind, owner_value);
             eg.push_reified_binding_scope_with_class(frame as usize, binding, class_id);
         } else {
             eg.push_reified_binding_scope(frame as usize, binding);
@@ -238,6 +266,7 @@ fn resolve_generic_args_cache_miss(
 #[inline]
 fn generic_scope_class_id(
     eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
     kind: crate::generics::GenericDeclarationKind,
     owner: &Value,
 ) -> u32 {
@@ -247,10 +276,17 @@ fn generic_scope_class_id(
     if owner.value_type() == ValueType::Object {
         return unsafe { owner.object_class_id_unchecked() };
     }
-    owner
+    let class = owner
         .as_str()
-        .map(|name| name.split_once("::").map_or(name, |(class, _)| class))
-        .map_or(0, |class| eg.class_id_of(class))
+        .map(|name| name.split_once("::").map_or(name, |(class, _)| class));
+    class.map_or(0, |class| {
+        if class.eq_ignore_ascii_case("self") || class.eq_ignore_ascii_case("parent") {
+            resolve_static_call_class(eg, frame, class, true)
+                .map_or(0, |class| eg.class_id_of(&class))
+        } else {
+            eg.class_id_of(class)
+        }
+    })
 }
 
 #[cfg(feature = "php-generics-reified")]
