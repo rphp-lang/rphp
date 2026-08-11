@@ -265,6 +265,39 @@ impl InvariantJsonProjectionState {
         Some(())
     }
 
+    /// Advance over the compiler's deferred argument expression and return
+    /// its positional send. Only fixed JSON fetch chains and their exact
+    /// String byte length are admitted between the call initializer and send.
+    fn deferred_argument_send(
+        &mut self,
+        op_array: &OpArray,
+        cursor: &mut usize,
+        total_slots: u32,
+    ) -> Option<crate::vm::instruction::Instruction> {
+        let mut instruction = *op_array.instructions.get(*cursor)?;
+        while instruction.opcode == OpCode::FetchDimR {
+            let array = long_slot(instruction.op1_type, instruction.op1)?;
+            if instruction.result_type != OpType::Tmp
+                || !self.extend_fetch(op_array, instruction, array, total_slots)?
+            {
+                return None;
+            }
+            *cursor += 1;
+            instruction = *op_array.instructions.get(*cursor)?;
+        }
+        if matches!(instruction.opcode, OpCode::Strlen | OpCode::Strlen_String) {
+            if !matches!(instruction.op1_type, OpType::Tmp | OpType::Var)
+                || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+            {
+                return None;
+            }
+            self.derive_string_length(instruction, total_slots)?;
+            *cursor += 1;
+            instruction = *op_array.instructions.get(*cursor)?;
+        }
+        Some(instruction)
+    }
+
     fn retain_projections(
         &self,
         source: &mut QuickTypedInvariantSource,

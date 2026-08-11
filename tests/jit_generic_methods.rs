@@ -733,6 +733,85 @@ echo genericNestedJsonPropertyTotal(
 }
 
 #[test]
+fn derived_json_string_length_argument_enters_one_generic_property_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericDerivedJsonPropertyJitBox<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function addPair(T $left, T $right): void {
+        $this->total = $this->total + $left;
+        $this->total = $this->total + $right;
+    }
+}
+function genericDerivedJsonPropertyTotal($box, $json) {
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $row = json_decode($json, true);
+        $box->addPair($row['value'], strlen($row['nested']['name']));
+        $checksum += $i;
+    }
+    return $i . ':' . $box->total . ':' . $checksum . ':' . $row['nested']['name'];
+}
+echo genericDerivedJsonPropertyTotal(
+    new GenericDerivedJsonPropertyJitBox::<int>(0),
+    '{"value":3,"nested":{"name":"rphp!"}}'
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:800000:4999950000:rphp!");
+
+    let plan = generic_property_ops_plan(&functions, "genericDerivedJsonPropertyTotal");
+    let source = plan
+        .typed_invariant_source
+        .as_ref()
+        .expect("derived JSON projections should be retained");
+    assert_eq!(source.projections.len(), 3);
+    assert_eq!(source.long_output_mask.count_ones(), 2);
+    assert_eq!(source.string_output_mask.count_ones(), 1);
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn non_string_derived_json_argument_replays_canonically() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericInvalidDerivedJsonPropertyJitBox<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function add(T $value): void { $this->total = $this->total + $value; }
+}
+function genericInvalidDerivedJsonPropertyTotal($box, $json) {
+    for ($i = 0; $i < 100000; $i++) {
+        $row = json_decode($json, true);
+        $box->add(strlen($row['name']));
+    }
+    return $box->total;
+}
+echo genericInvalidDerivedJsonPropertyTotal(
+    new GenericInvalidDerivedJsonPropertyJitBox::<int>(0),
+    '{"name":"abc"}'
+) . '|';
+echo genericInvalidDerivedJsonPropertyTotal(
+    new GenericInvalidDerivedJsonPropertyJitBox::<int>(0),
+    '{"name":123}'
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "300000|300000");
+
+    let plan = generic_property_ops_plan(&functions, "genericInvalidDerivedJsonPropertyTotal");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn invalid_generic_json_projection_replays_before_property_mutation() {
     let (_, functions, result, output) = compile_and_execute(
         r#"<?php

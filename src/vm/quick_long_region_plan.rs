@@ -1181,22 +1181,11 @@ fn detect_long_ops_region_inner(
                     let mut has_string_argument = false;
                     let mut cursor = ip + 1;
                     for argument_index in 0..argument_count {
-                        let mut send = *op_array.instructions.get(cursor)?;
-                        while send.opcode == OpCode::FetchDimR {
-                            let array = long_slot(send.op1_type, send.op1)?;
-                            if send.result_type != OpType::Tmp
-                                || !json_projections.extend_fetch(
-                                    op_array,
-                                    send,
-                                    array,
-                                    total_slots,
-                                )?
-                            {
-                                return None;
-                            }
-                            cursor += 1;
-                            send = *op_array.instructions.get(cursor)?;
-                        }
+                        let send = json_projections.deferred_argument_send(
+                            op_array,
+                            &mut cursor,
+                            total_slots,
+                        )?;
                         if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
                             || send.op2 as usize != argument_index + 1
                         {
