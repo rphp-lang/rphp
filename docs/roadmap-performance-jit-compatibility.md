@@ -9045,16 +9045,19 @@ specialization. ARM64 passes 197 default, 197 erased-only, 197 reified-only and
 same first three sets, 334 all-feature library tests and every target.
 Method-generic alpha-renaming, deterministic diamond merging and the plural
 Reflection inheritance view are now closed in the cold interned graph without
-weakening either exact fast-path proof. The remaining Reflection follow-up is
-the RFC object surface for generic parameter declarations and their type
-references.
+weakening either exact fast-path proof. The RFC object surface for generic
+parameter declarations, their type references and reified object bindings is
+also closed and executable in both runtime modes. The stdlib split now keeps
+the public façade, ancestry projection, generic-parameter objects and built-in
+registry in separate cohesive units without introducing another metadata
+representation.
 
 Generics-aware JIT work is the final milestone of this interphase, not a
 concurrent semantic shortcut. It begins only after parser/link/runtime/
 Reflection coverage, inheritance merging and both runtime modes are closed.
-This is a hard ordering gate: intermediate generics work must not add or tune
-JIT specialization before that semantic acceptance checklist is complete.
-The JIT may then consume stable interned declarations and use-site proofs:
+That semantic acceptance checklist is now complete for RPHP's supported PHP
+surface, so the JIT phase may consume stable interned declarations and use-site
+proofs:
 bound-erased specializations must add no generic guard beyond the proven erased
 ABI, while reified specializations require exact tuple/class guards and a
 canonical deoptimization edge to the already-tested reified executor. Final

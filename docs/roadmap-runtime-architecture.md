@@ -1958,9 +1958,11 @@ direct-trait methods return one argument list, while
 binding in traversal order. Defaults, forwarded parameters, nested arguments,
 unions/intersections and included declarations are materialized as
 `ReflectionType` objects; invalid targets raise `ReflectionException`. The
-stdlib-facing handlers live in the isolated `stdlib/reflection.rs` unit and the
-graph walk in `generics/reflection.rs`, so neither leaks into ordinary
-dispatch. Fixed stdlib table capacities are reserved only when stdlib is
+stdlib-facing façade lives in `stdlib/reflection.rs`, ancestry validation and
+binding projection in `stdlib/reflection/ancestry.rs`, built-in class and
+method registration in `stdlib/reflection/registry.rs`, and the canonical graph
+walk in `generics/reflection.rs`, so none of them leaks into ordinary dispatch.
+Fixed stdlib table capacities are reserved only when stdlib is
 installed, recovering the initially visible cold-start cost without making a
 bare executor allocate.
 
@@ -2188,10 +2190,12 @@ that static workload by 33.472%; the ordinary instance control is +0.963%, the
 erased generic-method control -0.200%, and explicit method turbofish -1.699%
 against exact checkpoint `3e5a507`. CPU-2-pinned x86-64 reports -44.599%,
 -0.014%, -1.418% and +3.255% for the same four controls, respectively.
-Generics-aware JIT specialization is still deliberately last: it starts only
-after the remaining parser/link/runtime/Reflection acceptance work is complete
-and must consume canonical metadata with exact guards and deoptimization to
-these established erased/reified paths.
+The parser/link/runtime/Reflection acceptance audit is now closed for RPHP's
+supported PHP surface, including the RFC generic-parameter object API and both
+runtime modes. Generics-aware JIT specialization therefore remains the next
+and final interphase milestone. It must consume canonical metadata with no
+extra erased guard, an exact class/type-tuple proof for reified receivers, and
+deoptimization to these established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
