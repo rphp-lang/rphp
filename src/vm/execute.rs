@@ -1704,6 +1704,21 @@ fn execute_full_call<'a>(
                     user.op_array.num_cvs,
                     user.op_array.num_temps,
                 );
+                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                let mut generator = generator;
+                #[cfg(feature = "php-generics-reified")]
+                {
+                    generator.reified_context = eg.generator_reified_context(call as usize);
+                }
+                #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                {
+                    generator.generic_member_contract = generic_member_contract;
+                }
+                #[cfg(not(any(
+                    feature = "php-generics-erased",
+                    feature = "php-generics-reified"
+                )))]
+                let _ = generic_member_contract;
                 let gen_ref = new_generator_ref(generator);
                 let mut gen_obj = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
                 gen_obj.generator = Some(gen_ref);

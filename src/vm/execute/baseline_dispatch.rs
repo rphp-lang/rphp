@@ -3003,6 +3003,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 op_check_reified_return(eg, frame, op_array, opline)?;
             }
 
+            OpCode::CheckGenericDefault => {
+                op_check_generic_default(eg, frame, opline)?;
+            }
+
             OpCode::FetchStaticProp => {
                 op_fetch_static_prop(eg, frame, op_array, opline);
             }

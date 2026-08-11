@@ -50,6 +50,40 @@ impl ExecutorGlobals {
             });
     }
 
+    pub(crate) fn active_reified_binding_scope(
+        &self,
+        call: usize,
+    ) -> Option<(usize, ReifiedBinding)> {
+        self.active_reified_binding_scopes
+            .iter()
+            .rfind(|scope| scope.call == call)
+            .map(|scope| (scope.owner, scope.binding))
+    }
+
+    pub(crate) fn generator_reified_context(
+        &self,
+        call: usize,
+    ) -> Option<crate::vm::generator::GeneratorReifiedContext> {
+        let scope = self
+            .active_reified_binding_scopes
+            .iter()
+            .rfind(|scope| scope.call == call)?;
+        let class_id = self.reified_binding_scope_class_id(scope.owner);
+        Some(crate::vm::generator::GeneratorReifiedContext {
+            binding: scope.binding,
+            class_id,
+        })
+    }
+
+    pub(crate) fn activate_generator_reified_context(
+        &mut self,
+        frame: usize,
+        context: crate::vm::generator::GeneratorReifiedContext,
+    ) {
+        self.push_reified_binding_scope_with_class(frame, context.binding, context.class_id);
+        self.activate_reified_binding_scope(frame, frame);
+    }
+
     pub(crate) fn reified_binding_scope_class_id(&self, owner: usize) -> u32 {
         self.reified_binding_scope_classes
             .iter()

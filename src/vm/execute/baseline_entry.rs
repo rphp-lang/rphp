@@ -473,16 +473,12 @@ pub fn resume_generator(
                             }
                         }
 
-                        let saved_active = eg.active_generator.take();
-                        eg.active_generator = Some(gen_ref.clone());
-                        eg.current_execute_data.set(frame);
-                        let result = execute_ex(eg, frame);
-                        eg.current_execute_data.set(saved_execute_data);
-                        eg.active_generator = saved_active;
-                        if result.is_err() {
-                            gen_ref.borrow_mut().state = GeneratorState::Completed;
-                        }
-                        return result;
+                        return execute_resumed_generator_frame(
+                            eg,
+                            gen_ref,
+                            frame,
+                            saved_execute_data,
+                        );
                     } else {
                         // Inner generator yielded again — copy its value/key to outer
                         let mut gen_data = gen_ref.borrow_mut();
@@ -547,16 +543,12 @@ pub fn resume_generator(
                             }
                         }
 
-                        let saved_active = eg.active_generator.take();
-                        eg.active_generator = Some(gen_ref.clone());
-                        eg.current_execute_data.set(frame);
-                        let result = execute_ex(eg, frame);
-                        eg.current_execute_data.set(saved_execute_data);
-                        eg.active_generator = saved_active;
-                        if result.is_err() {
-                            gen_ref.borrow_mut().state = GeneratorState::Completed;
-                        }
-                        return result;
+                        return execute_resumed_generator_frame(
+                            eg,
+                            gen_ref,
+                            frame,
+                            saved_execute_data,
+                        );
                     } else {
                         // Yield next array element
                         let mut gen_data = gen_ref.borrow_mut();
@@ -631,27 +623,62 @@ pub fn resume_generator(
         }
     }
 
-    // Set active generator so Yield/Return can find it
+    execute_resumed_generator_frame(eg, gen_ref, frame, saved_execute_data)
+}
+
+/// Execute one materialized generator frame and restore every executor
+/// sidecar, including feature-gated generic contracts, on yield or return.
+fn execute_resumed_generator_frame(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    frame: *mut ExecuteData,
+    saved_execute_data: *mut ExecuteData,
+) -> Result<(), VmError> {
     let saved_active = eg.active_generator.take();
     eg.active_generator = Some(gen_ref.clone());
-
+    activate_generator_generic_context(eg, gen_ref, frame);
     eg.current_execute_data.set(frame);
+
     let result = execute_ex(eg, frame);
 
-    // Restore state
+    discard_generator_generic_context(eg, frame);
     eg.current_execute_data.set(saved_execute_data);
     eg.active_generator = saved_active;
-
-    // Clean up frame (CV/TMP already saved by Yield handler)
-    // Note: Yield handler already cleaned up the frame, but if Return happened
-    // or an error occurred, the frame might still be allocated.
-    // The Yield/Return handlers pop the frame themselves, so we only need
-    // to handle the error case.
     if result.is_err() {
-        gen_ref.borrow_mut().state = GeneratorState::Completed;
+        gen_ref.borrow_mut().state = crate::vm::generator::GeneratorState::Completed;
+    }
+    result
+}
+
+#[inline]
+fn activate_generator_generic_context(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    frame: *mut ExecuteData,
+) {
+    #[cfg(feature = "php-generics-reified")]
+    if let Some(context) = gen_ref.borrow().reified_context {
+        eg.activate_generator_reified_context(frame as usize, context);
     }
 
-    result
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    if let Some(contract) = gen_ref.borrow().generic_member_contract.clone() {
+        eg.activate_generic_member_call(frame as usize, contract);
+    }
+
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    let _ = (eg, gen_ref, frame);
+}
+
+#[inline]
+fn discard_generator_generic_context(eg: &mut ExecutorGlobals, frame: *mut ExecuteData) {
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    eg.discard_generic_member_call(frame as usize);
+    #[cfg(feature = "php-generics-reified")]
+    eg.discard_active_reified_binding_scope(frame as usize);
+
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    let _ = (eg, frame);
 }
 
 /// Enter the canonical executor without imposing its top-level cleanup policy.

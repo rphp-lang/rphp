@@ -8872,15 +8872,41 @@ changed.
 This checkpoint does not implement `static<T>` by treating it as `self<T>`.
 Correct support requires the reserved-token parser path plus late-static
 called-scope state, including static calls and post-return checks. Pseudo-types
-in a diamond are now closed. Omitted dynamic defaults and real `static<T>`
-semantics still precede JIT work; neither may be papered over by a native
-specialization.
+in a diamond are now closed, and dynamic defaults are closed below. Real
+`static<T>` semantics still precede JIT work and may not be papered over by a
+native specialization.
 
-Omitted PHP default parameter values remain an explicit semantic follow-up.
-They are assigned by callee bytecode after the current pre-call reified
-boundary; the accepted design must validate them without inserting a feature
-or binding branch into ordinary generic calls. This correctness item precedes
-all generics-aware JIT work under the hard ordering gate below.
+Omitted PHP default parameter values now have an explicit callee boundary.
+Only a default whose declared type contains a generic parameter receives
+`CheckGenericDefault`, placed after default-expression assignment. The
+existing `BindDefaultParam` target is patched after that instruction, so an
+explicit argument skips both initialization and the new check and ordinary
+calls execute their unchanged bytecode. The handler consumes an already-active
+reified scope or linked/reified instance-method contract; it neither resolves
+a use site nor walks inheritance on its own.
+
+Lazy generators retain the corresponding feature-only binding/contract in
+their generator state. One centralized resume boundary installs and discards
+those sidecars for normal resume and both `yield from` completion paths,
+instead of duplicating lifecycle code. This closes functions, instance/static
+methods, closures, traits, direct/forwarded inheritance, constructors, named
+holes, nested applications and generators in reified mode, plus concrete
+linked methods/constructors/generators in both modes. The permanent bytecode
+invariant proves that explicit arguments jump beyond the check. Focused
+coverage is now 40 reified/dual, 31 erased-only and 2 syntax-disabled scenarios.
+No dependency, hot layout, native lowering or generics-aware JIT changed.
+
+The permanent release gate compares the candidate with exact checkpoint
+`615575e` in 20 balanced pairs. Existing hot controls remain admitted: ordinary
+generic method is -0.594% on ARM64 and +0.571% on CPU-2-pinned x86-64, while
+warmed inherited turbofish is -3.694% and -6.396%. The candidate's valid
+omitted-default workload is 47.959%/51.091% above the same generic declaration
+called with an explicit value. Five absolute paired samples put that required
+post-materialization guard at approximately 21.9 ns per ARM64 call and 28.1 ns
+per x86-64 call. The prior binary, which accepted the invalid omission without
+checking it, is retained only as the structural baseline; the new delta is real
+semantics. A dependency-free gate script records omitted, explicit, manually
+typed, ordinary-method and turbofish lanes independently.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked

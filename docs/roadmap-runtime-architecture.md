@@ -2102,20 +2102,40 @@ hosts pass all four production all-target matrices. Exact-checkpoint
 is kept outside hot callers through a cold non-inlined boundary; no runtime
 layout, dependency, native tier or JIT changed.
 
+Omitted dynamic default parameter values are now closed. A default whose type
+contains a generic parameter emits `CheckGenericDefault` immediately after its
+existing callee-side materialization. `BindDefaultParam` jumps past both the
+assignment and check for an explicit argument, so the ordinary and explicit-
+argument paths gain no generic branch. The cold handler reads the active
+reified binding or substituted linked/reified instance-method contract and
+uses the same recursive nested-type matcher as the established boundaries.
+
+Generator creation now copies only its feature-gated generic context and a
+single centralized resume boundary activates and removes that context for
+normal yield, return and `yield from`. This keeps lazy default evaluation exact
+without leaving the creation frame alive. Permanent coverage includes named
+argument holes, functions, instance/static methods, closures, traits,
+inheritance, constructors, nested applications and linked/reified generators.
+The bytecode test fixes the skip target after the check. Focused coverage is 40
+reified/dual and 31 erased-only scenarios; syntax-disabled coverage remains 2.
+No hot representation, external dependency, native lowering or JIT changed.
+Against exact checkpoint `615575e`, 20 balanced release pairs keep the ordinary
+method at -0.594% ARM64/+0.571% CPU-2-pinned x86-64 and warmed turbofish at
+-3.694%/-6.396%. The new omitted-default path is 47.959%/51.091% above the
+otherwise identical explicit-argument generic call, approximately 21.9 ns and
+28.1 ns per required substituted guard; this is reported as semantic work, not
+an ordinary-path regression.
+
 `static<T>` remains deliberately open. It needs parser support for the
 reserved `static` token and a real late-static called-scope identity for both
 instance and static calls; aliasing it to lexical `self` would be observably
-wrong. Multi-ancestor pseudo-type scopes are now closed; omitted dynamic
-default parameter values and `static<T>` must still close before the hard
-generics-aware JIT gate.
-
-The remaining semantic audit includes omitted default parameter values. They
-are materialized inside the callee after the pre-call reified check, so this
-must be closed without adding a generic branch to ordinary calls. Generics-
-aware JIT specialization remains deliberately last: it starts only after this
-and the rest of parser/link/runtime/Reflection coverage in both runtimes are
-closed, and must consume canonical metadata with exact guards and
-deoptimization back to the established erased/reified paths.
+wrong. The next runtime audit also starts with the pre-existing explicitly
+typed generator/`foreach` completion loop found while validating generator
+sidecar lifetime. Generics-aware JIT specialization remains deliberately last:
+no JIT work starts until those parser/runtime semantics and the complete
+acceptance matrix are closed, after which it must consume canonical metadata
+with exact guards and deoptimization back to the established erased/reified
+paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

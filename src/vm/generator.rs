@@ -58,6 +58,20 @@ pub struct Generator {
     pub delegate: Option<YieldFromDelegate>,
     /// TMP slot index for writing `yield from` result when delegate completes
     pub yield_from_result_slot: u32,
+    /// Reified call context detached from the short-lived creation frame.
+    /// A fresh execution frame receives this context on every resume.
+    #[cfg(feature = "php-generics-reified")]
+    pub reified_context: Option<GeneratorReifiedContext>,
+    /// Substituted instance-member contract preserved across suspensions.
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub generic_member_contract: Option<Rc<crate::generics::GenericMethodContract>>,
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[derive(Clone, Copy)]
+pub struct GeneratorReifiedContext {
+    pub binding: crate::generics::ReifiedBinding,
+    pub class_id: u32,
 }
 
 impl Generator {
@@ -95,6 +109,10 @@ impl Generator {
             implicit_key: 0,
             delegate: None,
             yield_from_result_slot: 0,
+            #[cfg(feature = "php-generics-reified")]
+            reified_context: None,
+            #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+            generic_member_contract: None,
         }
     }
 

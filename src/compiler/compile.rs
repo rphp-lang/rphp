@@ -1913,7 +1913,19 @@ impl Compiler {
                 let cv_idx = func_compiler.resolve_cv(&param.name);
                 if let Some(default_expr) = &param.default {
                     seen_default = true;
-                    Self::emit_default_param(func_compiler, cv_idx, default_expr);
+                    let check_generic_default =
+                        crate::generics::GenericRuntimeCapabilities::CONFIGURED.syntax_enabled()
+                            && param
+                                .type_hint
+                                .as_ref()
+                                .is_some_and(Self::type_hint_contains_generic_parameter);
+                    Self::emit_default_param(
+                        func_compiler,
+                        cv_idx,
+                        i as u16,
+                        default_expr,
+                        check_generic_default,
+                    );
                 } else {
                     if seen_default {
                         return Err(format!(
@@ -1997,8 +2009,15 @@ impl Compiler {
     }
 
     /// Emit default parameter initialization for a single param.
-    /// Pattern: BindDefaultParam (skip if arg passed) → compute default → AssignCv → label
-    fn emit_default_param(compiler: &mut Compiler, cv_idx: u16, default_expr: &Expr) {
+    /// Pattern: BindDefaultParam (skip if arg passed) → compute default →
+    /// AssignCv → optional generic check → label.
+    fn emit_default_param(
+        compiler: &mut Compiler,
+        cv_idx: u16,
+        parameter_index: u16,
+        default_expr: &Expr,
+        check_generic_default: bool,
+    ) {
         // BindDefaultParam: if CV is NOT undef, jump to skip_label (op2 = target, patched later)
         let bind_idx = compiler.instructions.len();
         let mut bind = Instruction::new(OpCode::BindDefaultParam);
@@ -2018,7 +2037,16 @@ impl Compiler {
         assign.op2 = val_op;
         compiler.instructions.push(assign);
 
-        // Patch BindDefaultParam to skip past the assign
+        if check_generic_default {
+            let mut check = Instruction::new(OpCode::CheckGenericDefault);
+            check.op1_type = OpType::Cv;
+            check.op1 = cv_idx;
+            check.extended_value = u32::from(parameter_index);
+            compiler.instructions.push(check);
+        }
+
+        // An explicitly supplied argument skips both initialization and its
+        // post-materialization check; the existing pre-call boundary owns it.
         let skip_label = compiler.instructions.len() as u16;
         compiler.instructions[bind_idx].op2 = skip_label;
     }

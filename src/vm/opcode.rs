@@ -135,6 +135,9 @@ pub enum OpCode {
     CheckReifiedArgs = 134,
     /// Reified-only return check. Pops the matching LIFO sidecar binding.
     CheckReifiedReturn = 135,
+    /// Validate one generic parameter after its omitted default expression has
+    /// materialized inside the callee. Explicit arguments jump over this op.
+    CheckGenericDefault = 136,
 
     // ── Specialized opcodes ──────────────────────────────────────────
     // Compiler emits these for common operand-type patterns.

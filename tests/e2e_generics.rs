@@ -763,6 +763,54 @@ fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {
     }));
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn generic_default_check_is_guarded_by_the_default_binding_jump() {
+    let statements = parse(
+        "<?php function value<T>(T $input = 7): T { return $input; } function plain(int $input = 8): int { return $input; }",
+    )
+    .unwrap();
+    let result = Compiler::new().compile(&statements).unwrap();
+    let generic = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "value")
+        .unwrap()
+        .1
+        .op_array
+        .instructions;
+    let bind = generic
+        .iter()
+        .position(|instruction| instruction.opcode == OpCode::BindDefaultParam)
+        .unwrap();
+    let assign = generic
+        .iter()
+        .position(|instruction| instruction.opcode == OpCode::AssignCv)
+        .unwrap();
+    let check = generic
+        .iter()
+        .position(|instruction| instruction.opcode == OpCode::CheckGenericDefault)
+        .unwrap();
+    assert!(bind < assign && assign < check);
+    assert_eq!(generic[bind].op2 as usize, check + 1);
+    assert_eq!(generic[check].op1, generic[bind].op1);
+    assert_eq!(generic[check].extended_value, 0);
+
+    let plain = &result
+        .functions
+        .iter()
+        .find(|(name, _)| name == "plain")
+        .unwrap()
+        .1
+        .op_array
+        .instructions;
+    assert!(
+        plain
+            .iter()
+            .all(|instruction| instruction.opcode != OpCode::CheckGenericDefault)
+    );
+}
+
 #[cfg(feature = "php-generics-reified")]
 #[test]
 fn reified_substitution_that_differs_from_erasure_keeps_boundary_checks() {
@@ -1019,6 +1067,151 @@ echo outer::<int>(inner::<int>(9));
 "#,
     );
     assert_eq!(output, "9");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_runtime_checks_omitted_defaults_after_materialization() {
+    let output = common::run_php(
+        r#"<?php
+function valid<T>(T $value = 7): T { return $value; }
+function named<T>(T $value = 10, string $tail = "z"): string { return $value . $tail; }
+class MethodDefaults {
+    public function valid<T>(T $value = 8): T { return $value; }
+}
+class InstanceDefaults<T> {
+    public function valid(T $value = 9): T { return $value; }
+}
+echo valid::<int>() . ":";
+echo named::<int>(tail: "n") . ":";
+$methods = new MethodDefaults();
+echo $methods->valid::<int>() . ":";
+$instance = new InstanceDefaults::<int>();
+echo $instance->valid();
+"#,
+    );
+    assert_eq!(output, "7:10n:8:9");
+
+    let generator_output = common::run_php(
+        r#"<?php
+function values<T>(T $first = 11, T $second = 12) {
+    yield $first;
+    yield $second;
+}
+function delegatedValue($value) { yield $value; }
+function delegatedValues<T>(T $value = 14) { yield from delegatedValue($value); }
+class GeneratorDefaults<T> {
+    public function values(T $value = 13) { yield $value; }
+}
+foreach (values::<int>() as $value) { echo $value . ":"; }
+$defaults = new GeneratorDefaults::<int>();
+foreach ($defaults->values() as $value) { echo $value . ":"; }
+foreach (delegatedValues::<int>() as $value) { echo $value; }
+"#,
+    );
+    assert_eq!(generator_output, "11:12:13:14");
+
+    for source in [
+        r#"<?php function consume<T>(T $value = "bad"): string { return "body"; } consume::<int>();"#,
+        r#"<?php class Defaults { public function consume<T>(T $value = "bad"): string { return "body"; } } $value = new Defaults(); $value->consume::<int>();"#,
+        r#"<?php class Defaults { public static function consume<T>(T $value = "bad"): string { return "body"; } } Defaults::consume::<int>();"#,
+        r#"<?php $consume = function<T>(T $value = "bad"): string { return "body"; }; $consume::<int>();"#,
+        r#"<?php function nested<U>(U $value): U { return $value; } function consume<T>(T $value = nested::<string>("bad")): string { return "body"; } consume::<int>();"#,
+        r#"<?php class Defaults<T> { public function consume(T $value = "bad"): string { return "body"; } } $value = new Defaults::<int>(); $value->consume();"#,
+        r#"<?php class ParentDefaults<T> { public function consume(T $value = "bad"): string { return "body"; } } class ChildDefaults<U> extends ParentDefaults<U> {} $value = new ChildDefaults::<int>(); $value->consume();"#,
+        r#"<?php trait TraitDefaults<T> { public function consume(T $value = "bad"): string { return "body"; } } class Defaults<T> { use TraitDefaults<T>; } $value = new Defaults::<int>(); $value->consume();"#,
+        r#"<?php class Defaults<T> { public function __construct(T $value = "bad") {} } new Defaults::<int>();"#,
+        r#"<?php class NestedBox<T> {} function consume<T>(NestedBox<T> $value = new NestedBox::<string>()): string { return "body"; } consume::<int>();"#,
+        r#"<?php function values<T>(T $value = "bad") { yield $value; } foreach (values::<int>() as $value) {}"#,
+        r#"<?php class Defaults { public function values<T>(T $value = "bad") { yield $value; } } $defaults = new Defaults(); foreach ($defaults->values::<int>() as $value) {}"#,
+        r#"<?php class Defaults<T> { public function values(T $value = "bad") { yield $value; } } $defaults = new Defaults::<int>(); foreach ($defaults->values() as $value) {}"#,
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        let normalized = rendered.to_ascii_lowercase();
+        assert!(
+            normalized.contains("default")
+                && (normalized.contains("generic") || normalized.contains("class type")),
+            "{rendered:?}"
+        );
+    }
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn linked_instance_contracts_check_omitted_defaults() {
+    let output = common::run_php(
+        r#"<?php
+class ParentDefaults<T> {
+    public function value(T $value = 7): T { return $value; }
+}
+class IntDefaults extends ParentDefaults<int> {}
+$value = new IntDefaults();
+echo $value->value();
+"#,
+    );
+    assert_eq!(output, "7");
+
+    let generator_output = common::run_php(
+        r#"<?php
+class ParentGeneratorDefaults<T> {
+    public function values(T $value = 8) { yield $value; }
+}
+class IntGeneratorDefaults extends ParentGeneratorDefaults<int> {}
+$value = new IntGeneratorDefaults();
+foreach ($value->values() as $item) { echo $item; }
+"#,
+    );
+    assert_eq!(generator_output, "8");
+
+    let error = common::run_php_expect_error(
+        r#"<?php
+class ParentDefaults<T> {
+    public function consume(T $value = "bad"): string { return "body"; }
+}
+class IntDefaults extends ParentDefaults<int> {}
+$value = new IntDefaults();
+$value->consume();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    let normalized = rendered.to_ascii_lowercase();
+    assert!(
+        normalized.contains("default")
+            && (normalized.contains("generic") || normalized.contains("class type")),
+        "{rendered:?}"
+    );
+
+    let generator_error = common::run_php_expect_error(
+        r#"<?php
+class ParentGeneratorDefaults<T> {
+    public function values(T $value = "bad") { yield $value; }
+}
+class IntGeneratorDefaults extends ParentGeneratorDefaults<int> {}
+$value = new IntGeneratorDefaults();
+foreach ($value->values() as $item) {}
+"#,
+    );
+    let rendered = format!("{generator_error:?}");
+    let normalized = rendered.to_ascii_lowercase();
+    assert!(
+        normalized.contains("default")
+            && (normalized.contains("generic") || normalized.contains("class type")),
+        "{rendered:?}"
+    );
+
+    let constructor_error = common::run_php_expect_error(
+        r#"<?php
+class ParentDefaults<T> { public function __construct(T $value = "bad") {} }
+class IntDefaults extends ParentDefaults<int> {}
+new IntDefaults();
+"#,
+    );
+    let rendered = format!("{constructor_error:?}");
+    assert!(
+        rendered.to_ascii_lowercase().contains("default"),
+        "{rendered:?}"
+    );
 }
 
 #[cfg(feature = "php-generics-reified")]

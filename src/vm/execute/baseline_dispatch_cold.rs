@@ -303,6 +303,37 @@ fn generic_call_reified_arguments_match(
     )
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[inline]
+fn value_matches_reified_default(
+    eg: &ExecutorGlobals,
+    scope_owner: usize,
+    value: &Value,
+    expected: &crate::generics::GenericType,
+    binding: crate::generics::ReifiedBinding,
+    declared_scope: &str,
+) -> bool {
+    let class_id = eg.reified_binding_scope_class_id(scope_owner);
+    let receiver_scope = eg.class_by_id(class_id).map(|class| class.name.as_str());
+    let scope = eg.generic_declaration_scope(declared_scope, receiver_scope);
+    eg.generic_metadata.value_matches_binding_reified(
+        value,
+        expected,
+        binding,
+        |actual, bound| eg.class_is_a_in_generic_scope(actual, bound, scope),
+        |value, name, arguments, declaration, site| {
+            eg.reified_object_arguments_match_binding(
+                value,
+                name,
+                arguments,
+                declaration,
+                site,
+                scope,
+            )
+        },
+    )
+}
+
 #[inline(never)]
 fn op_check_reified_args(
     eg: &mut ExecutorGlobals,
@@ -464,6 +495,79 @@ fn op_check_reified_args(
             }
         }
         eg.activate_reified_binding_scope(frame as usize, call as usize);
+        Ok(())
+    }
+}
+
+#[cold]
+#[inline(never)]
+fn op_check_generic_default(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
+    {
+        let _ = (eg, frame, opline);
+        return Err(VmError::Fatal(
+            "Generic default check emitted without generic runtime support".into(),
+        ));
+    }
+
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    {
+        let parameter_index = opline.extended_value as usize;
+        let value = unsafe { &*(*frame).cv(opline.op1 as u32) };
+
+        #[cfg(feature = "php-generics-reified")]
+        if let Some((scope_owner, binding)) =
+            eg.active_reified_binding_scope(frame as usize)
+        {
+            let declaration = eg
+                .generic_metadata
+                .declaration(binding)
+                .ok_or_else(|| VmError::Fatal("Invalid reified generic declaration".into()))?;
+            if let Some(expected) = declaration
+                .value_parameters
+                .get(parameter_index)
+                .and_then(Option::as_ref)
+            {
+                let declared_scope = eg
+                    .generic_metadata
+                    .symbol(declaration.owner)
+                    .unwrap_or("?");
+                if !value_matches_reified_default(
+                    eg,
+                    scope_owner,
+                    value,
+                    expected,
+                    binding,
+                    declared_scope,
+                ) {
+                    return Err(VmError::Fatal(format!(
+                        "Default value for argument #{} of {} does not match its reified generic type",
+                        parameter_index + 1,
+                        declared_scope
+                    )));
+                }
+            }
+        }
+
+        if let Some(contract) = eg.active_generic_member_call(frame as usize)
+            && let Some(expected) = contract
+                .value_parameters
+                .get(parameter_index)
+                .and_then(Option::as_ref)
+            && !eg.value_matches_generic_method_contract(value, expected, contract)
+        {
+            return Err(VmError::Fatal(format!(
+                "Default value for argument #{} of {}::{}() does not match its {}",
+                parameter_index + 1,
+                contract.owner,
+                contract.method,
+                generic_method_contract_kind(contract.runtime_mode)
+            )));
+        }
         Ok(())
     }
 }

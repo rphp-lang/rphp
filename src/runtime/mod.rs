@@ -511,6 +511,14 @@ impl ExecutorGlobals {
     }
 
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub(crate) fn active_generic_member_call(&self, call: usize) -> Option<&GenericMethodContract> {
+        self.active_generic_member_calls
+            .iter()
+            .rfind(|(candidate, _)| *candidate == call)
+            .map(|(_, contract)| contract.as_ref())
+    }
+
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     pub(crate) fn discard_generic_member_call(&mut self, call: usize) {
         let _ = take_generic_member_call(&mut self.pending_generic_member_calls, call);
         let _ = take_generic_member_call(&mut self.active_generic_member_calls, call);
