@@ -2476,6 +2476,25 @@ reified scenarios; direct JSON argument gates improve by 99.541% to 99.744%
 across both modes and reference architectures, while unchanged controls remain
 inside one percent.
 
+Projection planning no longer keeps paths, parent/fetch reachability and
+String-derived metadata as unrelated locals in the main region detector.
+`InvariantJsonProjectionState` owns their complete lifecycle and exposes one
+contract to standalone and deferred consumers. This reduces the coupling
+surface without changing `QuickTypedInvariantSource`, quick/native operations
+or the runtime prelude.
+
+The deferred consumer can now retain one exact `strlen()` derivation after a
+fixed JSON fetch chain. Prelude publication includes the String leaf needed to
+prove PHP type semantics and the derived Long byte length used by the existing
+property method operation; machine code receives only Long slots, so it needs
+no dynamic String token or JSON-specific instruction. If the leaf is not an
+exact String, publication remains atomic and canonical execution resumes at
+`InitMethodCall`, preserving PHP coercion, argument order and call count. The
+new two-argument generic and ordinary gates improve by 99.574% to 99.753%
+across both modes and reference architectures; unchanged controls remain
+inside the one-percent regression boundary. Focused coverage is 21 erased and
+31 reified scenarios, with no persistent-layout or dependency change.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

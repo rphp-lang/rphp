@@ -9392,6 +9392,39 @@ and +0.346% across both hosts and modes. Focused generic JIT coverage is now
 19 erased and 29 reified scenarios. No backend operation, persistent layout
 or dependency was added.
 
+The projection planner state is subsequently centralized in one
+`InvariantJsonProjectionState`. Path ownership, fetch/parent reachability,
+String leaves, derived String lengths and final typed-source retention now
+share one admission boundary instead of five parallel locals and duplicated
+finalization in the 1,700-line region detector. The standalone-fetch and
+deferred-argument paths use the same `start`/`extend`/`derive`/`retain`
+contract. This is a behavior-preserving structural commit: the quick/native
+IR, persistent plan layout, runtime prelude and dependencies are unchanged;
+61 quick-planner unit tests, 16 JSON projection tests and 19 erased generic
+JIT tests pass before the next feature is layered on it.
+
+That boundary now admits an exact String byte length inside a deferred method
+argument, for example
+`$box->addPair($row['value'], strlen($row['nested']['name']))`. The shared
+argument walker consumes the fixed `FetchDimR` chain and optional
+`Strlen`/`Strlen_String` before the positional send. The invariant prelude
+validates and publishes the Long leaf, String leaf and derived Long length
+atomically; the existing property call consumes only the two Long arguments,
+so arbitrary String contents never enter the finite-token native ABI. A
+missing/non-String leaf rejects the prelude and replays canonical argument
+coercion and the method call from `InitMethodCall` exactly once.
+
+Against exact refactored checkpoint `0f21b93`, 40 balanced max-perf pairs
+improve the new two-million-iteration generic derived-argument workload by
+99.675%/99.730% on ARM64 and 99.685%/99.753% on CPU-2-pinned x86-64 in
+erased/reified mode. Its ordinary-signature control improves by
+99.639%/99.621% on ARM64 and 99.574%/99.580% on x86-64. One-hundred-pair
+direct-JSON, materialized-JSON and property-method controls have a largest
+positive movement of +0.690%; no lane breaches the one-percent regression
+gate. Focused generic JIT coverage is now 21 erased and 31 reified scenarios,
+and all four all-target matrices pass on both hosts. No backend operation,
+persistent layout or dependency was added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
