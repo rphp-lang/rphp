@@ -815,6 +815,64 @@ echo outer::<int>(inner::<int>(9));
 
 #[cfg(feature = "php-generics-reified")]
 #[test]
+fn reified_runtime_checks_every_positional_and_named_variadic_argument() {
+    let output = common::run_php(
+        r#"<?php
+function first<T>(T ...$values): T { return $values[0]; }
+class VariadicHost {
+    public function first<T>(T ...$values): T { return $values[0]; }
+}
+$closure = function<T>(T ...$values): T { return $values[0]; };
+echo first::<int>(1, 2, 3);
+echo (new VariadicHost())->first::<string>("m", "n");
+echo $closure::<int>(4, 5);
+echo first("ordinary", 6);
+"#,
+    );
+    assert_eq!(output, "1m4ordinary");
+
+    for (source, expected) in [
+        (
+            "<?php function first<T>(T ...$values): T { return $values[0]; } first::<int>(1, 2, 'bad');",
+            "Variadic argument #3 passed to first",
+        ),
+        (
+            "<?php class Host { public function first<T>(T ...$values): T { return $values[0]; } } $host = new Host(); $host->first::<int>(1, 'bad');",
+            "Variadic argument #2 passed to Host::first",
+        ),
+        (
+            "<?php $first = function<T>(T ...$values): T { return $values[0]; }; $first::<int>(1, 'bad');",
+            "Variadic argument #2 passed to __closure_",
+        ),
+        (
+            "<?php function first<T>(T ...$values): T { return $values[0]; } first::<int>(valid: 1, invalid: 'bad');",
+            "Named variadic argument $invalid passed to first",
+        ),
+    ] {
+        let error = common::run_php_expect_error(source);
+        let rendered = format!("{error:?}");
+        assert!(rendered.contains(expected), "{rendered:?}");
+    }
+}
+
+#[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+#[test]
+fn erased_runtime_keeps_unbounded_variadic_arguments_erased_to_mixed() {
+    let output = common::run_php(
+        r#"<?php
+function first<T>(T ...$values): T { return $values[0]; }
+$closure = function<T>(T ...$values): T { return $values[0]; };
+echo first::<int>("erased", 2);
+echo $closure::<int>(" closure", 3);
+first::<int>(named: "accepted");
+echo " named";
+"#,
+    );
+    assert_eq!(output, "erased closure named");
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
 fn reified_instances_enforce_property_bindings_and_clone_identity() {
     let output = common::run_php(
         r#"<?php

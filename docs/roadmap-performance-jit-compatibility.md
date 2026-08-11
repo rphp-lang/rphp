@@ -8718,7 +8718,7 @@ declaring-entity round trip. Included closures prove metadata relocation,
 ordinary closures return an empty generic view, and the feature-off build keeps
 the internal Reflection model while rejecting only generic source syntax. The
 four-mode all-target matrix passes on ARM64 and x86-64; dual/reified generic
-coverage is now 30 scenarios and erased-only 25.
+coverage is now 31 scenarios and erased-only 26.
 
 The final paired release control records both the immediate and stable
 comparisons because this cold-only code change moves unrelated functions under
@@ -8729,6 +8729,25 @@ never entered by that workload and the call path is unchanged. Against the
 shared `e9893af` Reflection checkpoint, 201 pairs report ARM64
 -1.255%/+1.252% and x86-64 +0.024%/-5.461% for method/startup respectively.
 These remain layout/no-regression observations rather than optimization claims.
+
+Reified function, method and closure calls now validate the complete variadic
+boundary. Fixed parameters use the signature's canonical CV mapping; every
+positional variadic slot and every pending named variadic value is checked
+against the same interned binding before the call becomes active. The
+bound-erased mode deliberately retains the RFC behavior: an unbounded `T`
+still erases to `mixed`, including variadics. Permanent tests cover valid and
+invalid function/method/closure calls, later invalid positional values, named
+variadics and ordinary calls without turbofish.
+
+The permanent one-million-call three-value variadic benchmark measures the
+real array-packing call ABI plus all reified scope, argument and return checks.
+In 61 order-rotated release triples, current reified generic/manual is +18.097%
+on ARM64 (0.165479/0.139740 seconds) and +16.166% on CPU-2-pinned x86-64
+(0.189798/0.164505 seconds), about 25-26 ns per call for the complete reified
+delta. Against parent `b7f5695`, the new all-element validation is +3.650% on
+ARM64 and -7.254% on x86-64; the opposite directions are recorded as fat-LTO
+layout observations, not as an optimization claim. No ordinary-call, object,
+frame, `Value` or function layout changed.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked

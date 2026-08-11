@@ -168,18 +168,23 @@ fn op_check_reified_args(
             ));
         }
         let common = unsafe { &*(*call).func };
-        for (index, expected) in declaration.value_parameters.iter().enumerate() {
+        let fixed = declaration
+            .value_parameters
+            .len()
+            .saturating_sub(usize::from(common.sig.is_variadic));
+        for index in 0..fixed {
+            let expected = &declaration.value_parameters[index];
             let Some(expected) = expected else {
                 continue;
             };
             if index >= unsafe { (*call).num_args as usize } {
                 continue;
             }
-            let slot = common.sig.this_offset as usize + index;
-            if slot >= unsafe { (*call).num_cvs as usize } {
+            let slot = common.sig.param_cv_index(index as u32);
+            if slot >= unsafe { (*call).num_cvs } {
                 break;
             }
-            let value = unsafe { (*call).cv(slot as u32) };
+            let value = unsafe { (*call).cv(slot) };
             if value.is_undef() {
                 continue;
             }
@@ -198,6 +203,53 @@ fn op_check_reified_args(
                     index + 1,
                     owner
                 )));
+            }
+        }
+        if common.sig.is_variadic
+            && let Some(expected) = declaration
+                .value_parameters
+                .last()
+                .and_then(Option::as_ref)
+        {
+            let public_max = common.sig.public_arity();
+            let extra = unsafe { (*call).num_args }.saturating_sub(public_max);
+            for index in 0..extra {
+                let value = unsafe { &*(*call).cv(common.sig.variadic_cv_index + index) };
+                if !eg.generic_metadata.value_matches_binding(
+                    value,
+                    expected,
+                    binding,
+                    |actual, bound| eg.class_is_a(actual, bound),
+                ) {
+                    let owner = eg
+                        .generic_metadata
+                        .symbol(declaration.owner)
+                        .unwrap_or("?");
+                    return Err(VmError::Fatal(format!(
+                        "Variadic argument #{} passed to {} does not match its reified generic type",
+                        fixed + index as usize + 1,
+                        owner
+                    )));
+                }
+            }
+            if let Some(named) = eg.pending_named_variadic.get(&(call as usize)) {
+                for (name, value) in named {
+                    if !eg.generic_metadata.value_matches_binding(
+                        value,
+                        expected,
+                        binding,
+                        |actual, bound| eg.class_is_a(actual, bound),
+                    ) {
+                        let owner = eg
+                            .generic_metadata
+                            .symbol(declaration.owner)
+                            .unwrap_or("?");
+                        return Err(VmError::Fatal(format!(
+                            "Named variadic argument ${} passed to {} does not match its reified generic type",
+                            name, owner
+                        )));
+                    }
+                }
             }
         }
         eg.activate_reified_binding_scope(frame as usize, call as usize);
