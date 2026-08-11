@@ -701,6 +701,53 @@ class ReverseDiamond { use Pipeline<Cacheable>, Pipeline<Renderable>; }
     );
 }
 
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn diamond_contract_candidates_keep_individual_pseudo_type_scopes() {
+    let output = common::run_php(
+        r#"<?php
+class Envelope<T> {}
+class Root<T> {
+    public Envelope<self<T>> $slot;
+    public function consume(Envelope<self<T>> $value): string { return "root"; }
+}
+trait Consumes<T> {
+    public Envelope<self<T>> $slot;
+    public function consume(Envelope<self<T>> $value): string { return "trait"; }
+}
+class Combined<T> extends Root<T> { use Consumes<T>; }
+$combined = new Combined::<int>();
+echo $combined->consume(new Envelope::<Combined<int>>());
+echo ":" . $combined->consume(new Envelope::<Root<int>>());
+$combined->slot = new Envelope::<Combined<int>>();
+$combined->slot = new Envelope::<Root<int>>();
+echo $combined->slot instanceof Envelope ? ":property" : ":bad";
+"#,
+    );
+    assert_eq!(output, "trait:trait:property");
+
+    let error = common::run_php_expect_error(
+        r#"<?php
+class Envelope<T> {}
+class Root<T> {
+    public function consume(Envelope<self<T>> $value): string { return "root"; }
+}
+trait Consumes<T> {
+    public function consume(Envelope<self<T>> $value): string { return "trait"; }
+}
+class Unrelated<T> {}
+class Combined<T> extends Root<T> { use Consumes<T>; }
+$combined = new Combined::<int>();
+$combined->consume(new Envelope::<Unrelated<int>>());
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("generic") || rendered.contains("reified class type"),
+        "{rendered:?}"
+    );
+}
+
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
 fn statically_proven_erasure_equivalent_turbofish_emits_no_runtime_checks() {

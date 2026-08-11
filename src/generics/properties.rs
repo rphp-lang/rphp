@@ -71,20 +71,22 @@ impl GenericMetadata {
         name: &str,
     ) -> Option<GenericType> {
         if let Some(property) = self.find_instance_property(child, name) {
-            return Some(substitute_generic_parameters(
-                &property.value_type,
-                effective,
-            ));
+            let substituted = substitute_generic_parameters(&property.value_type, effective);
+            return Some(
+                self.resolve_lexical_class_pseudo_types(&substituted, child.owner)
+                    .unwrap_or(GenericType::Never),
+            );
         }
         let inherited = self
-            .ancestor_bindings_from(child, effective)
+            .ancestor_bindings_scoped_from(child, effective)
             .into_iter()
-            .filter_map(|(ancestor, arguments)| {
+            .filter_map(|(ancestor, arguments, scope)| {
                 let property = self.find_instance_property(ancestor, name)?;
-                Some(substitute_generic_parameters(
-                    &property.value_type,
-                    &arguments,
-                ))
+                let substituted = substitute_generic_parameters(&property.value_type, &arguments);
+                Some(
+                    self.resolve_lexical_class_pseudo_types(&substituted, scope)
+                        .unwrap_or(GenericType::Never),
+                )
             })
             .collect::<Vec<_>>();
         (!inherited.is_empty()).then(|| self.merge_generic_union(inherited))

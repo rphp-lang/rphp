@@ -2085,13 +2085,29 @@ and 29 erased-only scenarios, while ordinary method and warmed-turbofish gates
 remain within +0.358% and +3.732% of exact checkpoint `27cb47c` on both
 architectures. No hot layout or native tier changed.
 
+Diamond runtime materialization now carries a lexical scope alongside each
+ancestor binding. Method and property candidates resolve `self`/`parent` to a
+concrete interned owner before the existing deterministic union/intersection
+merge, so the first prototype can no longer donate its scope to later
+branches. Nested traits inherit their nearest class consumer; ordinary
+unscoped graph clients deduplicate the scoped walk back to their previous
+view. Missing or unsupported pseudo state fails closed. A permanent reified
+parent-plus-trait diamond accepts both `Envelope<Root<int>>` and
+`Envelope<Combined<int>>` while rejecting an unrelated nested binding.
+
+Focused coverage is now 37 reified/dual and 29 erased-only scenarios; both
+hosts pass all four production all-target matrices. Exact-checkpoint
+`14a9587` controls are +0.250%/+0.480% for the ordinary method and
++0.044%/+2.906% for warmed turbofish on ARM64/CPU-pinned x86-64. The graph walk
+is kept outside hot callers through a cold non-inlined boundary; no runtime
+layout, dependency, native tier or JIT changed.
+
 `static<T>` remains deliberately open. It needs parser support for the
 reserved `static` token and a real late-static called-scope identity for both
 instance and static calls; aliasing it to lexical `self` would be observably
-wrong. A multi-ancestor diamond containing pseudo-types must likewise retain
-one lexical scope per merged candidate instead of selecting the first
-prototype. This and omitted dynamic default parameter values must close before
-the hard generics-aware JIT gate.
+wrong. Multi-ancestor pseudo-type scopes are now closed; omitted dynamic
+default parameter values and `static<T>` must still close before the hard
+generics-aware JIT gate.
 
 The remaining semantic audit includes omitted default parameter values. They
 are materialized inside the callee after the pre-call reified check, so this

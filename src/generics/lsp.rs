@@ -1,7 +1,7 @@
 use super::link::substitute_generic_parameters;
 use super::{
-    GenericDeclaration, GenericMetadata, GenericMethodMetadata, GenericSymbol, GenericType,
-    GenericVariance,
+    GenericDeclaration, GenericDeclarationKind, GenericMetadata, GenericMethodMetadata,
+    GenericSymbol, GenericType, GenericVariance,
 };
 
 impl GenericMetadata {
@@ -50,23 +50,61 @@ impl GenericMetadata {
         self.ancestor_bindings_from(child, &identity)
     }
 
+    pub(super) fn ancestor_bindings_scoped<'a>(
+        &'a self,
+        child: &'a GenericDeclaration,
+    ) -> Vec<(&'a GenericDeclaration, Vec<GenericType>, GenericSymbol)> {
+        let identity = (0..child.parameters.len())
+            .map(|index| GenericType::Parameter(index as u8))
+            .collect::<Vec<_>>();
+        self.ancestor_bindings_scoped_from(child, &identity)
+    }
+
     pub(super) fn ancestor_bindings_from<'a>(
         &'a self,
         child: &'a GenericDeclaration,
         binding: &[GenericType],
     ) -> Vec<(&'a GenericDeclaration, Vec<GenericType>)> {
+        let mut seen = Vec::new();
+        self.ancestor_bindings_scoped_from(child, binding)
+            .into_iter()
+            .filter_map(|(ancestor, binding, _scope)| {
+                let key = (ancestor.owner, binding.clone());
+                (!seen.contains(&key)).then(|| {
+                    seen.push(key);
+                    (ancestor, binding)
+                })
+            })
+            .collect()
+    }
+
+    /// Compose ancestor bindings while retaining the lexical class scope of
+    /// every path. A trait consumes the nearest non-trait owner; nested traits
+    /// inherit that consumer. Keeping scope in the identity is essential for
+    /// diamonds where the same declaration/binding is reached through two
+    /// different consuming classes.
+    #[cold]
+    #[inline(never)]
+    pub(super) fn ancestor_bindings_scoped_from<'a>(
+        &'a self,
+        child: &'a GenericDeclaration,
+        binding: &[GenericType],
+    ) -> Vec<(&'a GenericDeclaration, Vec<GenericType>, GenericSymbol)> {
         let mut result = Vec::new();
         let mut seen = Vec::new();
-        self.collect_ancestor_bindings(child, binding, &mut seen, &mut result);
+        self.collect_ancestor_bindings_scoped(child, binding, child.owner, &mut seen, &mut result);
         result
     }
 
-    fn collect_ancestor_bindings<'a>(
+    #[cold]
+    #[inline(never)]
+    fn collect_ancestor_bindings_scoped<'a>(
         &'a self,
         current: &'a GenericDeclaration,
         current_binding: &[GenericType],
-        seen: &mut Vec<(GenericSymbol, Vec<GenericType>)>,
-        result: &mut Vec<(&'a GenericDeclaration, Vec<GenericType>)>,
+        current_scope: GenericSymbol,
+        seen: &mut Vec<(GenericSymbol, Vec<GenericType>, GenericSymbol)>,
+        result: &mut Vec<(&'a GenericDeclaration, Vec<GenericType>, GenericSymbol)>,
     ) {
         for inheritance in self
             .inheritances
@@ -84,15 +122,23 @@ impl GenericMetadata {
                 .iter()
                 .map(|argument| substitute_generic_parameters(argument, current_binding))
                 .collect::<Vec<_>>();
-            if seen
-                .iter()
-                .any(|(owner, arguments)| *owner == ancestor.owner && *arguments == binding)
-            {
+            let scope = if ancestor.kind == GenericDeclarationKind::Trait {
+                if current.kind == GenericDeclarationKind::Trait {
+                    current_scope
+                } else {
+                    current.owner
+                }
+            } else {
+                ancestor.owner
+            };
+            if seen.iter().any(|(owner, arguments, candidate_scope)| {
+                *owner == ancestor.owner && *arguments == binding && *candidate_scope == scope
+            }) {
                 continue;
             }
-            seen.push((ancestor.owner, binding.clone()));
-            result.push((ancestor, binding.clone()));
-            self.collect_ancestor_bindings(ancestor, &binding, seen, result);
+            seen.push((ancestor.owner, binding.clone(), scope));
+            result.push((ancestor, binding.clone(), scope));
+            self.collect_ancestor_bindings_scoped(ancestor, &binding, scope, seen, result);
         }
     }
 

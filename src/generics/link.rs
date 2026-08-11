@@ -74,8 +74,8 @@ impl GenericMetadata {
                 } else {
                     ancestor_declaration.owner
                 };
-                let actual = self.resolve_inheritance_pseudo_types(&actual, inheritance.owner);
-                let bound = self.resolve_inheritance_pseudo_types(&bound, bound_scope);
+                let actual = self.resolve_lexical_class_pseudo_types(&actual, inheritance.owner);
+                let bound = self.resolve_lexical_class_pseudo_types(&bound, bound_scope);
                 let satisfies = actual.zip(bound).is_some_and(|(actual, bound)| {
                     let current_owner_is_a = |actual: &str, bound: &str| {
                         class_is_a(actual, bound)
@@ -131,7 +131,8 @@ impl GenericMetadata {
             .any(|ancestor| ancestor.eq_ignore_ascii_case(bound) || class_is_a(ancestor, bound))
     }
 
-    fn resolve_inheritance_pseudo_types(
+    #[inline(never)]
+    pub(super) fn resolve_lexical_class_pseudo_types(
         &self,
         value: &GenericType,
         scope: GenericSymbol,
@@ -158,25 +159,25 @@ impl GenericMetadata {
                     name: resolved,
                     arguments: arguments
                         .iter()
-                        .map(|argument| self.resolve_inheritance_pseudo_types(argument, scope))
+                        .map(|argument| self.resolve_lexical_class_pseudo_types(argument, scope))
                         .collect::<Option<Vec<_>>>()?
                         .into_boxed_slice(),
                 })
             }
             GenericType::Nullable(inner) => Some(GenericType::Nullable(Box::new(
-                self.resolve_inheritance_pseudo_types(inner, scope)?,
+                self.resolve_lexical_class_pseudo_types(inner, scope)?,
             ))),
             GenericType::Union(parts) => Some(GenericType::Union(
                 parts
                     .iter()
-                    .map(|part| self.resolve_inheritance_pseudo_types(part, scope))
+                    .map(|part| self.resolve_lexical_class_pseudo_types(part, scope))
                     .collect::<Option<Vec<_>>>()?
                     .into_boxed_slice(),
             )),
             GenericType::Intersection(parts) => Some(GenericType::Intersection(
                 parts
                     .iter()
-                    .map(|part| self.resolve_inheritance_pseudo_types(part, scope))
+                    .map(|part| self.resolve_lexical_class_pseudo_types(part, scope))
                     .collect::<Option<Vec<_>>>()?
                     .into_boxed_slice(),
             )),

@@ -8845,12 +8845,36 @@ ARM64 pairs put the ordinary generic method at -0.019% and warmed turbofish at
 and -0.797%. This is cold link work: no runtime layout, dependency, JIT or
 native lowering changed.
 
+Multi-ancestor runtime contracts now keep one lexical scope with every
+composed ancestor binding until that candidate has been substituted, erased
+and had `self`/`parent` resolved. Only the resulting concrete type enters the
+deterministic union/intersection merge. A trait reached directly or through
+another trait retains its nearest non-trait consumer, while class and
+interface candidates keep their declaration scope. The same scoped traversal
+feeds inherited methods and properties; the previous unscoped Reflection/LSP
+view is deduplicated after traversal and remains source-order compatible.
+Unsupported or invalid pseudo state fails closed as `never` instead of
+borrowing another diamond branch's scope.
+
+Permanent reified coverage combines a generic parent and overriding generic
+trait whose nested `Envelope<self<T>>` inputs must accept both independently
+scoped branches and reject an unrelated branch. Focused generic coverage is
+now 37 reified/dual and 29 erased-only scenarios. Both hosts pass all four
+production `--all-targets` configurations. Against exact checkpoint
+`14a9587`, final balanced controls put the ordinary method at +0.250% ARM64
+(40 pairs) and +0.480% CPU-2-pinned x86-64 (20 pairs); warmed inherited
+turbofish is +0.044% ARM64 (20 pairs) and +2.906% x86-64 (40 pairs), below its
+five-percent ceiling. The recursive graph walk is explicitly cold and
+non-inlined, while the small resolver stays non-inlined without forcing a
+separate cold section. No hot representation, dependency, JIT or native tier
+changed.
+
 This checkpoint does not implement `static<T>` by treating it as `self<T>`.
 Correct support requires the reserved-token parser path plus late-static
 called-scope state, including static calls and post-return checks. Pseudo-types
-in a diamond also need a scope per merged candidate. That semantic item and
-omitted dynamic defaults precede JIT work; neither may be papered over by a
-native specialization.
+in a diamond are now closed. Omitted dynamic defaults and real `static<T>`
+semantics still precede JIT work; neither may be papered over by a native
+specialization.
 
 Omitted PHP default parameter values remain an explicit semantic follow-up.
 They are assigned by callee bytecode after the current pre-call reified
