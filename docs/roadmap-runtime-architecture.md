@@ -2512,10 +2512,23 @@ trait ownership rule off ordinary dispatch while supporting bound validation,
 reified argument tuples, namespaces, inheritance and forwarding `static`
 return contracts for `self::...::<...>` and `parent::...::<...>`.
 
-General `static::` call expressions remain a parser/runtime dispatch milestone
-before the RFC turbofish form can be enabled on that owner. The future call
-site must key dispatch by late-called class; it must not lower `static` to the
-lexical owner or reuse the trait exception as a general cache policy.
+General `static::method()` and RFC `static::method::<...>()` call expressions
+are implemented as a separate late-bound dispatch path. Their dedicated call
+and generic-check opcodes key warmed metadata by the runtime called class,
+while explicit, `self` and `parent` sites retain their existing monomorphic hot
+path. Overrides, inherited bodies and shared traits therefore rekey without
+allowing one called class to publish a target or generic declaration for
+another.
+
+The called-class scope is carried without growing `CallPlan`, `ExecuteData` or
+`Value`: participating compact frames use the otherwise unused upper half of
+their existing heap bitmap, and wide frames fall back to the existing sparse
+executor sidecar. Closures and arrows capture the scope explicitly so escaped
+calls retain PHP late-static semantics. Ordinary `static::method()` remains
+available with both generic syntax flags off; only turbofish syntax is gated.
+Late-static property and constant access remain separate compatibility slices.
+Generic-specific JIT specialization stays deferred until the language/runtime
+surface is complete, as required by the generics phase order.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

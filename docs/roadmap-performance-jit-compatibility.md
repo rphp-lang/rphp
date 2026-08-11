@@ -9459,13 +9459,36 @@ trait resolution out of both ordinary cache hits. Default, erased, reified
 and all-feature all-target matrices pass on both architectures, with no
 external dependency, hot layout or JIT backend change.
 
-The remaining RFC static pseudo-owner item is `static::method::<...>()`.
-RPHP's general expression parser does not yet accept `static::` calls, so that
-must be implemented as a base PHP call-form slice before generics can attach
-type arguments to it; it must preserve late-static dispatch and use a
-called-class-keyed cache. Attribute and property-hook generic use sites stay
-behind their corresponding general PHP surface rather than bypassing it in
-the generics parser.
+Late-static call checkpoint (2026-08-11): the base PHP
+`static::method()` form and RFC `static::method::<...>()` form now share a
+dedicated late-bound call path. Separate call and generic-check opcodes keep
+their inline caches keyed by the runtime called class; warmed explicit,
+`self` and `parent` calls retain their existing opcodes and cache hits.
+Inheritance alternation, selected overrides, bounds, shared traits, forwarding
+return contracts and erased/reified metadata therefore resolve against the
+same called class without cross-class cache publication.
+
+Static methods carry the called scope through participating frames without
+growing `CallPlan`, `ExecuteData` or `Value`. Compact frames embed the class ID
+in the unused upper half of the heap-ownership bitmap, wide frames use the
+existing sparse sidecar, and cleanup masks embedded metadata from ownership
+bits. Closures and arrows capture and republish this scope, including after
+escaping the creating method. With both syntax flags off, ordinary late-static
+calls remain accepted while turbofish is rejected at the parser boundary.
+Late-static properties/constants, attributes and property-hook use sites stay
+behind their corresponding general PHP surfaces.
+
+The dependency-free static pseudo gate now measures three lanes. Forty
+balanced max-perf pairs record ordinary `static::` versus `self::` movement of
++3.266%/+2.309% on ARM64 and +1.072%/+0.781% on CPU-2-pinned x86-64 in
+erased/reified mode. Generic late-static versus generic self moves
+-0.375%/+0.327% and +0.794%/-0.406%; the established generic
+`self`/explicit-owner control moves -0.078%/-0.002% and -0.456%/-0.356%.
+Every lane remains inside its five-percent admission ceiling. Default, erased,
+reified and all-feature test matrices plus all-feature/all-target checks pass
+on both hosts. No external dependency or JIT backend path was added, and
+generic-specific JIT optimization remains the final step after the runtime
+surface is developed.
 
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
