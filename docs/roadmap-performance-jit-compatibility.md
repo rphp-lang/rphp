@@ -9301,6 +9301,33 @@ same-object capture, transactional overflow replay and canonical reified
 mismatch. No crate, native operation or backend-specific generic path was
 added.
 
+Mixed object/property regions now retain fused conditional updates as well.
+`QuickLongOp::ConditionalAddAssign` expands during target-neutral region
+construction into the existing `BranchUnless` plus checked `BinaryAssign`
+operations. Admission requires the encoded false edge to be the immediately
+following quick operation and rejects result aliases that would make the
+unmaterialized condition temporary observable. Thus neither native backend,
+the persistent quick representation nor generic metadata gains a new form.
+
+The false edge skips the checked update inside the same region. If that update
+overflows, the existing operation-granular side exit publishes the already
+completed property-call prefix and resumes at the assignment boundary, so the
+preceding composed call is not executed twice. Permanent coverage proves one
+native entry with multiple safepoint chunks and no normal side exit, plus an
+exact-final overflow that preserves all 100,000 earlier composed property
+calls before canonical arithmetic replay.
+
+Against exact checkpoint `21a4af8`, 40 balanced max-perf pairs improve the new
+ten-million-iteration generic conditional-property workload by 98.970%
+erased and 99.869% reified on ARM64, and by 98.974%/99.821% on CPU-2-pinned
+x86-64. Its ordinary-signature control improves by 90.417%/90.328% on ARM64
+and 94.087%/94.031% on x86-64 because it shares the same lowering. Unchanged
+composed-property and scalar-method controls remain below the one-percent
+regression gate; an initially noisy ARM64 reified lane falls from +1.255% to
++0.470% in a 200-pair rerun, and the largest remaining positive lane is
++0.597%. Focused generic JIT coverage is now 16 erased and 26 reified
+scenarios. No dependency was added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

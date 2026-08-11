@@ -2406,6 +2406,32 @@ movements are improvements. Default, erased, reified and all-feature
 all-target matrices pass on ARM64 and x86-64, including 14 erased and 24
 reified generic JIT scenarios. No dependency was added.
 
+The mixed object/property kernel now admits its compiler-fused conditional
+addition without introducing a conditional-specific backend path. The region
+builder validates that `ConditionalAddAssign` branches directly to the next
+quick operation, emits the existing `BranchUnless`, and follows it with the
+existing checked Long `BinaryAssign`. The branch target is resolved through
+the operation-count map after both native operations are appended. Dead
+condition temporaries remain unmaterialized, while observable post-value
+aliases conservatively reject the region.
+
+This keeps a composed property call and its conditional scalar update in one
+native region. A false predicate skips only the update. Checked overflow uses
+the established side-exit resume IP: completed property shadows and call
+counters are published once, then the canonical assignment reports the
+arithmetic failure without replaying the preceding call. Tests cover the
+normal one-entry/multi-chunk path and exact-final overflow; focused generic JIT
+coverage grows from 14/24 to 16/26 erased/reified scenarios.
+
+Against exact checkpoint `21a4af8`, 40 balanced max-perf pairs improve the new
+generic conditional-property workload by 98.970%/99.869% on ARM64 and
+98.974%/99.821% on CPU-2-pinned x86-64 in erased/reified mode. Its ordinary
+typed control improves by 90.417%/90.328% and 94.087%/94.031%. Unchanged
+composed-property and scalar-method controls stay within the one-percent gate
+on both hosts and modes; the largest measured positive movement is +0.597%.
+No operation layout, backend representation, generic hot-loop check or
+dependency was added.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

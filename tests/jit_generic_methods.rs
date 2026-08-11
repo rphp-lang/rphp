@@ -758,6 +758,92 @@ echo genericComposedPropertyTotal(
 }
 
 #[test]
+fn generic_composed_property_with_conditional_update_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericConditionalPropertySource<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+class GenericConditionalPropertyTarget<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function add(T $value): void { $this->total = $this->total + $value; }
+}
+function genericConditionalPropertyTotal($target, $source) {
+    $selected = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $target->add($source->current());
+        if (($i % 2) == 0) {
+            $selected += $i;
+        }
+    }
+    return $i . ':' . $target->total . ':' . $selected;
+}
+echo genericConditionalPropertyTotal(
+    new GenericConditionalPropertyTarget::<int>(0),
+    new GenericConditionalPropertySource::<int>(7)
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:700000:2499950000");
+
+    let plan = generic_composed_property_ops_plan(&functions, "genericConditionalPropertyTotal");
+    assert!(
+        plan.ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::ConditionalAddAssign { .. }))
+    );
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn generic_conditional_overflow_keeps_prior_composed_property_call() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericConditionalOverflowSource<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+class GenericConditionalOverflowTarget<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function add(T $value): void { $this->total = $this->total + $value; }
+}
+function genericConditionalOverflow($target, $source) {
+    $selected = 9223372036854725808;
+    $one = 1;
+    for ($i = 0; $i < 100000; $i++) {
+        $target->add($source->current());
+        if (($i % 2) == 0) {
+            $selected += $one;
+        }
+    }
+    return $target->total;
+}
+echo genericConditionalOverflow(
+    new GenericConditionalOverflowTarget::<int>(0),
+    new GenericConditionalOverflowSource::<int>(1)
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000");
+
+    let plan = generic_composed_property_ops_plan(&functions, "genericConditionalOverflow");
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 1);
+}
+
+#[test]
 fn generic_composed_property_call_captures_same_object_getter_before_mutation() {
     let (_, functions, result, output) = compile_and_execute(
         r#"<?php

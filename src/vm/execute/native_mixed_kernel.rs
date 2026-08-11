@@ -728,6 +728,57 @@ unsafe fn native_quick_long_mixed_kernel(
                     add_resume_ip,
                 )?;
             }
+            QuickLongOp::ConditionalAddAssign {
+                condition,
+                lhs,
+                rhs,
+                result,
+                destination,
+                next_target,
+                condition_resume_ip,
+                add_resume_ip,
+                ..
+            } => {
+                if next_target.op_index() != Some(plan_index + 1)
+                    || result == post_value
+                    || destination == post_value
+                {
+                    return None;
+                }
+                let (kind, condition_lhs, condition_rhs) = match condition {
+                    QuickLongCondition::Lt { lhs, rhs } => {
+                        (ScalarLongConditionKind::LessThan, lhs, rhs)
+                    }
+                    QuickLongCondition::Eq { lhs, rhs } => {
+                        (ScalarLongConditionKind::Equal, lhs, rhs)
+                    }
+                };
+                let branch = builder.append(
+                    NativeStraightLongOperation::BranchUnless {
+                        kind,
+                        lhs: NativeStraightLongConditionOperand::Source(
+                            QuickLongOperand::Slot(condition_lhs),
+                        ),
+                        rhs: NativeStraightLongConditionOperand::Source(condition_rhs),
+                        false_target: 0,
+                    },
+                    condition_resume_ip,
+                )?;
+                // The fused quick operation represents a forward branch over
+                // the checked update. Its false edge begins at the next quick
+                // operation, after both native operations appended here.
+                pending_branches.push((branch, plan_index + 1));
+                builder.append(
+                    NativeStraightLongOperation::BinaryAssign {
+                        kind: ScalarLongOpKind::Add,
+                        lhs: QuickLongOperand::Slot(lhs),
+                        rhs: QuickLongOperand::Slot(rhs),
+                        result,
+                        destination,
+                    },
+                    add_resume_ip,
+                )?;
+            }
             QuickLongOp::AddAddAssign {
                 first_lhs,
                 first_rhs,
