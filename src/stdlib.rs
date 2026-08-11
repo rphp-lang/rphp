@@ -1168,24 +1168,42 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     #[cfg(feature = "value-errors")]
     funcs.extend(register_value_error(eg));
 
-    // Generator class — implements Iterator
-    eg.register_class(ClassDef {
-        name: "Generator".to_string(),
-        parent: None,
-        implements: vec![],
-        is_interface: false,
-        is_abstract: false,
-        is_final: false,
-        is_trait: false,
-        is_enum: false,
-        uses: vec![],
-        properties: vec![],
-        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
-        property_defaults: std::rc::Rc::from([]),
-        readonly_props: vec![],
-        methods: vec![],
-        class_id: 0,
-    })
+    let empty_internal_type =
+        |name: &str, implements: Vec<String>, is_interface: bool, is_final: bool| ClassDef {
+            name: name.to_string(),
+            parent: None,
+            implements,
+            is_interface,
+            is_abstract: false,
+            is_final,
+            is_trait: false,
+            is_enum: false,
+            uses: vec![],
+            properties: vec![],
+            property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+            property_defaults: std::rc::Rc::from([]),
+            readonly_props: vec![],
+            methods: vec![],
+            class_id: 0,
+        };
+
+    // Canonical iterator hierarchy used by generator return contracts,
+    // instanceof and the iterable pseudo-type.
+    eg.register_class(empty_internal_type("Traversable", vec![], true, false))
+        .unwrap();
+    eg.register_class(empty_internal_type(
+        "Iterator",
+        vec!["Traversable".to_string()],
+        true,
+        false,
+    ))
+    .unwrap();
+    eg.register_class(empty_internal_type(
+        "Generator",
+        vec!["Iterator".to_string()],
+        false,
+        true,
+    ))
     .unwrap();
 
     // Generator methods: $this is CV 0
@@ -3398,9 +3416,26 @@ fn ensure_generator_started(
     use crate::vm::generator::GeneratorState;
     let state = gen_ref.borrow().state;
     if state == GeneratorState::Created {
-        crate::vm::execute::resume_generator(eg, gen_ref, Value::null())?;
+        resume_generator_method(eg, gen_ref, Value::null())?;
     }
     Ok(())
+}
+
+/// Generator methods execute as internal calls. Preserve an escaped PHP
+/// exception in the standard executor sidecar so `execute_full_call` can
+/// inject it into the user caller after the handler returns.
+fn resume_generator_method(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    send_value: Value,
+) -> Result<(), VmError> {
+    match crate::vm::execute::resume_generator(eg, gen_ref, send_value)? {
+        crate::vm::execute::GeneratorResumeOutcome::Advanced => Ok(()),
+        crate::vm::execute::GeneratorResumeOutcome::Threw(exception) => {
+            eg.exception = Some(exception);
+            Ok(())
+        }
+    }
 }
 
 fn fn_generator_current(
@@ -3444,7 +3479,7 @@ fn fn_generator_next(
         // Advance past current yield
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Suspended {
-            crate::vm::execute::resume_generator(eg, &gen_ref, Value::null())?;
+            resume_generator_method(eg, &gen_ref, Value::null())?;
         }
     }
     ret!(rv, Value::null());
@@ -3488,14 +3523,14 @@ fn fn_generator_send(
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Created {
             // Start generator — runs to first yield, sets up send_target
-            crate::vm::execute::resume_generator(eg, &gen_ref, Value::null())?;
+            resume_generator_method(eg, &gen_ref, Value::null())?;
             // Now resume with the actual send value (if still suspended)
             let state2 = gen_ref.borrow().state;
             if state2 == crate::vm::generator::GeneratorState::Suspended {
-                crate::vm::execute::resume_generator(eg, &gen_ref, send_val)?;
+                resume_generator_method(eg, &gen_ref, send_val)?;
             }
         } else if state == crate::vm::generator::GeneratorState::Suspended {
-            crate::vm::execute::resume_generator(eg, &gen_ref, send_val)?;
+            resume_generator_method(eg, &gen_ref, send_val)?;
         }
 
         // Return current yielded value

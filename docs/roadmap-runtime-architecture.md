@@ -2126,16 +2126,41 @@ otherwise identical explicit-argument generic call, approximately 21.9 ns and
 28.1 ns per required substituted guard; this is reported as semantic work, not
 an ordinary-path regression.
 
+The explicitly typed generator completion debt is now closed. A detached
+resume returns either normal advancement or an escaped PHP exception; the
+caller reinjects the latter into `foreach`, an internal `Generator` method or
+the suspended outer `yield from` frame. Every failure atomically closes the
+generator, clears its public current value/key and reclaims the complete
+detached frame chain. Normal yield and return reclaim their materialized frame
+as well, removing the previous bump-stack growth. One materialization helper
+now owns CV/TMP restoration for ordinary resume, delegated completion and
+delegated exception instead of three copies.
+
+A generator function's declared return contract is checked against the
+created `Generator` object through the canonical `Generator -> Iterator ->
+Traversable` hierarchy (including `iterable`, `object`, nullable and compound
+forms). Its internal `return` expression is deliberately independent and is
+exposed only by `Generator::getReturn()`. Permanent coverage now exercises
+functions, methods, closures, pre/post-yield exceptions, `foreach`, `next()`
+and nested `yield from` recovery. The generator suite has 30 scenarios and the
+frame-cleanup suite has 25. Against exact checkpoint `294307d`, 40 balanced
+release pairs over 200,000 scalar yields improve detached resume throughput by
+5.733% and 5.202% in two consecutive ARM64 runs. The latter has candidate
+medians 0.012463/0.012571 seconds versus baseline 0.013160/0.013247 seconds.
+CPU-2-pinned x86-64 independently improves by 30.377% and 31.171%; the latter
+has candidate medians 0.016495/0.016552 seconds versus baseline
+0.024031/0.023982 seconds. The gate is dependency-free and deliberately uses
+an untyped generator so the old binary completes identical work rather than
+entering the corrected typed-completion loop. Both hosts pass all four
+production all-targets matrices.
+
 `static<T>` remains deliberately open. It needs parser support for the
 reserved `static` token and a real late-static called-scope identity for both
 instance and static calls; aliasing it to lexical `self` would be observably
-wrong. The next runtime audit also starts with the pre-existing explicitly
-typed generator/`foreach` completion loop found while validating generator
-sidecar lifetime. Generics-aware JIT specialization remains deliberately last:
-no JIT work starts until those parser/runtime semantics and the complete
-acceptance matrix are closed, after which it must consume canonical metadata
-with exact guards and deoptimization back to the established erased/reified
-paths.
+wrong. Generics-aware JIT specialization remains deliberately last: no JIT
+work starts until those parser/runtime semantics and the complete acceptance
+matrix are closed, after which it must consume canonical metadata with exact
+guards and deoptimization back to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

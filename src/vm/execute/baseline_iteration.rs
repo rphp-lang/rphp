@@ -1,12 +1,12 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
 #[inline(never)]
-fn op_foreach_init(
+fn op_foreach_init<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<bool, VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     // Check for Generator object
@@ -22,7 +22,11 @@ fn op_foreach_init(
         {
             let state = gen_ref.borrow().state;
             if state == crate::vm::generator::GeneratorState::Created {
-                resume_generator(eg, &gen_ref, Value::null())?;
+                let outcome = resume_generator(eg, &gen_ref, Value::null())?;
+                match generator_resume_result(eg, frame, outcome) {
+                    ColdResult::Done => {}
+                    control => return Ok(control),
+                }
             }
         }
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
@@ -30,7 +34,7 @@ fn op_foreach_init(
             let target = opline.op2 as usize;
             let base_ptr = op_array.instructions.as_ptr();
             unsafe { (*frame).opline = base_ptr.add(target) };
-            return Ok(true); // continue
+            return Ok(ColdResult::Continue);
         }
         // Store generator object in result TMP
         let cloned = arr_val.clone();
@@ -61,7 +65,7 @@ fn op_foreach_init(
             let target = opline.op2 as usize;
             let base_ptr = op_array.instructions.as_ptr();
             unsafe { (*frame).opline = base_ptr.add(target) };
-            return Ok(true); // continue
+            return Ok(ColdResult::Continue);
         }
         // Copy array to result TMP
         let cloned = arr_val.clone();
@@ -71,16 +75,16 @@ fn op_foreach_init(
         let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
         unsafe { slot_set(pos_ptr, Value::long(0)) };
     }
-    Ok(false)
+    Ok(ColdResult::Done)
 }
 
 #[inline(never)]
-fn op_foreach_next(
+fn op_foreach_next<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let val_cv = (opline.extended_value & 0xFFFF) as u32;
     let key_encoded = (opline.extended_value >> 16) as u32;
 
@@ -102,7 +106,11 @@ fn op_foreach_next(
         if pos > 0 {
             let state = gen_ref.borrow().state;
             if state == crate::vm::generator::GeneratorState::Suspended {
-                resume_generator(eg, &gen_ref, Value::null())?;
+                let outcome = resume_generator(eg, &gen_ref, Value::null())?;
+                let control = generator_resume_result(eg, frame, outcome);
+                if !matches!(control, ColdResult::Done) {
+                    return Ok(control);
+                }
             }
         }
 
@@ -162,7 +170,23 @@ fn op_foreach_next(
 
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     unsafe { slot_set(result_ptr, Value::bool(has_more)) };
-    Ok(())
+    Ok(ColdResult::Done)
+}
+
+fn generator_resume_result<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    outcome: GeneratorResumeOutcome,
+) -> ColdResult<'a> {
+    match outcome {
+        GeneratorResumeOutcome::Advanced => ColdResult::Done,
+        GeneratorResumeOutcome::Threw(exception) => match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+        },
+    }
 }
 
 #[inline(never)]
@@ -255,9 +279,20 @@ fn op_yield_from<'a>(
                     {
                         let inner_state: GeneratorState = inner_gen_ref.borrow().state;
                         if inner_state == GeneratorState::Created {
-                            eg.active_generator = Some(gen_ref.clone());
-                            drop(eg.active_generator.take());
-                            resume_generator(eg, &inner_gen_ref, Value::null())?;
+                            match resume_generator(eg, &inner_gen_ref, Value::null())? {
+                                GeneratorResumeOutcome::Advanced => {}
+                                GeneratorResumeOutcome::Threw(exception) => {
+                                    eg.active_generator = Some(gen_ref);
+                                    return Ok(match throw_in_frame(eg, frame, exception) {
+                                        ThrowResult::Handled(new_frame, new_op_array) => {
+                                            ColdResult::NewFrame(new_frame, new_op_array)
+                                        }
+                                        ThrowResult::Unhandled(exception) => {
+                                            ColdResult::Unhandled(exception)
+                                        }
+                                    });
+                                }
+                            }
                         }
                     }
 
@@ -396,4 +431,3 @@ fn op_yield_from<'a>(
         return Err(VmError::Fatal("yield from outside generator".into()));
     }
 }
-

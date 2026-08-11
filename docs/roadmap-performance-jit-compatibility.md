@@ -8908,6 +8908,29 @@ checking it, is retained only as the structural baseline; the new delta is real
 semantics. A dependency-free gate script records omitted, explicit, manually
 typed, ordinary-method and turbofish lanes independently.
 
+Detached generator resume now has one explicit ownership boundary. The
+executor reports an escaped PHP exception as an outcome rather than leaving a
+`Running` generator plus a sidecar exception behind; `foreach`, internal
+Generator methods and nested `yield from` reinject it into their live frame.
+All normal and exceptional resumes reclaim the detached frame chain after its
+CV/TMP snapshot has been saved, eliminating the previous bump-stack growth.
+The same materializer serves direct resume and both delegated completion
+paths. A declared generator return type is validated against the created
+Generator object through its Iterator/Traversable hierarchy; the internal
+return value remains exclusively `getReturn()` data.
+
+The permanent dependency-free generator gate uses 200,000 scalar yields in an
+untyped declaration so exact checkpoint `294307d` completes the same workload
+instead of reproducing its typed infinite loop. Two consecutive 40-pair ARM64
+runs are 5.733% and 5.202% faster; the latter records candidate medians
+0.012463/0.012571 seconds versus baseline 0.013160/0.013247 seconds. Two
+CPU-2-pinned x86-64 runs independently improve by 30.377% and 31.171%; the
+latter records 0.016495/0.016552 seconds versus 0.024031/0.023982 seconds. The
+result admits the lifecycle refactor without hiding correctness inside a
+benchmark timeout. Generator coverage is 30 scenarios and frame cleanup
+coverage is 25; both hosts pass the default, erased, reified and dual
+production all-targets matrices. No dependency, native tier or JIT changed.
+
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked
 arguments before the body; the property-initializer fast path proves both

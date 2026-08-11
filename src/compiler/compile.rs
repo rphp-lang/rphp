@@ -1974,7 +1974,9 @@ impl Compiler {
             Some(TypeHint::ClassName(name)) => {
                 // `self` and `parent` are special PHP pseudo-types — don't resolve through namespaces
                 match name.as_str() {
-                    "self" | "parent" | "static" => ParamTypeHint::ClassName(name.clone()),
+                    "self" | "parent" | "static" | "object" | "iterable" => {
+                        ParamTypeHint::ClassName(name.clone())
+                    }
                     _ => ParamTypeHint::ClassName(self.resolve_name(name)),
                 }
             }

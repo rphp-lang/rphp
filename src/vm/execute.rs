@@ -226,6 +226,12 @@ fn check_type_hint(
             matches!(val.value_type(), ValueType::String | ValueType::Array)
         }
         ParamTypeHint::ClassName(class_name) => {
+            if class_name.eq_ignore_ascii_case("iterable") {
+                return val.as_array().is_some()
+                    || val
+                        .as_object()
+                        .is_some_and(|object| eg.class_is_a(&object.class_name, "Traversable"));
+            }
             if let Some(obj) = val.as_object() {
                 if class_name.eq_ignore_ascii_case("object") {
                     return true;
@@ -1722,13 +1728,42 @@ fn execute_full_call<'a>(
                 let gen_ref = new_generator_ref(generator);
                 let mut gen_obj = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
                 gen_obj.generator = Some(gen_ref);
+                let generator_value = Value::object(gen_obj);
+                let return_hint = &func_common.sig.return_type_hint;
+                if !check_type_hint(
+                    &generator_value,
+                    return_hint,
+                    eg,
+                    op_array.strict_types,
+                    callee_class_ref,
+                ) {
+                    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+                    eg.discard_generic_member_call(call as usize);
+                    #[cfg(feature = "php-generics-reified")]
+                    eg.discard_active_reified_binding_scope(call as usize);
+                    unsafe { cleanup_frame_slots(call) };
+                    eg.vm_stack.pop_call_frame(call);
+                    let error = make_error_value(
+                        "TypeError",
+                        &format!(
+                            "Generator return type must be a supertype of Generator, {} given",
+                            return_hint.display_name()
+                        ),
+                    );
+                    return Ok(match throw_in_frame(eg, frame, error) {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            ColdResult::NewFrame(new_frame, new_op_array)
+                        }
+                        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                    });
+                }
                 if !return_value_ptr.is_null() {
                     unsafe {
                         frame_result_set(
                             frame,
                             return_value_ptr,
                             opline.result_type,
-                            Value::object(gen_obj),
+                            generator_value,
                         )
                     };
                 }

@@ -143,6 +143,185 @@ echo $g->getReturn();
     );
 }
 
+#[test]
+fn test_typed_generator_completion_and_internal_return_value() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function typedValues(): Generator {
+    yield 1;
+    return 7;
+}
+class TypedGeneratorFactory {
+    public function values(): Generator {
+        yield 2;
+    }
+}
+$closure = function (): Generator {
+    yield 3;
+};
+$generator = typedValues();
+foreach ($generator as $value) { echo $value; }
+echo ":" . $generator->getReturn() . ":";
+foreach ((new TypedGeneratorFactory())->values() as $value) { echo $value; }
+echo ":";
+foreach ($closure() as $value) { echo $value; }
+"#
+        ),
+        "1:7:2:3"
+    );
+}
+
+#[test]
+fn test_generator_return_contract_uses_iterator_hierarchy() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function traversableValues(): Traversable { yield 1; }
+function iteratorValues(): Iterator { yield 2; }
+function iterableValues(): iterable { yield 3; }
+function objectValues(): object { yield 4; }
+function nullableValues(): ?Generator { yield 5; }
+function consume(iterable $values): string {
+    $result = "";
+    foreach ($values as $value) { $result .= $value; }
+    return $result;
+}
+$generator = traversableValues();
+echo ($generator instanceof Iterator ? "i" : "x");
+echo ($generator instanceof Traversable ? "t" : "x");
+echo consume($generator);
+echo consume(iteratorValues());
+echo consume(iterableValues());
+echo consume(objectValues());
+echo consume(nullableValues());
+echo consume([6]);
+"#
+        ),
+        "it123456"
+    );
+
+    use common::run_php_expect_error;
+    let error = run_php_expect_error(
+        r#"<?php
+function invalidGenerator(): int { yield 1; }
+invalidGenerator();
+"#,
+    );
+    let rendered = format!("{error:?}");
+    assert!(
+        rendered.contains("Generator return type must be a supertype of Generator")
+            && rendered.contains("int"),
+        "{rendered}"
+    );
+}
+
+#[test]
+fn test_generator_exception_closes_and_reaches_foreach_caller() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function failingValues() {
+    yield 1;
+    throw new Exception("boom");
+}
+$generator = failingValues();
+try {
+    foreach ($generator as $value) { echo $value; }
+} catch (Throwable $error) {
+    echo ":" . $error->getMessage() . ":";
+}
+echo $generator->valid() ? "open" : "closed";
+
+function immediateFailure() {
+    throw new Exception("early");
+    yield 0;
+}
+$immediate = immediateFailure();
+try {
+    foreach ($immediate as $value) { echo "unreachable"; }
+} catch (Throwable $error) {
+    echo ":" . $error->getMessage() . ":";
+}
+echo $immediate->valid() ? "open" : "closed";
+"#
+        ),
+        "1:boom:closed:early:closed"
+    );
+}
+
+#[test]
+fn test_generator_exception_reaches_method_caller_and_yield_from_catch() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function directFailure() {
+    yield 1;
+    throw new Exception("direct");
+}
+$direct = directFailure();
+echo $direct->current() . ":";
+try {
+    $direct->next();
+} catch (Throwable $error) {
+    echo $error->getMessage() . ":";
+}
+
+function innerFailure() {
+    yield 2;
+    throw new Exception("delegated");
+}
+function outerRecovery() {
+    try {
+        yield from innerFailure();
+    } catch (Throwable $error) {
+        yield $error->getMessage();
+    }
+    yield 3;
+}
+foreach (outerRecovery() as $value) { echo $value . ":"; }
+"#
+        ),
+        "1:direct:2:delegated:3:"
+    );
+}
+
+#[test]
+fn test_generator_resume_preserves_or_replaces_pending_finally_exception() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function oneValue() { yield 1; }
+try {
+    try {
+        throw new Exception("original");
+    } finally {
+        foreach (oneValue() as $value) { echo $value . ":"; }
+    }
+} catch (Throwable $error) {
+    echo $error->getMessage() . ":";
+}
+
+function replacementFailure() {
+    throw new Exception("replacement");
+    yield 0;
+}
+try {
+    try {
+        throw new Exception("suppressed");
+    } finally {
+        $replacement = replacementFailure();
+        $replacement->current();
+    }
+} catch (Throwable $error) {
+    echo $error->getMessage();
+}
+"#
+        ),
+        "1:original:replacement"
+    );
+}
+
 // ── send() ──
 
 #[test]

@@ -2319,13 +2319,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ForeachInit => {
-                if op_foreach_init(eg, frame, op_array, opline)? {
-                    continue;
+                match op_foreach_init(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue,
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
                 }
             }
 
             OpCode::ForeachNext => {
-                op_foreach_next(eg, frame, op_array, opline)?;
+                match op_foreach_next(eg, frame, op_array, opline)? {
+                    ColdResult::Continue => continue,
+                    ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
+                    ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
+                    _ => {}
+                }
             }
 
             OpCode::Throw => {
@@ -3240,7 +3248,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 // ── Return type validation ──
                 let func_common = unsafe { &*(*frame).func };
                 let return_hint = &func_common.sig.return_type_hint;
-                if !matches!(return_hint, crate::vm::function::ParamTypeHint::None) {
+                // A generator declaration describes the Generator object
+                // produced at call time. Its internal `return` expression is
+                // the independent value exposed by Generator::getReturn().
+                if !op_array.is_generator
+                    && !matches!(return_hint, crate::vm::function::ParamTypeHint::None)
+                {
                     let has_explicit_value = opline.extended_value == 1;
                     match return_hint {
                         crate::vm::function::ParamTypeHint::Void => {

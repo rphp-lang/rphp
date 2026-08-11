@@ -375,19 +375,31 @@ where
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
+/// Observable result of one generator resume boundary.
+pub(crate) enum GeneratorResumeOutcome {
+    /// The generator either yielded or completed normally. Its state carries
+    /// the exact distinction without cloning another payload.
+    Advanced,
+    /// A PHP exception escaped the detached generator frame. The caller owns
+    /// reinjection into its live frame (foreach, yield-from or an internal
+    /// Generator method call).
+    Threw(Value),
+}
+
 /// Resume a generator: set up frame, copy state, execute until yield/return.
-/// The generator's state is updated in place.
-pub fn resume_generator(
+/// The generator's state is updated in place and detached exceptions are
+/// returned explicitly rather than left in the executor sidecar.
+pub(crate) fn resume_generator(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
     send_value: Value,
-) -> Result<(), VmError> {
+) -> Result<GeneratorResumeOutcome, VmError> {
     use crate::vm::generator::GeneratorState;
 
     {
         let gen_data = gen_ref.borrow();
         match gen_data.state {
-            GeneratorState::Completed => return Ok(()),
+            GeneratorState::Completed => return Ok(GeneratorResumeOutcome::Advanced),
             GeneratorState::Running => {
                 return Err(VmError::Fatal("Cannot resume an already running generator".into()));
             }
@@ -404,80 +416,42 @@ pub fn resume_generator(
             match delegate {
                 Some(YieldFromDelegate::Generator(inner_gen_ref)) => {
                     // Forward send value to inner generator
-                    resume_generator(eg, &inner_gen_ref, send_value)?;
+                    match resume_generator(eg, &inner_gen_ref, send_value)? {
+                        GeneratorResumeOutcome::Advanced => {}
+                        GeneratorResumeOutcome::Threw(exception) => {
+                            gen_ref.borrow_mut().delegate = None;
+                            let (frame, saved_execute_data) =
+                                materialize_generator_frame(eg, gen_ref);
+                            return execute_resumed_generator_frame(
+                                eg,
+                                gen_ref,
+                                frame,
+                                saved_execute_data,
+                                Some(exception),
+                            );
+                        }
+                    }
 
                     let inner_state = inner_gen_ref.borrow().state;
                     if inner_state == GeneratorState::Completed {
-                        // Inner generator done — remove delegate, resume outer with return value
+                        // Advance the outer frame past YieldFrom and publish
+                        // the delegate's getReturn() value into its result TMP.
                         let ret_val = inner_gen_ref.borrow().return_value.clone();
                         gen_ref.borrow_mut().delegate = None;
-
-                        // Resume the outer generator at the YieldFrom instruction
-                        // It will advance past it. We need to write the return value
-                        // to the result slot. We'll do this by resuming normally
-                        // but first advancing ip past the YieldFrom and writing result.
                         {
                             let mut gen_data = gen_ref.borrow_mut();
-                            // ip_offset points to YieldFrom instruction, advance past it
                             gen_data.ip_offset += 1;
-                            gen_data.state = GeneratorState::Suspended;
-                            // Store return value in send_value to be written to result slot
-                            // We'll handle this by writing it after frame setup below
                         }
-
-                        // Now do a normal resume, but we need to write ret_val to the
-                        // YieldFrom result TMP. We handle this by writing it after frame setup.
-                        // Actually, let's just set ip_offset-1 to point to YieldFrom so the
-                        // send value write logic handles it... but it checks for OpCode::Yield.
-                        // Better approach: resume the generator normally and write ret_val
-                        // to the YieldFrom's result TMP slot manually.
-                        let func_ptr = gen_ref.borrow().func;
-                        let user = unsafe { &*(func_ptr as *const UserFunction) };
-
-                        gen_ref.borrow_mut().state = GeneratorState::Running;
-                        let saved_execute_data = eg.current_execute_data.get();
-                        let frame = eg.vm_stack.push_call_frame(
-                            func_ptr,
-                            0,
-                            0,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                        );
-                        let mut dummy_return = Value::null();
-                        unsafe {
-                            (*frame).return_value = &mut dummy_return;
-                        }
-
-                        {
-                            let gen_data = gen_ref.borrow();
-                            for (i, val) in gen_data.cv_values.iter().enumerate() {
-                                let slot = unsafe { (*frame).cv_mut(i as u32) };
-                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
-                            }
-                            for (i, val) in gen_data.tmp_values.iter().enumerate() {
-                                let slot = unsafe { (*frame).tmp_mut(i as u32) };
-                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
-                            }
-                            unsafe {
-                                (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
-                            }
-                        }
-
-                        // Write return value to the YieldFrom result slot
-                        {
-                            let result_slot = gen_ref.borrow().yield_from_result_slot;
-                            let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
-                            if yield_from_instr.result_type != OpType::Unused {
-                                let slot = unsafe { (*frame).slot_mut(result_slot) };
-                                unsafe { frame_restore_slot(frame, slot as *mut Value, ret_val) };
-                            }
-                        }
+                        let (frame, saved_execute_data) =
+                            materialize_generator_frame(eg, gen_ref);
+                        restore_yield_from_result(frame, gen_ref, ret_val);
 
                         return execute_resumed_generator_frame(
                             eg,
                             gen_ref,
                             frame,
                             saved_execute_data,
+                            None,
                         );
                     } else {
                         // Inner generator yielded again — copy its value/key to outer
@@ -488,7 +462,7 @@ pub fn resume_generator(
                         drop(inner);
                         gen_data.delegate = Some(YieldFromDelegate::Generator(inner_gen_ref));
                         gen_data.state = GeneratorState::Suspended;
-                        return Ok(());
+                        return Ok(GeneratorResumeOutcome::Advanced);
                     }
                 }
                 Some(YieldFromDelegate::Array(entries, pos)) => {
@@ -498,56 +472,18 @@ pub fn resume_generator(
                         {
                             let mut gen_data = gen_ref.borrow_mut();
                             gen_data.ip_offset += 1;
-                            gen_data.state = GeneratorState::Suspended;
                         }
 
-                        let func_ptr = gen_ref.borrow().func;
-                        let user = unsafe { &*(func_ptr as *const UserFunction) };
-
-                        gen_ref.borrow_mut().state = GeneratorState::Running;
-                        let saved_execute_data = eg.current_execute_data.get();
-                        let frame = eg.vm_stack.push_call_frame(
-                            func_ptr,
-                            0,
-                            0,
-                            std::ptr::null_mut(),
-                            std::ptr::null_mut(),
-                        );
-                        let mut dummy_return = Value::null();
-                        unsafe {
-                            (*frame).return_value = &mut dummy_return;
-                        }
-
-                        {
-                            let gen_data = gen_ref.borrow();
-                            for (i, val) in gen_data.cv_values.iter().enumerate() {
-                                let slot = unsafe { (*frame).cv_mut(i as u32) };
-                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
-                            }
-                            for (i, val) in gen_data.tmp_values.iter().enumerate() {
-                                let slot = unsafe { (*frame).tmp_mut(i as u32) };
-                                unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
-                            }
-                            unsafe {
-                                (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
-                            }
-                        }
-
-                        // Write null to YieldFrom result (arrays return null)
-                        {
-                            let result_slot = gen_ref.borrow().yield_from_result_slot;
-                            let yield_from_instr = &user.op_array.instructions[gen_ref.borrow().ip_offset - 1];
-                            if yield_from_instr.result_type != OpType::Unused {
-                                let slot = unsafe { (*frame).slot_mut(result_slot) };
-                                unsafe { frame_restore_slot(frame, slot as *mut Value, Value::null()) };
-                            }
-                        }
+                        let (frame, saved_execute_data) =
+                            materialize_generator_frame(eg, gen_ref);
+                        restore_yield_from_result(frame, gen_ref, Value::null());
 
                         return execute_resumed_generator_frame(
                             eg,
                             gen_ref,
                             frame,
                             saved_execute_data,
+                            None,
                         );
                     } else {
                         // Yield next array element
@@ -560,7 +496,7 @@ pub fn resume_generator(
                         };
                         gen_data.delegate = Some(YieldFromDelegate::Array(entries, pos + 1));
                         gen_data.state = GeneratorState::Suspended;
-                        return Ok(());
+                        return Ok(GeneratorResumeOutcome::Advanced);
                     }
                 }
                 None => unreachable!(),
@@ -568,14 +504,22 @@ pub fn resume_generator(
         }
     }
 
-    // Mark as running
-    gen_ref.borrow_mut().state = GeneratorState::Running;
+    let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
+    restore_yield_send_value(frame, gen_ref, send_value);
+    execute_resumed_generator_frame(eg, gen_ref, frame, saved_execute_data, None)
+}
 
+/// Materialize one detached frame from the generator snapshot. All resume
+/// paths use this function so slot restoration and frame ownership cannot
+/// drift between normal yield, delegated return and delegated exception.
+fn materialize_generator_frame(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+) -> (*mut ExecuteData, *mut ExecuteData) {
+    gen_ref.borrow_mut().state = crate::vm::generator::GeneratorState::Running;
     let func_ptr = gen_ref.borrow().func;
     let user = unsafe { &*(func_ptr as *const UserFunction) };
     let saved_execute_data = eg.current_execute_data.get();
-
-    // Push a frame for the generator
     let frame = eg.vm_stack.push_call_frame(
         func_ptr,
         0,
@@ -583,47 +527,59 @@ pub fn resume_generator(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
     );
-    let mut dummy_return = Value::null();
+    unsafe { (*frame).return_value = std::ptr::null_mut() };
+
+    let gen_data = gen_ref.borrow();
+    for (i, value) in gen_data.cv_values.iter().enumerate() {
+        let slot = unsafe { (*frame).cv_mut(i as u32) };
+        unsafe { frame_restore_slot(frame, slot as *mut Value, value.clone()) };
+    }
+    for (i, value) in gen_data.tmp_values.iter().enumerate() {
+        let slot = unsafe { (*frame).tmp_mut(i as u32) };
+        unsafe { frame_restore_slot(frame, slot as *mut Value, value.clone()) };
+    }
     unsafe {
-        (*frame).return_value = &mut dummy_return;
-    }
+        (*frame).opline = user
+            .op_array
+            .instructions
+            .as_ptr()
+            .add(gen_data.ip_offset)
+    };
+    drop(gen_data);
+    (frame, saved_execute_data)
+}
 
-    // Copy saved CV values into frame
+fn restore_yield_send_value(
+    frame: *mut ExecuteData,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    send_value: Value,
+) {
+    let gen_data = gen_ref.borrow();
+    if gen_data.ip_offset == 0 {
+        return;
+    }
+    let user = unsafe { &*(gen_data.func as *const UserFunction) };
+    let yield_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
+    if yield_instruction.opcode == crate::vm::opcode::OpCode::Yield
+        && yield_instruction.result_type != OpType::Unused
     {
-        let gen_data = gen_ref.borrow();
-        for (i, val) in gen_data.cv_values.iter().enumerate() {
-            let slot = unsafe { (*frame).cv_mut(i as u32) };
-            unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
-        }
-        for (i, val) in gen_data.tmp_values.iter().enumerate() {
-            let slot = unsafe { (*frame).tmp_mut(i as u32) };
-            unsafe { frame_restore_slot(frame, slot as *mut Value, val.clone()) };
-        }
-
-        // Set instruction pointer
-        unsafe {
-            (*frame).opline = user.op_array.instructions.as_ptr().add(gen_data.ip_offset);
-        }
+        let slot = unsafe { (*frame).slot_mut(yield_instruction.result as u32) };
+        unsafe { frame_restore_slot(frame, slot as *mut Value, send_value) };
     }
+}
 
-    // If resuming from a yield (not first call), write send value to the
-    // previous yield's result TMP. The yield instruction at ip_offset-1
-    // told us its result slot.
-    {
-        let gen_data = gen_ref.borrow();
-        if gen_data.state == GeneratorState::Running && gen_data.ip_offset > 0 {
-            // The yield instruction is at ip_offset - 1
-            let yield_instr = &user.op_array.instructions[gen_data.ip_offset - 1];
-            if yield_instr.opcode == crate::vm::opcode::OpCode::Yield
-                && yield_instr.result_type != OpType::Unused
-            {
-                let tmp_slot = unsafe { (*frame).slot_mut(yield_instr.result as u32) };
-                unsafe { frame_restore_slot(frame, tmp_slot as *mut Value, send_value.clone()) };
-            }
-        }
+fn restore_yield_from_result(
+    frame: *mut ExecuteData,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    value: Value,
+) {
+    let gen_data = gen_ref.borrow();
+    let user = unsafe { &*(gen_data.func as *const UserFunction) };
+    let yield_from_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
+    if yield_from_instruction.result_type != OpType::Unused {
+        let slot = unsafe { (*frame).slot_mut(gen_data.yield_from_result_slot) };
+        unsafe { frame_restore_slot(frame, slot as *mut Value, value) };
     }
-
-    execute_resumed_generator_frame(eg, gen_ref, frame, saved_execute_data)
 }
 
 /// Execute one materialized generator frame and restore every executor
@@ -633,21 +589,78 @@ fn execute_resumed_generator_frame(
     gen_ref: &crate::vm::generator::GeneratorRef,
     frame: *mut ExecuteData,
     saved_execute_data: *mut ExecuteData,
-) -> Result<(), VmError> {
+    injected_exception: Option<Value>,
+) -> Result<GeneratorResumeOutcome, VmError> {
     let saved_active = eg.active_generator.take();
+    // A caller executing `finally` may already carry an exception that must
+    // stay invisible to the detached generator. Normal advancement restores
+    // it; a new escaped exception or VM failure supersedes it.
+    let saved_exception = eg.exception.take();
     eg.active_generator = Some(gen_ref.clone());
     activate_generator_generic_context(eg, gen_ref, frame);
     eg.current_execute_data.set(frame);
 
-    let result = execute_ex(eg, frame);
+    let result = if let Some(exception) = injected_exception {
+        match throw_in_frame(eg, frame, exception) {
+            ThrowResult::Handled(new_frame, _) => execute_ex(eg, new_frame),
+            ThrowResult::Unhandled(exception) => {
+                eg.exception = Some(exception);
+                Ok(())
+            }
+        }
+    } else {
+        execute_ex(eg, frame)
+    };
+    let escaped_exception = eg.exception.take();
 
-    discard_generator_generic_context(eg, frame);
+    cleanup_detached_generator_frames(eg, frame);
     eg.current_execute_data.set(saved_execute_data);
     eg.active_generator = saved_active;
-    if result.is_err() {
-        gen_ref.borrow_mut().state = crate::vm::generator::GeneratorState::Completed;
+    if let Err(error) = result {
+        close_failed_generator(gen_ref);
+        return Err(error);
     }
-    result
+    if let Some(exception) = escaped_exception {
+        close_failed_generator(gen_ref);
+        return Ok(GeneratorResumeOutcome::Threw(exception));
+    }
+    if gen_ref.borrow().state == crate::vm::generator::GeneratorState::Running {
+        close_failed_generator(gen_ref);
+        return Err(VmError::Fatal(
+            "Generator resume returned without yielding or completing".into(),
+        ));
+    }
+    eg.exception = saved_exception;
+    Ok(GeneratorResumeOutcome::Advanced)
+}
+
+fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
+    let mut generator = gen_ref.borrow_mut();
+    generator.state = crate::vm::generator::GeneratorState::Completed;
+    generator.value = Value::null();
+    generator.key = Value::null();
+    generator.delegate = None;
+}
+
+/// A detached generator owns every frame above and including `root`. Normal
+/// yield/return leaves the root allocated; an unhandled exception can also
+/// leave nested callees above it. Reclaim the complete chain exactly once.
+fn cleanup_detached_generator_frames(eg: &mut ExecutorGlobals, root: *mut ExecuteData) {
+    let mut frame = eg.current_execute_data.get();
+    while !frame.is_null() {
+        let previous = unsafe { (*frame).prev_execute_data };
+        eg.current_execute_data.set(previous);
+        discard_generator_generic_context(eg, frame);
+        unsafe {
+            cleanup_pending_calls(eg, frame);
+            cleanup_frame_slots(frame);
+        }
+        eg.vm_stack.pop_call_frame(frame);
+        if frame == root {
+            break;
+        }
+        frame = previous;
+    }
 }
 
 #[inline]
