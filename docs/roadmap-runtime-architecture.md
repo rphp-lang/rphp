@@ -2446,6 +2446,21 @@ are -0.120%/-0.473% on ARM64 and -0.058%/-0.121% on CPU-2-pinned x86-64. The
 shared quick-loop and architecture suites plus 16 erased/26 reified generic
 JIT tests pass on both hosts, with no backend or persistent-layout change.
 
+Invariant JSON and property plans now compose at the existing prelude/native
+boundary. The prelude remains the only owner of parsing, path lookup and exact
+type validation; its `JsonProjectionStep` nodes carry baseline control and
+resume positions but emit no native operation. Projected Long slots then enter
+the same mixed property builder and transactional shadow lifecycle as any other
+proved scalar source.
+
+The JSON source CV is not itself a finite-token input. Its String/reference
+guard lives in `prepare_quick_typed_invariant_source()`, and the planner adds it
+to `string_input_mask` only if a separate region operation actually consumes
+the same CV as a native string. This keeps arbitrary JSON text out of the
+token ABI without weakening reused-string guards. A failed projection returns
+to canonical execution before property seeding or native entry. The change
+adds no decoder-specific native opcode, persistent metadata or dependency.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control
@@ -2484,3 +2499,61 @@ in even when its syntax is disabled.
 If these gates cannot be met without adding overhead to normal PHP, keep the
 primitive opt-in and continue compatibility work rather than weakening the
 pay-for-use contract.
+
+## Planned typed-data ingestion and serialization substrate
+
+Once the dual generic runtime and the production stream surface are stable,
+introduce one internal typed-data substrate for JSON, CSV, XML and standard
+binary/schema-driven formats. The runtime contract is a single staged path:
+
+```text
+format adapter
+  -> schema/type resolution
+  -> validated TypedDecodePlan<T>
+  -> owned object/record block or frozen borrowed view
+  -> proof-carrying iterator/collection
+  -> quick/JIT consumer
+```
+
+The format adapter owns syntax and wire correctness only. Shared runtime code
+owns PHP/reified type resolution, schema fingerprints, property-slot mapping,
+allocation arenas, proof lifetime, mutation barriers, escape materialization
+and canonical fallback. This keeps CBOR, MessagePack, BSON, JSON, CSV and XML
+from growing independent object hydrators while allowing Protocol Buffers,
+FlatBuffers and later Arrow/Parquet to retain their own wire and evolution
+semantics.
+
+Expose both a constant class-string contract and the generic contract. For
+example, `Json::stream($input, UserDto::class)` and
+`Json::stream::<UserDto>($input)` must share the same cached decode plan and
+native consumer when the target is statically known. The former preserves a
+fast path in syntax-disabled/ordinary PHP code; the latter carries
+`iterable<UserDto>` through the type system and supplies an exact erased-linked
+or reified proof. Untyped `json_decode()` and equivalent compatibility APIs
+retain their current dynamic PHP result and error behavior.
+
+Do not widen `Value`, ordinary objects or normal arrays for this feature.
+Store schema/type tuples and proof generations in sparse interned metadata,
+and allocate typed record/column payloads only at participating decode sites.
+An input type tag is not trusted metadata: the decoder validates it while
+parsing and publishes the proof only when the complete admitted extent is
+well-formed. A normal mutable result must preserve the proof through a typed
+write barrier or invalidate it; immutable/frozen storage may retain a borrowed
+buffer only while its owner and backing stream/mapping remain alive.
+
+Streaming decoders should integrate with coroutine readiness and cancellation
+without making the parser scheduler-aware. They yield only at bounded input or
+output boundaries. An escape-free record can remain in typed scratch slots for
+the current consumer iteration; storing, returning, referencing or passing it
+to an unknown call materializes a normal PHP object before behavior becomes
+observable. Constructors, hooks, magic access and object identity are bypassed
+only for explicit data-only DTO contracts.
+
+The implementation sequence is: common schema and codec-plan representation;
+compatible class-string JSON vertical slice; generic JSON wrapper over the same
+plan; proof-carrying typed record iteration; CSV and XML streaming adapters;
+CBOR/MessagePack/BSON binary adapters; optional schema/zero-copy adapters; and
+only then fused JIT consumers. Each slice needs differential compatibility,
+malformed-input/security, mutation/escape, erased/reified and allocation gates.
+No ordinary program pays for the feature, and no format earns a specialized
+backend opcode when the shared typed IR can express its consumer.

@@ -9344,6 +9344,33 @@ move -0.120%/-0.473% on ARM64 and -0.058%/-0.121% on CPU-2-pinned x86-64.
 Quick-loop, architecture-native and both generic-mode suites pass on both
 hosts. No runtime operation, persistent layout or dependency changed.
 
+Invariant JSON projections can now feed an ordinary or generic property
+mutator without breaking the surrounding native mixed region. The existing
+typed-source prelude still decodes once, validates every fixed projection and
+publishes the projected Long slots atomically before native entry.
+`JsonProjectionStep` is therefore a zero-code control edge in the mixed
+target-neutral builder, just as it already is in the scalar straight builder;
+no decoder or JSON operation is emitted into machine code.
+
+The planner no longer misclassifies the prelude's arbitrary JSON source text
+as a finite native string token. The prelude owns its String/reference guard,
+while any independent use of the same CV as a native string operand still adds
+the slot through that consuming operation. Invalid, missing or non-Long
+projections reject the prelude before native entry and replay the canonical
+caller, so no transactional property shadow is published. Permanent coverage
+proves one native entry across multiple safepoint chunks and the invalid-type
+replay path in both erased and reified modes.
+
+Against exact checkpoint `9499764`, 40 balanced max-perf pairs improve the new
+ten-million-iteration generic JSON/property workload by 94.770% erased and
+94.493% reified on ARM64, and by 96.169%/96.004% on CPU-2-pinned x86-64. The
+ordinary-signature control improves by 94.785%/94.504% on ARM64 and
+96.102%/96.021% on x86-64. One-hundred-pair unchanged property-method controls
+remain between -0.277% and +0.066% across both hosts and modes. Focused generic
+JIT coverage is now 18 erased and 28 reified scenarios. Default, erased,
+reified and all-feature all-target matrices pass on ARM64 and x86-64. No
+backend operation, persistent layout or dependency was added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
@@ -9351,6 +9378,101 @@ the upstream RFC implementation tests that fit RPHP's supported PHP surface.
 Add dedicated cold-compile, link, ordinary-call, generic-call and turbofish hot
 benchmarks on ARM64 and x86-64. Use no parser, type-system or collection crate;
 the implementation remains within the standard library and existing runtime.
+
+## Interphase 5.75: first-class typed data interchange and streams
+
+After the generic metadata/runtime contract is stable and Phase 5 has enough
+production compatibility to exercise real applications, add one language-owned
+typed-data path shared by textual, binary and schema-driven formats. This is not
+merely a collection of convenience parsers. Its purpose is to carry a type proof
+from input validation through object/collection layout into no-JIT quick regions
+and the JIT, without first materializing an `array<mixed>`, reflecting over it
+and hydrating a second object graph. It is not a prerequisite for PHP
+compatibility and must not delay the ordinary Composer/framework surface.
+
+Keep the existing compatible APIs and semantics. Add an explicit target-class
+path that works with generic syntax disabled and a generic path that expresses
+the exact result relation in the language, for example:
+
+```php
+json_decode($input);                         // compatible mixed PHP result
+Json::decode($input, UserDto::class);        // explicit typed target
+Json::decode::<UserDto>($input);             // exact generic result
+Json::stream($input, UserDto::class);        // iterable object bridge
+Json::stream::<UserDto>($input);             // iterable<UserDto>
+```
+
+The class-string and generic forms must lower to one `TypedDecodePlan` when the
+target is compile-time constant. They are two user-facing contracts, not two
+decoder implementations. A dynamic class string may use a guarded schema cache;
+unknown targets retain a canonical dynamic path. Erased builds may link a
+concrete call-site codec, while reified builds may additionally resolve and
+check the exact runtime type tuple. Neither mode may add a branch, allocation or
+layout field to programs that do not use the typed-data API.
+
+The shared substrate should expose internal proof-carrying results such as
+`Verified<T>`, `TypedArray<T>` and `TypedRecordBlock<T>` without requiring those
+names to become public PHP classes. A decoder may establish the proof while it
+already reads the input; a second whole-collection scan is not acceptable.
+Self-describing inputs still contain claims, not trusted proofs: malformed
+tags, lengths, offsets, encodings and schema identifiers must be validated
+before admission. A homogeneous fixed-layout block may validate its header,
+schema and total byte extent once; a heterogeneous tagged document records a
+type/shape summary during its mandatory parse. Mutation either passes a typed
+write barrier, materializes an owned PHP value, or invalidates the proof and
+forces the canonical path.
+
+Build format support as feature-gated runtime modules over that one internal
+codec/plan interface rather than as Composer packages crossing an opaque
+extension ABI. The planned coverage is:
+
+- ordinary JSON encode/decode plus typed DTO and streaming-record paths;
+- CSV rows driven by a target DTO or explicit schema, reusing the existing
+  coroutine stream substrate and CSV compatibility parser;
+- XML DOM-compatible fallback plus XSD/DTO-driven streaming hydration, with
+  namespaces, attributes, mixed content and entity security kept exact;
+- self-describing binary formats beginning with CBOR, MessagePack and BSON;
+- schema-driven adapters for Protocol Buffers and FlatBuffers where their wire
+  and evolution rules can be preserved faithfully;
+- Arrow and, later, Parquet adapters for typed columnar/analytical workloads
+  once the Phase 6 typed-buffer ownership contract is stable.
+
+Do not force every format into one physical representation. Maps, ordered
+records, tagged unions, packed scalar vectors, object graphs and columnar data
+retain format-appropriate canonical fallbacks. What is shared is schema
+resolution, validation, property-slot mapping, allocation/borrowing policy,
+proof lifetime and the consumer-facing typed plan. Export/import of standard
+schema descriptions should be preferred over inventing an RPHP-only wire
+format; a later private snapshot format is admissible only for same-runtime
+cache artifacts with explicit version and build/schema fingerprints.
+
+The optimized owned path writes validated fields directly into known property
+slots or batch-allocated record storage. A frozen/borrowed path may expose a
+read-only view over a stable input buffer when the format supports it. Normal
+PHP object identity, constructors, hooks, magic access, references and mutation
+must not be bypassed unless the class explicitly opts into a data-only contract.
+If a streamed DTO escapes the current iteration, it is materialized with normal
+identity; escape-free consumers may keep its fields in temporary typed slots.
+
+JIT admission starts only after the canonical typed decoder is correct. A loop
+such as `Json::stream::<UserDto>()` followed by typed property reads should guard
+the decoder/schema identity and proof generation once, then consume fixed slots
+or packed columns directly. Eligible parse -> filter/map/reduce -> encode chains
+may fuse without creating every DTO or intermediate array, but parsing,
+UTF/number conversion, exceptions, observable partial progress and backpressure
+remain exact. A format-specific parser must not become a format-specific
+machine-code backend; it produces the same target-neutral typed consumer IR.
+
+Permanent gates include malformed/adversarial inputs, schema evolution,
+optional/unknown fields, unions/nullability, integer and floating boundaries,
+UTF handling, JSON flags/error state, CSV dialects, XML namespaces and disabled
+external entities, binary length/offset corruption, generic mismatches,
+mutation/escape materialization and coroutine cancellation. Measure parse-only,
+typed hydration, peak allocation, first-record latency, streaming throughput and
+end-to-end decode -> typed loop -> encode against the compatible dynamic path
+on ARM64 and x86-64. Admission requires no regression to the existing untyped
+APIs and a demonstrated win after validation, allocation and materialization
+costs are included.
 
 ## Phase 6: optional numerical computing and accelerator platform
 
