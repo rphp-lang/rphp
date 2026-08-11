@@ -7,8 +7,12 @@
   cleanup remains within the safe targets below.
 - Run `scripts/cleanup-builds.sh` before and after a full four-configuration
   test matrix or release benchmark cycle. The script automatically cleans the
-  workspace Cargo target once it exceeds the configured size limit and removes
-  stale task-scoped candidate directories.
+  workspace Cargo target once it exceeds the configured size limit or the
+  filesystem falls below its minimum free-space reserve, and removes stale
+  task-scoped candidate directories.
+- On a filesystem that cannot retain every feature variant at once, run the
+  same hook between matrix configurations. This is an expected automatic
+  lifecycle step, not a reason to leave a full disk or skip a configuration.
 - At the end of a benchmark checkpoint, run the same cleanup on both the local
   workspace and `the configured private benchmark host`, even when the matrix or benchmark failed.
 - Put disposable release builds in task-scoped `/tmp/rphp-candidate-*`
