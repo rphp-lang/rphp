@@ -2005,12 +2005,23 @@ external dependency or native lowering changed.
 
 Lifecycle coverage now follows reflected reified bindings through cloning and
 included metadata, including relocated use-site indices and substituted
-defaults; ordinary non-turbofish objects remain intentionally unbound. The next
-semantic step is the final Reflection class-hierarchy and exception-consistency
-audit. Generics-aware JIT specialization is deliberately last: it starts only
-after these semantics, complete Reflection and both runtimes are closed, and
-must consume the canonical metadata with exact guards and deoptimization back
-to the established erased/reified paths.
+defaults; ordinary non-turbofish objects remain intentionally unbound.
+
+The Reflection hierarchy and exception audit is complete. `Reflector` and
+abstract `ReflectionFunctionAbstract` are registered explicitly, Function and
+Method inherit from the latter, and generic type-parameter objects implement
+the RFC contract. Valid non-generic ancestor relationships return empty
+argument lists while missing parent/interface/trait targets throw
+`ReflectionException`. A permanent registry-capacity invariant also caught and
+removed one stdlib function-table rehash without changing its final capacity.
+Exact release gates against `e9893af` are -6.324% method/+0.281% startup on
+ARM64 and +0.356%/-5.366% on CPU-pinned x86-64.
+
+The next semantic step is `ReflectionFunction` support for generic closure and
+arrow-function values. Generics-aware JIT specialization is deliberately last:
+it starts only after these semantics, complete Reflection and both runtimes are
+closed, and must consume the canonical metadata with exact guards and
+deoptimization back to the established erased/reified paths.
 
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated

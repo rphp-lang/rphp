@@ -1274,6 +1274,66 @@ try {
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 #[test]
+fn generic_reflection_follows_the_builtin_class_hierarchy() {
+    let output = common::run_php(
+        r#"<?php
+class ReflectedHierarchy<T> {
+    public function map<U : T>() {}
+}
+$class = new ReflectionClass("ReflectedHierarchy");
+$method = new ReflectionMethod("ReflectedHierarchy", "map");
+$classParameter = $class->getGenericParameters()[0];
+$methodBound = $method->getGenericParameters()[0]->getBound();
+echo ($class instanceof Reflector) ? "class:" : "missing:";
+echo ($method instanceof ReflectionFunctionAbstract) ? "method:" : "missing:";
+echo ($method instanceof Reflector) ? "reflector:" : "missing:";
+echo ($classParameter instanceof Reflector) ? "parameter:" : "missing:";
+echo ($methodBound instanceof ReflectionType) ? "type:" : "missing:";
+echo ($methodBound instanceof ReflectionTypeParameterReference) ? "reference" : "missing";
+"#,
+    );
+    assert_eq!(output, "class:method:reflector:parameter:type:reference");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn generic_ancestor_reflection_distinguishes_empty_bindings_and_invalid_targets() {
+    let output = common::run_php(
+        r#"<?php
+class PlainParent {}
+class PlainChild extends PlainParent {}
+interface PlainInterface {}
+class PlainImplementation implements PlainInterface {}
+trait PlainTrait {}
+class PlainTraitUser { use PlainTrait; }
+
+echo count((new ReflectionClass("PlainChild"))->getGenericArgumentsForParentClass()) . ":";
+echo count((new ReflectionClass("PlainImplementation"))->getGenericArgumentsForParentInterface("PlainInterface")) . ":";
+echo count((new ReflectionClass("PlainTraitUser"))->getGenericArgumentsForUsedTrait("PlainTrait")) . ":";
+
+foreach (["parent", "interface", "trait"] as $case) {
+    try {
+        if ($case === "parent") {
+            $reflection = new ReflectionClass("PlainParent");
+            $reflection->getGenericArgumentsForParentClass();
+        } elseif ($case === "interface") {
+            $reflection = new ReflectionClass("PlainChild");
+            $reflection->getGenericArgumentsForParentInterface("PlainInterface");
+        } else {
+            $reflection = new ReflectionClass("PlainChild");
+            $reflection->getGenericArgumentsForUsedTrait("PlainTrait");
+        }
+    } catch (ReflectionException $error) {
+        echo "caught:";
+    }
+}
+"#,
+    );
+    assert_eq!(output, "0:0:0:caught:caught:caught:");
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
 fn parser_enforces_declaration_invariants() {
     let cases = [
         (

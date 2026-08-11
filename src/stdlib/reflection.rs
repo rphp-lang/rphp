@@ -388,7 +388,18 @@ fn register_reflection_class(
     is_abstract: bool,
     is_final: bool,
 ) {
-    register_reflection_class_kind(eg, name, parent, is_abstract, is_final, false);
+    register_reflection_class_kind(eg, name, parent, is_abstract, is_final, false, &[]);
+}
+
+fn register_reflection_class_with_interfaces(
+    eg: &mut ExecutorGlobals,
+    name: &str,
+    parent: Option<&str>,
+    is_abstract: bool,
+    is_final: bool,
+    implements: &[&str],
+) {
+    register_reflection_class_kind(eg, name, parent, is_abstract, is_final, false, implements);
 }
 
 fn register_reflection_class_kind(
@@ -398,16 +409,38 @@ fn register_reflection_class_kind(
     is_abstract: bool,
     is_final: bool,
     is_enum: bool,
+    implements: &[&str],
 ) {
     eg.register_class(ClassDef {
         name: name.to_string(),
         parent: parent.map(str::to_owned),
-        implements: vec![],
+        implements: implements.iter().map(|name| (*name).to_string()).collect(),
         is_interface: false,
         is_abstract,
         is_final,
         is_trait: false,
         is_enum,
+        uses: vec![],
+        properties: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        class_id: 0,
+    })
+    .unwrap();
+}
+
+fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
+    eg.register_class(ClassDef {
+        name: name.to_string(),
+        parent: None,
+        implements: vec![],
+        is_interface: true,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
         uses: vec![],
         properties: vec![],
         property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
@@ -475,9 +508,26 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         }};
     }
 
-    for class in ["ReflectionFunction", "ReflectionClass", "ReflectionMethod"] {
-        register_reflection_class(eg, class, None, false, false);
+    register_reflection_interface(eg, "Reflector");
+    register_reflection_class_with_interfaces(
+        eg,
+        "ReflectionFunctionAbstract",
+        None,
+        true,
+        false,
+        &["Reflector"],
+    );
+    for class in ["ReflectionFunction", "ReflectionMethod"] {
+        register_reflection_class(eg, class, Some("ReflectionFunctionAbstract"), false, false);
     }
+    register_reflection_class_with_interfaces(
+        eg,
+        "ReflectionClass",
+        None,
+        false,
+        false,
+        &["Reflector"],
+    );
     register_reflection_class(
         eg,
         "ReflectionObject",
@@ -487,7 +537,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     register_reflection_class(eg, "ReflectionException", Some("Exception"), false, false);
     register_reflection_class(eg, "ReflectionType", None, true, false);
-    register_reflection_class(eg, "ReflectionGenericTypeParameter", None, false, true);
+    register_reflection_class_with_interfaces(
+        eg,
+        "ReflectionGenericTypeParameter",
+        None,
+        false,
+        true,
+        &["Reflector"],
+    );
     register_generic_variance(eg);
     for class in [
         "ReflectionNamedType",

@@ -200,7 +200,7 @@ impl ExecutorGlobals {
     /// normal executors avoid repeated hash-table growth while installing the
     /// fixed built-in class and function set.
     pub(crate) fn reserve_stdlib_capacity(&mut self) {
-        self.function_table.reserve(192);
+        self.function_table.reserve(256);
         self.class_table.reserve(64);
         self.method_declaring_class.reserve(96);
         self.class_by_id.reserve(64);
@@ -1386,6 +1386,37 @@ fn class_is_a_in_table(
             .implements
             .iter()
             .any(|interface| class_is_a_in_table(class_table, interface, target))
+}
+
+#[cfg(test)]
+mod stdlib_capacity_tests {
+    use super::ExecutorGlobals;
+
+    #[test]
+    fn stdlib_registration_fits_the_reserved_registry_envelopes() {
+        let mut eg = ExecutorGlobals::new();
+        eg.reserve_stdlib_capacity();
+        let capacities = (
+            eg.function_table.capacity(),
+            eg.class_table.capacity(),
+            eg.method_declaring_class.capacity(),
+            eg.class_by_id.capacity(),
+        );
+
+        let functions = crate::stdlib::register_stdlib(&mut eg);
+
+        assert_eq!(
+            (
+                eg.function_table.capacity(),
+                eg.class_table.capacity(),
+                eg.method_declaring_class.capacity(),
+                eg.class_by_id.capacity(),
+            ),
+            capacities,
+            "fixed stdlib registration must not grow a reserved registry"
+        );
+        assert!(!functions.is_empty());
+    }
 }
 
 #[cfg(feature = "coroutines")]

@@ -8650,7 +8650,7 @@ declaring `ReflectionClass`; neither is accidentally replaced by its erased
 bound. Interfaces and traits are recognized by `ReflectionClass::isGeneric()`
 through the shared class-like declaration index. Included metadata continues
 to use the same relocated graph. The growing implementation was split again:
-the registration/ancestor façade is 696 lines and the 525-line pre-erasure
+the registration/ancestor façade is 753 lines and the 525-line pre-erasure
 parameter/type model lives in `stdlib/reflection/generic_parameters.rs`.
 
 Final release controls against commit `e9893af` remain comfortably inside the
@@ -8688,9 +8688,27 @@ Reified Reflection lifecycle coverage now proves that clones retain the exact
 structured binding, ordinary non-turbofish instances remain unbound, and an
 object constructed in an included unit resolves its relocated declaration,
 use-site and substituted default through the executor's merged metadata graph.
-The next semantic slice is the final Reflection class-hierarchy and exception-
-behavior audit before runtime-semantics closeout. Generics-aware JIT
-specialization remains deliberately last, after both runtime models and the
+
+The class-hierarchy and exception audit is complete as well. The stdlib now
+models `Reflector`, abstract `ReflectionFunctionAbstract`, the Function/Method
+parent relation and the RFC's `Reflector` contract for
+`ReflectionGenericTypeParameter`. Ancestor accessors distinguish a valid
+non-generic parent/interface/trait binding (an empty list) from a missing or
+invalid target (`ReflectionException`). Adding the hierarchy exposed a stale
+function-table envelope: capacity grew from 224 to 448 during every stdlib
+installation. Reserving 256 entries selects the same final 448-slot table in
+one allocation, and a permanent test now asserts that none of the four fixed
+stdlib registries grows during registration.
+
+Against `e9893af`, the exact final 101-pair release controls are -6.324% method
+and +0.281% startup on ARM64, and +0.356% method/-5.366% startup on
+CPU-2-pinned x86-64. These remain layout/no-regression observations. The full
+four-mode all-target matrix passes on both architectures; dual/reified generic
+coverage is 29 scenarios and erased-only 24.
+
+The next semantic slice exposes generic closure and arrow-function declarations
+when `ReflectionFunction` is constructed from a closure value. Generics-aware
+JIT specialization remains deliberately last, after both runtime models and the
 complete Reflection surface are closed.
 
 Generic constructors now consume the same effective own/inherited method
