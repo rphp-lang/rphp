@@ -87,9 +87,11 @@ fn generic_double_accumulate_plan<'a>(
         .expect("compiler should select the generic Double method accumulate loop")
 }
 
-fn generic_mixed_ops_plan<'a>(
+fn generic_ops_plan<'a>(
     functions: &'a [(String, rphp::vm::function::UserFunction)],
     function_name: &str,
+    contains: fn(&QuickLongOp) -> bool,
+    expectation: &str,
 ) -> &'a rphp::vm::quick::QuickLongOpsLoop {
     functions
         .iter()
@@ -100,69 +102,47 @@ fn generic_mixed_ops_plan<'a>(
                 .block_plans
                 .iter()
                 .find_map(|plan| match plan {
-                    BlockPlan::QuickLongOps(plan)
-                        if plan.ops.iter().any(|operation| {
-                            matches!(operation, QuickLongOp::ObjectLongMethodCall { .. })
-                        }) =>
-                    {
-                        Some(plan)
-                    }
+                    BlockPlan::QuickLongOps(plan) if plan.ops.iter().any(contains) => Some(plan),
                     _ => None,
                 })
         })
-        .expect("compiler should select the generic mixed-method ops loop")
+        .unwrap_or_else(|| panic!("{expectation}"))
+}
+
+fn generic_mixed_ops_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickLongOpsLoop {
+    generic_ops_plan(
+        functions,
+        function_name,
+        |operation| matches!(operation, QuickLongOp::ObjectLongMethodCall { .. }),
+        "compiler should select the generic mixed-method ops loop",
+    )
 }
 
 fn generic_property_ops_plan<'a>(
     functions: &'a [(String, rphp::vm::function::UserFunction)],
     function_name: &str,
 ) -> &'a rphp::vm::quick::QuickLongOpsLoop {
-    functions
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
-        .and_then(|(_, function)| {
-            function
-                .op_array
-                .block_plans
-                .iter()
-                .find_map(|plan| match plan {
-                    BlockPlan::QuickLongOps(plan)
-                        if plan.ops.iter().any(|operation| {
-                            matches!(operation, QuickLongOp::PropertyMethodCall { .. })
-                        }) =>
-                    {
-                        Some(plan)
-                    }
-                    _ => None,
-                })
-        })
-        .expect("compiler should select the generic property-method ops loop")
+    generic_ops_plan(
+        functions,
+        function_name,
+        |operation| matches!(operation, QuickLongOp::PropertyMethodCall { .. }),
+        "compiler should select the generic property-method ops loop",
+    )
 }
 
 fn generic_property_getter_ops_plan<'a>(
     functions: &'a [(String, rphp::vm::function::UserFunction)],
     function_name: &str,
 ) -> &'a rphp::vm::quick::QuickLongOpsLoop {
-    functions
-        .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
-        .and_then(|(_, function)| {
-            function
-                .op_array
-                .block_plans
-                .iter()
-                .find_map(|plan| match plan {
-                    BlockPlan::QuickLongOps(plan)
-                        if plan.ops.iter().any(|operation| {
-                            matches!(operation, QuickLongOp::PropertyGetterCall { .. })
-                        }) =>
-                    {
-                        Some(plan)
-                    }
-                    _ => None,
-                })
-        })
-        .expect("compiler should select the generic property-getter ops loop")
+    generic_ops_plan(
+        functions,
+        function_name,
+        |operation| matches!(operation, QuickLongOp::PropertyGetterCall { .. }),
+        "compiler should select the generic property-getter ops loop",
+    )
 }
 
 #[test]

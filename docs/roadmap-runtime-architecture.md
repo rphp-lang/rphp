@@ -2362,6 +2362,21 @@ coverage is now 20 dual/reified and 11 erased scenarios. The generic proof is
 kept out of native iterations; no property IC, native operation, context or
 backend layout changed, and no dependency was added.
 
+The native property lifecycle is now structurally cohesive without creating a
+second abstraction. Builder-side binding, getter moves and mutator plans live
+in a 188-line property include; activation seeding and final publication live
+in a 59-line runtime include at the original item position. The former scalar
+file drops from 383 to 199 lines. All items still inhabit the execute module,
+so private access, monomorphization, persistent layouts and hot symbol ordering
+remain unchanged.
+
+Against exact checkpoint `72969ef`, 200 balanced ARM64 property-getter,
+property-mutator and scalar-method pairs are +0.421%/+0.000%/+0.064%; the same
+CPU-2-pinned x86-64 lanes are -0.195%/+0.252%/-0.443%. Binary and `__TEXT`
+sizes plus mixed-kernel symbol addresses are unchanged, all six lanes pass the
+one-percent structural gate, and 11 erased/20 reified focused tests pass on
+both hosts.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

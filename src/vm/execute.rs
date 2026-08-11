@@ -605,6 +605,15 @@ include!("execute/native_mixed_scalar.rs");
         all(target_arch = "x86_64", target_os = "linux")
     )
 ))]
+include!("execute/native_mixed_property.rs");
+#[cfg(all(
+    feature = "quick-loops",
+    feature = "jit-prototype",
+    any(
+        all(target_arch = "aarch64", target_os = "macos"),
+        all(target_arch = "x86_64", target_os = "linux")
+    )
+))]
 include!("execute/native_mixed_typed.rs");
 
 #[cfg(all(

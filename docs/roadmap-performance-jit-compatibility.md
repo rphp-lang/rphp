@@ -9246,6 +9246,23 @@ ordering and canonical reified mismatch replay. No property IC, native
 instruction, kernel-state or backend layout changed, and no dependency was
 added.
 
+A behavior-preserving property-lifecycle cleanup follows this checkpoint.
+Native property binding/lowering moved out of the scalar-method file into a
+188-line property builder, while activation seeding and publication moved into
+a 59-line runtime child included at their original item position. The scalar
+builder falls from 383 to 199 lines, repeated generic-JIT test-plan discovery
+uses one predicate helper, and the execute module still owns every item through
+`include!`. Consequently visibility, persistent layouts, native operations,
+hot-function order, final binary size, `__TEXT` size and both mixed-kernel
+symbol addresses remain unchanged.
+
+Against exact checkpoint `72969ef`, 200 balanced ARM64 pairs move the generic
+property getter by +0.421%, the property mutator by +0.000% and the independent
+scalar-method control by +0.064%. CPU-2-pinned x86-64 reports
+-0.195%/+0.252%/-0.443%, respectively. All six lanes remain inside the
+one-percent structural gate, and the complete 11 erased/20 reified focused
+suite passes on both hosts. No dependency or runtime behavior changed.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
