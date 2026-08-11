@@ -2495,6 +2495,28 @@ across both modes and reference architectures; unchanged controls remain
 inside the one-percent regression boundary. Focused coverage is 21 erased and
 31 reified scenarios, with no persistent-layout or dependency change.
 
+Static call compilation now separates PHP dispatch spelling from generic
+declaration ownership. `InitStaticCall` retains `self` or `parent` so the
+existing call-site walk can recover forwarding called scope, while
+`CheckGenericArgs` receives the lexically resolved class/parent owner for
+ordinary class methods. Nested compilers preserve the enclosing file's
+namespace aliases and strict-types flag rather than silently creating a new
+top-level resolution context.
+
+Shared trait bodies deliberately keep a dynamic pseudo owner. Their generic
+site and static call target remain uncached and resolve on each entry so one
+consumer cannot publish metadata or a function pointer used by another class.
+All non-trait warmed static calls take the
+unchanged single-pointer cache hit with no flag test. This keeps the exceptional
+trait ownership rule off ordinary dispatch while supporting bound validation,
+reified argument tuples, namespaces, inheritance and forwarding `static`
+return contracts for `self::...::<...>` and `parent::...::<...>`.
+
+General `static::` call expressions remain a parser/runtime dispatch milestone
+before the RFC turbofish form can be enabled on that owner. The future call
+site must key dispatch by late-called class; it must not lower `static` to the
+lexical owner or reuse the trait exception as a general cache policy.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

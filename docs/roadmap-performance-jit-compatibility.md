@@ -9425,6 +9425,48 @@ gate. Focused generic JIT coverage is now 21 erased and 31 reified scenarios,
 and all four all-target matrices pass on both hosts. No backend operation,
 persistent layout or dependency was added.
 
+Static pseudo-owner turbofish calls now cover the RFC's supported
+`self::method::<...>()` and `parent::method::<...>()` forms, including
+namespaces, inherited declarations, nullsafe instance calls and forwarding
+`static` return contracts. Nested compilers retain file `strict_types`,
+namespace and `use` context. Class methods additionally carry a cold lexical
+class/parent owner used by generic metadata, while `InitStaticCall` preserves
+the original pseudo spelling needed to recover PHP called scope. The runtime
+resolves that spelling only on the static-call cache miss; ordinary warmed
+static calls retain their original one-load cache path.
+
+Trait method op arrays require a separate correctness boundary because one
+body is shared by every consuming class. Their pseudo owner remains dynamic,
+the site publishes neither a generic declaration cache entry nor a static call
+target, and both are resolved per call instead of allowing one consumer's
+monomorphic state to leak into another. Erased and reified modes validate the
+same selected declaration but retain their intended runtime difference:
+bound-erased unconstrained arguments keep the erased PHP contract, whereas
+reified calls check the explicit tuple. Syntax-disabled builds reject the same
+turbofish before compilation.
+
+The dependency-free `run_generics_static_pseudo_gate.sh` compares five million
+warmed `self::step::<int>` calls with an otherwise identical explicit-owner
+control. Forty balanced pairs measure -0.187%/-0.018% on ARM64 and
+-4.776%/+0.707% on CPU-2-pinned x86-64 in erased/reified mode. The favorable
+erased x86 movement is treated as measurement/layout noise, not an
+optimization claim. Against exact checkpoint `94394c6`, the established
+explicit-owner generic control is -1.221%/+0.436% on ARM64 and
+-1.237%/+0.488% on x86-64 in erased/reified mode. The ordinary
+20-million-call static control is -1.394%/-1.706%, and a longer 100-pair
+erased instance-turbofish control is +0.032%/+0.145%, after keeping dynamic
+trait resolution out of both ordinary cache hits. Default, erased, reified
+and all-feature all-target matrices pass on both architectures, with no
+external dependency, hot layout or JIT backend change.
+
+The remaining RFC static pseudo-owner item is `static::method::<...>()`.
+RPHP's general expression parser does not yet accept `static::` calls, so that
+must be implemented as a base PHP call-form slice before generics can attach
+type arguments to it; it must preserve late-static dispatch and use a
+called-class-keyed cache. Attribute and property-hook generic use sites stay
+behind their corresponding general PHP surface rather than bypassing it in
+the generics parser.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and
