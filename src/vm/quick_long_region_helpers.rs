@@ -165,6 +165,42 @@ fn fixed_invariant_path_element(
     })
 }
 
+/// Extend a fixed projection rooted in the invariant JSON producer. `false`
+/// means that the fetch belongs to an ordinary PHP array and must be handled
+/// by the caller's canonical array-planning path.
+fn extend_json_projection_fetch(
+    op_array: &OpArray,
+    instruction: crate::vm::instruction::Instruction,
+    array: u16,
+    total_slots: u32,
+    json_paths: &mut [Option<Vec<QuickInvariantPathElement>>],
+    json_fetch_mask: &mut u64,
+    json_parent_mask: &mut u64,
+) -> Option<bool> {
+    let Some(mut path) = json_paths
+        .get(array as usize)
+        .and_then(|path| path.as_ref())
+        .cloned()
+    else {
+        return Some(false);
+    };
+    let element = fixed_invariant_path_element(
+        op_array,
+        instruction.op2_type,
+        instruction.op2,
+    )?;
+    if path.len() == 8 {
+        return None;
+    }
+    path.push(element);
+    json_paths
+        .get_mut(instruction.result as usize)?
+        .replace(path);
+    add_mask_slot(json_fetch_mask, instruction.result, total_slots)?;
+    add_mask_slot(json_parent_mask, array, total_slots)?;
+    Some(true)
+}
+
 fn long_add(instruction: crate::vm::instruction::Instruction) -> Option<(u16, u16, u16)> {
     if !matches!(
         instruction.opcode,

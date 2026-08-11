@@ -657,8 +657,7 @@ function genericJsonPropertyTotal($box, $json) {
     $checksum = 0;
     for ($i = 0; $i < 100000; $i++) {
         $row = json_decode($json, true);
-        $value = $row['value'];
-        $box->add($value);
+        $box->add($row['value']);
         $checksum += $i;
     }
     return $i . ':' . $box->total . ':' . $checksum . ':' . $row['value'];
@@ -689,6 +688,51 @@ echo genericJsonPropertyTotal(
 }
 
 #[test]
+fn nested_json_projection_arguments_enter_one_generic_property_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericNestedJsonPropertyJitBox<T : int> {
+    public T $total;
+    public function __construct(T $total) { $this->total = $total; }
+    public function addPair(T $left, T $right): void {
+        $this->total = $this->total + $left;
+        $this->total = $this->total + $right;
+    }
+}
+function genericNestedJsonPropertyTotal($box, $json) {
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $row = json_decode($json, true);
+        $box->addPair($row['left'], $row['nested']['right']);
+        $checksum += $i;
+    }
+    return $i . ':' . $box->total . ':' . $checksum;
+}
+echo genericNestedJsonPropertyTotal(
+    new GenericNestedJsonPropertyJitBox::<int>(0),
+    '{"left":3,"nested":{"right":4}}'
+);
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:700000:4999950000");
+
+    let plan = generic_property_ops_plan(&functions, "genericNestedJsonPropertyTotal");
+    assert_eq!(
+        plan.typed_invariant_source
+            .as_ref()
+            .expect("JSON projections should be retained")
+            .projections
+            .len(),
+        2
+    );
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
 fn invalid_generic_json_projection_replays_before_property_mutation() {
     let (_, functions, result, output) = compile_and_execute(
         r#"<?php
@@ -700,8 +744,7 @@ class GenericInvalidJsonPropertyJitBox<T : int> {
 function genericInvalidJsonPropertyTotal($box, $json) {
     for ($i = 0; $i < 100000; $i++) {
         $row = json_decode($json, true);
-        $value = $row['value'];
-        $box->add($value);
+        $box->add($row['value']);
     }
     return $box->total;
 }

@@ -55,6 +55,7 @@ case $only in
         bench_generics_property_composed_conditional_native_loop.php | \
         bench_generics_property_composed_native_loop.php | \
         bench_generics_property_getter_native_loop.php | \
+        bench_generics_property_json_argument_native_loop.php | \
         bench_generics_property_json_projection_native_loop.php | \
         bench_generics_property_method_native_loop.php | \
         bench_scalar_method_native_loop.php | \
@@ -67,6 +68,7 @@ case $only in
         bench_scalar_property_composed_conditional_native_loop.php | \
         bench_scalar_property_composed_native_loop.php | \
         bench_scalar_property_getter_native_loop.php | \
+        bench_scalar_property_json_argument_native_loop.php | \
         bench_scalar_property_json_projection_native_loop.php | \
         bench_scalar_property_method_native_loop.php | \
         bench_generics_method_turbofish.php | \
@@ -176,6 +178,7 @@ bench_generics_method_mixed_native_loop.php
 bench_generics_property_composed_conditional_native_loop.php
 bench_generics_property_composed_native_loop.php
 bench_generics_property_getter_native_loop.php
+bench_generics_property_json_argument_native_loop.php
 bench_generics_property_json_projection_native_loop.php
 bench_generics_property_method_native_loop.php
 bench_scalar_method_native_loop.php
@@ -188,6 +191,7 @@ bench_scalar_method_mixed_native_loop.php
 bench_scalar_property_composed_conditional_native_loop.php
 bench_scalar_property_composed_native_loop.php
 bench_scalar_property_getter_native_loop.php
+bench_scalar_property_json_argument_native_loop.php
 bench_scalar_property_json_projection_native_loop.php
 bench_scalar_property_method_native_loop.php
 bench_generics_method_turbofish.php
@@ -209,6 +213,7 @@ for workload in \
     bench_generics_property_composed_conditional_native_loop.php \
     bench_generics_property_composed_native_loop.php \
     bench_generics_property_getter_native_loop.php \
+    bench_generics_property_json_argument_native_loop.php \
     bench_generics_property_json_projection_native_loop.php \
     bench_generics_property_method_native_loop.php \
     bench_scalar_method_native_loop.php \
@@ -221,6 +226,7 @@ for workload in \
     bench_scalar_property_composed_conditional_native_loop.php \
     bench_scalar_property_composed_native_loop.php \
     bench_scalar_property_getter_native_loop.php \
+    bench_scalar_property_json_argument_native_loop.php \
     bench_scalar_property_json_projection_native_loop.php \
     bench_scalar_property_method_native_loop.php \
     bench_generics_method_turbofish.php \

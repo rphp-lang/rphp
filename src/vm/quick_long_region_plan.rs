@@ -397,25 +397,15 @@ fn detect_long_ops_region_inner(
                 if instruction.result_type != OpType::Tmp {
                     return None;
                 }
-                if let Some(mut path) = json_paths
-                    .get(array as usize)
-                    .and_then(|path| path.as_ref())
-                    .cloned()
-                {
-                    let element = fixed_invariant_path_element(
-                        op_array,
-                        instruction.op2_type,
-                        instruction.op2,
-                    )?;
-                    if path.len() == 8 {
-                        return None;
-                    }
-                    path.push(element);
-                    json_paths
-                        .get_mut(instruction.result as usize)?
-                        .replace(path);
-                    add_mask_slot(&mut json_fetch_mask, instruction.result, total_slots)?;
-                    add_mask_slot(&mut json_parent_mask, array, total_slots)?;
+                if extend_json_projection_fetch(
+                    op_array,
+                    instruction,
+                    array,
+                    total_slots,
+                    &mut json_paths,
+                    &mut json_fetch_mask,
+                    &mut json_parent_mask,
+                )? {
                     let resume_ip = ip;
                     ip += 1;
                     QuickLongOp::JsonProjectionStep {
@@ -1232,7 +1222,25 @@ fn detect_long_ops_region_inner(
                     let mut has_string_argument = false;
                     let mut cursor = ip + 1;
                     for argument_index in 0..argument_count {
-                        let send = *op_array.instructions.get(cursor)?;
+                        let mut send = *op_array.instructions.get(cursor)?;
+                        while send.opcode == OpCode::FetchDimR {
+                            let array = long_slot(send.op1_type, send.op1)?;
+                            if send.result_type != OpType::Tmp
+                                || !extend_json_projection_fetch(
+                                    op_array,
+                                    send,
+                                    array,
+                                    total_slots,
+                                    &mut json_paths,
+                                    &mut json_fetch_mask,
+                                    &mut json_parent_mask,
+                                )?
+                            {
+                                return None;
+                            }
+                            cursor += 1;
+                            send = *op_array.instructions.get(cursor)?;
+                        }
                         if !matches!(send.opcode, OpCode::SendVal | OpCode::SendVarEx)
                             || send.op2 as usize != argument_index + 1
                         {
