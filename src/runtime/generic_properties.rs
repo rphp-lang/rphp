@@ -8,6 +8,7 @@ impl ExecutorGlobals {
     fn value_matches_reified_property(
         &self,
         value: &crate::value::Value,
+        receiver_scope: &str,
         name: &str,
         binding: ReifiedBinding,
     ) -> Option<bool> {
@@ -21,7 +22,9 @@ impl ExecutorGlobals {
                     return Some(self.generic_metadata.value_matches_resolved_type(
                         value,
                         &cached.expected,
-                        |actual, bound| self.class_is_a(actual, bound),
+                        |actual, bound| {
+                            self.class_is_a_in_generic_scope(actual, bound, &cached.scope)
+                        },
                     ));
                 }
             }
@@ -29,16 +32,18 @@ impl ExecutorGlobals {
         let expected = self
             .generic_metadata
             .reified_instance_property_type(binding, name)?;
+        let scope: Box<str> = self.generic_property_scope(receiver_scope, name).into();
         let matches =
             self.generic_metadata
                 .value_matches_resolved_type(value, &expected, |actual, bound| {
-                    self.class_is_a(actual, bound)
+                    self.class_is_a_in_generic_scope(actual, bound, &scope)
                 });
         self.generic_property_contract_cache
             .replace(Some(GenericPropertyContractBinding {
                 declaration: binding.declaration,
                 use_site: Some(binding.use_site),
                 property: name.into(),
+                scope,
                 expected,
             }));
         Some(matches)
@@ -47,6 +52,7 @@ impl ExecutorGlobals {
     fn value_matches_linked_erased_property(
         &self,
         value: &crate::value::Value,
+        receiver_scope: &str,
         name: &str,
         declaration: u32,
     ) -> Option<bool> {
@@ -63,7 +69,9 @@ impl ExecutorGlobals {
                             value,
                             &cached.expected,
                             declaration,
-                            |actual, bound| self.class_is_a(actual, bound),
+                            |actual, bound| {
+                                self.class_is_a_in_generic_scope(actual, bound, &cached.scope)
+                            },
                         );
                 }
             }
@@ -71,19 +79,21 @@ impl ExecutorGlobals {
         let expected = self
             .generic_metadata
             .linked_instance_property_type(declaration, name)?;
+        let scope: Box<str> = self.generic_property_scope(receiver_scope, name).into();
         let matches = self
             .generic_metadata
             .value_matches_erased_instance_property_type(
                 value,
                 &expected,
                 declaration,
-                |actual, bound| self.class_is_a(actual, bound),
+                |actual, bound| self.class_is_a_in_generic_scope(actual, bound, &scope),
             )?;
         self.generic_property_contract_cache
             .replace(Some(GenericPropertyContractBinding {
                 declaration,
                 use_site: None,
                 property: name.into(),
+                scope,
                 expected,
             }));
         Some(matches)
@@ -110,7 +120,9 @@ impl ExecutorGlobals {
                 .is_some_and(|declaration| !declaration.parameters.is_empty())
         }) {
             if let Some(binding) = self.reified_object_binding(object) {
-                if let Some(matches) = self.value_matches_reified_property(value, name, binding) {
+                if let Some(matches) =
+                    self.value_matches_reified_property(value, owner, name, binding)
+                {
                     if matches {
                         return Ok(Some(binding.declaration));
                     }
@@ -129,7 +141,8 @@ impl ExecutorGlobals {
         let Some(declaration) = declaration else {
             return Ok(None);
         };
-        let Some(matches) = self.value_matches_linked_erased_property(value, name, declaration)
+        let Some(matches) =
+            self.value_matches_linked_erased_property(value, owner, name, declaration)
         else {
             return Ok(None);
         };
@@ -149,8 +162,11 @@ impl ExecutorGlobals {
         value: &crate::value::Value,
         declaration: u32,
     ) -> Result<(), String> {
-        #[cfg(not(feature = "php-generics-reified"))]
-        let _ = object;
+        let receiver_scope = if object.value_type() == crate::value::ValueType::Object {
+            unsafe { object.object_class_name_unchecked() }
+        } else {
+            "?"
+        };
         #[cfg(feature = "php-generics-reified")]
         if self
             .generic_metadata
@@ -160,17 +176,17 @@ impl ExecutorGlobals {
         {
             if let Some(binding) = self.reified_object_binding(object) {
                 if binding.declaration == declaration {
-                    let matches = self
-                        .value_matches_reified_property(value, name, binding)
-                        .ok_or_else(|| "Invalid cached reified property metadata".to_string())?;
-                    if matches {
-                        return Ok(());
-                    }
                     let owner = self
                         .generic_metadata
                         .declaration(binding)
                         .and_then(|declaration| self.generic_metadata.symbol(declaration.owner))
                         .unwrap_or("?");
+                    let matches = self
+                        .value_matches_reified_property(value, receiver_scope, name, binding)
+                        .ok_or_else(|| "Invalid cached reified property metadata".to_string())?;
+                    if matches {
+                        return Ok(());
+                    }
                     return Err(format!(
                         "Value does not match reified property {}::${}",
                         owner, name
@@ -178,18 +194,18 @@ impl ExecutorGlobals {
                 }
             }
         }
-        let matches = self
-            .value_matches_linked_erased_property(value, name, declaration)
-            .ok_or_else(|| "Invalid cached bound-erased property metadata".to_string())?;
-        if matches {
-            return Ok(());
-        }
         let owner = self
             .generic_metadata
             .declarations()
             .get(declaration as usize)
             .and_then(|declaration| self.generic_metadata.symbol(declaration.owner))
             .unwrap_or("?");
+        let matches = self
+            .value_matches_linked_erased_property(value, receiver_scope, name, declaration)
+            .ok_or_else(|| "Invalid cached bound-erased property metadata".to_string())?;
+        if matches {
+            return Ok(());
+        }
         Err(format!(
             "Value does not match bound-erased property {}::${}",
             owner, name

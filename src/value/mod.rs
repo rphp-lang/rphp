@@ -3376,6 +3376,17 @@ impl Value {
         (*refcell.as_ptr()).class_id
     }
 
+    /// Read the immutable class name for Object values without taking a
+    /// `RefCell` borrow. This is needed by boundary checks that may run while
+    /// the same object's property storage is already mutably borrowed.
+    /// SAFETY: Only valid when `value_type() == ValueType::Object`.
+    #[inline(always)]
+    pub unsafe fn object_class_name_unchecked(&self) -> &str {
+        debug_assert!(self.value_type() == ValueType::Object);
+        let refcell = &*(self.data.ptr as *const RefCell<PhpObject>);
+        (*refcell.as_ptr()).class_name.as_ref()
+    }
+
     /// Read the shared property-layout identity without a `RefCell` borrow.
     /// SAFETY: Only valid when `value_type() == ValueType::Object`.
     #[inline(always)]

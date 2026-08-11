@@ -2027,6 +2027,43 @@ lookup. The warmed cache-hit prefix remains a small separate function; all
 owner recovery and binding work is behind an explicitly cold, non-inlined miss
 helper.
 
+Class-context generic applications now retain PHP's lexical scope instead of
+treating `self` as the concrete receiver name. `self<T>` and `parent<T>` work
+in direct declarations, inherited methods/properties and traits; an inherited
+trait resolves to the nearest ancestor that actually consumed it. Explicit
+method-generic bounds use the same scope during first-site validation. A
+sparse reified sidecar retains only a numeric class ID, and only for signatures
+that contain a class pseudo-type, so the ordinary warmed turbofish path keeps
+the original pending/active scope shape. Generic object matching reads the
+immutable class name without a second `RefCell` borrow, which also makes
+self-assignment to a checked property safe while its receiver is mutably
+borrowed. Linked bound-erased method comparison drops nested named arguments
+before deciding whether a sidecar is needed, matching the RFC erasure rule and
+leaving the ordinary executable `self`/`parent` hint as the sole outer-class
+guard. Permanent coverage includes direct, inherited and trait scopes plus
+method-generic `self`/`parent` bounds in erased-only, reified-only and dual
+builds. No external dependency, JIT or native lowering changed.
+
+Both architectures pass all four full `--all-targets` configurations; focused
+generic coverage is 34 scenarios in reified/dual builds and 28 in erased-only.
+Against exact checkpoint `15f2f36`, 20 balanced all-feature release pairs keep
+the ordinary five-million-call generic method at -0.261% on ARM64 and -0.120%
+on CPU-2-pinned x86-64. The warmed inherited turbofish path remains below its
+five-percent ceiling at +1.927% and +2.744%, respectively.
+
+`static<T>` remains deliberately open. It needs parser support for the
+reserved `static` token and a real late-static called-scope identity for both
+instance and static calls; aliasing it to lexical `self` would be observably
+wrong. Reified matching of nested named arguments is also still a semantic
+item: the metadata preserves them, but a later runtime check must compare the
+target object's canonical binding rather than accepting only its erased outer
+class. A multi-ancestor diamond containing pseudo-types must likewise retain
+one lexical scope per merged candidate instead of selecting the first
+prototype, and inheritance-site bound checks must use the declaring class
+scope just as method turbofish bounds now do. These items, along with omitted
+dynamic default parameter values, must close before the hard generics-aware
+JIT gate.
+
 The remaining semantic audit includes omitted default parameter values. They
 are materialized inside the callee after the pre-call reified check, so this
 must be closed without adding a generic branch to ordinary calls. Generics-

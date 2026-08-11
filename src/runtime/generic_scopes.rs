@@ -21,6 +21,18 @@ impl ExecutorGlobals {
             .push(PendingReifiedBindingScope { owner, binding });
     }
 
+    pub(crate) fn push_reified_binding_scope_with_class(
+        &mut self,
+        owner: usize,
+        binding: ReifiedBinding,
+        class_id: u32,
+    ) {
+        self.push_reified_binding_scope(owner, binding);
+        if class_id != 0 {
+            self.reified_binding_scope_classes.push((owner, class_id));
+        }
+    }
+
     pub(crate) fn activate_reified_binding_scope(&mut self, owner: usize, call: usize) {
         let Some(position) = self
             .pending_reified_binding_scopes
@@ -38,6 +50,14 @@ impl ExecutorGlobals {
             });
     }
 
+    pub(crate) fn reified_binding_scope_class_id(&self, owner: usize) -> u32 {
+        self.reified_binding_scope_classes
+            .iter()
+            .rfind(|(scope_owner, _)| *scope_owner == owner)
+            .map(|(_, class_id)| *class_id)
+            .unwrap_or(0)
+    }
+
     pub(crate) fn finish_reified_binding_scope(&mut self, owner: usize) {
         let binding = self
             .active_reified_binding_scopes
@@ -51,6 +71,7 @@ impl ExecutorGlobals {
                     .map(|position| self.pending_reified_binding_scopes.remove(position).binding)
             });
         if let Some(binding) = binding {
+            self.remove_reified_binding_scope_class(owner);
             self.remove_reified_binding(binding);
         }
     }
@@ -63,7 +84,9 @@ impl ExecutorGlobals {
         else {
             return;
         };
-        let binding = self.active_reified_binding_scopes.remove(position).binding;
+        let scope = self.active_reified_binding_scopes.remove(position);
+        let binding = scope.binding;
+        self.remove_reified_binding_scope_class(scope.owner);
         self.remove_reified_binding(binding);
     }
 
@@ -74,7 +97,18 @@ impl ExecutorGlobals {
             .rposition(|scope| scope.owner == owner)
         {
             let binding = self.pending_reified_binding_scopes.remove(position).binding;
+            self.remove_reified_binding_scope_class(owner);
             self.remove_reified_binding(binding);
+        }
+    }
+
+    fn remove_reified_binding_scope_class(&mut self, owner: usize) {
+        if let Some(position) = self
+            .reified_binding_scope_classes
+            .iter()
+            .rposition(|(scope_owner, _)| *scope_owner == owner)
+        {
+            self.reified_binding_scope_classes.remove(position);
         }
     }
 

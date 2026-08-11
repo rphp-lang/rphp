@@ -201,6 +201,7 @@ impl InlineCache {
     const METHOD_LINKED_GENERIC_LONG_CONTRACT: u32 = 16;
     const CALLBACK_PIPELINE_METADATA_ARMED: u32 = 1 << 31;
     const CALLBACK_CACHE_DISABLED: *const FunctionCommon = 1usize as *const FunctionCommon;
+    const GENERIC_CLASS_SCOPE: u32 = 1 << 31;
 
     pub fn empty() -> Self {
         Self {
@@ -215,7 +216,12 @@ impl InlineCache {
     /// index+1 without changing InlineCache's 16-byte layout.
     #[inline(always)]
     pub fn generic_declaration(&self) -> Option<u32> {
-        self.prop_info.checked_sub(1)
+        (self.prop_info & !Self::GENERIC_CLASS_SCOPE).checked_sub(1)
+    }
+
+    #[inline(always)]
+    pub fn generic_signature_uses_class_scope(&self) -> bool {
+        self.prop_info & Self::GENERIC_CLASS_SCOPE != 0
     }
 
     #[inline(always)]
@@ -224,10 +230,12 @@ impl InlineCache {
         declaration: u32,
         receiver_class_id: u32,
         callable: *const FunctionCommon,
+        uses_class_scope: bool,
     ) {
         self.func = callable;
         self.class_id = receiver_class_id;
-        self.prop_info = declaration.saturating_add(1);
+        self.prop_info =
+            declaration.saturating_add(1) | u32::from(uses_class_scope) * Self::GENERIC_CLASS_SCOPE;
     }
 
     /// Generic property writes reuse the otherwise-idle function word for a

@@ -61,13 +61,19 @@ unsafe fn try_execute_property_init_constructor(
             return None;
         }
         #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-        if let Some(expected) = generic_contract
-            .and_then(|contract| contract.value_parameters.get(index))
-            .and_then(Option::as_ref)
+        if let Some((contract, expected)) = generic_contract.and_then(|contract| {
+            contract
+                .value_parameters
+                .get(index)
+                .and_then(Option::as_ref)
+                .map(|expected| (contract, expected))
+        })
             && !eg.generic_metadata.value_matches_resolved_type(
                 value,
                 expected,
-                |actual, bound| eg.class_is_a(actual, bound),
+                |actual, bound| {
+                    eg.class_is_a_in_generic_scope(actual, bound, &contract.scope)
+                },
             )
         {
             return None;

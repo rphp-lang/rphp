@@ -134,6 +134,7 @@ impl GenericMetadata {
         }
         Some(GenericMethodContract {
             owner: self.symbol(candidates[0].0.owner).unwrap_or("?").into(),
+            scope: self.symbol(candidates[0].0.owner).unwrap_or("?").into(),
             method: self.symbol(candidates[0].1.name).unwrap_or(method).into(),
             value_parameters,
             return_type,
@@ -229,21 +230,24 @@ impl GenericMetadata {
                             })
                             .unwrap_or(GenericType::Mixed)
                     }));
+                let child_abi = erase_named_type_arguments(child_abi);
+                let parent_abi = erase_named_type_arguments(parent_abi);
                 (child_abi != parent_abi).then_some(child_abi)
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
-        let child_return =
-            self.merge_generic_intersection(candidates.iter().map(|(_, prototype, arguments)| {
+        let child_return = erase_named_type_arguments(self.merge_generic_intersection(
+            candidates.iter().map(|(_, prototype, arguments)| {
                 prototype
                     .return_type
                     .as_ref()
                     .map(|value| substitute_generic_parameters(value, arguments))
                     .map(|value| erase_method_signature(&value, child, prototype, arguments))
                     .unwrap_or(GenericType::Mixed)
-            }));
-        let parent_return =
-            self.merge_generic_intersection(candidates.iter().map(|(ancestor, prototype, _)| {
+            }),
+        ));
+        let parent_return = erase_named_type_arguments(self.merge_generic_intersection(
+            candidates.iter().map(|(ancestor, prototype, _)| {
                 let identity = (0..ancestor.parameters.len())
                     .map(|parameter| GenericType::Parameter(parameter as u8))
                     .collect::<Vec<_>>();
@@ -252,13 +256,15 @@ impl GenericMetadata {
                     .as_ref()
                     .map(|value| erase_method_signature(value, ancestor, prototype, &identity))
                     .unwrap_or(GenericType::Mixed)
-            }));
+            }),
+        ));
         let return_type = (child_return != parent_return).then_some(child_return);
         if value_parameters.iter().all(Option::is_none) && return_type.is_none() {
             return None;
         }
         Some(GenericMethodContract {
             owner: self.symbol(child.owner).unwrap_or("?").into(),
+            scope: self.symbol(candidates[0].0.owner).unwrap_or("?").into(),
             method: method.into(),
             value_parameters,
             return_type,
@@ -291,6 +297,7 @@ impl GenericMetadata {
         }
         Some(GenericMethodContract {
             owner: self.symbol(declaration.owner).unwrap_or("?").into(),
+            scope: self.symbol(declaration.owner).unwrap_or("?").into(),
             method: self.symbol(method.name).unwrap_or("?").into(),
             value_parameters: method
                 .value_parameters
@@ -311,6 +318,39 @@ impl GenericMetadata {
             is_variadic: method.is_variadic,
             runtime_mode: GenericRuntimeMode::Reified,
         })
+    }
+}
+
+/// Bound erasure drops arguments on a named type application before deciding
+/// whether a linked child boundary differs from its executable PHP ABI. The
+/// outer named type remains enforced by the ordinary signature; reified
+/// contracts deliberately retain their nested arguments.
+fn erase_named_type_arguments(value: GenericType) -> GenericType {
+    match value {
+        GenericType::Named { name, .. } => GenericType::Named {
+            name,
+            arguments: Box::new([]),
+        },
+        GenericType::Nullable(inner) => {
+            GenericType::Nullable(Box::new(erase_named_type_arguments(*inner)))
+        }
+        GenericType::Union(parts) => GenericType::Union(
+            parts
+                .into_vec()
+                .into_iter()
+                .map(erase_named_type_arguments)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        GenericType::Intersection(parts) => GenericType::Intersection(
+            parts
+                .into_vec()
+                .into_iter()
+                .map(erase_named_type_arguments)
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        ),
+        value => value,
     }
 }
 

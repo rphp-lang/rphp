@@ -171,6 +171,9 @@ pub struct GenericMethodMetadata {
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenericMethodContract {
     pub owner: Box<str>,
+    /// Lexical class/trait that gives `self` and `parent` their meaning. This
+    /// may differ from `owner`, which names the concrete receiver contract.
+    pub scope: Box<str>,
     pub method: Box<str>,
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,
@@ -224,6 +227,9 @@ pub struct GenericDeclaration {
     pub parameters: Box<[GenericParameterMetadata]>,
     pub value_parameters: Box<[Option<GenericType>]>,
     pub return_type: Option<GenericType>,
+    /// Whether an explicit call must retain its concrete class scope until
+    /// post-return validation of `self`/`parent`. Cold metadata only.
+    pub signature_uses_class_pseudo: bool,
     pub properties: Box<[GenericPropertyMetadata]>,
     pub variance_uses: Box<[GenericVarianceUse]>,
     pub methods: Box<[GenericMethodMetadata]>,
@@ -638,11 +644,13 @@ impl GenericMetadata {
                 let Some(expected_name) = self.symbol(*name) else {
                     return false;
                 };
-                value.as_object().is_some_and(|object| {
-                    expected_name.eq_ignore_ascii_case("object")
-                        || object.class_name.eq_ignore_ascii_case(expected_name)
-                        || class_is_a(&object.class_name, expected_name)
-                })
+                if value.value_type() != ValueType::Object {
+                    return false;
+                }
+                let class_name = unsafe { value.object_class_name_unchecked() };
+                expected_name.eq_ignore_ascii_case("object")
+                    || class_name.eq_ignore_ascii_case(expected_name)
+                    || class_is_a(class_name, expected_name)
             }
             GenericType::Nullable(inner) => {
                 value.value_type() == ValueType::Null
@@ -756,11 +764,13 @@ impl GenericMetadata {
                 let Some(expected_name) = self.symbol(*name) else {
                     return false;
                 };
-                value.as_object().is_some_and(|object| {
-                    expected_name.eq_ignore_ascii_case("object")
-                        || object.class_name.eq_ignore_ascii_case(expected_name)
-                        || class_is_a(&object.class_name, expected_name)
-                })
+                if value.value_type() != ValueType::Object {
+                    return false;
+                }
+                let class_name = unsafe { value.object_class_name_unchecked() };
+                expected_name.eq_ignore_ascii_case("object")
+                    || class_name.eq_ignore_ascii_case(expected_name)
+                    || class_is_a(class_name, expected_name)
             }
             GenericType::Nullable(inner) => {
                 value.value_type() == ValueType::Null
@@ -813,11 +823,13 @@ impl GenericMetadata {
                 let Some(expected_name) = self.symbol(*name) else {
                     return false;
                 };
-                value.as_object().is_some_and(|object| {
-                    expected_name.eq_ignore_ascii_case("object")
-                        || object.class_name.eq_ignore_ascii_case(expected_name)
-                        || class_is_a(&object.class_name, expected_name)
-                })
+                if value.value_type() != ValueType::Object {
+                    return false;
+                }
+                let class_name = unsafe { value.object_class_name_unchecked() };
+                expected_name.eq_ignore_ascii_case("object")
+                    || class_name.eq_ignore_ascii_case(expected_name)
+                    || class_is_a(class_name, expected_name)
             }
             GenericType::Nullable(inner) => {
                 value.value_type() == ValueType::Null
@@ -1134,16 +1146,53 @@ impl GenericMetadataBuilder {
             })
             .collect::<Vec<_>>()
             .into_boxed_slice();
+        let signature_uses_class_pseudo = value_parameters
+            .iter()
+            .flatten()
+            .any(|value| self.type_uses_class_pseudo(value))
+            || return_type
+                .as_ref()
+                .is_some_and(|value| self.type_uses_class_pseudo(value));
         self.declarations.push(GenericDeclaration {
             kind: declaration.kind,
             owner,
             parameters,
             value_parameters,
             return_type,
+            signature_uses_class_pseudo,
             properties,
             variance_uses,
             methods,
         });
+    }
+
+    fn type_uses_class_pseudo(&self, value: &GenericType) -> bool {
+        match value {
+            GenericType::Named { name, arguments } => {
+                self.symbols.get(*name as usize).is_some_and(|name| {
+                    name.eq_ignore_ascii_case("self")
+                        || name.eq_ignore_ascii_case("parent")
+                        || name.eq_ignore_ascii_case("static")
+                }) || arguments
+                    .iter()
+                    .any(|argument| self.type_uses_class_pseudo(argument))
+            }
+            GenericType::Nullable(inner) => self.type_uses_class_pseudo(inner),
+            GenericType::Union(parts) | GenericType::Intersection(parts) => {
+                parts.iter().any(|part| self.type_uses_class_pseudo(part))
+            }
+            GenericType::Int
+            | GenericType::Float
+            | GenericType::String
+            | GenericType::Bool
+            | GenericType::Array
+            | GenericType::Callable
+            | GenericType::Null
+            | GenericType::Void
+            | GenericType::Mixed
+            | GenericType::Never
+            | GenericType::Parameter(_) => false,
+        }
     }
 
     fn push_inheritance(&mut self, inheritance: PendingGenericInheritance) {

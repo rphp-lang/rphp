@@ -142,6 +142,84 @@ echo (new GenericChild())->inherited::<int>(2);
     assert_eq!(output, "1s2");
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn generic_pseudo_type_applications_keep_their_lexical_class_scope() {
+    let output = common::run_php(
+        r#"<?php
+class ScopedParent<T> {}
+class ScopedChild<U> extends ScopedParent<U> {
+    public self<U> $peer;
+    public function same(self<U> $value): self<U> { return $value; }
+    public function ancestor(parent<U> $value): parent<U> { return $value; }
+}
+$child = new ScopedChild::<int>();
+$child->peer = $child;
+echo $child->same($child) instanceof ScopedChild ? "self:" : "bad:";
+echo $child->ancestor(new ScopedParent()) instanceof ScopedParent ? "parent:" : "bad:";
+echo $child->peer instanceof ScopedChild ? "property:" : "bad:";
+
+class InheritedParent<T> {
+    public self<T> $peer;
+    public function same(self<T> $value): self<T> { return $value; }
+}
+class InheritedChild<U> extends InheritedParent<U> {}
+$inherited = new InheritedChild::<int>();
+$parent = new InheritedParent::<int>();
+$inherited->peer = $parent;
+echo $inherited->same($parent) instanceof InheritedParent ? "inherited:" : "bad:";
+
+trait ScopedTrait<T> {
+    public self<T> $peer;
+    public function same(self<T> $value): self<T> { return $value; }
+}
+class TraitBase { use ScopedTrait<int>; }
+class TraitChild extends TraitBase {}
+$traitChild = new TraitChild();
+$traitBase = new TraitBase();
+$traitChild->peer = $traitBase;
+echo $traitChild->same($traitBase) instanceof TraitBase ? "trait:" : "bad:";
+
+trait ScopedMethodTrait {
+    public function sameGeneric<V>(self<V> $value): self<V> { return $value; }
+}
+class MethodTraitBase { use ScopedMethodTrait; }
+class MethodTraitChild extends MethodTraitBase {}
+$methodTraitChild = new MethodTraitChild();
+$methodTraitBase = new MethodTraitBase();
+echo $methodTraitChild->sameGeneric::<int>($methodTraitBase) instanceof MethodTraitBase
+    ? "method-trait:"
+    : "bad";
+
+class BoundParent {}
+class BoundScope extends BoundParent {
+    public function sameBound<V : self>(V $value): V { return $value; }
+    public function parentBound<V : parent>(V $value): V { return $value; }
+}
+$boundScope = new BoundScope();
+echo $boundScope->sameBound::<BoundScope>($boundScope) instanceof BoundScope
+    && $boundScope->parentBound::<BoundParent>(new BoundParent()) instanceof BoundParent
+    ? "bounds:"
+    : "bad:";
+
+trait BoundTrait {
+    public function traitBound<V : self>(V $value): V { return $value; }
+}
+class BoundTraitBase { use BoundTrait; }
+class BoundTraitChild extends BoundTraitBase {}
+$boundTraitChild = new BoundTraitChild();
+$boundTraitBase = new BoundTraitBase();
+echo $boundTraitChild->traitBound::<BoundTraitBase>($boundTraitBase) instanceof BoundTraitBase
+    ? "trait-bound"
+    : "bad";
+"#,
+    );
+    assert_eq!(
+        output,
+        "self:parent:property:inherited:trait:method-trait:bounds:trait-bound"
+    );
+}
+
 #[cfg(feature = "php-generics-reified")]
 #[test]
 fn imported_generic_method_keeps_its_reified_contract() {

@@ -47,7 +47,18 @@ fn op_check_generic_args(
                 use_site: opline.extended_value,
             };
             #[cfg(feature = "php-generics-reified")]
-            eg.push_reified_binding_scope(frame as usize, binding);
+            {
+                if cache.generic_signature_uses_class_scope() {
+                    let class_id = generic_scope_class_id(eg, kind, owner_value);
+                    eg.push_reified_binding_scope_with_class(
+                        frame as usize,
+                        binding,
+                        class_id,
+                    );
+                } else {
+                    eg.push_reified_binding_scope(frame as usize, binding);
+                }
+            }
             #[cfg(not(feature = "php-generics-reified"))]
             let _ = binding;
             return Ok(());
@@ -159,6 +170,28 @@ fn resolve_generic_args_cache_miss(
         }
     }
 
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    let receiver_scope = if kind == crate::generics::GenericDeclarationKind::Method
+        && owner_value.value_type() == ValueType::Object
+    {
+        Some(unsafe { owner_value.object_class_name_unchecked() })
+    } else if kind == crate::generics::GenericDeclarationKind::Method {
+        owner_value
+            .as_str()
+            .map(|name| name.split_once("::").map_or(name, |(class, _)| class))
+    } else {
+        None
+    };
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    let declaration_scope = eg.generic_declaration_scope(&owner, receiver_scope);
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    let binding = eg
+        .generic_metadata
+        .resolve_binding(kind, &owner, opline.extended_value, |actual, bound| {
+            eg.class_is_a_in_generic_scope(actual, bound, declaration_scope)
+        })
+        .map_err(VmError::Fatal)?;
+    #[cfg(not(any(feature = "php-generics-erased", feature = "php-generics-reified")))]
     let binding = eg
         .generic_metadata
         .resolve_binding(kind, &owner, opline.extended_value, |actual, bound| {
@@ -166,17 +199,77 @@ fn resolve_generic_args_cache_miss(
         })
         .map_err(VmError::Fatal)?;
 
+    let uses_class_scope = eg
+        .generic_metadata
+        .declaration(binding)
+        .is_some_and(|declaration| declaration.signature_uses_class_pseudo);
+
     if cacheable {
-        cache.set_generic_declaration(binding.declaration, receiver_class_id, callable);
+        cache.set_generic_declaration(
+            binding.declaration,
+            receiver_class_id,
+            callable,
+            uses_class_scope,
+        );
     }
 
     #[cfg(feature = "php-generics-reified")]
-    eg.push_reified_binding_scope(frame as usize, binding);
+    {
+        if uses_class_scope {
+            let class_id = generic_scope_class_id(eg, kind, owner_value);
+            eg.push_reified_binding_scope_with_class(frame as usize, binding, class_id);
+        } else {
+            eg.push_reified_binding_scope(frame as usize, binding);
+        }
+    }
 
     #[cfg(not(feature = "php-generics-reified"))]
     let _ = binding;
 
     Ok(())
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[inline]
+fn generic_scope_class_id(
+    eg: &ExecutorGlobals,
+    kind: crate::generics::GenericDeclarationKind,
+    owner: &Value,
+) -> u32 {
+    if kind != crate::generics::GenericDeclarationKind::Method {
+        return 0;
+    }
+    if owner.value_type() == ValueType::Object {
+        return unsafe { owner.object_class_id_unchecked() };
+    }
+    owner
+        .as_str()
+        .map(|name| name.split_once("::").map_or(name, |(class, _)| class))
+        .map_or(0, |class| eg.class_id_of(class))
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[inline]
+fn generic_call_class_is_a(
+    eg: &ExecutorGlobals,
+    call: *mut ExecuteData,
+    actual: &str,
+    expected: &str,
+    declared_scope: &str,
+) -> bool {
+    let common = unsafe { &*(*call).func };
+    let receiver_scope = if common.sig.this_offset == 1 {
+        let receiver = unsafe { &*(*call).cv(0) };
+        if receiver.value_type() == ValueType::Object {
+            Some(unsafe { receiver.object_class_name_unchecked() })
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+    let scope = eg.generic_declaration_scope(declared_scope, receiver_scope);
+    eg.class_is_a_in_generic_scope(actual, expected, scope)
 }
 
 #[inline(never)]
@@ -209,6 +302,10 @@ fn op_check_reified_args(
             ));
         }
         let common = unsafe { &*(*call).func };
+        let declared_scope = eg
+            .generic_metadata
+            .symbol(declaration.owner)
+            .unwrap_or("?");
         let fixed = declaration
             .value_parameters
             .len()
@@ -233,7 +330,9 @@ fn op_check_reified_args(
                 value,
                 expected,
                 binding,
-                |actual, bound| eg.class_is_a(actual, bound),
+                |actual, bound| {
+                    generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                },
             ) {
                 let owner = eg
                     .generic_metadata
@@ -260,7 +359,9 @@ fn op_check_reified_args(
                     value,
                     expected,
                     binding,
-                    |actual, bound| eg.class_is_a(actual, bound),
+                    |actual, bound| {
+                        generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                    },
                 ) {
                     let owner = eg
                         .generic_metadata
@@ -279,7 +380,9 @@ fn op_check_reified_args(
                         value,
                         expected,
                         binding,
-                        |actual, bound| eg.class_is_a(actual, bound),
+                        |actual, bound| {
+                            generic_call_class_is_a(eg, call, actual, bound, declared_scope)
+                        },
                     ) {
                         let owner = eg
                             .generic_metadata
@@ -323,6 +426,10 @@ fn op_check_reified_return(
             .generic_metadata
             .declaration(binding)
             .ok_or_else(|| VmError::Fatal("Invalid reified generic declaration".into()))?;
+        let declared_scope = eg
+            .generic_metadata
+            .symbol(declaration.owner)
+            .unwrap_or("?");
         if let Some(expected) = declaration.return_type.as_ref() {
             let value = unsafe {
                 &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
@@ -331,7 +438,15 @@ fn op_check_reified_return(
                 value,
                 expected,
                 binding,
-                |actual, bound| eg.class_is_a(actual, bound),
+                |actual, bound| {
+                    let class_id = eg.reified_binding_scope_class_id(frame as usize);
+                    let receiver_scope = eg
+                        .class_by_id(class_id)
+                        .map(|class| class.name.as_str());
+                    let scope =
+                        eg.generic_declaration_scope(declared_scope, receiver_scope);
+                    eg.class_is_a_in_generic_scope(actual, bound, scope)
+                },
             ) {
                 let owner = eg
                     .generic_metadata
@@ -376,7 +491,7 @@ fn validate_generic_member_arguments(
         if !eg.generic_metadata.value_matches_resolved_type(
             value,
             expected,
-            |actual, bound| eg.class_is_a(actual, bound),
+            |actual, bound| eg.class_is_a_in_generic_scope(actual, bound, &contract.scope),
         ) {
             return Err(VmError::Fatal(format!(
                 "Argument #{} passed to {}::{}() does not match its {}",
@@ -401,7 +516,9 @@ fn validate_generic_member_arguments(
                 if !eg.generic_metadata.value_matches_resolved_type(
                     value,
                     expected,
-                    |actual, bound| eg.class_is_a(actual, bound),
+                    |actual, bound| {
+                        eg.class_is_a_in_generic_scope(actual, bound, &contract.scope)
+                    },
                 ) {
                     return Err(VmError::Fatal(format!(
                         "Variadic argument #{} passed to {}::{}() does not match its {}",
@@ -417,7 +534,9 @@ fn validate_generic_member_arguments(
                     if !eg.generic_metadata.value_matches_resolved_type(
                         value,
                         expected,
-                        |actual, bound| eg.class_is_a(actual, bound),
+                        |actual, bound| {
+                            eg.class_is_a_in_generic_scope(actual, bound, &contract.scope)
+                        },
                     ) {
                         return Err(VmError::Fatal(format!(
                             "Named variadic argument ${} passed to {}::{}() does not match its {}",
@@ -453,7 +572,7 @@ fn validate_generic_member_return(
     if eg.generic_metadata.value_matches_resolved_type(
         value,
         expected,
-        |actual, bound| eg.class_is_a(actual, bound),
+        |actual, bound| eg.class_is_a_in_generic_scope(actual, bound, &contract.scope),
     ) {
         return Ok(());
     }

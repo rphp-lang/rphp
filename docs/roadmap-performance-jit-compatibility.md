@@ -8771,6 +8771,42 @@ movement is treated as binary-layout noise, not an optimization claim. No
 ordinary dispatch branch, runtime layout, dependency or JIT/native lowering
 changed.
 
+Class-context type applications now resolve through one canonical lexical
+scope path. Direct and inherited `self<T>`/`parent<T>` retain their declaring
+class, while trait bodies bind to the nearest class in the receiver hierarchy
+that consumed the trait. The same rule covers explicit method-generic bounds,
+properties, arguments and returns. A sparse feature-only class-ID sidecar is
+created only for explicit signatures that actually contain a pseudo-type;
+primitive turbofish sites do not grow their pending/active scope records.
+Property and method L0 entries own the already-resolved scope, and object type
+matching reads the immutable class name without a conflicting `RefCell`
+borrow. Bound-erased linked methods discard named-application arguments before
+ABI comparison, so `self<T>` does not create a redundant second outer-class
+guard after erasure. The permanent pseudo-scope benchmark separates this
+checked object/property path from its manually typed control.
+
+Both hosts pass all four complete `--all-targets` matrices. Against exact
+checkpoint `15f2f36`, 20 balanced release pairs put the ordinary generic method
+at -0.261% ARM64 and -0.120% CPU-2-pinned x86-64. The warmed inherited
+turbofish is +1.927% (0.337372/0.330994 seconds) and +2.744%
+(0.504342/0.490871 seconds), within the five-percent gate. Twenty balanced
+pseudo-scope pairs report 0.188390/0.123548 seconds on ARM64 and
+0.247753/0.164126 seconds on x86-64 for two million combined method/property
+iterations. The remaining 52.484%/50.953% delta is the real generic property
+guard—about 32 ns and 42 ns per iteration—not inheritance traversal or a
+redundant method sidecar; RPHP's manually typed property path does not yet
+enforce that write contract.
+
+This checkpoint does not implement `static<T>` by treating it as `self<T>`.
+Correct support requires the reserved-token parser path plus late-static
+called-scope state, including static calls and post-return checks. Nested named
+applications remain interned exactly for Reflection, but the reified runtime
+must still compare the nested object's canonical type tuple. Pseudo-types in a
+diamond also need a scope per merged candidate, and inheritance-site bounds
+need the same lexical resolver already used by method turbofish bounds. These
+semantic items and omitted dynamic defaults precede JIT work; none may be
+papered over by a native specialization.
+
 Omitted PHP default parameter values remain an explicit semantic follow-up.
 They are assigned by callee bytecode after the current pre-call reified
 boundary; the accepted design must validate them without inserting a feature

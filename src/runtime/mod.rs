@@ -46,6 +46,7 @@ struct GenericPropertyContractBinding {
     declaration: u32,
     use_site: Option<u32>,
     property: Box<str>,
+    scope: Box<str>,
     expected: GenericType,
 }
 
@@ -164,6 +165,10 @@ pub struct ExecutorGlobals {
     pending_reified_binding_scopes: Vec<PendingReifiedBindingScope>,
     #[cfg(feature = "php-generics-reified")]
     active_reified_binding_scopes: Vec<ActiveReifiedBindingScope>,
+    /// Sparse class scope for explicit signatures containing `self`/`parent`.
+    /// Ordinary generic calls never allocate or push into this sidecar.
+    #[cfg(feature = "php-generics-reified")]
+    reified_binding_scope_classes: Vec<(usize, u32)>,
     /// Object identity → canonical type arguments. Weak ownership prevents a
     /// recycled allocation from inheriting a stale binding; periodic
     /// exponential sweeps keep construction amortized O(1).
@@ -223,6 +228,8 @@ impl ExecutorGlobals {
             #[cfg(feature = "php-generics-reified")]
             active_reified_binding_scopes: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
+            reified_binding_scope_classes: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
             reified_objects: HashMap::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_object_cache: std::cell::RefCell::new(None),
@@ -272,6 +279,8 @@ impl ExecutorGlobals {
             pending_reified_binding_scopes: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             active_reified_binding_scopes: Vec::new(),
+            #[cfg(feature = "php-generics-reified")]
+            reified_binding_scope_classes: Vec::new(),
             #[cfg(feature = "php-generics-reified")]
             reified_objects: HashMap::new(),
             #[cfg(feature = "php-generics-reified")]
@@ -391,10 +400,14 @@ impl ExecutorGlobals {
                     return Some(cached.contract.clone());
                 }
             }
-            if let Some(contract) = self
+            if let Some(mut contract) = self
                 .generic_metadata
                 .reified_instance_method_contract(binding, method)
             {
+                let scope = self.generic_declaration_scope(&contract.scope, Some(&class_name));
+                if scope != contract.scope.as_ref() {
+                    contract.scope = scope.into();
+                }
                 let contract = std::rc::Rc::new(contract);
                 self.generic_method_contract_cache
                     .replace(Some(GenericMethodContractBinding {
@@ -416,10 +429,14 @@ impl ExecutorGlobals {
                 return Some(cached.contract.clone());
             }
         }
-        let contract = std::rc::Rc::new(
-            self.generic_metadata
-                .linked_instance_method_contract(declaration, method)?,
-        );
+        let mut contract = self
+            .generic_metadata
+            .linked_instance_method_contract(declaration, method)?;
+        let scope = self.generic_declaration_scope(&contract.scope, Some(&class_name));
+        if scope != contract.scope.as_ref() {
+            contract.scope = scope.into();
+        }
+        let contract = std::rc::Rc::new(contract);
         self.generic_method_contract_cache
             .replace(Some(GenericMethodContractBinding {
                 class_id,
@@ -799,6 +816,91 @@ impl ExecutorGlobals {
             }
         }
         false
+    }
+
+    /// Match a class name used by interned generic metadata in its concrete
+    /// class scope. Type applications retain `self` and `parent` before
+    /// erasure, so runtime sidecar checks must resolve those pseudo-types just
+    /// like the executable signature does.
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub(crate) fn class_is_a_in_generic_scope(
+        &self,
+        class_name: &str,
+        target: &str,
+        scope: &str,
+    ) -> bool {
+        let scope = scope.split_once("::").map_or(scope, |(class, _)| class);
+        if target.eq_ignore_ascii_case("self") {
+            self.class_is_a(class_name, scope)
+        } else if target.eq_ignore_ascii_case("parent") {
+            self.class_table
+                .get(scope)
+                .and_then(|class| class.parent.as_deref())
+                .is_some_and(|parent| self.class_is_a(class_name, parent))
+        } else {
+            self.class_is_a(class_name, target)
+        }
+    }
+
+    /// Resolve the lexical class scope of generic metadata. Trait bodies are
+    /// special: PHP binds their `self`/`parent` pseudo-types to the nearest
+    /// class in the receiver hierarchy that actually consumed the trait.
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub(crate) fn generic_declaration_scope<'a>(
+        &'a self,
+        declared_scope: &'a str,
+        receiver_scope: Option<&'a str>,
+    ) -> &'a str {
+        let declared_scope = declared_scope
+            .split_once("::")
+            .map_or(declared_scope, |(class, _)| class);
+        if !self
+            .class_table
+            .get(declared_scope)
+            .is_some_and(|class| class.is_trait)
+        {
+            return declared_scope;
+        }
+        let Some(mut candidate) = receiver_scope else {
+            return declared_scope;
+        };
+        while let Some(class) = self.class_table.get(candidate) {
+            if class
+                .uses
+                .iter()
+                .any(|used| used.eq_ignore_ascii_case(declared_scope))
+            {
+                return class.name.as_str();
+            }
+            let Some(parent) = class.parent.as_deref() else {
+                break;
+            };
+            candidate = parent;
+        }
+        receiver_scope.unwrap_or(declared_scope)
+    }
+
+    /// Find the class scope that owns one concrete property declaration. The
+    /// compiled property table retains its original owner across inheritance;
+    /// trait owners are then rebound to their consuming class.
+    #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+    pub(crate) fn generic_property_scope<'a>(
+        &'a self,
+        receiver_scope: &'a str,
+        property: &str,
+    ) -> &'a str {
+        let declared_scope = self
+            .class_table
+            .get(receiver_scope)
+            .and_then(|class| {
+                class
+                    .properties
+                    .iter()
+                    .find(|(name, _, _, _)| name == property)
+            })
+            .map(|(_, _, _, declaring)| declaring.as_str())
+            .unwrap_or(receiver_scope);
+        self.generic_declaration_scope(declared_scope, Some(receiver_scope))
     }
 
     /// Get the class_id for a given class name. Returns 0 if not found.
