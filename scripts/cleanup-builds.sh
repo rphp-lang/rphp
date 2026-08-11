@@ -11,6 +11,7 @@ TARGET_DIR="$ROOT_DIR/target"
 TMP_ROOT="${TMPDIR:-/tmp}"
 THRESHOLD_GIB="${RPHP_BUILD_CLEAN_THRESHOLD_GIB:-20}"
 STALE_DAYS="${RPHP_BUILD_STALE_DAYS:-1}"
+rphp_cargo_bin="${RPHP_CARGO_BIN:-}"
 
 case "$THRESHOLD_GIB" in
     '' | *[!0-9]*)
@@ -29,8 +30,18 @@ if [ -d "$TARGET_DIR" ]; then
     target_kib=$(du -sk "$TARGET_DIR" | awk '{ print $1 }')
     limit_kib=$((THRESHOLD_GIB * 1024 * 1024))
     if [ "$target_kib" -ge "$limit_kib" ]; then
+        if [ -z "$rphp_cargo_bin" ]; then
+            if command -v cargo >/dev/null 2>&1; then
+                rphp_cargo_bin=$(command -v cargo)
+            elif [ -x /root/.cargo/bin/cargo ]; then
+                rphp_cargo_bin=/root/.cargo/bin/cargo
+            else
+                echo "cargo executable not found; set RPHP_CARGO_BIN" >&2
+                exit 1
+            fi
+        fi
         echo "cleaning workspace target ($((target_kib / 1024 / 1024)) GiB)"
-        (cd "$ROOT_DIR" && cargo clean)
+        (cd "$ROOT_DIR" && "$rphp_cargo_bin" clean)
     else
         echo "keeping workspace target ($((target_kib / 1024)) MiB; limit ${THRESHOLD_GIB} GiB)"
     fi
@@ -49,4 +60,3 @@ find "$TMP_ROOT" -maxdepth 1 -type d \
                 ;;
         esac
     done
-
