@@ -237,6 +237,29 @@ impl NativeMixedBuildState {
         }
     }
 
+    fn lower_property_getter(
+        &mut self,
+        op_index: usize,
+        receiver: *const Value,
+        target: *const FunctionCommon,
+        property_slot: usize,
+        call: &QuickTypedMethodCall,
+        result_slot: u16,
+    ) -> Option<()> {
+        if call.argument_count != 0 {
+            return None;
+        }
+        let shadow_slot = self.property_binding_slot(op_index, receiver, property_slot, 0)?;
+        let completion = self.append(
+            NativeStraightLongOperation::Move {
+                source: QuickLongOperand::Slot(shadow_slot),
+                result: result_slot,
+            },
+            call.resume_ip,
+        )?;
+        self.record_call(target, completion)
+    }
+
     fn lower_property_method(
         &mut self,
         op_index: usize,

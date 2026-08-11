@@ -2342,6 +2342,26 @@ dual/reified and 9 erased generic JIT scenarios. No `Value`, function, frame,
 instruction, property-IC, native-context or backend layout changed, and no
 dependency was added.
 
+Generic and ordinary typed property getters now lower through the same native
+property binding without adding a getter-specific backend operation. Region
+construction resolves the existing quick getter cache, validates the
+receiver-specific generic return boundary and current exact-Long slot once,
+then emits the existing slot `Move`. Activation seeding accepts either the
+getter or mutator as the first use of a binding. Binding identity remains the
+receiver plus declared object slot, so a mixed getter/mutator pipeline shares
+one shadow and observes program order before the existing transactional
+publication step.
+
+A wrong reified tuple, referenced property or non-Long value fails before the
+native region and resumes the original caller operation. Against exact
+checkpoint `8a36f5f`, the generic getter improves by 88.999%/88.905% on ARM64
+and 92.037%/91.969% on CPU-2-pinned x86-64 in erased/reified mode. Ordinary
+typed getters improve by 89.097%/88.981% and 91.979%/91.947%, while unchanged
+scalar-method controls remain -0.357%/-0.337% and +0.569%/+0.180%. Focused
+coverage is now 20 dual/reified and 11 erased scenarios. The generic proof is
+kept out of native iterations; no property IC, native operation, context or
+backend layout changed, and no dependency was added.
+
 ARM64 and x86-64 release builds additionally align functions to one 64-byte
 cache line. This stabilizes the large dispatch entry points against unrelated
 cold metadata/drop-glue growth: the unaligned feature-off property control

@@ -139,6 +139,32 @@ fn generic_property_ops_plan<'a>(
         .expect("compiler should select the generic property-method ops loop")
 }
 
+fn generic_property_getter_ops_plan<'a>(
+    functions: &'a [(String, rphp::vm::function::UserFunction)],
+    function_name: &str,
+) -> &'a rphp::vm::quick::QuickLongOpsLoop {
+    functions
+        .iter()
+        .find(|(name, _)| name.eq_ignore_ascii_case(function_name))
+        .and_then(|(_, function)| {
+            function
+                .op_array
+                .block_plans
+                .iter()
+                .find_map(|plan| match plan {
+                    BlockPlan::QuickLongOps(plan)
+                        if plan.ops.iter().any(|operation| {
+                            matches!(operation, QuickLongOp::PropertyGetterCall { .. })
+                        }) =>
+                    {
+                        Some(plan)
+                    }
+                    _ => None,
+                })
+        })
+        .expect("compiler should select the generic property-getter ops loop")
+}
+
 #[test]
 fn exact_generic_long_tuple_enters_one_native_region() {
     let (_, functions, result, output) = compile_and_execute(
@@ -623,6 +649,110 @@ echo genericPropertyTotal(new BoundGenericPropertyJitBox::<int>(0));
     );
     assert_eq!(plan.native_jit().native_entries(), 1);
     assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn bound_generic_property_getter_enters_one_native_region() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class BoundGenericPropertyGetterJitBox<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+function genericPropertyReadTotal($box) {
+    $sum = 0;
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->current();
+        $checksum += $i;
+    }
+    return $i . ':' . $sum . ':' . $checksum;
+}
+echo genericPropertyReadTotal(new BoundGenericPropertyGetterJitBox::<int>(7));
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:700000:4999950000");
+
+    let plan = generic_property_getter_ops_plan(&functions, "genericPropertyReadTotal");
+    assert!(
+        plan.native_jit().is_straight_compiled(),
+        "ops: {:?}",
+        plan.ops
+    );
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[test]
+fn generic_property_getter_and_mutator_share_one_native_shadow() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericPropertyPipelineJitBox<T : int> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+    public function add(T $value): void { $this->value = $this->value + $value; }
+}
+function genericPropertyPipeline($box) {
+    $sum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->current();
+        $box->add(1);
+    }
+    return $i . ':' . $sum . ':' . $box->value;
+}
+echo genericPropertyPipeline(new GenericPropertyPipelineJitBox::<int>(1));
+"#,
+    );
+    result.unwrap();
+    assert_eq!(output, "100000:5000050000:100001");
+
+    let plan = generic_property_getter_ops_plan(&functions, "genericPropertyPipeline");
+    assert!(
+        plan.ops
+            .iter()
+            .any(|operation| matches!(operation, QuickLongOp::PropertyMethodCall { .. }))
+    );
+    assert!(plan.native_jit().is_straight_compiled());
+    assert_eq!(plan.native_jit().native_entries(), 1);
+    assert!(plan.native_jit().native_chunks() > 1);
+    assert_eq!(plan.native_jit().side_exits(), 0);
+}
+
+#[cfg(feature = "php-generics-reified")]
+#[test]
+fn reified_property_getter_mismatch_replays_canonical_caller_operation() {
+    let (_, functions, result, output) = compile_and_execute(
+        r#"<?php
+class GenericPropertyGetterJitBox<T> {
+    public T $value;
+    public function __construct(T $value) { $this->value = $value; }
+    public function current(): T { return $this->value; }
+}
+function genericPropertyReadTotal($box) {
+    $sum = 0;
+    $checksum = 0;
+    for ($i = 0; $i < 100000; $i++) {
+        $sum += $box->current();
+        $checksum += $i;
+    }
+    return $sum . ':' . $checksum;
+}
+echo genericPropertyReadTotal(new GenericPropertyGetterJitBox::<int>(7)) . '|';
+genericPropertyReadTotal(new GenericPropertyGetterJitBox::<string>('seed'));
+"#,
+    );
+    let error = result.unwrap_err();
+    assert_eq!(output, "700000:4999950000|");
+    let rendered = format!("{error:?}");
+    assert!(rendered.contains("Unsupported operand types"), "{rendered}");
+
+    let plan = generic_property_getter_ops_plan(&functions, "genericPropertyReadTotal");
+    assert_eq!(plan.native_jit().native_entries(), 1);
     assert_eq!(plan.native_jit().side_exits(), 0);
 }
 

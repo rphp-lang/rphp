@@ -9223,6 +9223,29 @@ generic property, canonical replay for a wrong reified property tuple, and no
 plan for an invalid void value return. Focused generic JIT coverage is now 17
 dual/reified and 9 erased scenarios.
 
+Property getters now reuse that activation-time property proof and shadow
+binding. A zero-argument `PropertyGetterCall` lowers to the existing native
+slot-to-slot move after the ordinary quick resolver has proved the receiver,
+method result and current property value are exact Longs. Generic metadata is
+therefore still consulted only before native entry. A getter and mutator for
+the same receiver slot deliberately deduplicate to one transactional shadow,
+so reads observe preceding native writes and final publication preserves call
+order. Getter-only regions publish the identical checked Long; referenced,
+non-Long or reified-mismatched properties reject the region and replay the
+original caller operation.
+
+Against exact checkpoint `8a36f5f`, 20 balanced max-perf pairs improve the
+ten-million-iteration generic getter by 88.999%/88.905% on ARM64 and
+92.037%/91.969% on CPU-2-pinned x86-64 in erased/reified mode. Forty-pair
+ordinary typed-getter measurements improve by 89.097%/88.981% and
+91.979%/91.947%, respectively, because they share the same target-neutral
+lowering. Unchanged scalar-method controls over 200 pairs are
+-0.357%/-0.337% on ARM64 and +0.569%/+0.180% on x86-64. Permanent coverage is
+now 20 dual/reified and 11 erased scenarios, including shared getter/mutator
+ordering and canonical reified mismatch replay. No property IC, native
+instruction, kernel-state or backend layout changed, and no dependency was
+added.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

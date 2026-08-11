@@ -121,21 +121,29 @@ unsafe fn prepare_native_mixed_properties(
     for index in 0..kernel.property_binding_count as usize {
         let op_index = kernel.property_binding_op_indices[index] as usize;
         let property_index = kernel.property_binding_property_indices[index] as usize;
-        let QuickResolvedObjectOp::PropertyMethod {
-            receiver,
-            property_slots,
-            property_count,
-            ..
-        } = *resolved_object_ops.get(op_index)?
-        else {
-            return None;
+        let (receiver, property_slot) = match *resolved_object_ops.get(op_index)? {
+            QuickResolvedObjectOp::PropertyMethod {
+                receiver,
+                property_slots,
+                property_count,
+                ..
+            } => {
+                if property_index >= property_count as usize {
+                    return None;
+                }
+                (receiver, property_slots[property_index])
+            }
+            QuickResolvedObjectOp::PropertyGetter {
+                receiver,
+                property_slot,
+                ..
+            } if property_index == 0 => (receiver, property_slot),
+            _ => return None,
         };
-        if receiver.is_null() || property_index >= property_count as usize {
+        if receiver.is_null() {
             return None;
         }
-        let value = (*receiver)
-            .object_property_slot_unchecked(property_slots[property_index])
-            as *mut Value;
+        let value = (*receiver).object_property_slot_unchecked(property_slot) as *mut Value;
         if value.is_null()
             || (*value).value_type() != ValueType::Long
             || (*value).is_reference()

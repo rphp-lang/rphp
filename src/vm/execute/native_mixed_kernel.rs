@@ -130,7 +130,7 @@ unsafe fn native_quick_long_mixed_kernel(
     let mut has_indexed_load = false;
     let mut has_indexed_store = false;
     let mut has_virtual_pipeline = false;
-    let mut has_property_method = false;
+    let mut has_property_binding = false;
     let mut has_property_read = false;
     let mut has_typed_method = false;
     let mut plan_index = 1usize;
@@ -388,7 +388,33 @@ unsafe fn native_quick_long_mixed_kernel(
                     property_count,
                     &call,
                 )?;
-                has_property_method = true;
+                has_property_binding = true;
+                has_typed_method = true;
+            }
+            QuickLongOp::PropertyGetterCall { call, result } => {
+                if call.next_target.op_index() != Some(plan_index + 1) {
+                    return None;
+                }
+                let QuickResolvedObjectOp::PropertyGetter {
+                    receiver,
+                    target,
+                    property_slot,
+                } = *resolved_object_ops.get(plan_index)?
+                else {
+                    return None;
+                };
+                builder.lower_property_getter(
+                    plan_index,
+                    receiver,
+                    target,
+                    property_slot,
+                    &call,
+                    result,
+                )?;
+                // Getter shadows share the same activation binding and final
+                // publication path as property mutators. A read-only binding
+                // writes back the identical checked Long value.
+                has_property_binding = true;
                 has_typed_method = true;
             }
             QuickLongOp::ScalarMethodCall { call, result } => {
@@ -753,14 +779,14 @@ unsafe fn native_quick_long_mixed_kernel(
     // operation, whereas native property inputs are hoisted once at entry.
     // Keep that combination out until property read/write sets are proven
     // disjoint by the planner.
-    if has_property_read && (has_property_method || has_typed_method || has_virtual_pipeline) {
+    if has_property_read && (has_property_binding || has_typed_method || has_virtual_pipeline) {
         return None;
     }
     if (!has_hash_update
         && !has_indexed_load
         && !has_indexed_store
         && !has_virtual_pipeline
-        && !has_property_method
+        && !has_property_binding
         && !has_property_read)
         || (!has_typed_method
             && !has_property_read
