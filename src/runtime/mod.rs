@@ -128,30 +128,23 @@ fn inherit_property_definitions(
     child: &mut Vec<PropertyDefinition>,
     parent: &[PropertyDefinition],
 ) {
-    let child_names: std::collections::HashSet<&str> =
-        child.iter().map(|(name, _, _, _)| name.as_str()).collect();
+    let child_names: std::collections::HashSet<&str> = child
+        .iter()
+        .map(|property| property.name.as_str())
+        .collect();
     let mut inherited = Vec::new();
-    for (name, default, visibility, declaring) in parent {
-        if child_names.contains(name.as_str()) {
-            if *visibility == Visibility::Private
-                && child.iter().any(|(child_name, _, child_visibility, _)| {
-                    child_name == name && *child_visibility == Visibility::Private
+    for property in parent {
+        if child_names.contains(property.name.as_str()) {
+            if property.visibility == Visibility::Private
+                && child.iter().any(|child_property| {
+                    child_property.name == property.name
+                        && child_property.visibility == Visibility::Private
                 })
             {
-                inherited.push((
-                    name.clone(),
-                    default.clone(),
-                    *visibility,
-                    declaring.clone(),
-                ));
+                inherited.push(property.clone());
             }
         } else {
-            inherited.push((
-                name.clone(),
-                default.clone(),
-                *visibility,
-                declaring.clone(),
-            ));
+            inherited.push(property.clone());
         }
     }
     child.extend(inherited);
@@ -168,28 +161,23 @@ fn inherit_static_property_definitions(
 ) {
     debug_assert_eq!(child.len(), child_slots.len());
     debug_assert_eq!(parent.len(), parent_slots.len());
-    let child_names: std::collections::HashSet<&str> =
-        child.iter().map(|(name, _, _, _)| name.as_str()).collect();
+    let child_names: std::collections::HashSet<&str> = child
+        .iter()
+        .map(|property| property.name.as_str())
+        .collect();
     let mut inherited = Vec::new();
-    for (index, (name, default, visibility, declaring)) in parent.iter().enumerate() {
-        let keep = if child_names.contains(name.as_str()) {
-            *visibility == Visibility::Private
-                && child.iter().any(|(child_name, _, child_visibility, _)| {
-                    child_name == name && *child_visibility == Visibility::Private
+    for (index, property) in parent.iter().enumerate() {
+        let keep = if child_names.contains(property.name.as_str()) {
+            property.visibility == Visibility::Private
+                && child.iter().any(|child_property| {
+                    child_property.name == property.name
+                        && child_property.visibility == Visibility::Private
                 })
         } else {
             true
         };
         if keep {
-            inherited.push((
-                (
-                    name.clone(),
-                    default.clone(),
-                    *visibility,
-                    declaring.clone(),
-                ),
-                parent_slots[index],
-            ));
+            inherited.push((property.clone(), parent_slots[index]));
         }
     }
     for (definition, slot) in inherited {
@@ -228,34 +216,30 @@ fn merge_trait_static_property_definitions(
     composed_names: &mut std::collections::HashSet<String>,
 ) -> Result<(), String> {
     debug_assert_eq!(target.len(), target_slots.len());
-    for (name, default, visibility, _) in source {
+    for property in source {
         let existing = target
             .iter()
-            .position(|(candidate, _, _, _)| candidate == name);
-        if own_names.contains(name) || composed_names.contains(name) {
+            .position(|candidate| candidate.name == property.name);
+        if own_names.contains(&property.name) || composed_names.contains(&property.name) {
             let index = existing.expect("own/composed static property definition");
-            let (_, existing_default, existing_visibility, existing_declaring) = &target[index];
+            let existing_property = &target[index];
             if !property_definitions_are_compatible(
-                existing_default,
-                *existing_visibility,
-                default,
-                *visibility,
+                &existing_property.default,
+                existing_property.visibility,
+                &property.default,
+                property.visibility,
             ) {
                 return Err(format!(
                     "{} and {} define the same property (${}) in the composition of {}. \
                      However, the definition differs and is considered incompatible",
-                    existing_declaring, trait_name, name, class_name
+                    existing_property.declaring_class, trait_name, property.name, class_name
                 ));
             }
             continue;
         }
 
-        let definition = (
-            name.clone(),
-            default.clone(),
-            *visibility,
-            trait_name.to_string(),
-        );
+        let mut definition = property.clone();
+        definition.declaring_class = trait_name.to_string();
         if let Some(index) = existing {
             // A first trait declaration in this class overrides inherited
             // metadata and receives a fresh storage slot.
@@ -265,7 +249,7 @@ fn merge_trait_static_property_definitions(
             target.push(definition);
             target_slots.push(None);
         }
-        composed_names.insert(name.clone());
+        composed_names.insert(property.name.clone());
     }
     Ok(())
 }
@@ -279,35 +263,33 @@ fn merge_trait_property_definitions(
     trait_name: &str,
 ) -> Result<(), String> {
     let mut additions = Vec::new();
-    for (name, default, visibility, _) in source {
-        if let Some((_, existing_default, existing_visibility, existing_declaring)) =
-            target.iter().find(|(candidate, _, _, _)| candidate == name)
+    for property in source {
+        if let Some(existing_property) = target
+            .iter()
+            .find(|candidate| candidate.name == property.name)
         {
-            if existing_declaring == class_name {
+            if existing_property.declaring_class == class_name {
                 continue;
             }
-            let compatible = existing_visibility == visibility
+            let compatible = existing_property.visibility == property.visibility
                 && property_definitions_are_compatible(
-                    default,
-                    *visibility,
-                    existing_default,
-                    *existing_visibility,
+                    &property.default,
+                    property.visibility,
+                    &existing_property.default,
+                    existing_property.visibility,
                 );
             if !compatible {
                 return Err(format!(
                     "{} and {} define the same property (${}) in the composition of {}. \
                      However, the definition differs and is considered incompatible",
-                    existing_declaring, trait_name, name, class_name
+                    existing_property.declaring_class, trait_name, property.name, class_name
                 ));
             }
             continue;
         }
-        additions.push((
-            name.clone(),
-            default.clone(),
-            *visibility,
-            trait_name.to_string(),
-        ));
+        let mut addition = property.clone();
+        addition.declaring_class = trait_name.to_string();
+        additions.push(addition);
     }
     target.extend(additions);
     Ok(())
@@ -841,7 +823,7 @@ impl ExecutorGlobals {
         let own_static_names = class_def
             .static_properties
             .iter()
-            .map(|(name, _, _, _)| name.clone())
+            .map(|property| property.name.clone())
             .collect::<std::collections::HashSet<_>>();
         // `None` denotes a declaration composed by this class and therefore a
         // fresh slot. Inherited entries carry the parent's canonical slot.
@@ -1007,7 +989,7 @@ impl ExecutorGlobals {
                 let slot = u32::try_from(self.static_property_values.len())
                     .map_err(|_| "Too many static property storage slots".to_string())?;
                 self.static_property_values
-                    .push(definition.1.clone().unwrap_or_else(Value::null));
+                    .push(definition.default.clone().unwrap_or_else(Value::null));
                 slot
             };
             resolved_static_slots.push(slot);
@@ -1018,11 +1000,11 @@ impl ExecutorGlobals {
         let property_keys = class_def
             .properties
             .iter()
-            .map(|(name, _default, visibility, declaring)| {
-                if *visibility == Visibility::Private {
-                    mangle_private_prop(declaring, name)
+            .map(|property| {
+                if property.visibility == Visibility::Private {
+                    mangle_private_prop(&property.declaring_class, &property.name)
                 } else {
-                    name.clone()
+                    property.name.clone()
                 }
             })
             .collect();
@@ -1031,9 +1013,9 @@ impl ExecutorGlobals {
         class_def.property_defaults = class_def
             .properties
             .iter()
-            .map(|(name, default, _visibility, _declaring)| {
-                default.clone().unwrap_or_else(|| {
-                    if class_def.readonly_props.contains(name) {
+            .map(|property| {
+                property.default.clone().unwrap_or_else(|| {
+                    if class_def.readonly_props.contains(&property.name) {
                         crate::value::Value::undef()
                     } else {
                         crate::value::Value::null()
@@ -1286,9 +1268,9 @@ impl ExecutorGlobals {
                 class
                     .properties
                     .iter()
-                    .find(|(name, _, _, _)| name == property)
+                    .find(|definition| definition.name == property)
             })
-            .map(|(_, _, _, declaring)| declaring.as_str())
+            .map(|definition| definition.declaring_class.as_str())
             .unwrap_or(receiver_scope);
         self.generic_declaration_scope(declared_scope, Some(receiver_scope))
     }
@@ -1619,9 +1601,9 @@ impl ExecutorGlobals {
         prop_name: &str,
     ) -> Option<(Visibility, String)> {
         if let Some(class_def) = self.class_table.get(class_name) {
-            for (name, _default, vis, declaring) in &class_def.properties {
-                if name == prop_name {
-                    return Some((*vis, declaring.clone()));
+            for property in &class_def.properties {
+                if property.name == prop_name {
+                    return Some((property.visibility, property.declaring_class.clone()));
                 }
             }
             // Check parent

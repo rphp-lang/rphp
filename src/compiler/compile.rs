@@ -1014,8 +1014,31 @@ pub(crate) struct CompiledParams {
     pub return_type_hint: crate::vm::function::ParamTypeHint,
 }
 
-/// Compiled class definition
-pub type PropertyDefinition = (String, Option<Value>, Visibility, String);
+/// One compiled property declaration. Instance and static tables share this
+/// metadata shape while keeping their storage domains separate.
+#[derive(Debug, Clone)]
+pub struct PropertyDefinition {
+    pub name: String,
+    pub default: Option<Value>,
+    pub visibility: Visibility,
+    pub declaring_class: String,
+}
+
+impl PropertyDefinition {
+    pub fn new(
+        name: String,
+        default: Option<Value>,
+        visibility: Visibility,
+        declaring_class: String,
+    ) -> Self {
+        Self {
+            name,
+            default,
+            visibility,
+            declaring_class,
+        }
+    }
+}
 
 pub struct ClassDef {
     pub name: String,
@@ -1027,7 +1050,7 @@ pub struct ClassDef {
     pub is_trait: bool,
     pub is_enum: bool,
     pub uses: Vec<String>, // trait names from `use Foo, Bar;`
-    /// Instance properties: (name, default value, visibility, declaring class).
+    /// Instance-property declarations in deterministic layout order.
     pub properties: Vec<PropertyDefinition>,
     /// Static properties remain outside every object layout. Mutable static
     /// storage can build on this separate declaration table without widening

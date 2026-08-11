@@ -131,7 +131,7 @@ class LateStaticOpcodeBase {
     let class = &compiled.class_defs[0];
     assert!(class.properties.is_empty());
     assert_eq!(class.static_properties.len(), 1);
-    assert_eq!(class.static_properties[0].0, "number");
+    assert_eq!(class.static_properties[0].name, "number");
     let dispatch = class
         .methods
         .iter()

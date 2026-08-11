@@ -20,7 +20,7 @@ use super::{
     reflection_type_generic_arguments, reflection_type_has_generic_arguments, reflection_type_name,
     reflection_type_to_string,
 };
-use crate::compiler::compile::ClassDef;
+use crate::compiler::compile::{ClassDef, PropertyDefinition};
 use crate::compiler::make_internal_method;
 use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
@@ -105,7 +105,7 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
         .into_iter()
         .zip(cases)
         .map(|(name, value)| {
-            (
+            PropertyDefinition::new(
                 name.to_string(),
                 Some(value),
                 Visibility::Public,

@@ -12,6 +12,7 @@
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
+use crate::compiler::compile::PropertyDefinition;
 use crate::compiler::{
     make_direct_internal_function, make_internal_function, make_internal_function_ref,
     make_internal_function_variadic, make_internal_method,
@@ -1042,7 +1043,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_trait: false,
         is_enum: false,
         uses: vec![],
-        properties: vec![(
+        properties: vec![PropertyDefinition::new(
             "message".to_string(),
             Some(Value::string("")),
             Visibility::Protected,
@@ -1068,7 +1069,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         is_trait: false,
         is_enum: false,
         uses: vec![],
-        properties: vec![(
+        properties: vec![PropertyDefinition::new(
             "message".to_string(),
             Some(Value::string("")),
             Visibility::Protected,

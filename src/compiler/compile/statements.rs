@@ -1107,14 +1107,8 @@ impl Compiler {
                 }
 
                 // Evaluate property defaults (constant expressions only)
-                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
-                    Vec::new();
-                let mut compiled_static_props: Vec<(
-                    String,
-                    Option<Value>,
-                    Visibility,
-                    String,
-                )> = Vec::new();
+                let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
+                let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
@@ -1126,7 +1120,7 @@ impl Compiler {
                     if prop.is_readonly && !prop.is_static {
                         readonly_props.push(prop.name.clone());
                     }
-                    let definition = (
+                    let definition = PropertyDefinition::new(
                         prop.name.clone(),
                         default,
                         prop.visibility,
@@ -1141,7 +1135,12 @@ impl Compiler {
 
                 // Add promoted properties
                 for (pname, pvis, p_readonly) in &promoted_props {
-                    compiled_props.push((pname.clone(), None, *pvis, name.clone()));
+                    compiled_props.push(PropertyDefinition::new(
+                        pname.clone(),
+                        None,
+                        *pvis,
+                        name.clone(),
+                    ));
                     if *p_readonly {
                         readonly_props.push(pname.clone());
                     }
@@ -1420,14 +1419,8 @@ impl Compiler {
                     ));
                 }
 
-                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
-                    Vec::new();
-                let mut compiled_static_props: Vec<(
-                    String,
-                    Option<Value>,
-                    Visibility,
-                    String,
-                )> = Vec::new();
+                let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
+                let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 for prop in properties {
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
@@ -1435,7 +1428,7 @@ impl Compiler {
                         })?),
                         None => None,
                     };
-                    let definition = (
+                    let definition = PropertyDefinition::new(
                         prop.name.clone(),
                         default,
                         prop.visibility,
@@ -1572,8 +1565,7 @@ impl Compiler {
                 // Build properties for enum cases — each case is stored as a property
                 // with a default value that is a PhpObject with name/value fields.
                 // Static properties (cases) are stored as class properties with is_enum_case flag.
-                let mut compiled_props: Vec<(String, Option<Value>, Visibility, String)> =
-                    Vec::new();
+                let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 for (case_name, case_value) in cases {
                     use crate::value::{PhpArray, PhpObject};
                     let mut props = std::collections::HashMap::new();
@@ -1591,7 +1583,7 @@ impl Compiler {
                         0, // assigned at runtime registration
                         props,
                     ));
-                    compiled_props.push((
+                    compiled_props.push(PropertyDefinition::new(
                         case_name.clone(),
                         Some(obj),
                         Visibility::Public,

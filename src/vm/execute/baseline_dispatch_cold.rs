@@ -1130,11 +1130,11 @@ fn resolve_static_property_storage_slot(
     let class = eg.class_by_id(class_id).ok_or_else(|| {
         VmError::Fatal(format!("Class \"{}\" not found", raw_class))
     })?;
-    let Some((property_index, (_, _, visibility, declaring))) = class
+    let Some((property_index, definition)) = class
         .static_properties
         .iter()
         .enumerate()
-        .find(|(_, (name, _, _, _))| name == property)
+        .find(|(_, definition)| definition.name == property)
     else {
         return Err(VmError::Fatal(format!(
             "Access to undeclared static property {}::${}",
@@ -1148,15 +1148,19 @@ fn resolve_static_property_storage_slot(
         )));
     }
     let caller = get_caller_class(frame, eg);
-    if !eg.check_visibility(caller.as_deref(), declaring, *visibility) {
-        let visibility = match visibility {
+    if !eg.check_visibility(
+        caller.as_deref(),
+        &definition.declaring_class,
+        definition.visibility,
+    ) {
+        let visibility = match definition.visibility {
             Visibility::Private => "private",
             Visibility::Protected => "protected",
             Visibility::Public => unreachable!(),
         };
         return Err(VmError::Fatal(format!(
             "Cannot access {} property {}::${}",
-            visibility, declaring, property
+            visibility, definition.declaring_class, property
         )));
     }
     eg.static_property_storage_slot(class_id, property_index)

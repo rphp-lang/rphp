@@ -243,9 +243,9 @@ fn op_new_obj<'a>(
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
     if let Some(class) = eg.class_by_id(class_id) {
         let object = unsafe { &*result_ptr };
-        for (property, default, _, _) in &class.properties {
-            if let Some(default) = default {
-                eg.check_generic_property_value(object, &class.name, property, default)
+        for property in &class.properties {
+            if let Some(default) = &property.default {
+                eg.check_generic_property_value(object, &class.name, &property.name, default)
                     .map_err(VmError::Fatal)?;
             }
         }
