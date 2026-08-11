@@ -73,16 +73,14 @@ fn op_check_generic_args(
     } else if let Some(name) = owner_value.as_str() {
         name.to_string()
     } else if let Some(closure) = owner_value.as_closure() {
-        let common = unsafe { &*closure.func };
-        if common.fn_type != FunctionType::User {
+        let Some(user) = closure.user_function() else {
             return Err(VmError::Fatal(
                 "Generic arguments are not supported for this callable".into(),
             ));
-        }
+        };
         kind = crate::generics::GenericDeclarationKind::Closure;
         cacheable = true;
         callable = closure.func;
-        let user = unsafe { &*(closure.func as *const UserFunction) };
         user.op_array.name.clone()
     } else {
         return Err(VmError::Fatal(

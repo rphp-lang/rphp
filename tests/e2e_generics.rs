@@ -53,9 +53,12 @@ $reflection = new ReflectionFunction("strlen");
 echo $reflection->isGeneric() ? "yes" : "no";
 echo count($reflection->getGenericParameters());
 echo count($reflection->getGenericRuntimeModes());
+$closureReflection = new ReflectionFunction(function() {});
+echo $closureReflection->isGeneric() ? "yes" : "no";
+echo count($closureReflection->getGenericParameters());
 "#,
     );
-    assert_eq!(output, "no00");
+    assert_eq!(output, "no00no0");
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1269,6 +1272,44 @@ try {
     assert_eq!(
         output,
         "ReflectionGenericTypeParameter:A:A:0:ReflectionGenericVariance:Covariant:object:stdClass:ReflectionClass:A:singleton:case:interface:Contravariant:ReflectionFunction:ReflectionMethod:C:ReflectionClass:V:ReflectionMethod:V:caught"
+    );
+}
+
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn reflection_function_accepts_generic_closure_and_arrow_values() {
+    let output = common::run_php(
+        r#"<?php
+$closure = function<C : object = stdClass>() {};
+$arrow = fn<A : string = string>() => "value";
+$plain = function() {};
+
+$closureReflection = new ReflectionFunction($closure);
+$closureParameter = $closureReflection->getGenericParameters()[0];
+echo ($closureReflection instanceof ReflectionFunctionAbstract) ? "function:" : "missing:";
+echo $closureReflection->isGeneric() ? "generic:" : "plain:";
+echo $closureParameter->getName() . ":";
+echo $closureParameter->getBound()->getName() . ":";
+echo $closureParameter->getDefault()->getName() . ":";
+$declaringClosure = $closureParameter->getDeclaringEntity();
+echo $declaringClosure->isGeneric() ? $declaringClosure->getGenericParameters()[0]->getName() . ":" : "missing:";
+
+$arrowReflection = new ReflectionFunction($arrow);
+$arrowParameter = $arrowReflection->getGenericParameters()[0];
+echo $arrowReflection->isGeneric() ? "arrow:" : "missing:";
+echo $arrowParameter->getName() . ":";
+echo $arrowParameter->getBound()->getName() . ":";
+echo $arrowParameter->getDefault()->getName() . ":";
+echo get_class($arrowParameter->getDeclaringEntity()) . ":";
+
+$plainReflection = new ReflectionFunction($plain);
+echo $plainReflection->isGeneric() ? "missing:" : "plain:";
+echo count($plainReflection->getGenericParameters());
+"#,
+    );
+    assert_eq!(
+        output,
+        "function:generic:C:object:stdClass:C:arrow:A:string:string:ReflectionFunction:plain:0"
     );
 }
 

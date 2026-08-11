@@ -8706,10 +8706,29 @@ CPU-2-pinned x86-64. These remain layout/no-regression observations. The full
 four-mode all-target matrix passes on both architectures; dual/reified generic
 coverage is 29 scenarios and erased-only 24.
 
-The next semantic slice exposes generic closure and arrow-function declarations
-when `ReflectionFunction` is constructed from a closure value. Generics-aware
-JIT specialization remains deliberately last, after both runtime models and the
-complete Reflection surface are closed.
+`ReflectionFunction` now accepts closure values and exposes generic closure and
+arrow-function declarations through the same RFC parameter objects as named
+functions. It recovers the compiler-interned declaration name from the existing
+resolved `UserFunction` pointer, so neither `Value`, `PhpClosure` nor the call
+path gains a metadata payload. The checked pointer recovery now has one owner,
+`PhpClosure::user_function`, shared by turbofish dispatch and a small separate
+Reflection function-target unit. Closure parameter objects retain their
+distinct declaration kind, including bounds, defaults and a working
+declaring-entity round trip. Included closures prove metadata relocation,
+ordinary closures return an empty generic view, and the feature-off build keeps
+the internal Reflection model while rejecting only generic source syntax. The
+four-mode all-target matrix passes on ARM64 and x86-64; dual/reified generic
+coverage is now 30 scenarios and erased-only 25.
+
+The final paired release control records both the immediate and stable
+comparisons because this cold-only code change moves unrelated functions under
+fat LTO. Against immediate parent `81cad28`, 101 pairs report ARM64 method
++5.252% and 20-process startup +0.015%, while CPU-2-pinned x86-64 reports
++0.092%/-0.618%. The ARM64 method delta is a text-layout shift: the handler is
+never entered by that workload and the call path is unchanged. Against the
+shared `e9893af` Reflection checkpoint, 201 pairs report ARM64
+-1.255%/+1.252% and x86-64 +0.024%/-5.461% for method/startup respectively.
+These remain layout/no-regression observations rather than optimization claims.
 
 Generic constructors now consume the same effective own/inherited method
 contract in both runtime modes. The ordinary path validates reified or linked
@@ -8810,6 +8829,8 @@ references.
 Generics-aware JIT work is the final milestone of this interphase, not a
 concurrent semantic shortcut. It begins only after parser/link/runtime/
 Reflection coverage, inheritance merging and both runtime modes are closed.
+This is a hard ordering gate: intermediate generics work must not add or tune
+JIT specialization before that semantic acceptance checklist is complete.
 The JIT may then consume stable interned declarations and use-site proofs:
 bound-erased specializations must add no generic guard beyond the proven erased
 ABI, while reified specializations require exact tuple/class guards and a

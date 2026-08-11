@@ -4,10 +4,12 @@
 //! cold handlers outside the main stdlib unit prevents metadata-facing API
 //! growth from obscuring unrelated built-ins or entering their hot paths.
 
+mod functions;
 mod generic_parameters;
 
 use std::collections::HashMap;
 
+use functions::reflection_function_target;
 use generic_parameters::{
     generic_parameter_bound, generic_parameter_declaring_entity, generic_parameter_default,
     generic_parameter_has_bound, generic_parameter_has_default, generic_parameter_name,
@@ -171,7 +173,8 @@ fn function_construct(
     _rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    set_target(ed, "function", argument_string(ed, 1));
+    let (kind, owner) = with_argument(ed, 1, reflection_function_target)?;
+    set_target(ed, kind, owner);
     Ok(())
 }
 
@@ -218,6 +221,7 @@ fn generic_target(ed: *mut ExecuteData) -> Option<(GenericDeclarationKind, Strin
         let object = value.as_object()?;
         let kind = match object.get_property("__generic_kind")?.as_str()? {
             "function" => GenericDeclarationKind::Function,
+            "closure" => GenericDeclarationKind::Closure,
             "class" => GenericDeclarationKind::Class,
             "method" => GenericDeclarationKind::Method,
             _ => return None,

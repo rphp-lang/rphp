@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 #[cfg(feature = "resource-lifetime")]
 use crate::resource_handle::ResourceHandle;
-use crate::vm::function::FunctionCommon;
+use crate::vm::function::{FunctionCommon, FunctionType, UserFunction};
 use crate::vm::generator::GeneratorRef;
 use crate::vm::stats;
 
@@ -3096,6 +3096,22 @@ impl Clone for PhpClosure {
             captures: self.captures.clone(),
             has_heap_captures: self.has_heap_captures,
         }
+    }
+}
+
+impl PhpClosure {
+    /// Recover the user function guaranteed by normal closure construction.
+    ///
+    /// Keeping the checked pointer cast here gives generic calls and
+    /// Reflection one canonical boundary for the closure/function layout.
+    #[inline]
+    pub(crate) fn user_function(&self) -> Option<&UserFunction> {
+        if self.func.is_null() {
+            return None;
+        }
+        let common = unsafe { &*self.func };
+        (common.fn_type == FunctionType::User)
+            .then(|| unsafe { &*(self.func as *const UserFunction) })
     }
 }
 

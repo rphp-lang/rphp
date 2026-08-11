@@ -48,7 +48,8 @@ fn reflection_kind_name(kind: GenericDeclarationKind) -> &'static str {
         GenericDeclarationKind::Class
         | GenericDeclarationKind::Interface
         | GenericDeclarationKind::Trait => "class",
-        GenericDeclarationKind::Function | GenericDeclarationKind::Closure => "function",
+        GenericDeclarationKind::Function => "function",
+        GenericDeclarationKind::Closure => "closure",
         GenericDeclarationKind::Method => "method",
     }
 }
@@ -462,9 +463,8 @@ pub(super) fn generic_parameter_declaring_entity(
         GenericDeclarationKind::Class
         | GenericDeclarationKind::Interface
         | GenericDeclarationKind::Trait => ("ReflectionClass", "class"),
-        GenericDeclarationKind::Function | GenericDeclarationKind::Closure => {
-            ("ReflectionFunction", "function")
-        }
+        GenericDeclarationKind::Function => ("ReflectionFunction", "function"),
+        GenericDeclarationKind::Closure => ("ReflectionFunction", "closure"),
         GenericDeclarationKind::Method => ("ReflectionMethod", "method"),
     };
     return_value(

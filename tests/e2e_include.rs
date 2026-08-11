@@ -91,6 +91,9 @@ function included_call() {
     $includedCallable = "included_id";
     return ($includedCallable)::<string>("s");
 }
+function included_closure() {
+    return function<C : object = stdClass>() {};
+}
 class IncludedCaller {
     public function call() {
         $includedCallable = "included_id";
@@ -106,6 +109,7 @@ $reflection = new ReflectionFunction("included_id");
 $parameters = $reflection->getGenericParameters();
 echo $reflection->isGeneric() ? ":yes:" : ":no:";
 echo $parameters[0]->getName() . ":" . $parameters[0]->getBound()->getName();
+echo ":" . (new ReflectionFunction(included_closure()))->getGenericParameters()[0]->getDefault()->getName();
 echo (new IncludedChild::<int>()) instanceof IncludedParent ? ":linked" : ":missing";
 "#,
     );
@@ -121,7 +125,7 @@ echo ":" . $box->value;
 "#,
         path
     );
-    assert_eq!(run_php(&source), "1ss:yes:T:string:linked:2");
+    assert_eq!(run_php(&source), "1ss:yes:T:string:stdClass:linked:2");
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
