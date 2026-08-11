@@ -5,6 +5,104 @@ use crate::generics::ReifiedBinding;
 
 impl ExecutorGlobals {
     #[cfg(feature = "php-generics-reified")]
+    fn value_matches_reified_static_property_type(
+        &self,
+        value: &crate::value::Value,
+        expected: &crate::generics::GenericType,
+        scope: &str,
+    ) -> bool {
+        match expected {
+            crate::generics::GenericType::Named { name, arguments } if !arguments.is_empty() => {
+                let Some(owner) = self.generic_metadata.symbol(*name) else {
+                    return false;
+                };
+                // The erased PropertyDefinition guard already proved the base
+                // class. Only the additional reified tuple remains here.
+                self.reified_object_arguments_match_resolved(
+                    value,
+                    owner,
+                    arguments,
+                    scope,
+                    Some(scope),
+                )
+            }
+            crate::generics::GenericType::Nullable(inner)
+                if value.value_type() != crate::value::ValueType::Null =>
+            {
+                self.value_matches_reified_static_property_type(value, inner, scope)
+            }
+            _ => self.generic_metadata.value_matches_resolved_type_reified(
+                value,
+                expected,
+                |actual, bound| self.class_is_a_in_generic_scope(actual, bound, scope),
+                |value, expected, arguments| {
+                    self.reified_object_arguments_match_resolved(
+                        value,
+                        expected,
+                        arguments,
+                        scope,
+                        Some(scope),
+                    )
+                },
+            ),
+        }
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn check_reified_static_property_value(
+        &self,
+        owner: &str,
+        name: &str,
+        value: &crate::value::Value,
+    ) -> Result<(), String> {
+        let declaration = self
+            .generic_metadata
+            .find_class_like_index(owner)
+            .ok_or_else(|| {
+                format!("Missing generic metadata for static property {owner}::${name}")
+            })?;
+        {
+            let cache = self.generic_property_contract_cache.borrow();
+            if let Some(cached) = cache.as_ref()
+                && cached.declaration == declaration
+                && cached.use_site.is_none()
+                && cached.property.as_ref() == name
+                && cached.scope.as_ref().eq_ignore_ascii_case(owner)
+            {
+                let matches = self.value_matches_reified_static_property_type(
+                    value,
+                    &cached.expected,
+                    &cached.scope,
+                );
+                return matches.then_some(()).ok_or_else(|| {
+                    format!("Value does not match reified static property {owner}::${name}")
+                });
+            }
+        }
+
+        let expected = self
+            .generic_metadata
+            .linked_static_property_type(declaration, name)
+            .ok_or_else(|| format!("Missing generic type for static property {owner}::${name}"))?;
+        if !crate::generics::GenericMetadata::type_requires_reified_check(&expected) {
+            return Ok(());
+        }
+        let scope: Box<str> = owner.into();
+        let matches = self.value_matches_reified_static_property_type(value, &expected, &scope);
+        self.generic_property_contract_cache
+            .replace(Some(GenericPropertyContractBinding {
+                declaration,
+                use_site: None,
+                property: name.into(),
+                scope,
+                expected,
+            }));
+        matches
+            .then_some(())
+            .ok_or_else(|| format!("Value does not match reified static property {owner}::${name}"))
+    }
+
+    #[cfg(feature = "php-generics-reified")]
     fn value_matches_reified_property(
         &self,
         value: &crate::value::Value,

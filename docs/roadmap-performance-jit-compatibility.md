@@ -9577,6 +9577,68 @@ expressions, increment/decrement and `unset` remain outside this checkpoint.
 Generics-aware JIT specialization stays last, after both erased and reified
 runtime semantics are complete and stable.
 
+Typed dual-runtime static-property checkpoint (2026-08-12): the shared
+property-definition tuple is now a named `PropertyDefinition` carrying the
+declaring class, visibility, default, erased runtime type, readonly state and
+whether the interned generic contract needs a reified check. Class, trait and
+promoted-property compilation all populate that one shape. Mutable inherited
+properties enforce PHP's invariant type, staticness, readonly and visibility
+rules before storage is linked; private parent declarations remain independent,
+and source-level static readonly properties are rejected.
+
+Typed static properties without a default start uninitialized, including
+`mixed`, while untyped declarations retain their null initialization. Reads
+raise a catchable `Error`; writes apply PHP weak scalar conversion, preserve the
+strict-mode boundary and always permit `int` to `float`. Invalid defaults fail
+during compilation. The 16-byte instruction and inline-cache layouts do not
+grow: exact scalar tags occupy the low bits of an aligned declaration pointer,
+and cache misses retain the full declaration for unions, nullable, class and
+pseudo-class checks. The compact late-static write path validates its runtime
+called-class ID before decoding property-name operands, so a different child
+cannot reuse another invocation's storage proof.
+
+One interned generic property declaration feeds both feature-selected runtime
+models. Bound-erased mode checks the ordinary erased class contract; reified
+mode additionally checks the substituted nested arguments. A stable boxed
+sidecar holds the declaration proof and a `Weak` object identity, so repeated
+writes of the same live object avoid both recursive argument comparison and a
+hash lookup without retaining the object or accepting recycled addresses. The
+metadata is available to the existing generic Reflection graph; a dedicated
+`ReflectionProperty` surface remains future compatibility work. Syntax-off
+builds still reject generic syntax while compiling this internal metadata and
+ordinary typed-property logic.
+
+On the local ARM64 release all-features candidate, forty balanced pairs with
+six warmups produce the following candidate-only ratios. Every equivalence lane
+remains inside its five-percent ceiling; the large favorable reified result is
+the intended same-object proof reuse relative to repeating the erased class
+check, not a general allocation benchmark.
+
+| Lane | Ratio |
+|---|---:|
+| Ordinary `static::` / `self::` call | +2.133% |
+| Late-static / self static-property read | +1.974% |
+| Late-static / self untyped property write | -3.110% |
+| Typed / untyped self property write | +2.200% |
+| Typed / untyped late-static property write | -0.101% |
+| Reified / erased generic property write | -45.747% |
+| Generic `static::` / `self::` call | +0.135% |
+| Generic `self::` / explicit-owner call | -0.053% |
+
+The same forty-pair gate pinned to CPU 2 on the x86-64 reference host records
++1.320%, +0.284%, -5.695%, +3.493%, +3.651%, -58.589%, -6.407% and +0.317%
+in the table's lane order. Favorable movements outside the typed-property lanes
+remain layout/equivalence evidence rather than optimization claims.
+
+Default, erased, reified and all-features test configurations plus the
+all-feature/all-target check pass locally and on the x86-64 reference host. No
+dependency, `Value`, frame, JIT backend or native IR operation changed.
+Instance-property uninitialized/read and write enforcement, general reference
+binding, assignment expressions, increment/decrement, `unset` and
+`ReflectionProperty` remain separate bounded slices. Generics-aware JIT
+specialization remains the final step after these runtime semantics are
+complete.
+
 The permanent corpus must include ambiguous comparison/shift grammar, nested
 arguments, bounds/defaults/variance, inheritance forwarding and diamonds,
 traits, closures, dynamic calls, reflection metadata, invalid arity/bounds and

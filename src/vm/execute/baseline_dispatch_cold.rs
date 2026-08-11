@@ -933,22 +933,22 @@ fn op_call_user_func_array<'a>(
 }
 
 #[inline(never)]
-fn op_fetch_static_prop(
+fn op_fetch_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     op_fetch_static_prop_impl::<false>(eg, frame, op_array, opline)
 }
 
 #[inline(never)]
-fn op_fetch_late_static_prop(
+fn op_fetch_late_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     op_fetch_static_prop_impl::<true>(eg, frame, op_array, opline)
 }
 
@@ -957,7 +957,7 @@ fn op_fetch_late_static_prop(
 #[inline(always)]
 fn clone_static_property_value(value: &Value) -> Value {
     if value.needs_cleanup() || value.is_reference() {
-        value.clone()
+        clone_heap_static_property_value(value)
     } else {
         let mut cloned = std::mem::MaybeUninit::<Value>::uninit();
         unsafe {
@@ -967,13 +967,37 @@ fn clone_static_property_value(value: &Value) -> Value {
     }
 }
 
+/// Keep reference counting and reference-wrapper cloning out of scalar static
+/// property dispatch. Inlining `Value::clone` here noticeably grows both
+/// monomorphized static-property write handlers and perturbs their hot layout.
+#[inline(never)]
+fn clone_heap_static_property_value(value: &Value) -> Value {
+    value.clone()
+}
+
+#[inline]
+fn static_property_throw<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    class: &str,
+    message: String,
+) -> ColdResult<'a> {
+    let error = make_error_value(class, &message);
+    match throw_in_frame(eg, frame, error) {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }
+}
+
 #[inline(always)]
-fn op_fetch_static_prop_impl<const LATE_STATIC: bool>(
+fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     let class_name_val =
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let prop_name_val =
@@ -996,7 +1020,7 @@ fn op_fetch_static_prop_impl<const LATE_STATIC: bool>(
             eg.static_property_value_unchecked(cache.property_slot())
         });
         unsafe { slot_set(result_ptr, value) };
-        return Ok(());
+        return Ok(ColdResult::Done);
     }
 
     resolve_static_property_read_cache_miss(
@@ -1013,9 +1037,7 @@ fn static_property_class_id<const LATE_STATIC: bool>(
     raw_class: &str,
 ) -> u32 {
     if LATE_STATIC {
-        if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0
-            && !raw_class.eq_ignore_ascii_case("parent")
-        {
+        if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
             unsafe { ((*frame).heap_bitmap >> 32) as u32 }
         } else if raw_class.eq_ignore_ascii_case("parent") {
             eg.class_by_id(late_static_call_class_id(eg, frame))
@@ -1036,39 +1058,77 @@ fn static_property_class_id<const LATE_STATIC: bool>(
 }
 
 #[inline(never)]
-fn op_assign_static_prop(
+fn op_assign_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     op_assign_static_prop_impl::<false>(eg, frame, op_array, opline)
 }
 
 #[inline(never)]
-fn op_assign_late_static_prop(
+fn op_assign_late_static_prop<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
     op_assign_static_prop_impl::<true>(eg, frame, op_array, opline)
 }
 
 #[inline(always)]
-fn op_assign_static_prop_impl<const LATE_STATIC: bool>(
+fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
-) -> Result<(), VmError> {
+) -> Result<ColdResult<'a>, VmError> {
+    // Compact late-static frames already carry the called class ID. Check the
+    // monomorphic untyped cache before decoding the two constant string
+    // operands; a cache miss still takes the canonical resolver below.
+    if LATE_STATIC && opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
+        let ip = unsafe {
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+        };
+        let cache = unsafe {
+            &*(op_array.cache.as_ptr().add(ip) as *const crate::vm::instruction::InlineCache)
+        };
+        let class_id = unsafe { ((*frame).heap_bitmap >> 32) as u32 };
+        let flags = cache.property_flags();
+        let exact_int = flags == 1
+            && cache.typed_static_property_tag()
+                == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT;
+        if class_id != 0 && cache.class_id == class_id && (flags == 3 || exact_int) {
+            let source = unsafe {
+                &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
+            };
+            let source = if source.is_reference() {
+                unsafe { &*source.as_ref_ptr() }
+            } else {
+                source
+            };
+            let value = clone_static_property_value(source);
+            if flags == 3 || value.value_type() == ValueType::Long {
+                unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
+                return Ok(ColdResult::Done);
+            }
+        }
+    }
+
     let class_name =
         unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
     let property_name =
         unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-    let value = clone_static_property_value(unsafe {
+    let source = unsafe {
         &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
-    });
+    };
+    let source = if source.is_reference() {
+        unsafe { &*source.as_ref_ptr() }
+    } else {
+        source
+    };
+    let mut value = clone_static_property_value(source);
     let raw_class = class_name.as_str().unwrap_or("");
     let property = property_name.as_str().unwrap_or("");
     let ip = unsafe {
@@ -1079,24 +1139,242 @@ fn op_assign_static_prop_impl<const LATE_STATIC: bool>(
             as *mut crate::vm::instruction::InlineCache)
     };
     let class_id = static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class);
-    if class_id != 0 && cache.class_id == class_id && cache.property_flags() == 3 {
-        unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
-        return Ok(());
+    if class_id != 0 && cache.class_id == class_id {
+        if cache.property_flags() == 3 {
+            unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
+            return Ok(ColdResult::Done);
+        }
+        if cache.property_flags() == 1 {
+            let tag = cache.typed_static_property_tag();
+            let value_type = value.value_type();
+            if tag == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT
+                && value_type == ValueType::Long
+            {
+                unsafe {
+                    eg.set_static_property_value_unchecked(cache.property_slot(), value)
+                };
+                return Ok(ColdResult::Done);
+            }
+            #[cfg(feature = "php-generics-reified")]
+            let reified_contract = if tag
+                == crate::vm::instruction::InlineCache::TYPED_PROPERTY_REIFIED
+            {
+                cache.reified_static_property_contract()
+            } else {
+                std::ptr::null()
+            };
+            #[cfg(feature = "php-generics-reified")]
+            if !reified_contract.is_null()
+                && unsafe {
+                    eg.static_generic_property_contract_remembers(reified_contract, &value)
+                }
+            {
+                unsafe {
+                    eg.set_static_property_value_unchecked(cache.property_slot(), value)
+                };
+                return Ok(ColdResult::Done);
+            }
+            if tag == crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT
+                && value_type == ValueType::Long
+            {
+                value = Value::double(value.as_long().unwrap() as f64);
+            }
+            let fast_match = match tag {
+                crate::vm::instruction::InlineCache::TYPED_PROPERTY_FLOAT
+                    if matches!(value_type, ValueType::Double | ValueType::Long) => true,
+                crate::vm::instruction::InlineCache::TYPED_PROPERTY_STRING
+                    if value_type == ValueType::String => true,
+                crate::vm::instruction::InlineCache::TYPED_PROPERTY_BOOL
+                    if matches!(value_type, ValueType::True | ValueType::False) =>
+                {
+                    true
+                }
+                crate::vm::instruction::InlineCache::TYPED_PROPERTY_ARRAY
+                    if value_type == ValueType::Array => true,
+                _ => false,
+            };
+            if fast_match {
+                unsafe {
+                    eg.set_static_property_value_unchecked(cache.property_slot(), value)
+                };
+                return Ok(ColdResult::Done);
+            }
+            return validate_cached_typed_static_property(
+                eg,
+                frame,
+                op_array,
+                cache,
+                class_id,
+                raw_class,
+                value,
+            );
+        }
     }
 
-    let storage_slot = resolve_static_property_storage_slot(
-        eg, frame, class_id, raw_class, property, true,
-    )?;
-    if !eg.set_static_property_value(storage_slot, value) {
-        return Err(VmError::Fatal("Invalid static property storage slot".into()));
+    assign_static_property_cache_miss(
+        eg,
+        frame,
+        op_array,
+        cache,
+        class_id,
+        raw_class,
+        property,
+        value,
+    )
+}
+
+#[inline(never)]
+fn validate_cached_typed_static_property<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    cache: &mut crate::vm::instruction::InlineCache,
+    class_id: u32,
+    raw_class: &str,
+    mut value: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    #[cfg(feature = "php-generics-reified")]
+    let reified_contract = if cache.typed_static_property_tag()
+        == crate::vm::instruction::InlineCache::TYPED_PROPERTY_REIFIED
+    {
+        cache.reified_static_property_contract()
+    } else {
+        std::ptr::null()
+    };
+    #[cfg(feature = "php-generics-reified")]
+    let definition = if reified_contract.is_null() {
+        cache.typed_static_property_definition()
+    } else {
+        unsafe { eg.static_generic_property_contract_definition(reified_contract) }
+    };
+    #[cfg(not(feature = "php-generics-reified"))]
+    let definition = cache.typed_static_property_definition();
+    debug_assert!(!definition.is_null());
+    let definition_ref = unsafe { &*definition };
+    let called_class = eg
+        .class_by_id(class_id)
+        .map_or(raw_class, |class| class.name.as_str());
+    value = match prepare_property_assignment(
+        value,
+        definition_ref,
+        eg,
+        op_array.strict_types,
+        called_class,
+    ) {
+        Ok(value) => value,
+        Err(message) => {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                message,
+            ));
+        }
+    };
+    #[cfg(feature = "php-generics-reified")]
+    if definition_ref.requires_reified_check
+        && let Err(message) = eg.check_reified_static_property_value(
+            called_class,
+            &definition_ref.name,
+            &value,
+        )
+    {
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "TypeError",
+            message,
+        ));
     }
-    cache.set_property(class_id, storage_slot, 3);
-    Ok(())
+    #[cfg(feature = "php-generics-reified")]
+    if !reified_contract.is_null() {
+        unsafe { eg.remember_static_generic_property_contract(reified_contract, &value) };
+    }
+    unsafe { eg.set_static_property_value_unchecked(cache.property_slot(), value) };
+    Ok(ColdResult::Done)
 }
 
 #[cold]
 #[inline(never)]
-fn resolve_static_property_read_cache_miss(
+#[allow(clippy::too_many_arguments)]
+fn assign_static_property_cache_miss<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    cache: &mut crate::vm::instruction::InlineCache,
+    class_id: u32,
+    raw_class: &str,
+    property: &str,
+    mut value: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    let resolved = resolve_static_property(eg, frame, class_id, raw_class, property, true)?;
+    let definition = unsafe { &*resolved.definition };
+    if definition.is_typed() {
+        let called_class = eg
+            .class_by_id(class_id)
+            .map_or(raw_class, |class| class.name.as_str());
+        value = match prepare_property_assignment(
+            value,
+            definition,
+            eg,
+            op_array.strict_types,
+            called_class,
+        ) {
+            Ok(value) => value,
+            Err(message) => {
+                return Ok(static_property_throw(
+                    eg,
+                    frame,
+                    "TypeError",
+                    message,
+                ));
+            }
+        };
+        #[cfg(feature = "php-generics-reified")]
+        if definition.requires_reified_check
+            && let Err(message) = eg.check_reified_static_property_value(
+                called_class,
+                &definition.name,
+                &value,
+            )
+        {
+            return Ok(static_property_throw(
+                eg,
+                frame,
+                "TypeError",
+                message,
+            ));
+        }
+    }
+    #[cfg(feature = "php-generics-reified")]
+    let reified_contract = if definition.requires_reified_check {
+        eg.cache_static_generic_property_contract(resolved.definition, &value)
+    } else {
+        std::ptr::null()
+    };
+    if !eg.set_static_property_value(resolved.storage_slot, value) {
+        return Err(VmError::Fatal("Invalid static property storage slot".into()));
+    }
+    #[cfg(feature = "php-generics-reified")]
+    if !reified_contract.is_null() {
+        cache.set_reified_static_property(reified_contract, class_id, resolved.storage_slot);
+    } else if definition.is_typed() {
+        cache.set_typed_static_property(resolved.definition, class_id, resolved.storage_slot);
+    } else {
+        cache.set_property(class_id, resolved.storage_slot, 3);
+    }
+    #[cfg(not(feature = "php-generics-reified"))]
+    if definition.is_typed() {
+        cache.set_typed_static_property(resolved.definition, class_id, resolved.storage_slot);
+    } else {
+        cache.set_property(class_id, resolved.storage_slot, 3);
+    }
+    Ok(ColdResult::Done)
+}
+
+#[cold]
+#[inline(never)]
+fn resolve_static_property_read_cache_miss<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     result_ptr: *mut Value,
@@ -1104,29 +1382,45 @@ fn resolve_static_property_read_cache_miss(
     class_id: u32,
     raw_class: &str,
     property: &str,
-) -> Result<(), VmError> {
-    let storage_slot = resolve_static_property_storage_slot(
-        eg, frame, class_id, raw_class, property, false,
-    )?;
-    let value = eg
-        .static_property_value(storage_slot)
-        .map(clone_static_property_value)
+) -> Result<ColdResult<'a>, VmError> {
+    let resolved =
+        resolve_static_property(eg, frame, class_id, raw_class, property, false)?;
+    let stored = eg
+        .static_property_value(resolved.storage_slot)
         .ok_or_else(|| VmError::Fatal("Invalid static property storage slot".into()))?;
-    cache.set_property(class_id, storage_slot, 1);
+    if stored.is_undef() {
+        let definition = unsafe { &*resolved.definition };
+        return Ok(static_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!(
+                "Typed static property {}::${} must not be accessed before initialization",
+                definition.declaring_class, definition.name
+            ),
+        ));
+    }
+    let value = clone_static_property_value(stored);
+    cache.set_property(class_id, resolved.storage_slot, 1);
     unsafe { slot_set(result_ptr, value) };
-    Ok(())
+    Ok(ColdResult::Done)
+}
+
+struct ResolvedStaticProperty {
+    storage_slot: usize,
+    definition: *const crate::compiler::compile::PropertyDefinition,
 }
 
 #[cold]
 #[inline(never)]
-fn resolve_static_property_storage_slot(
+fn resolve_static_property(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     class_id: u32,
     raw_class: &str,
     property: &str,
     for_write: bool,
-) -> Result<usize, VmError> {
+) -> Result<ResolvedStaticProperty, VmError> {
     let class = eg.class_by_id(class_id).ok_or_else(|| {
         VmError::Fatal(format!("Class \"{}\" not found", raw_class))
     })?;
@@ -1163,8 +1457,13 @@ fn resolve_static_property_storage_slot(
             visibility, definition.declaring_class, property
         )));
     }
-    eg.static_property_storage_slot(class_id, property_index)
-        .ok_or_else(|| VmError::Fatal("Invalid static property storage mapping".into()))
+    let storage_slot = eg
+        .static_property_storage_slot(class_id, property_index)
+        .ok_or_else(|| VmError::Fatal("Invalid static property storage mapping".into()))?;
+    Ok(ResolvedStaticProperty {
+        storage_slot,
+        definition,
+    })
 }
 
 #[inline(never)]

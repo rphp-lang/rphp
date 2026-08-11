@@ -69,6 +69,38 @@ struct GenericPropertyContractBinding {
     expected: GenericType,
 }
 
+/// Stable sidecar for one reified static-property declaration. The weak
+/// receiver guard makes pointer reuse safe without retaining assigned objects;
+/// a different or already-dropped object always falls back to the full
+/// interned metadata check.
+#[cfg(feature = "php-generics-reified")]
+struct StaticGenericPropertyContract {
+    definition: *const PropertyDefinition,
+    identity: std::cell::Cell<usize>,
+    object: std::cell::RefCell<std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>>,
+}
+
+#[cfg(feature = "php-generics-reified")]
+impl StaticGenericPropertyContract {
+    fn remembers(&self, value: &Value) -> bool {
+        if value.value_type() != crate::value::ValueType::Object {
+            return false;
+        }
+        let identity = unsafe { value.object_identity_unchecked() };
+        self.identity.get() == identity && self.object.borrow().strong_count() != 0
+    }
+
+    fn remember(&self, value: &Value) {
+        let Some(object) = value.as_object_rc() else {
+            self.identity.set(0);
+            self.object.replace(std::rc::Weak::new());
+            return;
+        };
+        self.identity.set(std::rc::Rc::as_ptr(&object) as usize);
+        self.object.replace(std::rc::Rc::downgrade(&object));
+    }
+}
+
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 fn take_generic_member_call(
     entries: &mut Vec<(usize, std::rc::Rc<GenericMethodContract>)>,
@@ -121,180 +153,7 @@ pub fn resolve_property_key(
     prop_name.to_string()
 }
 
-/// Merge inherited declarations while preserving PHP's private-slot rule.
-/// The same rule applies to instance and static properties; keeping it here
-/// prevents their registration paths from drifting.
-fn inherit_property_definitions(
-    child: &mut Vec<PropertyDefinition>,
-    parent: &[PropertyDefinition],
-) {
-    let child_names: std::collections::HashSet<&str> = child
-        .iter()
-        .map(|property| property.name.as_str())
-        .collect();
-    let mut inherited = Vec::new();
-    for property in parent {
-        if child_names.contains(property.name.as_str()) {
-            if property.visibility == Visibility::Private
-                && child.iter().any(|child_property| {
-                    child_property.name == property.name
-                        && child_property.visibility == Visibility::Private
-                })
-            {
-                inherited.push(property.clone());
-            }
-        } else {
-            inherited.push(property.clone());
-        }
-    }
-    child.extend(inherited);
-}
-
-/// Static declarations additionally carry a storage identity. An inherited
-/// declaration reuses its parent's slot; a redeclaration keeps the child's
-/// independently allocated slot.
-fn inherit_static_property_definitions(
-    child: &mut Vec<PropertyDefinition>,
-    child_slots: &mut Vec<Option<u32>>,
-    parent: &[PropertyDefinition],
-    parent_slots: &[u32],
-) {
-    debug_assert_eq!(child.len(), child_slots.len());
-    debug_assert_eq!(parent.len(), parent_slots.len());
-    let child_names: std::collections::HashSet<&str> = child
-        .iter()
-        .map(|property| property.name.as_str())
-        .collect();
-    let mut inherited = Vec::new();
-    for (index, property) in parent.iter().enumerate() {
-        let keep = if child_names.contains(property.name.as_str()) {
-            property.visibility == Visibility::Private
-                && child.iter().any(|child_property| {
-                    child_property.name == property.name
-                        && child_property.visibility == Visibility::Private
-                })
-        } else {
-            true
-        };
-        if keep {
-            inherited.push((property.clone(), parent_slots[index]));
-        }
-    }
-    for (definition, slot) in inherited {
-        child.push(definition);
-        child_slots.push(Some(slot));
-    }
-}
-
-#[inline]
-fn property_definitions_are_compatible(
-    left_default: &Option<Value>,
-    left_visibility: Visibility,
-    right_default: &Option<Value>,
-    right_visibility: Visibility,
-) -> bool {
-    left_visibility == right_visibility
-        && match (left_default, right_default) {
-            (None, None) => true,
-            (Some(left), Some(right)) => left.structurally_equal(right),
-            _ => false,
-        }
-}
-
-/// A trait static property is composed into the consuming class, not shared
-/// with the trait or unrelated consumers. Since PHP 8.3, using the same trait
-/// again in a child also creates storage distinct from the parent's inherited
-/// property. Class/trait and trait/trait declarations still have to be
-/// compatible; a trait declaration simply replaces an inherited declaration.
-fn merge_trait_static_property_definitions(
-    target: &mut Vec<PropertyDefinition>,
-    target_slots: &mut Vec<Option<u32>>,
-    source: &[PropertyDefinition],
-    class_name: &str,
-    trait_name: &str,
-    own_names: &std::collections::HashSet<String>,
-    composed_names: &mut std::collections::HashSet<String>,
-) -> Result<(), String> {
-    debug_assert_eq!(target.len(), target_slots.len());
-    for property in source {
-        let existing = target
-            .iter()
-            .position(|candidate| candidate.name == property.name);
-        if own_names.contains(&property.name) || composed_names.contains(&property.name) {
-            let index = existing.expect("own/composed static property definition");
-            let existing_property = &target[index];
-            if !property_definitions_are_compatible(
-                &existing_property.default,
-                existing_property.visibility,
-                &property.default,
-                property.visibility,
-            ) {
-                return Err(format!(
-                    "{} and {} define the same property (${}) in the composition of {}. \
-                     However, the definition differs and is considered incompatible",
-                    existing_property.declaring_class, trait_name, property.name, class_name
-                ));
-            }
-            continue;
-        }
-
-        let mut definition = property.clone();
-        definition.declaring_class = trait_name.to_string();
-        if let Some(index) = existing {
-            // A first trait declaration in this class overrides inherited
-            // metadata and receives a fresh storage slot.
-            target[index] = definition;
-            target_slots[index] = None;
-        } else {
-            target.push(definition);
-            target_slots.push(None);
-        }
-        composed_names.insert(property.name.clone());
-    }
-    Ok(())
-}
-
-/// Merge one trait's declarations into a consuming class. Instance and static
-/// tables both use this exact collision contract, but remain separate storage.
-fn merge_trait_property_definitions(
-    target: &mut Vec<PropertyDefinition>,
-    source: &[PropertyDefinition],
-    class_name: &str,
-    trait_name: &str,
-) -> Result<(), String> {
-    let mut additions = Vec::new();
-    for property in source {
-        if let Some(existing_property) = target
-            .iter()
-            .find(|candidate| candidate.name == property.name)
-        {
-            if existing_property.declaring_class == class_name {
-                continue;
-            }
-            let compatible = existing_property.visibility == property.visibility
-                && property_definitions_are_compatible(
-                    &property.default,
-                    property.visibility,
-                    &existing_property.default,
-                    existing_property.visibility,
-                );
-            if !compatible {
-                return Err(format!(
-                    "{} and {} define the same property (${}) in the composition of {}. \
-                     However, the definition differs and is considered incompatible",
-                    existing_property.declaring_class, trait_name, property.name, class_name
-                ));
-            }
-            continue;
-        }
-        let mut addition = property.clone();
-        addition.declaring_class = trait_name.to_string();
-        additions.push(addition);
-    }
-    target.extend(additions);
-    Ok(())
-}
-
+include!("property_definitions.rs");
 /// Minimal ExecutorGlobals for vertical slice.
 /// Will grow as we implement more features.
 pub struct ExecutorGlobals {
@@ -404,6 +263,8 @@ pub struct ExecutorGlobals {
     /// Per-class property-index → canonical storage-slot mapping. Slot zero in
     /// this outer vector is reserved alongside `class_by_id`.
     static_property_slots_by_class: Vec<Box<[u32]>>,
+    #[cfg(feature = "php-generics-reified")]
+    static_generic_property_contracts: Vec<Box<StaticGenericPropertyContract>>,
 }
 
 impl ExecutorGlobals {
@@ -418,6 +279,8 @@ impl ExecutorGlobals {
         self.class_by_id.reserve(64);
         self.static_property_slots_by_class.reserve(64);
         self.static_property_values.reserve(16);
+        #[cfg(feature = "php-generics-reified")]
+        self.static_generic_property_contracts.reserve(4);
     }
 
     pub fn new() -> Self {
@@ -472,6 +335,8 @@ impl ExecutorGlobals {
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
             static_property_slots_by_class: vec![Box::new([])],
+            #[cfg(feature = "php-generics-reified")]
+            static_generic_property_contracts: Vec::new(),
         }
     }
 
@@ -528,6 +393,8 @@ impl ExecutorGlobals {
             class_by_id: vec![std::ptr::null()],
             static_property_values: Vec::new(),
             static_property_slots_by_class: vec![Box::new([])],
+            #[cfg(feature = "php-generics-reified")]
+            static_generic_property_contracts: Vec::new(),
         }
     }
 
@@ -844,6 +711,13 @@ impl ExecutorGlobals {
         // Resolve inheritance — merge parent's properties and methods
         if let Some(parent_name) = &class_def.parent {
             if let Some(parent) = self.class_table.get(parent_name.as_str()) {
+                validate_property_inheritance(
+                    &class_name,
+                    &class_def.properties,
+                    &class_def.static_properties,
+                    &parent.properties,
+                    &parent.static_properties,
+                )?;
                 // Own declarations stay first, so late-static lookup sees a
                 // redeclaration before inherited storage.
                 inherit_property_definitions(&mut class_def.properties, &parent.properties);
@@ -989,7 +863,13 @@ impl ExecutorGlobals {
                 let slot = u32::try_from(self.static_property_values.len())
                     .map_err(|_| "Too many static property storage slots".to_string())?;
                 self.static_property_values
-                    .push(definition.default.clone().unwrap_or_else(Value::null));
+                    .push(definition.default.clone().unwrap_or_else(|| {
+                        if definition.is_typed() {
+                            Value::undef()
+                        } else {
+                            Value::null()
+                        }
+                    }));
                 slot
             };
             resolved_static_slots.push(slot);
@@ -1015,7 +895,10 @@ impl ExecutorGlobals {
             .iter()
             .map(|property| {
                 property.default.clone().unwrap_or_else(|| {
-                    if class_def.readonly_props.contains(&property.name) {
+                    // Instance typed-property initialization is activated with
+                    // its read/write guards in a separate slice. Readonly
+                    // properties already use the undef sentinel today.
+                    if property.is_readonly {
                         crate::value::Value::undef()
                     } else {
                         crate::value::Value::null()
@@ -1095,6 +978,60 @@ impl ExecutorGlobals {
             .get(class_id as usize)?
             .get(property_index)
             .map(|slot| *slot as usize)
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) fn cache_static_generic_property_contract(
+        &mut self,
+        definition: *const PropertyDefinition,
+        value: &Value,
+    ) -> *const () {
+        let contract = if let Some(contract) = self
+            .static_generic_property_contracts
+            .iter()
+            .find(|contract| contract.definition == definition)
+        {
+            &**contract
+        } else {
+            self.static_generic_property_contracts
+                .push(Box::new(StaticGenericPropertyContract {
+                    definition,
+                    identity: std::cell::Cell::new(0),
+                    object: std::cell::RefCell::new(std::rc::Weak::new()),
+                }));
+            &**self.static_generic_property_contracts.last().unwrap()
+        };
+        contract.remember(value);
+        (contract as *const StaticGenericPropertyContract).cast()
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) unsafe fn static_generic_property_contract_remembers(
+        &self,
+        contract: *const (),
+        value: &Value,
+    ) -> bool {
+        debug_assert!(!contract.is_null());
+        unsafe { &*contract.cast::<StaticGenericPropertyContract>() }.remembers(value)
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) unsafe fn static_generic_property_contract_definition(
+        &self,
+        contract: *const (),
+    ) -> *const PropertyDefinition {
+        debug_assert!(!contract.is_null());
+        unsafe { (*contract.cast::<StaticGenericPropertyContract>()).definition }
+    }
+
+    #[cfg(feature = "php-generics-reified")]
+    pub(crate) unsafe fn remember_static_generic_property_contract(
+        &self,
+        contract: *const (),
+        value: &Value,
+    ) {
+        debug_assert!(!contract.is_null());
+        unsafe { &*contract.cast::<StaticGenericPropertyContract>() }.remember(value);
     }
 
     #[inline(always)]

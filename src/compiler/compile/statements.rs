@@ -954,6 +954,9 @@ impl Compiler {
                         || parent.is_some()
                         || !implements.is_empty()
                         || !uses.is_empty()
+                        || properties
+                            .iter()
+                            .any(|property| property.type_hint.is_some())
                         || methods
                             .iter()
                             .any(|method| !method.generic_params.is_empty()))
@@ -990,7 +993,8 @@ impl Compiler {
                 // Each class method gets compiled like a function
                 let mut compiled_methods = Vec::new();
                 // Collect promoted properties from constructor
-                let mut promoted_props: Vec<(String, Visibility, bool)> = Vec::new(); // (name, vis, is_readonly)
+                let mut promoted_props: Vec<(String, Visibility, bool, ParamTypeHint, bool)> =
+                    Vec::new(); // (name, visibility, readonly, erased type, needs reification)
                 for method in methods {
                     self.record_generic_declaration(
                         crate::generics::GenericDeclarationKind::Method,
@@ -1015,7 +1019,18 @@ impl Compiler {
                     if method.name == "__construct" {
                         for param in &method.params {
                             if let Some((vis, is_ro)) = &param.promotion {
-                                promoted_props.push((param.name.clone(), *vis, *is_ro));
+                                let promoted_type_hint = self.resolve_declared_property_type_hint(
+                                    self.convert_type_hint(&param.type_hint),
+                                    &resolved_class,
+                                    resolved_parent.as_deref(),
+                                );
+                                promoted_props.push((
+                                    param.name.clone(),
+                                    *vis,
+                                    *is_ro,
+                                    promoted_type_hint,
+                                    type_hint_requires_reified_check(&param.type_hint),
+                                ));
                                 // Generate: $this->paramName = $paramName;
                                 let this_cv = 0u16; // $this is always CV 0
                                 let param_cv = func_compiler.resolve_cv(&param.name);
@@ -1111,20 +1126,46 @@ impl Compiler {
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 let mut readonly_props: Vec<String> = Vec::new();
                 for prop in properties {
+                    if prop.is_static && prop.is_readonly {
+                        return Err(format!(
+                            "Static property {}::${} cannot be readonly",
+                            name, prop.name
+                        ));
+                    }
+                    let type_hint = self.resolve_declared_property_type_hint(
+                        self.convert_type_hint(&prop.type_hint),
+                        &resolved_class,
+                        resolved_parent.as_deref(),
+                    );
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
                     };
+                    let default = default
+                        .map(|value| {
+                            normalize_property_default(value, &type_hint).ok_or_else(|| {
+                                format!(
+                                    "Cannot use default value for property {}::${} of type {}",
+                                    name,
+                                    prop.name,
+                                    type_hint.display_name()
+                                )
+                            })
+                        })
+                        .transpose()?;
                     if prop.is_readonly && !prop.is_static {
                         readonly_props.push(prop.name.clone());
                     }
-                    let definition = PropertyDefinition::new(
+                    let definition = PropertyDefinition::declared(
                         prop.name.clone(),
                         default,
                         prop.visibility,
-                        name.clone(),
+                        resolved_class.clone(),
+                        type_hint,
+                        prop.is_readonly,
+                        type_hint_requires_reified_check(&prop.type_hint),
                     );
                     if prop.is_static {
                         compiled_static_props.push(definition);
@@ -1134,12 +1175,15 @@ impl Compiler {
                 }
 
                 // Add promoted properties
-                for (pname, pvis, p_readonly) in &promoted_props {
-                    compiled_props.push(PropertyDefinition::new(
+                for (pname, pvis, p_readonly, type_hint, requires_reified_check) in &promoted_props {
+                    compiled_props.push(PropertyDefinition::declared(
                         pname.clone(),
                         None,
                         *pvis,
-                        name.clone(),
+                        resolved_class.clone(),
+                        type_hint.clone(),
+                        *p_readonly,
+                        *requires_reified_check,
                     ));
                     if *p_readonly {
                         readonly_props.push(pname.clone());
@@ -1422,17 +1466,39 @@ impl Compiler {
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
                 for prop in properties {
+                    if prop.is_static && prop.is_readonly {
+                        return Err(format!(
+                            "Static property {}::${} cannot be readonly",
+                            name, prop.name
+                        ));
+                    }
+                    let type_hint = self.convert_type_hint(&prop.type_hint);
                     let default = match &prop.default {
                         Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for trait property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
                     };
-                    let definition = PropertyDefinition::new(
+                    let default = default
+                        .map(|value| {
+                            normalize_property_default(value, &type_hint).ok_or_else(|| {
+                                format!(
+                                    "Cannot use default value for trait property {}::${} of type {}",
+                                    name,
+                                    prop.name,
+                                    type_hint.display_name()
+                                )
+                            })
+                        })
+                        .transpose()?;
+                    let definition = PropertyDefinition::declared(
                         prop.name.clone(),
                         default,
                         prop.visibility,
-                        name.clone(),
+                        resolved_trait.clone(),
+                        type_hint,
+                        prop.is_readonly,
+                        type_hint_requires_reified_check(&prop.type_hint),
                     );
                     if prop.is_static {
                         compiled_static_props.push(definition);

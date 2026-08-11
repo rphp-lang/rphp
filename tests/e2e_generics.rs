@@ -1899,6 +1899,32 @@ assignBox($ints, "not an int");
     }
 }
 
+#[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+#[test]
+fn static_generic_applications_follow_the_selected_runtime_model() {
+    let output = common::run_php(
+        r#"<?php
+class StaticGenericBox<T> {}
+class StaticGenericHolder {
+    public static StaticGenericBox<int> $box;
+}
+
+StaticGenericHolder::$box = new StaticGenericBox::<int>();
+echo "first:";
+try {
+    StaticGenericHolder::$box = new StaticGenericBox::<string>();
+    echo "erased";
+} catch (TypeError $error) {
+    echo "reified";
+}
+"#,
+    );
+    #[cfg(feature = "php-generics-reified")]
+    assert_eq!(output, "first:reified");
+    #[cfg(all(feature = "php-generics-erased", not(feature = "php-generics-reified")))]
+    assert_eq!(output, "first:erased");
+}
+
 #[cfg(feature = "php-generics-reified")]
 #[test]
 fn reified_instances_substitute_inherited_property_bindings() {
@@ -2481,6 +2507,10 @@ function transform<-I, +O>(I $input): O { return $input; }
         ),
         (
             "<?php class Bad<T> { public static function take(T $value) {} }",
+            "cannot be used in static context",
+        ),
+        (
+            "<?php class Bad<T> { public static T $value; }",
             "cannot be used in static context",
         ),
         (

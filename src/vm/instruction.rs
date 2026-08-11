@@ -1,5 +1,6 @@
 use super::function::FunctionCommon;
 use super::opcode::OpCode;
+use crate::compiler::compile::PropertyDefinition;
 use crate::value::ObjectLayout;
 
 /// InitFcall/InitMethodCall flag: every source argument is positional and at
@@ -203,6 +204,14 @@ unsafe impl Sync for InlineCache {}
 impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
     const DYNAMIC_PROPERTY_READ_SLOT: usize = (u32::MAX >> 2) as usize;
+    pub const TYPED_PROPERTY_COMPLEX: usize = 0;
+    pub const TYPED_PROPERTY_INT: usize = 1;
+    pub const TYPED_PROPERTY_FLOAT: usize = 2;
+    pub const TYPED_PROPERTY_STRING: usize = 3;
+    pub const TYPED_PROPERTY_BOOL: usize = 4;
+    pub const TYPED_PROPERTY_ARRAY: usize = 5;
+    pub const TYPED_PROPERTY_REIFIED: usize = 6;
+    const TYPED_PROPERTY_TAG_MASK: usize = 0b111;
     const METHOD_FUSION_ELIGIBLE: u32 = 1;
     const METHOD_LONG_PROPERTY_PLAN: u32 = 2;
     const METHOD_PROPERTY_GETTER_PLAN: u32 = 4;
@@ -282,6 +291,60 @@ impl InlineCache {
         self.func = std::ptr::null();
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
+    }
+
+    /// A typed static write may reuse the canonical storage slot but cannot
+    /// become write-unconditionally-safe. Keep the stable declaration pointer
+    /// in the otherwise-idle function word so warm writes avoid class-table
+    /// lookup while still checking the source value.
+    #[inline]
+    pub fn set_typed_static_property(
+        &mut self,
+        definition: *const PropertyDefinition,
+        class_id: u32,
+        slot: usize,
+    ) {
+        debug_assert!(!definition.is_null());
+        debug_assert_eq!(definition as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
+        self.set_property(class_id, slot, 1);
+        let tag = match unsafe { &*definition }.type_hint {
+            super::function::ParamTypeHint::Int => Self::TYPED_PROPERTY_INT,
+            super::function::ParamTypeHint::Float => Self::TYPED_PROPERTY_FLOAT,
+            super::function::ParamTypeHint::String => Self::TYPED_PROPERTY_STRING,
+            super::function::ParamTypeHint::Bool => Self::TYPED_PROPERTY_BOOL,
+            super::function::ParamTypeHint::Array => Self::TYPED_PROPERTY_ARRAY,
+            _ => Self::TYPED_PROPERTY_COMPLEX,
+        };
+        self.func = ((definition as usize) | tag) as *const FunctionCommon;
+    }
+
+    #[inline(always)]
+    pub fn typed_static_property_definition(&self) -> *const PropertyDefinition {
+        debug_assert_eq!(self.property_flags(), 1);
+        (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const PropertyDefinition
+    }
+
+    #[inline(always)]
+    pub fn typed_static_property_tag(&self) -> usize {
+        debug_assert_eq!(self.property_flags(), 1);
+        self.func as usize & Self::TYPED_PROPERTY_TAG_MASK
+    }
+
+    #[inline]
+    pub fn set_reified_static_property(&mut self, contract: *const (), class_id: u32, slot: usize) {
+        debug_assert!(!contract.is_null());
+        debug_assert_eq!(contract as usize & Self::TYPED_PROPERTY_TAG_MASK, 0);
+        self.set_property(class_id, slot, 1);
+        self.func = ((contract as usize) | Self::TYPED_PROPERTY_REIFIED) as *const FunctionCommon;
+    }
+
+    #[inline(always)]
+    pub fn reified_static_property_contract(&self) -> *const () {
+        debug_assert_eq!(
+            self.typed_static_property_tag(),
+            Self::TYPED_PROPERTY_REIFIED
+        );
+        (self.func as usize & !Self::TYPED_PROPERTY_TAG_MASK) as *const ()
     }
 
     /// Mark a read site that resolved to the canonical dynamic `stdClass`.

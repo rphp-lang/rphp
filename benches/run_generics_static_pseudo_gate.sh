@@ -50,7 +50,8 @@ if ! printf '%s\n' "$max_regression" | awk '
     exit 2
 fi
 case $only in
-    '' | ordinary | property-read | property-write | generic | generic-control) ;;
+    '' | ordinary | property-read | property-write | typed-property-write-self | \
+        typed-property-write-late | generic-property-write | generic | generic-control) ;;
     *)
         echo "RPHP_GENERICS_STATIC_GATE_ONLY names an unknown lane" >&2
         exit 2
@@ -64,6 +65,10 @@ late_property_workload="$script_root/benches/bench_static_late_property.php"
 self_property_workload="$script_root/benches/bench_static_self_property.php"
 late_property_write_workload="$script_root/benches/bench_static_late_property_write.php"
 self_property_write_workload="$script_root/benches/bench_static_self_property_write.php"
+typed_late_property_write_workload="$script_root/benches/bench_static_late_property_write_typed.php"
+typed_self_property_write_workload="$script_root/benches/bench_static_self_property_write_typed.php"
+generic_property_write_workload="$script_root/benches/bench_generics_static_property_write.php"
+generic_property_write_control="$script_root/benches/bench_generics_static_property_write_erased.php"
 generic_late_workload="$script_root/benches/bench_generics_static_late_turbofish.php"
 generic_self_workload="$script_root/benches/bench_generics_static_self_turbofish.php"
 generic_explicit_workload="$script_root/benches/bench_generics_static_explicit_turbofish.php"
@@ -169,5 +174,8 @@ echo "balanced mean of order-specific candidate/control median ratios:"
 run_selected_gate ordinary "ordinary static::/self::" "$ordinary_late_workload" "$ordinary_self_workload"
 run_selected_gate property-read "property static::/self::" "$late_property_workload" "$self_property_workload"
 run_selected_gate property-write "property write static::/self::" "$late_property_write_workload" "$self_property_write_workload"
+run_selected_gate typed-property-write-self "typed/untyped self property write" "$typed_self_property_write_workload" "$self_property_write_workload"
+run_selected_gate typed-property-write-late "typed/untyped static property write" "$typed_late_property_write_workload" "$late_property_write_workload"
+run_selected_gate generic-property-write "reified/erased static property write" "$generic_property_write_workload" "$generic_property_write_control"
 run_selected_gate generic "generic static::/self::" "$generic_late_workload" "$generic_self_workload"
 run_selected_gate generic-control "generic self::/explicit" "$generic_self_workload" "$generic_explicit_workload"

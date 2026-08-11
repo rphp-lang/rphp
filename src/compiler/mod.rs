@@ -719,7 +719,15 @@ fn mark_embedded_late_static_properties(op_array: &mut OpArray, embedded: bool) 
         if matches!(
             instruction.opcode,
             OpCode::FetchLateStaticProp | OpCode::AssignLateStaticProp
-        ) {
+        ) && instruction.op1_type == OpType::Const
+            && op_array
+                .literals
+                .get(instruction.op1 as usize)
+                .and_then(Value::as_str)
+                .is_some_and(|class| {
+                    class.eq_ignore_ascii_case("static") || class.eq_ignore_ascii_case("self")
+                })
+        {
             instruction._pad |= LATE_STATIC_PROP_EMBEDDED_SCOPE;
         }
     }

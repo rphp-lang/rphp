@@ -3036,19 +3036,63 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::FetchStaticProp => {
-                op_fetch_static_prop(eg, frame, op_array, opline)?;
+                match op_fetch_static_prop(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::FetchLateStaticProp => {
-                op_fetch_late_static_prop(eg, frame, op_array, opline)?;
+                match op_fetch_late_static_prop(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::AssignStaticProp => {
-                op_assign_static_prop(eg, frame, op_array, opline)?;
+                match op_assign_static_prop(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::AssignLateStaticProp => {
-                op_assign_late_static_prop(eg, frame, op_array, opline)?;
+                match op_assign_late_static_prop(eg, frame, op_array, opline)? {
+                    ColdResult::NewFrame(nf, no) => {
+                        frame = nf;
+                        op_array = no;
+                        continue 'vm;
+                    }
+                    ColdResult::Unhandled(exc) => {
+                        eg.exception = Some(exc);
+                        return Ok(());
+                    }
+                    _ => {}
+                }
             }
 
             OpCode::Instanceof => {

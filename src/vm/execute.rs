@@ -2090,6 +2090,7 @@ fn execute_full_call<'a>(
     }
 }
 
+include!("execute/property_types.rs");
 include!("execute/baseline_dispatch_cold.rs");
 include!("execute/baseline_dispatch.rs");
 

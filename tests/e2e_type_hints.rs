@@ -32,3 +32,4 @@ include!("e2e_type_hints/runtime_guards.rs");
 include!("e2e_type_hints/scalar_propagation.rs");
 include!("e2e_type_hints/string_plans.rs");
 include!("e2e_type_hints/object_plans.rs");
+include!("e2e_type_hints/static_property_hints.rs");

@@ -93,16 +93,28 @@ impl ExecutorGlobals {
         }
         let identity = unsafe { value.object_identity_unchecked() };
         {
-            let cache = self.reified_nested_arguments_cache.borrow();
-            if let Some(cached) = cache.as_ref()
+            let mut cache = self.reified_nested_arguments_cache.borrow_mut();
+            if let Some(cached) = cache.as_mut()
                 && cached.identity == identity
                 && cached.object.strong_count() != 0
                 && cached.owner_name_identity == expected_owner.as_ptr() as usize
                 && cached.owner_name_len == expected_owner.len()
             {
-                return self
+                let expected_pointer = expected_arguments.as_ptr() as usize;
+                if cached.binding_expected_arguments == expected_pointer
+                    && cached.binding_expected_len == expected_arguments.len()
+                    && cached.binding_site == usize::MAX
+                {
+                    return cached.binding_matches;
+                }
+                let matches = self
                     .generic_metadata
                     .reified_arguments_match_resolved(&cached.arguments, expected_arguments);
+                cached.binding_expected_arguments = expected_pointer;
+                cached.binding_expected_len = expected_arguments.len();
+                cached.binding_site = usize::MAX;
+                cached.binding_matches = matches;
+                return matches;
             }
         }
         let Some(arguments) = self.reified_object_arguments_for_owner(value, expected_owner) else {
@@ -118,10 +130,10 @@ impl ExecutorGlobals {
                 owner_name_identity: expected_owner.as_ptr() as usize,
                 owner_name_len: expected_owner.len(),
                 arguments,
-                binding_expected_arguments: 0,
-                binding_expected_len: 0,
-                binding_site: 0,
-                binding_matches: false,
+                binding_expected_arguments: expected_arguments.as_ptr() as usize,
+                binding_expected_len: expected_arguments.len(),
+                binding_site: usize::MAX,
+                binding_matches: matches,
             }));
         matches
     }

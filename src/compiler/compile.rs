@@ -1022,9 +1022,18 @@ pub struct PropertyDefinition {
     pub default: Option<Value>,
     pub visibility: Visibility,
     pub declaring_class: String,
+    /// Erased PHP runtime contract. Generic metadata retains the richer
+    /// parameterized form outside this storage-oriented declaration table.
+    pub type_hint: ParamTypeHint,
+    pub is_readonly: bool,
+    /// The erased contract is insufficient for this declaration in reified
+    /// mode (for example `Box<int>`). Its full type stays interned in the
+    /// executor-wide GenericMetadata graph.
+    pub requires_reified_check: bool,
 }
 
 impl PropertyDefinition {
+    /// Internal declarations without a source-level type or readonly marker.
     pub fn new(
         name: String,
         default: Option<Value>,
@@ -1036,7 +1045,98 @@ impl PropertyDefinition {
             default,
             visibility,
             declaring_class,
+            type_hint: ParamTypeHint::None,
+            is_readonly: false,
+            requires_reified_check: false,
         }
+    }
+
+    pub fn declared(
+        name: String,
+        default: Option<Value>,
+        visibility: Visibility,
+        declaring_class: String,
+        type_hint: ParamTypeHint,
+        is_readonly: bool,
+        requires_reified_check: bool,
+    ) -> Self {
+        Self {
+            name,
+            default,
+            visibility,
+            declaring_class,
+            type_hint,
+            is_readonly,
+            requires_reified_check,
+        }
+    }
+
+    #[inline]
+    pub fn is_typed(&self) -> bool {
+        !matches!(self.type_hint, ParamTypeHint::None)
+    }
+}
+
+fn type_hint_requires_reified_check(hint: &Option<TypeHint>) -> bool {
+    fn contains_application(hint: &TypeHint) -> bool {
+        match hint {
+            TypeHint::GenericApplication { .. } => true,
+            TypeHint::GenericParameter { erased, .. } | TypeHint::Nullable(erased) => {
+                contains_application(erased)
+            }
+            TypeHint::Union(parts) | TypeHint::Intersection(parts) => {
+                parts.iter().any(contains_application)
+            }
+            _ => false,
+        }
+    }
+
+    hint.as_ref().is_some_and(contains_application)
+}
+
+fn property_default_matches_exact(value: &Value, hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::None | ParamTypeHint::Mixed => true,
+        ParamTypeHint::Int => value.value_type() == ValueType::Long,
+        ParamTypeHint::Float => value.value_type() == ValueType::Double,
+        ParamTypeHint::String => value.value_type() == ValueType::String,
+        ParamTypeHint::Bool => matches!(value.value_type(), ValueType::True | ValueType::False),
+        ParamTypeHint::Array => value.value_type() == ValueType::Array,
+        ParamTypeHint::Nullable(inner) => {
+            value.value_type() == ValueType::Null
+                || (!matches!(inner.as_ref(), ParamTypeHint::None)
+                    && property_default_matches_exact(value, inner))
+        }
+        ParamTypeHint::Union(parts) => parts
+            .iter()
+            .any(|part| property_default_matches_exact(value, part)),
+        ParamTypeHint::Intersection(parts) => parts
+            .iter()
+            .all(|part| property_default_matches_exact(value, part)),
+        ParamTypeHint::Callable
+        | ParamTypeHint::Void
+        | ParamTypeHint::Never
+        | ParamTypeHint::ClassName(_) => false,
+    }
+}
+
+/// Property defaults are compile-time constants and never use weak scalar
+/// coercion. PHP's one widening exception is an integer default for `float`.
+fn normalize_property_default(value: Value, hint: &ParamTypeHint) -> Option<Value> {
+    if property_default_matches_exact(&value, hint) {
+        return Some(value);
+    }
+    match hint {
+        ParamTypeHint::Float if value.value_type() == ValueType::Long => {
+            Some(Value::double(value.as_long()? as f64))
+        }
+        ParamTypeHint::Nullable(inner) if value.value_type() != ValueType::Null => {
+            normalize_property_default(value, inner)
+        }
+        ParamTypeHint::Union(parts) => parts
+            .iter()
+            .find_map(|part| normalize_property_default(value.clone(), part)),
+        _ => None,
     }
 }
 
@@ -2070,6 +2170,42 @@ impl Compiler {
                     _ => self.resolve_name(base),
                 })
             }
+        }
+    }
+
+    fn resolve_declared_property_type_hint(
+        &self,
+        hint: ParamTypeHint,
+        class_name: &str,
+        parent_name: Option<&str>,
+    ) -> ParamTypeHint {
+        match hint {
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
+                ParamTypeHint::ClassName(class_name.to_string())
+            }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
+                ParamTypeHint::ClassName(parent_name.unwrap_or("parent").to_string())
+            }
+            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
+                self.resolve_declared_property_type_hint(*inner, class_name, parent_name),
+            )),
+            ParamTypeHint::Union(parts) => ParamTypeHint::Union(
+                parts
+                    .into_iter()
+                    .map(|part| {
+                        self.resolve_declared_property_type_hint(part, class_name, parent_name)
+                    })
+                    .collect(),
+            ),
+            ParamTypeHint::Intersection(parts) => ParamTypeHint::Intersection(
+                parts
+                    .into_iter()
+                    .map(|part| {
+                        self.resolve_declared_property_type_hint(part, class_name, parent_name)
+                    })
+                    .collect(),
+            ),
+            concrete => concrete,
         }
     }
 
