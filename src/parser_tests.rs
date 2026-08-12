@@ -5,7 +5,7 @@ use crate::lexer::Lexer;
 fn test_parse_echo_42() {
     let tokens = Lexer::new("<?php echo 42;").tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
-    assert_eq!(stmts, vec![Stmt::Echo(Expr::Integer(42))]);
+    assert_eq!(stmts, vec![Stmt::Echo(vec![Expr::Integer(42)])]);
 }
 
 #[test]
@@ -19,7 +19,7 @@ fn test_parse_assign_echo() {
                 var: "a".into(),
                 expr: Expr::Integer(42),
             },
-            Stmt::Echo(Expr::Variable("a".into())),
+            Stmt::Echo(vec![Expr::Variable("a".into())]),
         ]
     );
 }
@@ -30,11 +30,11 @@ fn test_parse_add() {
     let stmts = Parser::new(tokens).parse().unwrap();
     assert_eq!(
         stmts,
-        vec![Stmt::Echo(Expr::BinaryOp {
+        vec![Stmt::Echo(vec![Expr::BinaryOp {
             op: BinOp::Add,
             left: Box::new(Expr::Integer(20)),
             right: Box::new(Expr::Integer(22)),
-        })]
+        }])]
     );
 }
 
@@ -44,11 +44,31 @@ fn test_parse_function_call() {
     let stmts = Parser::new(tokens).parse().unwrap();
     assert_eq!(
         stmts,
-        vec![Stmt::Echo(Expr::FunctionCall {
+        vec![Stmt::Echo(vec![Expr::FunctionCall {
             name: "my_double".into(),
             args: vec![CallArg::Positional(Expr::Integer(21))],
             generic_args: vec![],
-        })]
+        }])]
+    );
+}
+
+#[test]
+fn test_parse_comma_separated_echo() {
+    let tokens = Lexer::new("<?php echo 1, $value, 2 + 3;")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![Stmt::Echo(vec![
+            Expr::Integer(1),
+            Expr::Variable("value".into()),
+            Expr::BinaryOp {
+                op: BinOp::Add,
+                left: Box::new(Expr::Integer(2)),
+                right: Box::new(Expr::Integer(3)),
+            },
+        ])]
     );
 }
 
@@ -106,7 +126,7 @@ fn test_parse_if() {
         stmts,
         vec![Stmt::If {
             condition: Expr::Integer(1),
-            then_body: vec![Stmt::Echo(Expr::Integer(42))],
+            then_body: vec![Stmt::Echo(vec![Expr::Integer(42)])],
             else_body: vec![],
         }]
     );
@@ -122,8 +142,8 @@ fn test_parse_if_else() {
         stmts,
         vec![Stmt::If {
             condition: Expr::Integer(0),
-            then_body: vec![Stmt::Echo(Expr::Integer(1))],
-            else_body: vec![Stmt::Echo(Expr::Integer(2))],
+            then_body: vec![Stmt::Echo(vec![Expr::Integer(1)])],
+            else_body: vec![Stmt::Echo(vec![Expr::Integer(2)])],
         }]
     );
 }
@@ -142,7 +162,7 @@ fn test_parse_while() {
                 left: Box::new(Expr::Variable("x".into())),
                 right: Box::new(Expr::Integer(3)),
             },
-            body: vec![Stmt::Echo(Expr::Variable("x".into()))],
+            body: vec![Stmt::Echo(vec![Expr::Variable("x".into())])],
         }]
     );
 }

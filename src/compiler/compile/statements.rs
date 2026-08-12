@@ -5,12 +5,14 @@ impl Compiler {
             return Err(err);
         }
         match stmt {
-            Stmt::Echo(expr) => {
-                let (operand, op_type) = self.compile_expr(expr);
-                let mut echo = Instruction::new(OpCode::Echo);
-                echo.op1 = operand;
-                echo.op1_type = op_type;
-                self.instructions.push(echo);
+            Stmt::Echo(expressions) => {
+                for expr in expressions {
+                    let (operand, op_type) = self.compile_expr(expr);
+                    let mut echo = Instruction::new(OpCode::Echo);
+                    echo.op1 = operand;
+                    echo.op1_type = op_type;
+                    self.instructions.push(echo);
+                }
             }
             Stmt::Assign { var, expr } => {
                 // Detect $x .= expr pattern → emit AssignConcat (in-place string append)

@@ -22,6 +22,10 @@ impl CallArg {
             CallArg::Named { value, .. } => value,
         }
     }
+
+    pub(crate) fn contains_yield(&self) -> bool {
+        self.expr().contains_yield()
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,6 +155,83 @@ pub enum Expr {
     Clone(Box<Expr>),      // clone $expr
 }
 
+impl Expr {
+    pub(crate) fn contains_yield(&self) -> bool {
+        match self {
+            Expr::Yield { .. } | Expr::YieldFrom(_) => true,
+            Expr::BinaryOp { left, right, .. }
+            | Expr::NullCoalesce { left, right }
+            | Expr::Elvis { left, right } => left.contains_yield() || right.contains_yield(),
+            Expr::Not(inner)
+            | Expr::UnaryMinus(inner)
+            | Expr::Empty(inner)
+            | Expr::Throw(inner)
+            | Expr::BitwiseNot(inner)
+            | Expr::Clone(inner) => inner.contains_yield(),
+            Expr::Ternary {
+                condition,
+                then_expr,
+                else_expr,
+            } => {
+                condition.contains_yield()
+                    || then_expr.contains_yield()
+                    || else_expr.contains_yield()
+            }
+            Expr::ArrayLiteral(elements) => elements.iter().any(|element| {
+                element
+                    .key
+                    .as_ref()
+                    .is_some_and(Expr::contains_yield)
+                    || element.value.contains_yield()
+            }),
+            Expr::ArrayAccess { array, index } => {
+                array.contains_yield() || index.contains_yield()
+            }
+            Expr::Cast { expr, .. }
+            | Expr::PropertyAccess { object: expr, .. }
+            | Expr::Instanceof { expr, .. }
+            | Expr::Assign { expr, .. }
+            | Expr::Print(expr) => expr.contains_yield(),
+            Expr::Isset(expressions) => expressions.iter().any(Expr::contains_yield),
+            Expr::Match { expr, arms } => {
+                expr.contains_yield()
+                    || arms.iter().any(|arm| {
+                        arm.conditions
+                            .as_ref()
+                            .is_some_and(|conditions| {
+                                conditions.iter().any(Expr::contains_yield)
+                            })
+                            || arm.body.contains_yield()
+                    })
+            }
+            Expr::FunctionCall { args, .. }
+            | Expr::New { args, .. }
+            | Expr::StaticCall { args, .. } => args.iter().any(CallArg::contains_yield),
+            Expr::MethodCall { object, args, .. } => {
+                object.contains_yield() || args.iter().any(CallArg::contains_yield)
+            }
+            Expr::DynamicCall { callable, args, .. } => {
+                callable.contains_yield() || args.iter().any(CallArg::contains_yield)
+            }
+            // A closure has its own suspension context; declaring it does not
+            // suspend the surrounding expression.
+            Expr::Closure { .. }
+            | Expr::Integer(_)
+            | Expr::Float(_)
+            | Expr::StringLiteral(_)
+            | Expr::Null
+            | Expr::Bool(_)
+            | Expr::Variable(_)
+            | Expr::PostInc(_)
+            | Expr::PostDec(_)
+            | Expr::PreInc(_)
+            | Expr::PreDec(_)
+            | Expr::StaticProperty { .. }
+            | Expr::Constant(_) => false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CastType {
     Int = 0,
@@ -257,7 +338,7 @@ pub struct Param {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Stmt {
-    Echo(Expr),
+    Echo(Vec<Expr>),
     Assign {
         var: String,
         expr: Expr,

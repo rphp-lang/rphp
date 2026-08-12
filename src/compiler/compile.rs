@@ -2721,6 +2721,7 @@ impl Compiler {
                             if forwarded
                                 .iter()
                                 .all(|arg| matches!(arg, CallArg::Positional(_)))
+                                && !forwarded.iter().any(CallArg::contains_yield)
                             {
                                 let (callback_op, callback_type) = self.compile_expr(callback);
                                 let mut init = Instruction::new(OpCode::InitUserCall);
@@ -2746,7 +2747,9 @@ impl Compiler {
                             args.as_slice()
                         {
                             if let Expr::ArrayLiteral(elements) = array {
-                                if elements.iter().all(|element| element.key.is_none()) {
+                                if elements.iter().all(|element| {
+                                    element.key.is_none() && !element.value.contains_yield()
+                                }) {
                                     // A temporary packed literal cannot be observed by PHP
                                     // code. Forward its values directly and avoid allocating,
                                     // filling and dropping a PhpArray for every invocation.
@@ -2808,6 +2811,11 @@ impl Compiler {
                     0 // no fallback
                 };
 
+                let compiled_args = args
+                    .iter()
+                    .any(CallArg::contains_yield)
+                    .then(|| self.compile_call_args(args));
+
                 let runtime_generic_check = self.emit_generic_check(
                     OpCode::CheckGenericArgs,
                     GenericDeclarationKind::Function,
@@ -2831,9 +2839,21 @@ impl Compiler {
                 let init_index = self.instructions.len();
                 self.instructions.push(init);
 
-                self.emit_call_args(args, 0, ref_args, false, false);
+                if let Some(compiled_args) = compiled_args.as_deref() {
+                    self.emit_precompiled_runtime_call_args(
+                        args,
+                        compiled_args,
+                        0,
+                        ref_args,
+                        false,
+                        false,
+                    );
+                } else {
+                    self.emit_call_args(args, 0, ref_args, false, false);
+                }
 
-                if args.iter().all(|arg| matches!(arg, CallArg::Positional(_)))
+                if compiled_args.is_none()
+                    && args.iter().all(|arg| matches!(arg, CallArg::Positional(_)))
                     && self.instructions.len() > init_index + 1 + args.len()
                 {
                     self.instructions[init_index]._pad |= CALL_FLAG_DEFERRED_SCALAR_CANDIDATE;
@@ -3389,6 +3409,40 @@ impl Compiler {
                 generic_args,
                 nullsafe,
             } => {
+                if args.iter().any(CallArg::contains_yield) {
+                    // InitMethodCall owns a pending VM call frame. A yield in
+                    // an argument suspends before SendVal/DoFcall and cannot
+                    // keep that raw frame alive across generator detachment.
+                    // Evaluate the receiver and arguments first, then start
+                    // the call protocol from their stable TMP/CV operands.
+                    let (obj_op, obj_type) = self.compile_expr(object);
+                    let tmp = self.alloc_tmp();
+                    let nullsafe_patch = if *nullsafe {
+                        let mut check = Instruction::new(OpCode::NullSafeCheck);
+                        check.op1 = obj_op;
+                        check.op1_type = obj_type;
+                        check.op2 = 0;
+                        check.result = tmp;
+                        check.result_type = OpType::Tmp;
+                        check.extended_value = 1;
+                        let index = self.instructions.len();
+                        self.instructions.push(check);
+                        Some(index)
+                    } else {
+                        None
+                    };
+                    let compiled_args = self.compile_call_args(args);
+                    return self.compile_method_call_from_operands(
+                        obj_op,
+                        obj_type,
+                        tmp,
+                        nullsafe_patch,
+                        method,
+                        args,
+                        &compiled_args,
+                        generic_args,
+                    );
+                }
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let tmp = self.alloc_tmp();
 
@@ -3482,6 +3536,10 @@ impl Compiler {
                 let class_idx = self.add_literal(Value::string(resolved_class));
                 let method_idx = self.add_literal(Value::string(method.clone()));
                 let generic_owner_idx = self.add_literal(Value::string(generic_owner.clone()));
+                let compiled_args = args
+                    .iter()
+                    .any(CallArg::contains_yield)
+                    .then(|| self.compile_call_args(args));
                 let dynamic_static_scope = (self.dynamic_static_scope
                     && matches!(pseudo_class.as_str(), "self" | "parent"))
                     || pseudo_class == "static";
@@ -3534,7 +3592,11 @@ impl Compiler {
                 }
                 self.instructions.push(init);
 
-                self.emit_call_args(args, 1, 0, true, true);
+                if let Some(compiled_args) = compiled_args.as_deref() {
+                    self.emit_precompiled_runtime_call_args(args, compiled_args, 1, 0, true, true);
+                } else {
+                    self.emit_call_args(args, 1, 0, true, true);
+                }
                 self.emit_reified_argument_check(runtime_generic_check);
 
                 let tmp = self.alloc_tmp();
@@ -3586,6 +3648,10 @@ impl Compiler {
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
                 let (callable_op, callable_type) = self.compile_expr(callable);
+                let compiled_args = args
+                    .iter()
+                    .any(CallArg::contains_yield)
+                    .then(|| self.compile_call_args(args));
 
                 let runtime_generic_check = self.emit_generic_check(
                     OpCode::CheckGenericArgs,
@@ -3606,7 +3672,11 @@ impl Compiler {
                 self.instructions.push(init);
 
                 // Send arguments
-                self.emit_call_args(args, 0, 0, true, true);
+                if let Some(compiled_args) = compiled_args.as_deref() {
+                    self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, true, true);
+                } else {
+                    self.emit_call_args(args, 0, 0, true, true);
+                }
                 self.emit_reified_argument_check(runtime_generic_check);
 
                 // DoFcall
@@ -3854,6 +3924,65 @@ impl Compiler {
         }
     }
 
+    fn compile_call_args(&mut self, args: &[CallArg]) -> Vec<(u16, OpType, Option<u16>)> {
+        args.iter()
+            .map(|arg| match arg {
+                CallArg::Positional(expr) => {
+                    let (op, op_type) = self.compile_expr(expr);
+                    (op, op_type, None)
+                }
+                CallArg::Named { name, value } => {
+                    let (op, op_type) = self.compile_expr(value);
+                    let name_idx = self.add_literal(Value::string(name.clone()));
+                    (op, op_type, Some(name_idx))
+                }
+            })
+            .collect()
+    }
+
+    fn compile_method_call_from_operands(
+        &mut self,
+        obj_op: u16,
+        obj_type: OpType,
+        tmp: u16,
+        nullsafe_patch: Option<usize>,
+        method: &str,
+        args: &[CallArg],
+        compiled_args: &[(u16, OpType, Option<u16>)],
+        generic_args: &[TypeHint],
+    ) -> (u16, OpType) {
+        let method_idx = self.add_literal(Value::string(method.to_string()));
+        let runtime_generic_check = self.emit_generic_check(
+            OpCode::CheckGenericArgs,
+            GenericDeclarationKind::Method,
+            generic_args,
+            None,
+            obj_op,
+            obj_type,
+            method_idx,
+            OpType::Const,
+        );
+        let mut init = Instruction::new(OpCode::InitMethodCall);
+        init.op1 = obj_op;
+        init.op1_type = obj_type;
+        init.op2 = method_idx;
+        init.op2_type = OpType::Const;
+        init.extended_value = args.len() as u32;
+        self.instructions.push(init);
+        self.emit_precompiled_runtime_call_args(args, compiled_args, 1, 0, true, true);
+        self.emit_reified_argument_check(runtime_generic_check);
+
+        let mut do_fcall = Instruction::new(OpCode::DoFcall);
+        do_fcall.result = tmp;
+        do_fcall.result_type = OpType::Tmp;
+        self.instructions.push(do_fcall);
+        self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
+        if let Some(index) = nullsafe_patch {
+            self.instructions[index].op2 = self.instructions.len() as u16;
+        }
+        (tmp, OpType::Tmp)
+    }
+
     /// Emit arguments for compiler-lowered call_user_func. Unlike an ordinary
     /// dynamic call, the callback may resolve to a method, so the VM computes
     /// the hidden `$this` CV offset from the resolved signature.
@@ -3895,6 +4024,43 @@ impl Compiler {
                 send.op1_type = *op_type;
                 send.op2 = (i as u32 + cv_offset) as u16;
                 self.instructions.push(send);
+            }
+        }
+    }
+
+    fn emit_precompiled_runtime_call_args(
+        &mut self,
+        args: &[CallArg],
+        compiled_args: &[(u16, OpType, Option<u16>)],
+        cv_offset: u32,
+        ref_args: u64,
+        use_var_ex: bool,
+        set_extended_value: bool,
+    ) {
+        debug_assert_eq!(args.len(), compiled_args.len());
+        for (index, (arg, (op, op_type, name_idx))) in args.iter().zip(compiled_args).enumerate() {
+            match arg {
+                CallArg::Positional(_) => {
+                    let mut send = Instruction::new(Self::positional_opcode(
+                        ref_args, index, *op_type, use_var_ex,
+                    ));
+                    send.op1 = *op;
+                    send.op1_type = *op_type;
+                    send.op2 = (index as u32 + cv_offset) as u16;
+                    if set_extended_value {
+                        send.extended_value = index as u32;
+                    }
+                    self.instructions.push(send);
+                }
+                CallArg::Named { .. } => {
+                    let mut send = Instruction::new(OpCode::SendNamed);
+                    send.op1 = *op;
+                    send.op1_type = *op_type;
+                    send.op2 = name_idx.expect("compiled named argument must retain its name");
+                    send.op2_type = OpType::Const;
+                    send.extended_value = index as u32;
+                    self.instructions.push(send);
+                }
             }
         }
     }

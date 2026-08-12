@@ -492,6 +492,109 @@ $g->next();
     );
 }
 
+#[test]
+fn test_generator_yield_inside_method_argument() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class YieldReceiver {
+    public function emit($value) {
+        echo $value, ":";
+    }
+}
+function values() {
+    $receiver = new YieldReceiver;
+    $receiver->emit(yield "ready");
+}
+$generator = values();
+echo $generator->current(), ":";
+$generator->send("sent");
+"#
+        ),
+        "ready:sent:",
+    );
+}
+
+#[test]
+fn test_nullsafe_call_skips_yielding_argument() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function values() {
+    $receiver = null;
+    $receiver?->missing(yield "unreachable");
+    echo "completed";
+}
+$generator = values();
+$generator->current();
+"#
+        ),
+        "completed",
+    );
+}
+
+#[test]
+fn test_generator_yield_inside_other_call_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function emitYielded($value) { echo "f" . $value . ":"; }
+class StaticYieldReceiver {
+    public static function emit($value) { echo "s" . $value . ":"; }
+}
+function globalCall() { emitYielded(yield "global"); }
+function staticCall() { StaticYieldReceiver::emit(yield "static"); }
+function dynamicCall() {
+    $callable = function ($value) { echo "d" . $value . ":"; };
+    $callable(yield "dynamic");
+}
+$generator = globalCall();
+echo $generator->current(), ":";
+$generator->send("1");
+$generator = staticCall();
+echo $generator->current(), ":";
+$generator->send("2");
+$generator = dynamicCall();
+echo $generator->current(), ":";
+$generator->send("3");
+"#
+        ),
+        "global:f1:static:s2:dynamic:d3:",
+    );
+}
+
+#[test]
+fn test_generator_yield_call_preserves_prior_reference_arguments() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function replace(&$target, $value) { $target = $value; }
+class YieldReferenceReceiver {
+    public function replace(&$target, $value) { $target = $value; }
+}
+function globalReference() {
+    $value = "old";
+    replace($value, yield "global");
+    echo $value, ":";
+}
+function methodReference() {
+    $value = "old";
+    $receiver = new YieldReferenceReceiver;
+    $receiver->replace($value, yield "method");
+    echo $value, ":";
+}
+$generator = globalReference();
+echo $generator->current(), ":";
+$generator->send("new-global");
+$generator = methodReference();
+echo $generator->current(), ":";
+$generator->send("new-method");
+"#
+        ),
+        "global:new-global:method:new-method:",
+    );
+}
+
 // ── yield from ──
 
 #[test]

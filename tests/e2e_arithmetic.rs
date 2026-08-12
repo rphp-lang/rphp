@@ -38,6 +38,16 @@ fn test_e2e_multiple_echo() {
 }
 
 #[test]
+fn test_e2e_comma_separated_echo_preserves_order() {
+    assert_eq!(
+        run_php(
+            "<?php function emit($value) { echo '[' . $value . ']'; return $value; } echo emit('a'), ':', emit('b');",
+        ),
+        "[a]a:[b]b",
+    );
+}
+
+#[test]
 fn test_e2e_complex_expression() {
     assert_eq!(run_php("<?php echo 10 + 20 + 12;"), "42");
 }
