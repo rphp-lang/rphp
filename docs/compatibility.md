@@ -10,24 +10,24 @@ Passing a script is evidence only for the exercised behavior.
 The latest reproducible upstream baseline runs the unmodified `Zend/tests` and
 `tests/lang` suites from PHP 8.4.21 commit
 `7a64ae0507799547fbbd39b067bd3dd2c35e8fec` against all-features RPHP commit
-`9c8812dc37580731ec195cdd8199ed134d766e62`. The recorded run used arm64 and a
+`102800d9fa88a34ebc240a7a01c93fdd71f803bf`. The recorded run used arm64 and a
 three-second per-process timeout. It discovered 5,259 PHPT cases.
 
 | Suite | Pass | Fail | Skip | XFAIL | Unsupported | Timeout | Crash | Headline pass rate |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| `Zend/tests` | 487 | 4,126 | 86 | 1 | 258 | 0 | 7 | 10.557% |
+| `Zend/tests` | 545 | 4,068 | 86 | 1 | 258 | 0 | 7 | 11.814% |
 | `tests/lang` | 42 | 226 | 10 | 0 | 16 | 0 | 0 | 15.672% |
-| **Combined** | **529** | **4,352** | **96** | **1** | **274** | **0** | **7** | **10.838%** |
+| **Combined** | **587** | **4,294** | **96** | **1** | **274** | **0** | **7** | **12.026%** |
 
 The headline follows the published gate definition exactly:
 `pass / (pass + fail)`. It does not count skips, the known upstream `XFAIL`,
 unsupported cases, timeouts or crashes as passes. A stricter whole-corpus view
-is 529 / 5,259, or **10.059%**; including crashes in the attempted denominator
-gives **10.822%**. These numbers are intentionally pre-alpha and are not a
+is 587 / 5,259, or **11.162%**; including crashes in the attempted denominator
+gives **12.009%**. These numbers are intentionally pre-alpha and are not a
 claim of PHP 8.4 compatibility.
 
-The largest failure groups are 2,077 parse failures, 1,417 runtime failures,
-720 output mismatches, 130 compile failures and eight failed `SKIPIF`
+The largest failure groups are 2,045 parse failures, 1,334 runtime failures,
+762 output mismatches, 145 compile failures and eight failed `SKIPIF`
 evaluations; one known upstream expected failure is reported separately. Seven
 cases terminate by signal. Of the 96 skips, 65 require unavailable extensions
 and 31 are selected by `SKIPIF`.
@@ -35,8 +35,19 @@ Unsupported cases remain in the total: 269 require per-process `INI` behavior
 that the RPHP CLI does not expose, while five require PHPDBG or CGI/header
 sections outside this CLI gate.
 
-Relative to the retained `1a5a270` baseline, this run adds 179 passing cases
-without losing a previous pass, reduces parser failures by 744 and reduces
+Relative to the retained `9c8812d` baseline, this run adds 58 passing cases
+without losing a previous pass. A single postfix loop now covers offsets,
+dynamic calls, object access and class constants for every primary atom instead
+of selected parser entry points. Source-aware, case-insensitive magic constants
+cover file, directory, line, namespace, class, trait, function and method scope;
+fully-qualified built-in constants also discard their global namespace marker
+before lookup. Includes receive their own canonical source context. These
+shared changes reduce runtime failures by 83 and parser failures by 32; some
+tests now reach later output or compile-time checks, so those classifications
+increase even though the exact pass set only grows.
+
+Relative to the retained `1a5a270` baseline, this run adds 237 passing cases
+without losing a previous pass, reduces parser failures by 776 and reduces
 signal-terminated cases from 14 to 7. The measured change covers standard
 comma-separated `echo`, standalone `print` statements and generator-safe call
 argument suspension, empty/no-op and general expression statements, heredoc and
@@ -71,7 +82,7 @@ rate instead of inflating it.
 
 The largest first-error parser clusters in the latest audit are property hook
 or braced-member shapes (232), reference assignment expressions (155),
-anonymous classes (79), unpacking expressions (74), identifier grammar (66),
+anonymous classes (80), unpacking expressions (74), identifier grammar (66),
 variable-variable names (59), and returned-by-reference declarations (57).
 PHPT is an exact-output conformance suite: a correct rejection with different
 diagnostic text still fails, so this strict percentage is deliberately lower
@@ -85,9 +96,9 @@ section handling are continuously covered by local fixtures and the complete
 oracle result above.
 
 The complete machine-readable result is committed as
-[`9c8812d-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/9c8812d-arm64-manifest.jsonl),
+[`102800d-arm64-manifest.jsonl`](../tests/php-src/results/php-8.4.21/102800d-arm64-manifest.jsonl),
 with aggregate metadata in
-[`9c8812d-arm64-summary.json`](../tests/php-src/results/php-8.4.21/9c8812d-arm64-summary.json).
+[`102800d-arm64-summary.json`](../tests/php-src/results/php-8.4.21/102800d-arm64-summary.json).
 Every upstream path remains visible with its pass/fail/skip/XFAIL/unsupported/
 timeout/crash status and classification.
 
