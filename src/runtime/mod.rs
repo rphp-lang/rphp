@@ -2148,18 +2148,17 @@ impl ExecutorGlobals {
         }
 
         // Class name covariance
-        match (impl_hint, iface_hint) {
-            (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) => {
-                // Every class-like return type, including the late-static
-                // pseudo-type, is a subtype of PHP's built-in `object` type.
-                // This is what permits a trait method returning `static` to
-                // implement an interface method returning `object`.
-                if iface_class.eq_ignore_ascii_case("object") {
-                    return true;
-                }
-                return self.class_is_a(impl_class, iface_class);
+        if let (ParamTypeHint::ClassName(impl_class), ParamTypeHint::ClassName(iface_class)) =
+            (impl_hint, iface_hint)
+        {
+            // Every class-like return type, including the late-static
+            // pseudo-type, is a subtype of PHP's built-in `object` type.
+            // This is what permits a trait method returning `static` to
+            // implement an interface method returning `object`.
+            if iface_class.eq_ignore_ascii_case("object") {
+                return true;
             }
-            _ => {}
+            return self.class_is_a(impl_class, iface_class);
         }
 
         // Everything else: incompatible

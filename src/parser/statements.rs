@@ -589,9 +589,7 @@ impl Parser {
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
                 // contract, matching the closure parser's bounded handling.
-                if self.peek() == Token::Ampersand {
-                    self.advance();
-                }
+                self.consume_reference_return_marker();
                 let name = match self.advance() {
                     Token::Identifier(n) => n,
                     other => return Err(format!("Expected function name, got {:?}", other)),

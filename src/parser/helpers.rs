@@ -1,4 +1,11 @@
 impl Parser {
+    /// Consume PHP's marker for a function or method returning by reference.
+    pub(super) fn consume_reference_return_marker(&mut self) {
+        if self.peek() == Token::Ampersand {
+            self.advance();
+        }
+    }
+
     fn peek(&self) -> Token {
         self.tokens.get(self.pos).cloned().unwrap_or(Token::Eof)
     }

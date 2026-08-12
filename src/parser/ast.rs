@@ -8,10 +8,32 @@ pub enum ListTarget {
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
 }
 
+impl ListTarget {
+    pub(crate) fn contains_yield(&self) -> bool {
+        match self {
+            ListTarget::Variable(_) | ListTarget::Skip => false,
+            ListTarget::Target(target) => target.contains_yield(),
+            ListTarget::Nested(targets) => targets.iter().any(ListTarget::contains_yield),
+            ListTarget::KeyedVariable { key, .. } => key.contains_yield(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum ForeachTarget {
     Variable(String),
     Destructure(Vec<ListTarget>),
+}
+
+impl ForeachTarget {
+    pub(crate) fn contains_yield(&self) -> bool {
+        match self {
+            ForeachTarget::Variable(_) => false,
+            ForeachTarget::Destructure(targets) => {
+                targets.iter().any(ListTarget::contains_yield)
+            }
+        }
+    }
 }
 
 /// A call-site argument: either positional or named (PHP 8).
@@ -290,7 +312,9 @@ impl Expr {
             Expr::AssignTarget { target, expr } => {
                 target.contains_yield() || expr.contains_yield()
             }
-            Expr::ListAssign { expr, .. } => expr.contains_yield(),
+            Expr::ListAssign { targets, expr } => {
+                targets.iter().any(ListTarget::contains_yield) || expr.contains_yield()
+            }
             Expr::CompoundAssignExpression { target, expr, .. } => {
                 target.contains_yield() || expr.contains_yield()
             }
@@ -657,7 +681,8 @@ pub enum Stmt {
 }
 
 impl Stmt {
-    /// Whether executing this statement can suspend the current function.
+    /// Whether this statement syntactically contains a yield belonging to the
+    /// current function, including one in an unreachable branch.
     /// Nested function, method, closure and class bodies own independent
     /// suspension contexts and are therefore deliberately not traversed.
     pub(crate) fn contains_yield(&self) -> bool {
@@ -723,8 +748,12 @@ impl Stmt {
                     || expr.contains_yield()
             }
             Stmt::BindArrayAppendReference { target, .. } => target.contains_yield(),
-            Stmt::Foreach { array, body, .. } => {
-                array.contains_yield() || body.iter().any(Stmt::contains_yield)
+            Stmt::Foreach {
+                array, value, body, ..
+            } => {
+                array.contains_yield()
+                    || value.contains_yield()
+                    || body.iter().any(Stmt::contains_yield)
             }
             Stmt::TryCatch {
                 try_body,
@@ -749,7 +778,9 @@ impl Stmt {
                 object.contains_yield() || index.contains_yield() || expr.contains_yield()
             }
             Stmt::Namespace { body, .. } => body.iter().any(Stmt::contains_yield),
-            Stmt::ListAssign { expr, .. } => expr.contains_yield(),
+            Stmt::ListAssign { targets, expr } => {
+                targets.iter().any(ListTarget::contains_yield) || expr.contains_yield()
+            }
             Stmt::StaticVar { vars } => vars
                 .iter()
                 .any(|(_, value)| value.as_ref().is_some_and(Expr::contains_yield)),

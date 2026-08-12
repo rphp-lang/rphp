@@ -337,3 +337,13 @@ fn test_destructuring_assignment_is_value_producing_and_allows_skips() {
         "ac:a,c"
     );
 }
+
+#[test]
+fn test_destructuring_expression_preserves_a_cv_rhs_before_overwriting_it() {
+    assert_eq!(
+        run_php(
+            "<?php $values = ['a', 'b']; if ([$values, $second] = $values) { echo $values . $second; }"
+        ),
+        "ab"
+    );
+}

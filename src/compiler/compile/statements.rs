@@ -871,12 +871,15 @@ impl Compiler {
                 // effects. Compile only its live branch so mutually exclusive
                 // conditional declarations retain PHP's runtime identity
                 // instead of being registered eagerly as duplicates.
-                let branch_contains_yield = then_body.iter().any(Stmt::contains_yield)
-                    || else_body.iter().any(Stmt::contains_yield);
-                if !branch_contains_yield
-                    && let Ok(value) =
-                        self.eval_const_expr_in_source(condition, &self.known_constants)
+                if let Ok(value) =
+                    self.eval_const_expr_in_source(condition, &self.known_constants)
                 {
+                    // Yield is a syntactic generator marker in PHP, including
+                    // when it lives in the branch eliminated below. Record it
+                    // without retaining dead branch bytecode. Dynamic `if`
+                    // statements never pay for this recursive source scan.
+                    self.contains_yield |= then_body.iter().any(Stmt::contains_yield)
+                        || else_body.iter().any(Stmt::contains_yield);
                     let body = if value.is_truthy() {
                         then_body
                     } else {

@@ -4922,17 +4922,25 @@ impl Compiler {
             }
             Expr::ListAssign { targets, expr } => {
                 let (rhs, rhs_type) = self.compile_expr(expr);
-                let retained = self.alloc_tmp();
-                let mut assign = Instruction::new(OpCode::AssignCv);
-                assign.op1 = retained;
-                assign.op1_type = OpType::Tmp;
-                assign.op2 = rhs;
-                assign.op2_type = rhs_type;
-                self.instructions.push(assign);
-                if let Err(error) = self.compile_list_targets(targets, retained, OpType::Tmp, 0) {
+                // Preserve a CV before the targets can overwrite it. Const and
+                // temporary operands are immutable/uniquely numbered, so the
+                // extra copy is unnecessary for the common literal/call RHS.
+                let (retained, retained_type) = if rhs_type == OpType::Cv {
+                    let retained = self.alloc_tmp();
+                    let mut assign = Instruction::new(OpCode::AssignCv);
+                    assign.op1 = retained;
+                    assign.op1_type = OpType::Tmp;
+                    assign.op2 = rhs;
+                    assign.op2_type = rhs_type;
+                    self.instructions.push(assign);
+                    (retained, OpType::Tmp)
+                } else {
+                    (rhs, rhs_type)
+                };
+                if let Err(error) = self.compile_list_targets(targets, retained, retained_type, 0) {
                     self.deferred_error = Some(error);
                 }
-                (retained, OpType::Tmp)
+                (retained, retained_type)
             }
             Expr::FirstClassCallable(callable) => {
                 let (callable, callable_type) = self.compile_expr(callable);

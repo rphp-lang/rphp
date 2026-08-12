@@ -2817,17 +2817,20 @@ fn fn_substr_compare(
         .and_then(|length| usize::try_from(length).ok())
         .unwrap_or(available)
         .min(available);
-    let mut left = haystack_bytes[start..start + compared_length].to_vec();
-    let mut right = needle.as_bytes()[..length
+    let left = &haystack_bytes[start..start + compared_length];
+    let right = &needle.as_bytes()[..length
         .and_then(|length| usize::try_from(length).ok())
         .unwrap_or(needle.len())
-        .min(needle.len())]
-        .to_vec();
-    if arg_opt!(ed, 4).is_some_and(Value::is_truthy) {
-        left.make_ascii_lowercase();
-        right.make_ascii_lowercase();
-    }
-    let result = match left.cmp(&right) {
+        .min(needle.len())];
+    let ordering = if arg_opt!(ed, 4).is_some_and(Value::is_truthy) {
+        left.iter()
+            .copied()
+            .map(|byte| byte.to_ascii_lowercase())
+            .cmp(right.iter().copied().map(|byte| byte.to_ascii_lowercase()))
+    } else {
+        left.cmp(right)
+    };
+    let result = match ordering {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,
