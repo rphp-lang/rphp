@@ -337,3 +337,126 @@ echo $abs(-3);
         "5 3"
     );
 }
+
+#[test]
+fn instance_closures_bind_this_and_closure_bind_can_replace_it() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class BoundValue {
+    public $value;
+    public function __construct($value) { $this->value = $value; }
+    public function reader() { return function() { return $this->value; }; }
+}
+$first = new BoundValue('first');
+$second = new BoundValue('second');
+$reader = $first->reader();
+$rebound = Closure::bind($reader, $second, $second);
+echo $reader() . ':' . $rebound();
+"#,
+        ),
+        "first:second"
+    );
+}
+
+#[test]
+fn closure_bind_accepts_composer_static_null_binding() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$captured = 'ready';
+$closure = static function($suffix) use ($captured) { return $captured . $suffix; };
+$bound = Closure::bind($closure, null, null);
+echo $bound('!');
+"#,
+        ),
+        "ready!"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+$closure = static function() { return 'unused'; };
+var_dump(Closure::bind($closure, new stdClass()));
+"#,
+        ),
+        concat!(
+            "Warning: Closure::bind(): Cannot bind an instance to a static closure\n",
+            "NULL\n"
+        )
+    );
+}
+
+#[test]
+fn closure_bind_scope_grants_lexical_private_property_access() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ScopedStore {
+    private $values = [];
+    public function value() { return $this->values['ready']; }
+}
+$store = new ScopedStore();
+$writer = function ($target) { $target->values['ready'] = 42; };
+$bound = Closure::bind($writer, null, ScopedStore::class);
+call_user_func($bound, $store);
+echo $store->value();
+"#,
+        ),
+        "42"
+    );
+}
+
+#[test]
+fn bound_closure_context_survives_callback_standard_functions() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class CallbackContext {
+    private $factor = 3;
+    private $direction = -1;
+    private $seen = '';
+
+    public function reduce() {
+        return Closure::bind(
+            function($carry, $value) { return $carry + $value * $this->factor; },
+            $this,
+            self::class
+        );
+    }
+    public function compare() {
+        return Closure::bind(
+            function($left, $right) { return ($left - $right) * $this->direction; },
+            $this,
+            self::class
+        );
+    }
+    public function visit() {
+        return Closure::bind(
+            function($value, $key) { $this->seen = $this->seen . $key . $value; },
+            $this,
+            self::class
+        );
+    }
+    public function replace() {
+        return Closure::bind(
+            function($matches) { return $this->factor . $matches[0]; },
+            $this,
+            self::class
+        );
+    }
+    public function seen() { return $this->seen; }
+}
+$context = new CallbackContext();
+echo array_reduce([1, 2], $context->reduce(), 0) . '|';
+$values = [1, 3, 2];
+usort($values, $context->compare());
+echo $values[0] . $values[1] . $values[2] . '|';
+array_walk($values, $context->visit());
+echo $context->seen() . '|';
+echo preg_replace_callback('/x/', $context->replace(), 'x-x');
+"#,
+        ),
+        "9|321|031221|3x-3x"
+    );
+}

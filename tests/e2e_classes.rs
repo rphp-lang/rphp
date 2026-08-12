@@ -455,3 +455,25 @@ echo $last . '|' . $original->value;
         "3:9|3"
     );
 }
+
+#[test]
+fn new_static_in_a_static_closure_keeps_the_forwarded_called_class() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LateFactory {
+    public static function make(): static {
+        $factory = static function(): static { return new static(); };
+        return $factory();
+    }
+    public function kind() { return 'base'; }
+}
+class LateFactoryChild extends LateFactory {
+    public function kind() { return 'child'; }
+}
+echo LateFactoryChild::make()->kind();
+"#,
+        ),
+        "child"
+    );
+}

@@ -39,6 +39,52 @@ fn test_parse_add() {
 }
 
 #[test]
+fn test_parse_assignment_on_comparison_rhs() {
+    let tokens = Lexer::new("<?php echo false !== $position = find_position();")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![Stmt::Echo(vec![Expr::BinaryOp {
+            op: BinOp::NotIdentical,
+            left: Box::new(Expr::Bool(false)),
+            right: Box::new(Expr::Assign {
+                var: "position".into(),
+                expr: Box::new(Expr::FunctionCall {
+                    name: "find_position".into(),
+                    args: vec![],
+                    generic_args: vec![],
+                }),
+            }),
+        }])]
+    );
+}
+
+#[test]
+fn test_parse_assignment_on_logical_rhs() {
+    let tokens = Lexer::new("<?php echo $enabled && $file = find_file();")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![Stmt::Echo(vec![Expr::BinaryOp {
+            op: BinOp::And,
+            left: Box::new(Expr::Variable("enabled".into())),
+            right: Box::new(Expr::Assign {
+                var: "file".into(),
+                expr: Box::new(Expr::FunctionCall {
+                    name: "find_file".into(),
+                    args: vec![],
+                    generic_args: vec![],
+                }),
+            }),
+        }])]
+    );
+}
+
+#[test]
 fn test_parse_function_call() {
     let tokens = Lexer::new("<?php echo my_double(21);").tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
@@ -170,6 +216,10 @@ fn test_static_return_type_requires_a_real_class_scope() {
         "<?php class C { public function valid(): static { $f = function(): static { return $this; }; return $f(); } }",
     )
     .unwrap();
+    parse(
+        "<?php class C { public function valid(): static { $f = static function(): static { return new static(); }; return $f(); } }",
+    )
+    .unwrap();
     assert_eq!(
         parse(
             "<?php class C { public function invalid(): static { function nested(): static {} return $this; } }",
@@ -198,6 +248,34 @@ fn test_static_return_type_requires_a_real_class_scope() {
         .unwrap_err(),
         "Cannot use \"static\" when no class scope is active"
     );
+}
+
+#[test]
+fn test_static_anonymous_function_forms_are_expressions() {
+    let tokens = Lexer::new(
+        "<?php $closure = static function($value) { return $value; }; $arrow = static fn($value) => $value; static function() {}; static fn() => null;",
+    )
+    .tokenize()
+    .unwrap();
+    let statements = Parser::new(tokens).parse().unwrap();
+
+    let Stmt::Assign {
+        expr: Expr::Closure { is_static, .. },
+        ..
+    } = &statements[0]
+    else {
+        panic!("expected a static closure assignment");
+    };
+    assert!(*is_static);
+    let Stmt::Assign {
+        expr: Expr::Closure { is_static, .. },
+        ..
+    } = &statements[1]
+    else {
+        panic!("expected a static arrow assignment");
+    };
+    assert!(*is_static);
+    assert_eq!(statements.len(), 4);
 }
 
 #[test]

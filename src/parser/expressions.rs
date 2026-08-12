@@ -122,7 +122,7 @@ impl Parser {
 
         while self.peek() == Token::PipePipe {
             self.advance();
-            let right = self.parse_logical_and()?;
+            let right = self.parse_logical_or_operand()?;
             left = Expr::BinaryOp {
                 op: BinOp::Or,
                 left: Box::new(left),
@@ -133,13 +133,18 @@ impl Parser {
         Ok(left)
     }
 
+    fn parse_logical_or_operand(&mut self) -> Result<Expr, String> {
+        let operand = self.parse_logical_and()?;
+        self.finish_variable_assignment(operand)
+    }
+
     /// Logical AND: && (left-associative)
     fn parse_logical_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_bitwise_or()?;
 
         while self.peek() == Token::AmpAmp {
             self.advance();
-            let right = self.parse_bitwise_or()?;
+            let right = self.parse_logical_and_operand()?;
             left = Expr::BinaryOp {
                 op: BinOp::And,
                 left: Box::new(left),
@@ -148,6 +153,29 @@ impl Parser {
         }
 
         Ok(left)
+    }
+
+    /// PHP's expression grammar admits an assignment as the right operand of
+    /// `&&`/`||` without another pair of parentheses. This is common in
+    /// guarded lookup code such as `$enabled && $file = find_file()`.
+    fn parse_logical_and_operand(&mut self) -> Result<Expr, String> {
+        let operand = self.parse_bitwise_or()?;
+        self.finish_variable_assignment(operand)
+    }
+
+    fn finish_variable_assignment(&mut self, operand: Expr) -> Result<Expr, String> {
+        if self.peek() != Token::Assign {
+            return Ok(operand);
+        }
+        let Expr::Variable(var) = operand else {
+            return Ok(operand);
+        };
+        self.advance();
+        let expr = self.parse_expr()?;
+        Ok(Expr::Assign {
+            var,
+            expr: Box::new(expr),
+        })
     }
 
     /// Bitwise OR: | (left-associative)
@@ -238,7 +266,7 @@ impl Parser {
                 _ => break,
             };
             self.advance();
-            let right = self.parse_concat()?;
+            let right = self.parse_comparison_operand()?;
             left = Expr::BinaryOp {
                 op,
                 left: Box::new(left),
@@ -247,6 +275,25 @@ impl Parser {
         }
 
         Ok(left)
+    }
+
+    /// PHP admits assignment on the right side of a comparison without
+    /// requiring extra parentheses. Composer's canonical loader relies on
+    /// forms such as `false !== $position = strrpos(...)`.
+    fn parse_comparison_operand(&mut self) -> Result<Expr, String> {
+        let operand = self.parse_concat()?;
+        if self.peek() != Token::Assign {
+            return Ok(operand);
+        }
+        let Expr::Variable(var) = operand else {
+            return Ok(operand);
+        };
+        self.advance();
+        let expr = self.parse_expr()?;
+        Ok(Expr::Assign {
+            var,
+            expr: Box::new(expr),
+        })
     }
 
     /// Concat: . (left-associative, lower than additive in PHP 8)
@@ -583,6 +630,14 @@ impl Parser {
                 }
             }
             Token::Static => {
+                if self.peek_at(1) == Token::Function {
+                    self.advance(); // consume 'static'
+                    return self.parse_closure(true);
+                }
+                if self.peek_at(1) == Token::Fn {
+                    self.advance(); // consume 'static'
+                    return self.parse_arrow_function(true);
+                }
                 if !self.class_scope_active {
                     return Err("Cannot use \"static\" when no class scope is active".into());
                 }
@@ -600,23 +655,23 @@ impl Parser {
             }
             Token::Function => {
                 // Closure (anonymous function)
-                return self.parse_closure();
+                return self.parse_closure(false);
             }
             Token::Fn => {
                 // Arrow function: fn($x) => expr
-                return self.parse_arrow_function();
+                return self.parse_arrow_function(false);
             }
             Token::New => {
                 self.advance(); // consume 'new'
-                let class_name = if self.peek() == Token::Backslash
-                    || matches!(self.peek(), Token::Identifier(_))
-                {
-                    self.parse_qualified_name()?
-                } else {
-                    return Err(format!(
-                        "Expected class name after 'new', got {:?}",
-                        self.peek()
-                    ));
+                let class_name = match self.peek() {
+                    Token::Backslash | Token::Identifier(_) => self.parse_qualified_name()?,
+                    Token::Static if self.class_scope_active => {
+                        self.advance();
+                        "static".to_string()
+                    }
+                    token => {
+                        return Err(format!("Expected class name after 'new', got {token:?}"));
+                    }
                 };
                 let generic_args = self.parse_optional_turbofish()?;
                 let args = if self.peek() == Token::LParen {

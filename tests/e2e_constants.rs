@@ -970,6 +970,30 @@ fn test_global_and_source_magic_constants() {
 }
 
 #[test]
+fn source_magic_constants_are_available_in_declaration_defaults() {
+    let out = run_php_with_source_context(
+        r#"<?php
+const SOURCE_ROOT = __DIR__;
+class GeneratedPaths {
+    public static $files = [
+        'main' => __DIR__ . '/src/main.php',
+        'self' => __FILE__,
+    ];
+}
+echo SOURCE_ROOT . '|';
+echo GeneratedPaths::$files['main'] . '|';
+echo GeneratedPaths::$files['self'];
+"#,
+        "/virtual/project/generated.php",
+        "/virtual/project",
+    );
+    assert_eq!(
+        out,
+        "/virtual/project|/virtual/project/src/main.php|/virtual/project/generated.php"
+    );
+}
+
+#[test]
 fn test_scope_magic_constants() {
     let out = run_php(
         r#"<?php

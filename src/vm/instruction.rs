@@ -50,6 +50,10 @@ pub const CALL_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 9;
 /// embedded scope slot. Wide frames and instance methods use the resolver.
 pub const LATE_STATIC_PROP_EMBEDDED_SCOPE: u16 = 1;
 
+/// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
+/// an object, even when created inside an instance method.
+pub const CLOSURE_FLAG_STATIC: u16 = 1;
+
 /// FetchDynamicClassConst flag: the class owner is a runtime expression rather
 /// than a statically named class-like declaration.
 pub const CLASS_CONST_DYNAMIC_OWNER: u16 = 1 << 1;
@@ -71,6 +75,10 @@ pub const FETCH_OBJ_SILENT: u16 = 1;
 /// escape. Runtime may represent its declared properties virtually for that
 /// span, guarded by the canonical constructor/property caches.
 pub const NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE: u16 = 1;
+
+/// NewObj flag: resolve `static` (and trait-relative `self`/`parent`) from the
+/// runtime called-class scope before autoload, allocation and constructor lookup.
+pub const NEW_FLAG_DYNAMIC_STATIC_SCOPE: u16 = 1 << 1;
 
 /// InitArray flag: at least one compile-time literal string key guarantees
 /// general hash storage rather than packed integer storage.

@@ -41,7 +41,7 @@ fn symbol_exists(eg: &ExecutorGlobals, name: &str, kind: SymbolKind) -> bool {
     })
 }
 
-pub(super) fn ensure_symbol_loaded(eg: &mut ExecutorGlobals, name: &str) -> Result<bool, VmError> {
+pub(crate) fn ensure_symbol_loaded(eg: &mut ExecutorGlobals, name: &str) -> Result<bool, VmError> {
     exists_with_autoload(eg, name, SymbolKind::Any, true)
 }
 
@@ -232,6 +232,8 @@ fn resolved_entry(callback: Value, resolved: ResolvedCallback) -> AutoloadEntry 
         func_ptr: resolved.func_ptr,
         prepend_args: resolved.prepend_args,
         use_vars: resolved.use_vars,
+        called_scope_class_id: resolved.called_scope_class_id,
+        bound_this: resolved.bound_this,
     }
 }
 
@@ -244,6 +246,8 @@ fn invoke_entry(
         func_ptr: entry.func_ptr,
         prepend_args: entry.prepend_args.clone(),
         use_vars: entry.use_vars.clone(),
+        called_scope_class_id: entry.called_scope_class_id,
+        bound_this: entry.bound_this.clone(),
     };
     let _ = call_resolved_with_values(eg, &resolved, std::slice::from_ref(class_name))?;
     Ok(())

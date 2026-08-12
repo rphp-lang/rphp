@@ -26,8 +26,8 @@ use super::instruction::{
     CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
     CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CLASS_CONST_COMPILE_TIME_NAME,
     CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, Instruction,
-    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE,
-    OpType,
+    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, NEW_FLAG_DYNAMIC_STATIC_SCOPE,
+    NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, OpType,
 };
 use super::opcode::OpCode;
 use super::quick::{
@@ -195,7 +195,21 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
     if func.is_null() {
         return None;
     }
-    eg.declaring_class_of(func).map(|s| s.to_string())
+    if let Some(class) = eg.declaring_class_of(func) {
+        return Some(class.to_string());
+    }
+
+    // Closure::bind() may assign a lexical visibility scope to a closure that
+    // was declared outside any class. Dynamic-closure initialization publishes
+    // that explicit scope on the closure frame; do not recover a class from an
+    // ordinary caller here, because plain functions never inherit visibility.
+    let embedded = frame_embedded_late_static_class_id(frame);
+    let class_id = if embedded != 0 {
+        embedded
+    } else {
+        eg.late_static_scope_class_id(frame as usize)
+    };
+    eg.class_by_id(class_id).map(|class| class.name.clone())
 }
 
 /// Resolve the class part of a static call without rewriting its bytecode
@@ -240,11 +254,99 @@ fn resolve_static_call_class(
 /// an ordinary return path would have to clean up.
 #[inline(always)]
 fn late_static_call_class_id(eg: &ExecutorGlobals, frame: *mut ExecuteData) -> u32 {
-    let common = unsafe { &*(*frame).func };
-    if common.plan.has_embedded_late_static_scope() {
-        return unsafe { ((*frame).heap_bitmap >> 32) as u32 };
+    let embedded = frame_embedded_late_static_class_id(frame);
+    if embedded != 0 {
+        return embedded;
     }
     recover_late_static_call_class_id(eg, frame)
+}
+
+#[inline(always)]
+fn frame_embedded_late_static_class_id(frame: *mut ExecuteData) -> u32 {
+    // SAFETY: every caller has already established a live VM frame for the
+    // current execution boundary; this only reads its compact scope field.
+    unsafe { (*frame).embedded_late_static_class_id() }
+}
+
+#[inline]
+fn initialize_bound_this_frame(
+    frame: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    bound_this: Option<Value>,
+) {
+    let Some(bound_this) = bound_this else {
+        return;
+    };
+    // SAFETY: func_ptr and frame come from the same live call-frame creation
+    // boundary. User op-array CV metadata identifies an allocated frame slot,
+    // and frame_slot_init publishes exactly one previously uninitialized value.
+    unsafe {
+        if (*func_ptr).fn_type != FunctionType::User {
+            return;
+        }
+        let function = &*(func_ptr as *const UserFunction);
+        if let Some((this_cv, _)) = function
+            .op_array
+            .all_cvs
+            .iter()
+            .find(|(_, name)| name == "this")
+        {
+            let destination = (*frame).cv_mut(*this_cv) as *mut Value;
+            frame_slot_init(frame, destination, bound_this);
+        }
+    }
+}
+
+#[inline]
+fn closure_bound_this(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    is_static: bool,
+) -> Option<Value> {
+    if is_static {
+        return None;
+    }
+    // SAFETY: CreateClosure runs with a live frame whose function and CV
+    // metadata match op_array. The selected slot is read-only and cloned
+    // before the closure can outlive the frame.
+    unsafe {
+        let parent = &*(*frame).func;
+        let this_cv = if parent.sig.this_offset == 1 {
+            Some(0)
+        } else {
+            op_array
+                .all_cvs
+                .iter()
+                .find(|(_, name)| name == "this")
+                .map(|(index, _)| *index)
+        };
+        this_cv.and_then(|index| {
+            let value = &*(*frame).get_op_ptr(index, OpType::Cv, op_array);
+            (value.value_type() == ValueType::Object).then(|| value.clone())
+        })
+    }
+}
+
+#[inline]
+fn write_array_union_result(
+    frame: *mut ExecuteData,
+    result: u16,
+    left: &PhpArray,
+    right: &PhpArray,
+) {
+    // SAFETY: Add's compiler-owned result is a fresh TMP slot in this live
+    // frame; frame_tmp_set records the new array owner in the cleanup bitmap.
+    unsafe {
+        let result_ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS + result as usize);
+        frame_tmp_set(frame, result_ptr, Value::array(left.union(right)));
+    }
+}
+
+#[inline]
+fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value: Value) {
+    // SAFETY: FetchDimR always publishes into its compiler-owned TMP result in
+    // this live frame; frame_tmp_set handles first write and later overwrite.
+    unsafe { frame_tmp_set(frame, result_ptr, value) }
 }
 
 #[cold]
@@ -568,6 +670,37 @@ pub enum VmError {
     UnimplementedOpcode(OpCode),
     /// `exit($code)` / `die($msg)` — clean script termination.
     Exit(i32),
+}
+
+impl std::fmt::Display for VmError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Fatal(message) => formatter.write_str(message),
+            Self::UnimplementedOpcode(opcode) => {
+                write!(formatter, "Unimplemented opcode {opcode:?}")
+            }
+            Self::Exit(code) => write!(formatter, "Script exited with status {code}"),
+        }
+    }
+}
+
+impl std::error::Error for VmError {}
+
+#[cfg(test)]
+mod vm_error_display_tests {
+    use super::VmError;
+
+    #[test]
+    fn fatal_display_does_not_leak_the_rust_enum_wrapper() {
+        let error =
+            VmError::Fatal("Uncaught Error: Call to undefined function missing_function()".into());
+
+        assert_eq!(
+            error.to_string(),
+            "Uncaught Error: Call to undefined function missing_function()"
+        );
+        assert!(!error.to_string().contains("Fatal(\""));
+    }
 }
 
 include!("execute/frame_runtime.rs");

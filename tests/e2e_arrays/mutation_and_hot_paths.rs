@@ -194,3 +194,72 @@ echo gettype($values['value']);
         "double"
     );
 }
+
+#[test]
+fn nested_dimension_write_evaluates_keys_once_and_rebuilds_cow_parents() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$calls = 0;
+function key_once($value) { global $calls; $calls = $calls + 1; return $value; }
+$original = ['outer' => ['inner' => ['keep' => 1]]];
+$changed = $original;
+$changed[key_once('outer')][key_once('inner')][key_once('value')] = 42;
+echo $changed['outer']['inner']['value'] . ':';
+echo $changed['outer']['inner']['keep'] . ':';
+var_dump(isset($original['outer']['inner']['value']));
+echo $calls;
+"#,
+        ),
+        "42:1:bool(false)\n3"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+$created['first']['second'] = 'ready';
+echo $created['first']['second'];
+"#,
+        ),
+        "ready"
+    );
+
+    assert_eq!(
+        run_php(
+            r#"<?php
+class NestedStore {
+    public $values = [];
+    public static $staticValues = [];
+}
+$store = new NestedStore();
+$store->values['outer']['value'] = 42;
+NestedStore::$staticValues['outer']['value'] = 43;
+echo $store->values['outer']['value'] . ':';
+echo NestedStore::$staticValues['outer']['value'];
+unset($store->values['outer']['value']);
+unset(NestedStore::$staticValues['outer']['value']);
+echo ':';
+var_dump(isset($store->values['outer']['value']));
+var_dump(isset(NestedStore::$staticValues['outer']['value']));
+"#,
+        ),
+        "42:43:bool(false)\nbool(false)\n"
+    );
+}
+
+#[test]
+fn array_union_preserves_left_values_order_and_cow_ownership() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$left = ['shared' => 'left', 2 => 'two'];
+$right = ['shared' => 'right', 0 => 'zero', 'new' => 'value'];
+$union = $left + $right;
+$union['shared'] = 'changed';
+foreach ($union as $key => $value) { echo $key . '=' . $value . '|'; }
+echo $left['shared'];
+"#,
+        ),
+        "shared=changed|2=two|0=zero|new=value|left"
+    );
+}

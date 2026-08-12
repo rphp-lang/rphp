@@ -87,7 +87,8 @@ pub enum Expr {
         arms: Vec<MatchArm>,
     },
     Closure {
-        // function($x) use($y) { ... }: ReturnType
+        // [static] function($x) use($y) { ... }: ReturnType
+        is_static: bool,
         params: Vec<Param>,
         use_vars: Vec<String>,
         body: Vec<Stmt>,
@@ -410,6 +411,12 @@ pub enum Stmt {
         // $a[idx] = expr
         var: String,
         index: Expr,
+        expr: Expr,
+    },
+    NestedArrayAssign {
+        // $a[first][second]..., $obj->prop[...]..., or Class::$prop[...]... = expr
+        root: Expr,
+        indices: Vec<Expr>,
         expr: Expr,
     },
     ArrayPush {

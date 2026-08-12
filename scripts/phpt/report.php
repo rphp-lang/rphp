@@ -73,10 +73,19 @@ function summarize_results(array $options, array $records): array
     );
     $categories = [];
     $suites = [];
+    $expectationProfiles = [];
     $executionCounts = ['front_end_rejected' => 0, 'pre_execution_failed' => 0];
     foreach ($records as $record) {
         $statuses[$record['status']] = ($statuses[$record['status']] ?? 0) + 1;
         $categories[$record['category']] = ($categories[$record['category']] ?? 0) + 1;
+        $profile = $record['expectation_profile'] ?? 'ordinary';
+        if (!isset($expectationProfiles[$profile])) {
+            $expectationProfiles[$profile] = array_fill_keys(
+                ['pass', 'fail', 'skip', 'xfail', 'unsupported', 'timeout', 'crash'],
+                0,
+            );
+        }
+        $expectationProfiles[$profile][$record['status']]++;
         $suite = str_starts_with($record['path'], 'Zend/tests/') ? 'Zend/tests' : 'tests/lang';
         if (!isset($suites[$suite])) {
             $suites[$suite] = array_fill_keys(
@@ -126,11 +135,16 @@ function summarize_results(array $options, array $records): array
         unset($suiteStatuses['_execution']);
     }
     unset($suiteStatuses);
+    ksort($expectationProfiles);
+    foreach ($expectationProfiles as &$profileStatuses) {
+        $profileStatuses = status_profile($profileStatuses);
+    }
+    unset($profileStatuses);
 
     $headlineDenominator = $statuses['pass'] + $statuses['fail'];
     $attemptedDenominator = $headlineDenominator + $statuses['timeout'] + $statuses['crash'];
     return [
-        'schema_version' => 4,
+        'schema_version' => 5,
         'rphp_commit' => $options['rphp-commit'] ?? '',
         'runner_commit' => $options['runner-commit'] ?? '',
         'php_src_commit' => $options['php-src-commit'] ?? '',
@@ -141,6 +155,7 @@ function summarize_results(array $options, array $records): array
         'total' => count($records),
         'statuses' => $statuses,
         'categories' => $categories,
+        'expectation_profiles' => $expectationProfiles,
         'suites' => $suites,
         'headline_pass_rate' => $headlineDenominator === 0
             ? null
@@ -153,6 +168,23 @@ function summarize_results(array $options, array $records): array
             $executionCounts['front_end_rejected'],
             $executionCounts['pre_execution_failed'],
         ),
+    ];
+}
+
+/** @return array<string, mixed> */
+function status_profile(array $statuses): array
+{
+    $headlineDenominator = $statuses['pass'] + $statuses['fail'];
+    $attemptedDenominator = $headlineDenominator + $statuses['timeout'] + $statuses['crash'];
+    return [
+        ...$statuses,
+        'total' => array_sum($statuses),
+        'headline_pass_rate' => $headlineDenominator === 0
+            ? null
+            : $statuses['pass'] / $headlineDenominator,
+        'attempted_pass_rate' => $attemptedDenominator === 0
+            ? null
+            : $statuses['pass'] / $attemptedDenominator,
     ];
 }
 

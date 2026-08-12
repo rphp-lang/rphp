@@ -1,4 +1,172 @@
+#[derive(Clone, Copy)]
+enum ArrayRootWriteback {
+    None,
+    Object {
+        object: u16,
+        object_type: OpType,
+        property: u16,
+    },
+    Static {
+        class: u16,
+        property: u16,
+        dynamic: bool,
+    },
+}
+
+struct MutableArrayPath {
+    root: (u16, OpType),
+    containers: Vec<(u16, OpType)>,
+    keys: Vec<(u16, OpType)>,
+    writeback: ArrayRootWriteback,
+}
+
 impl Compiler {
+    fn compile_mutable_array_path(
+        &mut self,
+        root: &Expr,
+        indices: &[Expr],
+    ) -> Result<MutableArrayPath, String> {
+        if indices.is_empty() {
+            return Err("Array mutation requires at least one dimension".into());
+        }
+        let (root, writeback) = match root {
+            Expr::Variable(var) => ((self.resolve_cv(var), OpType::Cv), ArrayRootWriteback::None),
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let container = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = container;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    (container, OpType::Tmp),
+                    ArrayRootWriteback::Object {
+                        object,
+                        object_type,
+                        property,
+                    },
+                )
+            }
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => {
+                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
+                let class = self.add_literal(Value::string(resolved));
+                let property = self.add_literal(Value::string(property.clone()));
+                let container = self.alloc_tmp();
+                let mut fetch = Instruction::new(if dynamic {
+                    OpCode::FetchLateStaticProp
+                } else {
+                    OpCode::FetchStaticProp
+                });
+                fetch.op1 = class;
+                fetch.op1_type = OpType::Const;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = container;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    (container, OpType::Tmp),
+                    ArrayRootWriteback::Static {
+                        class,
+                        property,
+                        dynamic,
+                    },
+                )
+            }
+            _ => return Err("Unsupported array mutation target".into()),
+        };
+        let keys: Vec<(u16, OpType)> = indices
+            .iter()
+            .map(|index| self.compile_expr(index))
+            .collect();
+        let mut containers = Vec::with_capacity(indices.len());
+        containers.push(root);
+        for &(key, key_type) in keys.iter().take(keys.len() - 1) {
+            let (container, container_type) = *containers.last().unwrap();
+            let child = self.alloc_tmp();
+            let mut fetch = Instruction::new(OpCode::FetchDimR);
+            fetch.op1 = container;
+            fetch.op1_type = container_type;
+            fetch.op2 = key;
+            fetch.op2_type = key_type;
+            fetch.result = child;
+            fetch.result_type = OpType::Tmp;
+            self.instructions.push(fetch);
+            containers.push((child, OpType::Tmp));
+        }
+        Ok(MutableArrayPath {
+            root,
+            containers,
+            keys,
+            writeback,
+        })
+    }
+
+    fn rebuild_mutable_array_path(&mut self, path: &MutableArrayPath) {
+        for parent_index in (0..path.containers.len() - 1).rev() {
+            let (parent, parent_type) = path.containers[parent_index];
+            let (child, child_type) = path.containers[parent_index + 1];
+            let (key, key_type) = path.keys[parent_index];
+            let mut rebuild = Instruction::new(OpCode::AssignDim);
+            rebuild.op1 = parent;
+            rebuild.op1_type = parent_type;
+            rebuild.op2 = key;
+            rebuild.op2_type = key_type;
+            rebuild.result = child;
+            rebuild.result_type = child_type;
+            self.instructions.push(rebuild);
+        }
+    }
+
+    fn write_back_mutable_array_root(&mut self, path: &MutableArrayPath) {
+        let mut writeback = match path.writeback {
+            ArrayRootWriteback::None => return,
+            ArrayRootWriteback::Object {
+                object,
+                object_type,
+                property,
+            } => {
+                let mut instruction = Instruction::new(OpCode::AssignObjProp);
+                instruction.op1 = object;
+                instruction.op1_type = object_type;
+                instruction.op2 = property;
+                instruction.op2_type = OpType::Const;
+                instruction
+            }
+            ArrayRootWriteback::Static {
+                class,
+                property,
+                dynamic,
+            } => {
+                let mut instruction = Instruction::new(if dynamic {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                instruction.op1 = class;
+                instruction.op1_type = OpType::Const;
+                instruction.op2 = property;
+                instruction.op2_type = OpType::Const;
+                instruction
+            }
+        };
+        writeback.result = path.root.0;
+        writeback.result_type = path.root.1;
+        self.instructions.push(writeback);
+    }
+
     fn compile_stmt(&mut self, stmt: &Stmt) -> Result<(), String> {
         // Check for deferred errors from compile_expr (e.g. closure body errors)
         if let Some(err) = self.deferred_error.take() {
@@ -534,6 +702,28 @@ impl Compiler {
                 instr.result = val_op;
                 self.instructions.push(instr);
             }
+            Stmt::NestedArrayAssign {
+                root,
+                indices,
+                expr,
+            } => {
+                let path = self.compile_mutable_array_path(root, indices)?;
+
+                let (value, value_type) = self.compile_expr(expr);
+                let &(leaf, leaf_type) = path.containers.last().unwrap();
+                let &(leaf_key, leaf_key_type) = path.keys.last().unwrap();
+                let mut assign = Instruction::new(OpCode::AssignDim);
+                assign.op1 = leaf;
+                assign.op1_type = leaf_type;
+                assign.op2 = leaf_key;
+                assign.op2_type = leaf_key_type;
+                assign.result = value;
+                assign.result_type = value_type;
+                self.instructions.push(assign);
+
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+            }
             Stmt::ArrayPush { var, expr } => {
                 // $var[] = expr
                 let cv_idx = self.resolve_cv(var);
@@ -638,21 +828,25 @@ impl Compiler {
                             assign.op2 = undef_idx;
                             self.instructions.push(assign);
                         }
-                        Expr::ArrayAccess { array, index } => {
-                            if let Expr::Variable(name) = array.as_ref() {
-                                let cv_idx = self.resolve_cv(name);
-                                let (idx_op, idx_type) = self.compile_expr(index);
-                                let mut instr = Instruction::new(OpCode::UnsetDim);
-                                instr.op1_type = OpType::Cv;
-                                instr.op1 = cv_idx;
-                                instr.op2_type = idx_type;
-                                instr.op2 = idx_op;
-                                self.instructions.push(instr);
-                            } else {
-                                return Err(
-                                    "unset() only supports simple variable array access".into()
-                                );
+                        Expr::ArrayAccess { .. } => {
+                            let mut root = target;
+                            let mut indices = Vec::new();
+                            while let Expr::ArrayAccess { array, index } = root {
+                                indices.push((**index).clone());
+                                root = array;
                             }
+                            indices.reverse();
+                            let path = self.compile_mutable_array_path(root, &indices)?;
+                            let &(leaf, leaf_type) = path.containers.last().unwrap();
+                            let &(key, key_type) = path.keys.last().unwrap();
+                            let mut unset = Instruction::new(OpCode::UnsetDim);
+                            unset.op1 = leaf;
+                            unset.op1_type = leaf_type;
+                            unset.op2 = key;
+                            unset.op2_type = key_type;
+                            self.instructions.push(unset);
+                            self.rebuild_mutable_array_path(&path);
+                            self.write_back_mutable_array_root(&path);
                         }
                         _ => return Err("unset() requires a variable".into()),
                     }
@@ -870,8 +1064,9 @@ impl Compiler {
                 // Compile the value expression and emit FetchConst to define it
                 // For const, we evaluate at compile time if possible, otherwise at runtime
                 // Also record known compile-time constants for property default resolution.
-                let compile_time =
-                    Self::eval_const_expr_with_constants(value, &self.known_constants).ok();
+                let compile_time = self
+                    .eval_const_expr_in_source(value, &self.known_constants)
+                    .ok();
                 let (val_op, val_type) = if let Some(ct_val) = compile_time {
                     self.known_constants.insert(name.clone(), ct_val.clone());
                     (self.add_literal(ct_val), OpType::Const)
@@ -1146,7 +1341,7 @@ impl Compiler {
                         resolved_parent.as_deref(),
                     );
                     let default = match &prop.default {
-                        Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
+                        Some(expr) => Some(self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -1503,7 +1698,7 @@ impl Compiler {
                     }
                     let type_hint = self.convert_type_hint(&prop.type_hint);
                     let default = match &prop.default {
-                        Some(expr) => Some(Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
+                        Some(expr) => Some(self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
                             format!("Cannot use non-constant expression as default value for trait property {}::${}: {}", name, prop.name, e)
                         })?),
                         None => None,
@@ -1678,7 +1873,7 @@ impl Compiler {
                     props.insert("name".to_string(), Value::string(case_name.clone()));
                     if is_backed {
                         if let Some(expr) = case_value {
-                            let val = Self::eval_const_expr_with_constants(expr, &self.known_constants).map_err(|e| {
+                            let val = self.eval_const_expr_in_source(expr, &self.known_constants).map_err(|e| {
                                 format!("Cannot use non-constant expression as enum case value for {}::{}: {}", name, case_name, e)
                             })?;
                             props.insert("value".to_string(), val);
@@ -1768,7 +1963,7 @@ impl Compiler {
                 if values[index].is_some() {
                     continue;
                 }
-                let Ok(value) = Self::eval_const_expr_with_constants(&constant.value, &known)
+                let Ok(value) = self.eval_const_expr_in_source(&constant.value, &known)
                 else {
                     continue;
                 };
@@ -1787,7 +1982,7 @@ impl Compiler {
                     .find(|(index, _)| values[*index].is_none())
                     .map(|(_, constant)| constant)
                     .expect("remaining class constant");
-                let reason = Self::eval_const_expr_with_constants(&constant.value, &known)
+                let reason = self.eval_const_expr_in_source(&constant.value, &known)
                     .expect_err("unresolved class constant expression");
                 return Err(format!(
                     "Cannot use non-constant expression as value for class constant {}::{}: {}",

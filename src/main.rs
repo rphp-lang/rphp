@@ -178,7 +178,7 @@ fn main() {
             std::process::exit(code);
         }
         Err(e) => {
-            eprintln!("Fatal error: {:?}", e);
+            eprintln!("Fatal error: {e}");
             std::process::exit(255);
         }
     }

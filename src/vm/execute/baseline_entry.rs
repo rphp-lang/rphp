@@ -222,8 +222,39 @@ pub fn call_function_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) =
-        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args.cloned())?;
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        0,
+        None,
+    )?;
+    Ok(return_value)
+}
+
+/// Closure-aware detached callback entry. Captures remain ordinary trailing
+/// arguments, while bound `$this` and lexical scope are frame metadata rather
+/// than public parameters.
+pub(crate) fn call_function_iter_with_context<'a, I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<&Value>,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        called_scope_class_id,
+        bound_this.cloned(),
+    )?;
     Ok(return_value)
 }
 
@@ -240,7 +271,30 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, _) =
-        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args)?;
+        call_function_value_iter::<_, false>(eg, func_ptr, num_args, args, 0, None)?;
+    Ok(return_value)
+}
+
+/// Owned-argument closure entry retaining bound object and lexical scope.
+pub(crate) fn call_function_owned_iter_with_context<I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        bound_this,
+    )?;
     Ok(return_value)
 }
 
@@ -258,7 +312,30 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, arg0) =
-        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args)?;
+        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args, 0, None)?;
+    Ok((return_value, arg0.unwrap_or_else(Value::null)))
+}
+
+/// Owned closure entry retaining context and reading back its first argument.
+pub(crate) fn call_function_owned_iter_readback_arg0_with_context<I>(
+    eg: &mut ExecutorGlobals,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
+) -> Result<(Value, Value), VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, arg0) = call_function_value_iter::<_, true>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        bound_this,
+    )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
@@ -269,6 +346,8 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     func_ptr: *const FunctionCommon,
     num_args: usize,
     mut args: I,
+    called_scope_class_id: u32,
+    bound_this: Option<Value>,
 ) -> Result<(Value, Option<Value>), VmError>
 where
     I: Iterator<Item = Value>,
@@ -299,6 +378,11 @@ where
         args.next().is_none(),
         "callback argument iterator longer than declared length"
     );
+
+    if called_scope_class_id != 0 {
+        publish_late_static_call_class_id(eg, frame, called_scope_class_id);
+    }
+    initialize_bound_this_frame(frame, func_ptr, bound_this);
 
     let execution_result = match unsafe { (*func_ptr).fn_type } {
         FunctionType::User => {
@@ -335,6 +419,7 @@ where
     // Always restore and pop the callback frame, including fatal/error paths.
     eg.current_execute_data.set(saved_execute_data);
     unsafe { cleanup_frame_slots(frame) };
+    eg.discard_late_static_scope(frame as usize);
     eg.vm_stack.pop_call_frame(frame);
 
     execution_result?;
@@ -370,8 +455,14 @@ pub fn call_function_readback_arg0_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, arg0) =
-        call_function_value_iter::<_, true>(eg, func_ptr, num_args, args.cloned())?;
+    let (return_value, arg0) = call_function_value_iter::<_, true>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        0,
+        None,
+    )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 

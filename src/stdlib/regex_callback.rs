@@ -1,13 +1,13 @@
 //! Streaming `preg_replace_callback` consumer kept out of the general stdlib
 //! codegen unit so its specialized ownership path cannot perturb preg_match.
 
-use super::resolve_callback_or_fatal;
+use super::{
+    call_resolved_owned_iter, call_resolved_owned_iter_readback_arg0, resolve_callback_or_fatal,
+};
 use crate::regex::Regex;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value};
-use crate::vm::execute::{
-    VmError, call_function_owned_iter, call_function_owned_iter_readback_arg0,
-};
+use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
 /// Return `None` when the callback raised a PHP exception. No partial output is
@@ -78,11 +78,11 @@ pub(super) fn replace(
             .chain(resolved.use_vars.iter().cloned());
         let callback_result = if capture_free {
             let (callback_result, matches_value) =
-                call_function_owned_iter_readback_arg0(eg, resolved.func_ptr, num_args, args)?;
+                call_resolved_owned_iter_readback_arg0(eg, resolved, num_args, args)?;
             reusable_capture_free_matches = Some(matches_value);
             callback_result
         } else {
-            call_function_owned_iter(eg, resolved.func_ptr, num_args, args)?
+            call_resolved_owned_iter(eg, resolved, num_args, args)?
         };
         if eg.exception.is_some() {
             return Ok(false);

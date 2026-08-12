@@ -178,6 +178,8 @@ pub(crate) struct AutoloadEntry {
     pub(crate) func_ptr: *const FunctionCommon,
     pub(crate) prepend_args: Vec<Value>,
     pub(crate) use_vars: Vec<Value>,
+    pub(crate) called_scope_class_id: u32,
+    pub(crate) bound_this: Option<Value>,
 }
 
 /// Cold request-local SPL state. Executors that never register an autoloader

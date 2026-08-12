@@ -131,6 +131,33 @@ var_dump(class_exists('Project\\LoadedClass', false));
 }
 
 #[test]
+fn new_expression_invokes_registered_autoloaders_before_class_resolution() {
+    let dir = TempPhpDir::new();
+    std::fs::write(
+        dir.0.join("loaded.php"),
+        "<?php class ConstructedByLoader { public function value() { return 'loaded'; } }",
+    )
+    .unwrap();
+    let source_file = dir.0.join("new.php").to_string_lossy().into_owned();
+    let source_dir = dir.0.to_string_lossy().into_owned();
+    let output = run_php_with_source_context(
+        r#"<?php
+function load_for_new($class) {
+    echo "load:$class|";
+    if ($class === 'ConstructedByLoader') { require __DIR__ . '/loaded.php'; }
+}
+spl_autoload_register('load_for_new');
+$object = new ConstructedByLoader();
+echo $object->value();
+"#,
+        &source_file,
+        &source_dir,
+    );
+
+    assert_eq!(output, "load:ConstructedByLoader|loaded");
+}
+
+#[test]
 fn spl_autoload_honors_explicit_and_request_local_extensions() {
     let dir = TempPhpDir::new();
     std::fs::write(

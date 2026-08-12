@@ -491,3 +491,34 @@ fn test_e2e_too_many_args_no_corruption() {
         _ => panic!("Expected Fatal error"),
     }
 }
+
+#[test]
+fn test_static_closure_and_arrow_forms_capture_and_invoke() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$captured = 40;
+$closure = static function(int $value) use ($captured): int {
+    return $captured + $value;
+};
+$arrow = static fn(int $value): int => $captured + $value;
+echo $closure(2) . ":" . $arrow(3);
+"#,
+        ),
+        "42:43"
+    );
+}
+
+#[test]
+fn assignment_on_comparison_rhs_returns_and_publishes_the_value() {
+    assert_eq!(
+        run_php(
+            "<?php
+function locate() { return 4; }
+var_dump(false !== $position = locate());
+echo $position;
+"
+        ),
+        "bool(true)\n4"
+    );
+}

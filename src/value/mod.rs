@@ -1459,6 +1459,23 @@ impl PhpArray {
         }
     }
 
+    /// PHP array union (`$left + $right`): retain every left entry and append
+    /// only right-hand keys that are absent. Values stay COW-safe clones and
+    /// the left array's insertion order remains authoritative.
+    pub fn union(&self, right: &Self) -> Self {
+        let mut result = self.clone();
+        for (key, value) in right.iter() {
+            let exists = match &key {
+                ArrayKey::Int(key) => result.get_int(*key).is_some(),
+                ArrayKey::String(key) => result.get_str(key).is_some(),
+            };
+            if !exists {
+                result.set(key, value.clone());
+            }
+        }
+        result
+    }
+
     /// Create packed storage with capacity known from an array literal.
     pub fn with_packed_capacity(capacity: usize) -> Self {
         Self {
@@ -3087,6 +3104,12 @@ pub struct PhpClosure {
     /// Late-called class captured when a class-scoped closure is created.
     /// Zero keeps ordinary closures on the existing path.
     pub called_scope_class_id: u32,
+    /// True for PHP's `static function` and `static fn` forms. Retained on the
+    /// value so Closure binding can enforce the language-level object rule.
+    pub is_static: bool,
+    /// Object bound implicitly at creation or explicitly through
+    /// `Closure::bind()`. Static closures always keep this empty.
+    pub bound_this: Option<Value>,
     /// Captured `use` variable values, in declaration order.
     pub captures: Vec<Value>,
     /// True if any captured value needs cleanup (owned heap values/resources).
@@ -3100,6 +3123,8 @@ impl Clone for PhpClosure {
             identity: self.identity.clone(),
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
+            is_static: self.is_static,
+            bound_this: self.bound_this.clone(),
             captures: self.captures.clone(),
             has_heap_captures: self.has_heap_captures,
         }
@@ -3135,6 +3160,8 @@ impl std::fmt::Debug for PhpClosure {
             .field("identity", &Rc::as_ptr(&self.identity))
             .field("func", &self.func)
             .field("called_scope_class_id", &self.called_scope_class_id)
+            .field("is_static", &self.is_static)
+            .field("bound_this", &self.bound_this.is_some())
             .field("captures", &self.captures.len())
             .finish()
     }

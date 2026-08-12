@@ -9811,10 +9811,32 @@ aliases now share their exact reference-counted class identity across alias
 chains and preserve class-like kind, methods, static state, inheritance,
 callbacks and `instanceof` behavior. `function_exists()` accepts global names
 with a leading separator; `is_a()`/`is_subclass_of()` implement their
-string/autoload contract; and `stdClass` is a registered internal class. S0 is
-not complete: the remaining ordinary include-return/scope/exception edges,
-namespace function-import edges, truthful platform identity and the unmodified
-Composer fixture gate remain outstanding.
+string/autoload contract; and `stdClass` is a registered internal class.
+
+#### Composer loader-language substrate checkpoint (2026-08-12)
+
+Ordinary `new` now invokes the SPL autoload stack before reporting a missing
+class, while `new static` preserves the forwarded called class through static
+closures. Static anonymous functions and arrow functions are parsed and
+compiled, instance closures capture `$this`, and `Closure::bind()` can replace
+or remove both the receiver and lexical class scope. That closure context is
+preserved through direct and dynamic calls, `call_user_func()`, autoload, and
+the callback paths used by array and PCRE standard-library functions.
+
+The language substrate now also covers assignment expressions on comparison
+and logical right-hand sides, copy-on-write-safe nested array writes rooted in
+variables, object properties, or static properties, PHP array union, and
+source-aware `__DIR__`/`__FILE__` values in declaration defaults. Fatal errors
+render without Rust wrapper diagnostics. PHPT report schema 5 separates
+diagnostic expectations from ordinary output without changing the headline
+compatibility denominator.
+
+The full default, no-default-features, erased-generics, reified-generics, and
+all-features test matrix passes. The CI formatting and all-target check passes,
+including its unsafe-policy ratchet at 1,625 blocks against a ceiling of 1,628.
+S0 is not complete: the remaining ordinary include-return/scope/exception
+edges, namespace function-import edges, truthful platform identity, and the
+unmodified Composer fixture gate remain outstanding.
 
 Composer's generated platform check must observe truthful `PHP_VERSION_ID`,
 `PHP_VERSION`, `PHP_INT_SIZE`, extension availability and exit/error behavior.

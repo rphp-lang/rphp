@@ -740,7 +740,7 @@ impl Parser {
 
     /// Parse arrow function: fn($x, $y) => expr
     /// Desugars to Closure with auto-captured use vars and body = [Return(expr)]
-    fn parse_arrow_function(&mut self) -> Result<Expr, String> {
+    fn parse_arrow_function(&mut self, is_static: bool) -> Result<Expr, String> {
         self.advance(); // consume 'fn'
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
@@ -760,6 +760,7 @@ impl Parser {
 
         let body = vec![Stmt::Return(Some(expr))];
         Ok(Expr::Closure {
+            is_static,
             params,
             use_vars: free_vars,
             body,
@@ -920,7 +921,7 @@ impl Parser {
     }
 
     /// Parse closure: function($a, $b) use($c) { ... }
-    fn parse_closure(&mut self) -> Result<Expr, String> {
+    fn parse_closure(&mut self, is_static: bool) -> Result<Expr, String> {
         self.advance(); // consume 'function'
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
@@ -959,6 +960,7 @@ impl Parser {
         self.pop_generic_scope();
 
         Ok(Expr::Closure {
+            is_static,
             params,
             use_vars,
             body,

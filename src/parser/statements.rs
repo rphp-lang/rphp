@@ -173,23 +173,35 @@ impl Parser {
                             expr,
                         });
                     }
-                    // Check for $a[idx] = by scanning ahead for ] =
-                    // Simple heuristic: find matching ] then check for =
+                    // Parse a complete $a[idx]...[idx] write. Keeping every
+                    // dimension in one AST node lets the compiler evaluate
+                    // keys once and rebuild COW parents from the leaf.
                     if self.is_array_assign() {
                         let var_name = match self.advance() {
                             Token::Variable(name) => name,
                             _ => unreachable!(),
                         };
-                        self.advance(); // consume '['
-                        let index = self.parse_expr()?;
-                        self.expect(&Token::RBracket)?;
+                        let mut indices = Vec::new();
+                        while self.peek() == Token::LBracket {
+                            self.advance();
+                            indices.push(self.parse_expr()?);
+                            self.expect(&Token::RBracket)?;
+                        }
                         self.expect(&Token::Assign)?;
                         let expr = self.parse_expr()?;
                         self.expect(&Token::Semicolon)?;
-                        return Ok(Stmt::ArrayAssign {
-                            var: var_name,
-                            index,
-                            expr,
+                        return Ok(if indices.len() == 1 {
+                            Stmt::ArrayAssign {
+                                var: var_name,
+                                index: indices.pop().unwrap(),
+                                expr,
+                            }
+                        } else {
+                            Stmt::NestedArrayAssign {
+                                root: Expr::Variable(var_name),
+                                indices,
+                                expr,
+                            }
                         });
                     }
                     // Otherwise fall through to expression parsing
@@ -231,7 +243,6 @@ impl Parser {
                     if self.peek() == Token::Assign {
                         // Check structure without consuming
                         let is_prop_assign = matches!(&expr, Expr::PropertyAccess { .. });
-                        let is_obj_dim_assign = matches!(&expr, Expr::ArrayAccess { array, .. } if matches!(array.as_ref(), Expr::PropertyAccess { .. }));
 
                         if is_prop_assign {
                             if let Expr::PropertyAccess {
@@ -247,24 +258,36 @@ impl Parser {
                                     expr: rhs,
                                 });
                             }
-                        } else if is_obj_dim_assign {
-                            if let Expr::ArrayAccess { array, index } = expr {
-                                if let Expr::PropertyAccess {
+                        } else if matches!(expr, Expr::ArrayAccess { .. }) {
+                            let (root, mut indices) = Self::split_array_access(expr);
+                            self.advance(); // consume '='
+                            let rhs = self.parse_expr()?;
+                            self.expect(&Token::Semicolon)?;
+                            if indices.len() == 1
+                                && let Expr::PropertyAccess {
                                     object, property, ..
-                                } = *array
-                                {
-                                    self.advance(); // consume '='
-                                    let rhs = self.parse_expr()?;
-                                    self.expect(&Token::Semicolon)?;
-                                    return Ok(Stmt::AssignObjArrayDim {
-                                        object: *object,
-                                        property,
-                                        index: *index,
-                                        expr: rhs,
-                                    });
-                                }
+                                } = root
+                            {
+                                return Ok(Stmt::AssignObjArrayDim {
+                                    object: *object,
+                                    property,
+                                    index: indices.pop().unwrap(),
+                                    expr: rhs,
+                                });
                             }
-                            unreachable!();
+                            if matches!(
+                                root,
+                                Expr::Variable(_)
+                                    | Expr::PropertyAccess { .. }
+                                    | Expr::StaticProperty { .. }
+                            ) {
+                                return Ok(Stmt::NestedArrayAssign {
+                                    root,
+                                    indices,
+                                    expr: rhs,
+                                });
+                            }
+                            return Err("Unsupported array assignment target".into());
                         }
                     }
                     self.expect(&Token::Semicolon)?;
@@ -510,6 +533,11 @@ impl Parser {
                 let expr = self.parse_expr()?;
                 self.finish_static_property_statement(expr)
             }
+            Token::Static
+                if matches!(self.peek_at(1), Token::Function | Token::Fn) =>
+            {
+                self.parse_expression_statement()
+            }
             Token::Isset
             | Token::Empty
             | Token::Match
@@ -630,6 +658,20 @@ impl Parser {
     /// and compound writes share this path so pseudo-class resolution cannot
     /// drift between their parser branches.
     fn finish_static_property_statement(&mut self, expr: Expr) -> Result<Stmt, String> {
+        if self.peek() == Token::Assign && matches!(expr, Expr::ArrayAccess { .. }) {
+            let (root, indices) = Self::split_array_access(expr);
+            if !matches!(root, Expr::StaticProperty { .. }) {
+                return Err("Unsupported static array assignment target".into());
+            }
+            self.advance();
+            let value = self.parse_expr()?;
+            self.expect(&Token::Semicolon)?;
+            return Ok(Stmt::NestedArrayAssign {
+                root,
+                indices,
+                expr: value,
+            });
+        }
         let static_property = match &expr {
             Expr::StaticProperty {
                 class_name,

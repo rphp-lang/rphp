@@ -21,9 +21,10 @@ use crate::parser::Visibility;
 use crate::runtime::ExecutorGlobals;
 use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::{
-    ScalarLongSortOrder, VmError, call_function, call_function_iter, call_function_owned_iter,
-    call_function_readback_arg0_iter, prepare_scalar_long_callback,
-    try_execute_scalar_long_callback,
+    ScalarLongSortOrder, VmError, call_function, call_function_iter,
+    call_function_iter_with_context, call_function_owned_iter,
+    call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
+    prepare_scalar_long_callback, try_execute_scalar_long_callback,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -120,7 +121,7 @@ macro_rules! ret {
     }};
 }
 
-mod autoload;
+pub(crate) mod autoload;
 
 /// Read a borrowed argument for the frame-free internal ABI, following PHP
 /// references with the same semantics as `arg!` on an ExecuteData frame.
@@ -1034,6 +1035,73 @@ fn fn_throwable_get_message(
     ret!(rv, Value::string(""));
 }
 
+fn fn_closure_bind(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(source) = arg!(ed, 1).as_closure() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "Closure::bind(): Argument #1 ($closure) must be of type Closure",
+        ));
+        return Ok(());
+    };
+    let mut rebound = source.clone();
+    rebound.identity = std::rc::Rc::new(());
+
+    let new_this = arg!(ed, 2);
+    rebound.bound_this = match new_this.value_type() {
+        ValueType::Null => None,
+        ValueType::Object if rebound.is_static => {
+            eg.write_output(
+                b"Warning: Closure::bind(): Cannot bind an instance to a static closure\n",
+            );
+            ret!(rv, Value::null());
+        }
+        ValueType::Object => Some(new_this.clone()),
+        _ => {
+            eg.exception = Some(crate::value::make_error_value(
+                "TypeError",
+                "Closure::bind(): Argument #2 ($newThis) must be of type ?object",
+            ));
+            return Ok(());
+        }
+    };
+
+    if let Some(scope) = arg_opt!(ed, 3) {
+        rebound.called_scope_class_id = match scope.value_type() {
+            ValueType::Null => 0,
+            ValueType::String if scope.as_str() == Some("static") => source.called_scope_class_id,
+            ValueType::String => {
+                let name = scope.as_str().unwrap_or_default();
+                let Some(class) = eg.find_class(name) else {
+                    eg.write_output(
+                        format!("Warning: Closure::bind(): Class \"{name}\" not found\n")
+                            .as_bytes(),
+                    );
+                    ret!(rv, Value::null());
+                };
+                class.class_id
+            }
+            ValueType::Object => {
+                let object = scope.as_object().expect("object value lost its payload");
+                eg.find_class(object.class_name.as_ref())
+                    .map_or(0, |class| class.class_id)
+            }
+            _ => {
+                eg.exception = Some(crate::value::make_error_value(
+                    "TypeError",
+                    "Closure::bind(): Argument #3 ($newScope) must be of type object|string|null",
+                ));
+                return Ok(());
+            }
+        };
+    }
+
+    ret!(rv, Value::closure(rebound));
+}
+
 #[cfg(feature = "value-errors")]
 #[cold]
 fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] {
@@ -1313,6 +1381,21 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     // class_exists(), aliases, type hints and reflection as an internal class.
     eg.register_class(empty_internal_type("stdClass", vec![], false, false))
         .unwrap();
+
+    eg.register_class(empty_internal_type("Closure", vec![], false, true))
+        .unwrap();
+    // Static methods still reserve the canonical hidden method slot at CV 0;
+    // explicit Closure::bind arguments begin at CV 1.
+    reg_method!(
+        "Closure",
+        "bind",
+        fn_closure_bind,
+        4,
+        2,
+        "closure",
+        "newThis",
+        "newScope"
+    );
 
     // Canonical iterator hierarchy used by generator return contracts,
     // instanceof and the iterable pseudo-type.
@@ -3987,6 +4070,17 @@ pub(crate) struct ResolvedCallback {
     pub(crate) prepend_args: Vec<Value>,
     /// Captured use_vars for closures (appended after all params).
     pub(crate) use_vars: Vec<Value>,
+    /// Lexical visibility/late-static scope carried by a bound closure.
+    pub(crate) called_scope_class_id: u32,
+    /// Object bound as `$this`; it is frame metadata, not a public argument.
+    pub(crate) bound_this: Option<Value>,
+}
+
+impl ResolvedCallback {
+    #[inline]
+    pub(crate) fn has_context(&self) -> bool {
+        self.called_scope_class_id != 0 || self.bound_this.is_some()
+    }
 }
 
 /// Get the calling scope's class name from an ExecuteData frame.
@@ -4027,6 +4121,8 @@ fn resolve_callback(
                 func_ptr: closure.func,
                 prepend_args: vec![],
                 use_vars: closure.captures.clone(),
+                called_scope_class_id: closure.called_scope_class_id,
+                bound_this: closure.bound_this.clone(),
             })
         }
         ValueType::String => {
@@ -4035,6 +4131,8 @@ fn resolve_callback(
                 func_ptr: ptr,
                 prepend_args: vec![],
                 use_vars: vec![],
+                called_scope_class_id: 0,
+                bound_this: None,
             })
         }
         ValueType::Array => {
@@ -4052,6 +4150,8 @@ fn resolve_callback(
                         func_ptr,
                         prepend_args: vec![],
                         use_vars,
+                        called_scope_class_id: 0,
+                        bound_this: None,
                     });
                 }
             }
@@ -4094,6 +4194,8 @@ fn resolve_callback(
                     func_ptr,
                     prepend_args: vec![obj_val.clone()],
                     use_vars: vec![],
+                    called_scope_class_id: 0,
+                    bound_this: None,
                 })
             } else if let Some(class_str) = obj_val.as_str() {
                 // Static method: ["ClassName", "method"] — must be static; visibility depends on scope
@@ -4124,6 +4226,8 @@ fn resolve_callback(
                     func_ptr,
                     prepend_args: vec![Value::null()],
                     use_vars: vec![],
+                    called_scope_class_id: 0,
+                    bound_this: None,
                 })
             } else {
                 None
@@ -4138,6 +4242,8 @@ fn resolve_callback(
                 func_ptr,
                 prepend_args: vec![val.clone()],
                 use_vars: vec![],
+                called_scope_class_id: 0,
+                bound_this: None,
             })
         }
         _ => None,
@@ -4201,6 +4307,8 @@ fn resolve_cached_string_callback(
         func_ptr,
         prepend_args: vec![],
         use_vars: vec![],
+        called_scope_class_id: 0,
+        bound_this: None,
     })
 }
 
@@ -4347,15 +4455,83 @@ fn call_resolved_with_array(
     }
 
     let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
-    call_function_iter(
+    call_resolved_iter(
         eg,
-        resolved.func_ptr,
+        resolved,
         num_args,
         resolved
             .prepend_args
             .iter()
             .chain(args.values())
             .chain(resolved.use_vars.iter()),
+    )
+}
+
+#[inline]
+pub(super) fn call_resolved_iter<'a, I>(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    if !resolved.has_context() {
+        call_function_iter(eg, resolved.func_ptr, num_args, args)
+    } else {
+        call_function_iter_with_context(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            args,
+            resolved.called_scope_class_id,
+            resolved.bound_this.as_ref(),
+        )
+    }
+}
+
+#[inline]
+pub(super) fn call_resolved_owned_iter<I>(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    if !resolved.has_context() {
+        call_function_owned_iter(eg, resolved.func_ptr, num_args, args)
+    } else {
+        call_function_owned_iter_with_context(
+            eg,
+            resolved.func_ptr,
+            num_args,
+            args,
+            resolved.called_scope_class_id,
+            resolved.bound_this.clone(),
+        )
+    }
+}
+
+#[inline]
+pub(super) fn call_resolved_owned_iter_readback_arg0<I>(
+    eg: &mut ExecutorGlobals,
+    resolved: &ResolvedCallback,
+    num_args: usize,
+    args: I,
+) -> Result<(Value, Value), VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    call_function_owned_iter_readback_arg0_with_context(
+        eg,
+        resolved.func_ptr,
+        num_args,
+        args,
+        resolved.called_scope_class_id,
+        resolved.bound_this.clone(),
     )
 }
 
@@ -4369,7 +4545,7 @@ pub(super) fn call_resolved_with_values(
     resolved: &ResolvedCallback,
     args: &[Value],
 ) -> Result<Value, VmError> {
-    if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() {
+    if resolved.prepend_args.is_empty() && resolved.use_vars.is_empty() && !resolved.has_context() {
         if let Some(result) =
             unsafe { try_execute_scalar_long_callback(resolved.func_ptr, args.len(), args.iter()) }
         {
@@ -4379,9 +4555,9 @@ pub(super) fn call_resolved_with_values(
     }
 
     let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
-    call_function_iter(
+    call_resolved_iter(
         eg,
-        resolved.func_ptr,
+        resolved,
         num_args,
         resolved
             .prepend_args
@@ -4477,15 +4653,16 @@ fn call_resolved_with_php_array(
     normalized.extend(extra_positional);
 
     let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
-    call_function_owned_iter(
+    call_resolved_owned_iter(
         eg,
-        resolved.func_ptr,
+        &resolved,
         num_args,
         resolved
             .prepend_args
-            .into_iter()
+            .iter()
+            .cloned()
             .chain(normalized)
-            .chain(resolved.use_vars),
+            .chain(resolved.use_vars.iter().cloned()),
     )
 }
 
@@ -4560,9 +4737,9 @@ fn fn_call_user_func(
         call_resolved_with_array(eg, &resolved, arr)?
     } else if variadic_val.value_type() != ValueType::Undef {
         let num_args = resolved.prepend_args.len() + 1 + resolved.use_vars.len();
-        call_function_iter(
+        call_resolved_iter(
             eg,
-            resolved.func_ptr,
+            &resolved,
             num_args,
             resolved
                 .prepend_args
@@ -4572,9 +4749,9 @@ fn fn_call_user_func(
         )?
     } else {
         let num_args = resolved.prepend_args.len() + resolved.use_vars.len();
-        call_function_iter(
+        call_resolved_iter(
             eg,
-            resolved.func_ptr,
+            &resolved,
             num_args,
             resolved
                 .prepend_args
@@ -5503,6 +5680,7 @@ fn fn_array_reduce(
         for item in items {
             if resolved.prepend_args.is_empty()
                 && resolved.use_vars.is_empty()
+                && !resolved.has_context()
                 && let Some(result) = unsafe {
                     try_execute_scalar_long_callback(
                         resolved.func_ptr,
@@ -5517,9 +5695,9 @@ fn fn_array_reduce(
             // Carry and item are already owned: move both straight into the
             // callback frame while cloning only persistent receiver/captures.
             let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
-            carry = call_function_owned_iter(
+            carry = call_resolved_owned_iter(
                 eg,
-                resolved.func_ptr,
+                &resolved,
                 num_args,
                 resolved
                     .prepend_args
@@ -5544,7 +5722,8 @@ unsafe fn try_usort_scalar_long(
     items: &mut [Value],
     resolved: &ResolvedCallback,
 ) -> Result<bool, ()> {
-    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() {
+    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() || resolved.has_context()
+    {
         return Ok(false);
     }
     let Some(callback) = prepare_scalar_long_callback(resolved.func_ptr, 2) else {
@@ -5642,24 +5821,22 @@ fn fn_usort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         }
     }
 
-    let func_ptr = resolved.func_ptr;
-    let prepend = resolved.prepend_args;
-    let use_vars = resolved.use_vars;
     // Insertion sort with PHP callback comparison
     let len = items.len();
     for i in 1..len {
         let mut j = i;
         while j > 0 {
-            let num_args = prepend.len() + 2 + use_vars.len();
-            let result = call_function_iter(
+            let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
+            let result = call_resolved_iter(
                 eg,
-                func_ptr,
+                &resolved,
                 num_args,
-                prepend
+                resolved
+                    .prepend_args
                     .iter()
                     .chain(std::iter::once(&items[j - 1]))
                     .chain(std::iter::once(&items[j]))
-                    .chain(use_vars.iter()),
+                    .chain(resolved.use_vars.iter()),
             )?;
             if eg.exception.is_some() {
                 return Ok(());
@@ -5738,7 +5915,8 @@ fn fn_array_intersect(
 /// Supports by-ref callbacks: function (&$val, $key) { $val *= 2; }
 #[inline(never)]
 unsafe fn try_array_walk_scalar_long(arr: &PhpArray, resolved: &ResolvedCallback) -> Option<()> {
-    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() {
+    if !resolved.prepend_args.is_empty() || !resolved.use_vars.is_empty() || resolved.has_context()
+    {
         return None;
     }
     let callback = prepare_scalar_long_callback(resolved.func_ptr, 2)?;
@@ -5803,16 +5981,17 @@ fn fn_array_walk(
                 ArrayKey::String(s) => Value::string(s.clone()),
             };
             let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
-            let (_ret, modified_val) = call_function_readback_arg0_iter(
+            let (_ret, modified_val) = call_resolved_owned_iter_readback_arg0(
                 eg,
-                resolved.func_ptr,
+                &resolved,
                 num_args,
                 resolved
                     .prepend_args
                     .iter()
-                    .chain(std::iter::once(&v))
-                    .chain(std::iter::once(&key_val))
-                    .chain(resolved.use_vars.iter()),
+                    .cloned()
+                    .chain(std::iter::once(v))
+                    .chain(std::iter::once(key_val))
+                    .chain(resolved.use_vars.iter().cloned()),
             )?;
             if eg.exception.is_some() {
                 return Ok(());
@@ -5837,16 +6016,17 @@ fn fn_array_walk(
                 ArrayKey::String(s) => Value::string(s.clone()),
             };
             let num_args = resolved.prepend_args.len() + 2 + resolved.use_vars.len();
-            call_function_iter(
+            call_resolved_owned_iter(
                 eg,
-                resolved.func_ptr,
+                &resolved,
                 num_args,
                 resolved
                     .prepend_args
                     .iter()
-                    .chain(std::iter::once(&v))
-                    .chain(std::iter::once(&key_val))
-                    .chain(resolved.use_vars.iter()),
+                    .cloned()
+                    .chain(std::iter::once(v))
+                    .chain(std::iter::once(key_val))
+                    .chain(resolved.use_vars.iter().cloned()),
             )?;
             if eg.exception.is_some() {
                 return Ok(());

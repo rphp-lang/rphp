@@ -88,6 +88,28 @@ function normalized_runtime_output(string $output): string
     ) ?? $output;
 }
 
+/**
+ * Separate exact PHP diagnostics from ordinary program-output expectations.
+ *
+ * This is deliberately conservative: only a diagnostic label at the start of
+ * an expected output line qualifies. User data that happens to contain words
+ * such as "Error" remains ordinary output.
+ */
+function expectation_profile(array $sections): string
+{
+    $expected = $sections['EXPECT']
+        ?? $sections['EXPECTF']
+        ?? $sections['EXPECTREGEX']
+        ?? '';
+    $expected = str_replace(["\r\n", "\r"], "\n", $expected);
+    return preg_match(
+        '/(?:\A|\n)(?:PHP )?(?:Fatal error|Parse error|Warning|Deprecated|Notice|Strict Standards|Recoverable fatal error):/i',
+        $expected,
+    ) === 1
+        ? 'diagnostic'
+        : 'ordinary';
+}
+
 /** @return array<string, mixed> */
 function base_result(string $path, array $sections): array
 {
@@ -103,6 +125,7 @@ function base_result(string $path, array $sections): array
         'actual_sha256' => null,
         'expected_sha256' => null,
         'actual_excerpt' => '',
+        'expectation_profile' => expectation_profile($sections),
         // Internal runner fields. The merged public manifest omits them, but
         // the aggregate execution profile needs to distinguish FILE failures
         // from SKIPIF/runner failures and exact negative-test passes.

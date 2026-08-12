@@ -25,7 +25,8 @@ use crate::value::{
 use crate::vm::instruction::{
     ARRAY_INIT_HASH_HINT, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE,
     CALL_FLAG_EXACT_SCALAR_ARGS, CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, InlineCache, Instruction, KnownScalarType, OpType,
+    CLASS_CONST_DYNAMIC_OWNER, FETCH_OBJ_SILENT, InlineCache, Instruction, KnownScalarType,
+    NEW_FLAG_DYNAMIC_STATIC_SCOPE, OpType,
 };
 use crate::vm::opcode::OpCode;
 
@@ -1905,11 +1906,12 @@ impl Compiler {
     /// Two passes: first collect all simple constants, then re-evaluate those that
     /// reference other constants (handles `const A = 1; const B = A;`).
     fn prescan_constants(&mut self, stmts: &[Stmt]) {
+        let file_context = Some((self.source_file.as_str(), self.source_directory.as_str()));
         // Two passes over the full statement tree (including namespace bodies).
         // Pass 1: collect directly evaluable constants
-        Self::prescan_constants_pass(stmts, None, &mut self.known_constants);
+        Self::prescan_constants_pass(stmts, None, &mut self.known_constants, file_context);
         // Pass 2: retry with the now-larger table (handles forward refs like const B = A)
-        Self::prescan_constants_pass(stmts, None, &mut self.known_constants);
+        Self::prescan_constants_pass(stmts, None, &mut self.known_constants, file_context);
     }
 
     /// Single pass over statements, recursing into namespace bodies.
@@ -1918,6 +1920,7 @@ impl Compiler {
         stmts: &[Stmt],
         ns: Option<&str>,
         known: &mut HashMap<String, Value>,
+        file_context: Option<(&str, &str)>,
     ) {
         for stmt in stmts {
             match stmt {
@@ -1928,13 +1931,15 @@ impl Compiler {
                         None => name.clone(),
                     };
                     if !known.contains_key(&fqn) {
-                        if let Ok(val) = Self::eval_const_expr_with_constants(value, known) {
+                        if let Ok(val) =
+                            Self::eval_const_expr_with_context(value, known, file_context)
+                        {
                             known.insert(fqn, val);
                         }
                     }
                 }
                 Stmt::Namespace { name, body } => {
-                    Self::prescan_constants_pass(body, Some(name), known);
+                    Self::prescan_constants_pass(body, Some(name), known, file_context);
                 }
                 _ => {}
             }
@@ -2142,6 +2147,29 @@ impl Compiler {
         expr: &Expr,
         known: &HashMap<String, Value>,
     ) -> Result<Value, String> {
+        Self::eval_const_expr_with_context(expr, known, None)
+    }
+
+    fn eval_const_expr_in_source(
+        &self,
+        expr: &Expr,
+        known: &HashMap<String, Value>,
+    ) -> Result<Value, String> {
+        Self::eval_const_expr_with_context(
+            expr,
+            known,
+            Some((self.source_file.as_str(), self.source_directory.as_str())),
+        )
+    }
+
+    /// Evaluate a constant expression with the source-unit context needed by
+    /// file-scoped magic constants. Class/function magic constants require a
+    /// declaration context and remain rejected until that context is explicit.
+    fn eval_const_expr_with_context(
+        expr: &Expr,
+        known: &HashMap<String, Value>,
+        file_context: Option<(&str, &str)>,
+    ) -> Result<Value, String> {
         match expr {
             Expr::Integer(n) => Ok(Value::long(*n)),
             Expr::Float(f) => Ok(Value::double(*f)),
@@ -2172,6 +2200,20 @@ impl Compiler {
             Expr::MagicConstant { name, line } => {
                 if name.eq_ignore_ascii_case("__LINE__") {
                     Ok(Value::long(*line as i64))
+                } else if name.eq_ignore_ascii_case("__FILE__") {
+                    file_context
+                        .map(|(file, _)| Value::string(file))
+                        .ok_or_else(|| {
+                            "magic constant __FILE__ requires the active compilation context"
+                                .to_string()
+                        })
+                } else if name.eq_ignore_ascii_case("__DIR__") {
+                    file_context
+                        .map(|(_, directory)| Value::string(directory))
+                        .ok_or_else(|| {
+                            "magic constant __DIR__ requires the active compilation context"
+                                .to_string()
+                        })
                 } else {
                     Err(format!(
                         "magic constant {} requires the active compilation context",
@@ -2195,7 +2237,7 @@ impl Compiler {
                 class_name,
                 constant,
             } => {
-                let constant = Self::eval_const_expr_with_constants(constant, known)?;
+                let constant = Self::eval_const_expr_with_context(constant, known, file_context)?;
                 let constant = constant.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class constant name",
@@ -2215,14 +2257,14 @@ impl Compiler {
             Expr::DynamicClassConstant {
                 class, constant, ..
             } => {
-                let class = Self::eval_const_expr_with_constants(class, known)?;
+                let class = Self::eval_const_expr_with_context(class, known, file_context)?;
                 let class = class.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class name",
                         class.type_name()
                     )
                 })?;
-                let constant = Self::eval_const_expr_with_constants(constant, known)?;
+                let constant = Self::eval_const_expr_with_context(constant, known, file_context)?;
                 let constant = constant.as_str().ok_or_else(|| {
                     format!(
                         "value of type {} cannot be used as a class constant name",
@@ -2240,7 +2282,7 @@ impl Compiler {
                     })
             }
             Expr::BinaryOp { op, left, right } => {
-                let left = Self::eval_const_expr_with_constants(left, known)?;
+                let left = Self::eval_const_expr_with_context(left, known, file_context)?;
                 // Preserve PHP's short-circuit rules even though constant
                 // evaluation itself has no observable side effects.
                 match op {
@@ -2248,14 +2290,14 @@ impl Compiler {
                     BinOp::Or if left.is_truthy() => return Ok(Value::bool(true)),
                     _ => {}
                 }
-                let right = Self::eval_const_expr_with_constants(right, known)?;
+                let right = Self::eval_const_expr_with_context(right, known, file_context)?;
                 Self::eval_const_binary(*op, &left, &right)
             }
             Expr::Not(inner) => Ok(Value::bool(
-                !Self::eval_const_expr_with_constants(inner, known)?.is_truthy(),
+                !Self::eval_const_expr_with_context(inner, known, file_context)?.is_truthy(),
             )),
             Expr::UnaryMinus(inner) => {
-                let value = Self::eval_const_expr_with_constants(inner, known)?;
+                let value = Self::eval_const_expr_with_context(inner, known, file_context)?;
                 if let Some(number) = value.as_long() {
                     Ok(number
                         .checked_neg()
@@ -2272,24 +2314,24 @@ impl Compiler {
                 then_expr,
                 else_expr,
             } => {
-                if Self::eval_const_expr_with_constants(condition, known)?.is_truthy() {
-                    Self::eval_const_expr_with_constants(then_expr, known)
+                if Self::eval_const_expr_with_context(condition, known, file_context)?.is_truthy() {
+                    Self::eval_const_expr_with_context(then_expr, known, file_context)
                 } else {
-                    Self::eval_const_expr_with_constants(else_expr, known)
+                    Self::eval_const_expr_with_context(else_expr, known, file_context)
                 }
             }
             Expr::Elvis { left, right } => {
-                let left = Self::eval_const_expr_with_constants(left, known)?;
+                let left = Self::eval_const_expr_with_context(left, known, file_context)?;
                 if left.is_truthy() {
                     Ok(left)
                 } else {
-                    Self::eval_const_expr_with_constants(right, known)
+                    Self::eval_const_expr_with_context(right, known, file_context)
                 }
             }
             Expr::NullCoalesce { left, right } => {
-                let left = Self::eval_const_expr_with_constants(left, known)?;
+                let left = Self::eval_const_expr_with_context(left, known, file_context)?;
                 if left.value_type() == ValueType::Null {
-                    Self::eval_const_expr_with_constants(right, known)
+                    Self::eval_const_expr_with_context(right, known, file_context)
                 } else {
                     Ok(left)
                 }
@@ -2311,9 +2353,10 @@ impl Compiler {
             Expr::ArrayLiteral(elements) => {
                 let mut arr = crate::value::PhpArray::new();
                 for elem in elements {
-                    let val = Self::eval_const_expr_with_constants(&elem.value, known)?;
+                    let val = Self::eval_const_expr_with_context(&elem.value, known, file_context)?;
                     if let Some(key_expr) = &elem.key {
-                        let key = Self::eval_const_expr_with_constants(key_expr, known)?;
+                        let key =
+                            Self::eval_const_expr_with_context(key_expr, known, file_context)?;
                         if let Some(n) = key.as_long() {
                             arr.set_int(n, val);
                         } else if let Some(s) = key.as_str() {
@@ -2330,8 +2373,8 @@ impl Compiler {
                 Ok(Value::array(arr))
             }
             Expr::ArrayAccess { array, index } => {
-                let array = Self::eval_const_expr_with_constants(array, known)?;
-                let index = Self::eval_const_expr_with_constants(index, known)?;
+                let array = Self::eval_const_expr_with_context(array, known, file_context)?;
+                let index = Self::eval_const_expr_with_context(index, known, file_context)?;
                 let array = array
                     .as_array()
                     .ok_or_else(|| "constant expression cannot index a non-array".to_string())?;
@@ -2360,7 +2403,9 @@ impl Compiler {
 
         match op {
             BinOp::Add => {
-                if let Some((left, right)) = integer_pair() {
+                if let (Some(left), Some(right)) = (left.as_array(), right.as_array()) {
+                    Ok(Value::array(left.union(right)))
+                } else if let Some((left, right)) = integer_pair() {
                     Ok(left
                         .checked_add(right)
                         .map(Value::long)
@@ -3743,6 +3788,7 @@ impl Compiler {
                 (result_tmp, OpType::Tmp)
             }
             Expr::Closure {
+                is_static,
                 params,
                 use_vars,
                 body,
@@ -3867,6 +3913,9 @@ impl Compiler {
                 create.result = tmp;
                 create.result_type = OpType::Tmp;
                 create.extended_value = use_vars.len() as u32;
+                if *is_static {
+                    create._pad |= crate::vm::instruction::CLOSURE_FLAG_STATIC;
+                }
                 self.instructions.push(create);
 
                 // Add captured use_var values
@@ -3905,10 +3954,15 @@ impl Compiler {
                     })
                     .collect();
 
-                let resolved_class = self.resolve_name(class_name);
+                let (resolved_class, dynamic_static_scope) =
+                    self.resolve_static_member_owner(class_name);
                 let name_idx = self.add_literal(Value::string(resolved_class.clone()));
                 let runtime_generic_check = self.emit_generic_check(
-                    OpCode::CheckGenericArgs,
+                    if dynamic_static_scope {
+                        OpCode::CheckLateStaticGenericArgs
+                    } else {
+                        OpCode::CheckGenericArgs
+                    },
                     GenericDeclarationKind::Class,
                     generic_args,
                     Some(&resolved_class),
@@ -3924,6 +3978,9 @@ impl Compiler {
                 new_obj.result = tmp;
                 new_obj.result_type = OpType::Tmp;
                 new_obj.extended_value = args.len() as u32;
+                if dynamic_static_scope {
+                    new_obj._pad |= NEW_FLAG_DYNAMIC_STATIC_SCOPE;
+                }
                 self.instructions.push(new_obj);
 
                 // Send constructor args — offset by 1 because CV 0 is $this

@@ -168,21 +168,49 @@ fn op_new_obj<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
-    let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-    let name = class_name.as_str().unwrap_or("");
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    let ip = unsafe {
-        (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
+    // SAFETY: NewObj operands and result are compiler-owned slots in this live
+    // frame, and opline belongs to op_array's stable instruction allocation.
+    let (raw_name, ip, result_ptr) = unsafe {
+        (
+            (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+                .as_str()
+                .unwrap_or("")
+                .to_string(),
+            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize,
+            (*frame).get_op_mut(opline.result as u32, opline.result_type),
+        )
+    };
+    let dynamic_static_scope = opline._pad & NEW_FLAG_DYNAMIC_STATIC_SCOPE != 0;
+    let name = if dynamic_static_scope {
+        resolve_static_call_class(eg, frame, &raw_name, true).ok_or_else(|| {
+            VmError::Fatal(format!("Cannot access {raw_name} when no class scope is active"))
+        })?
+    } else {
+        raw_name
     };
     let ic = &op_array.cache[ip];
 
+    if (dynamic_static_scope || ic.class_id == 0) && eg.find_class(&name).is_none() {
+        let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &name)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        if !loaded {
+            return Err(VmError::Fatal(format!("Uncaught Error: Class \"{name}\" not found")));
+        }
+    }
     // Literal object creation is monomorphic in ordinary PHP code. After the
     // first canonical name lookup, use the stable numeric class index instead
     // of hashing the same class name on every allocation.
-    let class_def = if ic.class_id != 0 {
+    let class_def = if !dynamic_static_scope && ic.class_id != 0 {
         eg.class_by_id(ic.class_id)
     } else {
-        eg.class_table.get(name).map(std::rc::Rc::as_ref)
+        eg.find_class(&name)
     };
 
     // Reject instantiation of interfaces, abstract classes, and internal-only classes
@@ -246,7 +274,7 @@ fn op_new_obj<'a>(
                     && eg
                         .generic_metadata
                         .symbol(declaration.owner)
-                        .is_some_and(|owner| owner.eq_ignore_ascii_case(name))
+                        .is_some_and(|owner| owner.eq_ignore_ascii_case(&name))
             })
     }) {
         let object = unsafe { &*result_ptr };
@@ -1453,6 +1481,8 @@ fn init_resolved_user_call(
     explicit_args: u32,
     resolved: crate::stdlib::ResolvedCallback,
 ) {
+    let called_scope_class_id = resolved.called_scope_class_id;
+    let bound_this = resolved.bound_this;
     let signature = unsafe { &(*resolved.func_ptr).sig };
     let public_end = signature.this_offset + explicit_args;
     let capture_end = signature.num_args + resolved.use_vars.len() as u32;
@@ -1467,6 +1497,9 @@ fn init_resolved_user_call(
     );
     unsafe {
         (*frame).call = call;
+    }
+    if called_scope_class_id != 0 {
+        publish_late_static_call_class_id(eg, call, called_scope_class_id);
     }
 
     // push_call_frame leaves the whole requested argument prefix
@@ -1487,6 +1520,7 @@ fn init_resolved_user_call(
         let destination = unsafe { (*call).cv_mut(capture_offset + index as u32) } as *mut Value;
         unsafe { frame_slot_init(call, destination, value) };
     }
+    initialize_bound_this_frame(call, resolved.func_ptr, bound_this);
 }
 
 #[inline(never)]
@@ -1502,6 +1536,7 @@ fn op_init_dynamic_call(
         // Fast path: Closure value — direct function pointer, no string lookup.
         let func_ptr = closure.func;
         let called_scope_class_id = closure.called_scope_class_id;
+        let bound_this = closure.bound_this.clone();
         let num_args = opline.extended_value;
         let pending_call = unsafe { (*frame).call };
         let call = eg.vm_stack.push_call_frame(
@@ -1540,6 +1575,7 @@ fn op_init_dynamic_call(
                 }
             }
         }
+        initialize_bound_this_frame(call, func_ptr, bound_this);
     } else if let Some(arr) = callable.as_array() {
         // Legacy array callable: [class_or_object, method_name]
         let arr_len = arr.len();

@@ -320,6 +320,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     let result_ptr = unsafe { (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.result as usize) };
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
+                    write_array_union_result(frame, opline.result, left, right);
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for +".into()));
                 }
@@ -340,6 +342,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
+                    write_array_union_result(frame, opline.result, left, right);
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for +".into()));
                 }
@@ -612,6 +616,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 } else if let (Some(d1), Some(d2)) = (op1.to_double(), op2.to_double()) {
                     unsafe { frame_tmp_set(frame, result_ptr, Value::double(d1 + d2)) };
+                } else if let (Some(left), Some(right)) = (op1.as_array(), op2.as_array()) {
+                    write_array_union_result(frame, opline.result, left, right);
                 } else {
                     return Err(VmError::Fatal("Unsupported operand types for +".into()));
                 }
@@ -2237,7 +2243,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                     };
                     let val = fetched.cloned().unwrap_or(Value::null());
-                    unsafe { slot_set(result_ptr, val) };
+                    write_fetch_dim_result(frame, result_ptr, val);
                 } else if let Some(s) = arr_val.as_str() {
                     // String offset access: $s[0] — PHP strings are byte-oriented
                     let bytes = s.as_bytes();
@@ -2255,12 +2261,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             Value::string("")
                         };
-                        unsafe { slot_set(result_ptr, val) };
+                        write_fetch_dim_result(frame, result_ptr, val);
                     } else {
-                        unsafe { slot_set(result_ptr, Value::null()) };
+                        write_fetch_dim_result(frame, result_ptr, Value::null());
                     }
                 } else {
-                    unsafe { slot_set(result_ptr, Value::null()) };
+                    write_fetch_dim_result(frame, result_ptr, Value::null());
                 }
             }
 

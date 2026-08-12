@@ -26,7 +26,7 @@ cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
 
 "$php_bin" -r '
 $summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
-if ($summary["schema_version"] !== 4
+if ($summary["schema_version"] !== 5
     || $summary["total"] !== 14
     || $summary["statuses"]["pass"] !== 12
     || $summary["statuses"]["skip"] !== 1
@@ -41,6 +41,32 @@ if ($summary["schema_version"] !== 4
         "front_end_rejected" => 2,
         "runtime_reached" => 10,
         "runtime_reach_rate" => 10 / 12,
+    ]
+    || $summary["expectation_profiles"] !== [
+        "diagnostic" => [
+            "pass" => 2,
+            "fail" => 0,
+            "skip" => 0,
+            "xfail" => 0,
+            "unsupported" => 0,
+            "timeout" => 0,
+            "crash" => 0,
+            "total" => 2,
+            "headline_pass_rate" => 1,
+            "attempted_pass_rate" => 1,
+        ],
+        "ordinary" => [
+            "pass" => 10,
+            "fail" => 0,
+            "skip" => 1,
+            "xfail" => 1,
+            "unsupported" => 0,
+            "timeout" => 0,
+            "crash" => 0,
+            "total" => 12,
+            "headline_pass_rate" => 1,
+            "attempted_pass_rate" => 1,
+        ],
     ]
 ) {
     fwrite(STDERR, "unexpected PHPT runner fixture summary\n");
@@ -79,6 +105,9 @@ if ($profile !== [
 require $argv[1];
 if (classify_failure("Parse error: emitted by user code", 0) !== "output"
     || classify_failure("Parse error: emitted by the parser", 1) !== "parse"
+    || expectation_profile(["EXPECT" => "Error is ordinary user data"]) !== "ordinary"
+    || expectation_profile(["EXPECTF" => "Fatal error: broken in %s on line %d"]) !== "diagnostic"
+    || expectation_profile(["EXPECT" => "prefix\nWarning: broken"]) !== "diagnostic"
 ) {
     fwrite(STDERR, "unexpected execution-phase classification\n");
     exit(1);

@@ -538,30 +538,41 @@ impl Parser {
         Self::is_variable_like(expr) || matches!(expr, Expr::PropertyAccess { .. })
     }
 
-    /// Check if current $var[...] is an array assignment ($var[idx] =).
-    /// Scans ahead from pos+2 (inside brackets) to find matching ] then =.
+    /// Check if current `$var[...]...` chain ends in an assignment. Bracketed
+    /// index expressions may themselves contain nested brackets or calls.
     fn is_array_assign(&self) -> bool {
-        let mut i = self.pos + 2; // skip $var and [
-        let mut depth = 1;
-        while i < self.tokens.len() && depth > 0 {
-            match &self.tokens[i] {
-                Token::LBracket | Token::LParen => depth += 1,
-                Token::RBracket => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return self.tokens.get(i + 1) == Some(&Token::Assign);
-                    }
-                }
-                Token::RParen => {
-                    if depth > 1 {
-                        depth -= 1;
-                    }
-                }
-                _ => {}
-            }
+        let mut i = self.pos + 1;
+        let mut saw_dimension = false;
+        while self.tokens.get(i) == Some(&Token::LBracket) {
+            saw_dimension = true;
+            let mut depth = 1usize;
             i += 1;
+            while i < self.tokens.len() && depth != 0 {
+                match &self.tokens[i] {
+                    Token::LBracket | Token::LParen => depth += 1,
+                    Token::RBracket | Token::RParen => depth -= 1,
+                    _ => {}
+                }
+                i += 1;
+            }
+            if depth != 0 {
+                return false;
+            }
+            if !matches!(self.tokens.get(i - 1), Some(Token::RBracket)) {
+                return false;
+            }
         }
-        false
+        saw_dimension && self.tokens.get(i) == Some(&Token::Assign)
+    }
+
+    fn split_array_access(mut expr: Expr) -> (Expr, Vec<Expr>) {
+        let mut indices = Vec::new();
+        while let Expr::ArrayAccess { array, index } = expr {
+            indices.push(*index);
+            expr = *array;
+        }
+        indices.reverse();
+        (expr, indices)
     }
 
     /// Check if `[` at current position starts a short list destructuring pattern.

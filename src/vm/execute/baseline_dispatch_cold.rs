@@ -1855,10 +1855,14 @@ fn op_create_closure(
     } else {
         0
     };
+    let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
+    let bound_this = closure_bound_this(frame, op_array, is_static);
     let closure = PhpClosure {
         identity: std::rc::Rc::new(()),
         func: func_ptr,
         called_scope_class_id,
+        is_static,
+        bound_this,
         captures: Vec::with_capacity(opline.extended_value as usize),
         has_heap_captures: false,
     };
