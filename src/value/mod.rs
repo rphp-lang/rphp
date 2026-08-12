@@ -1,5 +1,5 @@
 use std::borrow::Borrow;
-use std::cell::{Cell, OnceCell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell, UnsafeCell};
 use std::collections::{HashMap, hash_map::Entry};
 use std::fmt::Write as _;
 use std::hash::{BuildHasherDefault, Hasher};
@@ -2588,6 +2588,29 @@ impl PhpArray {
         }
     }
 
+    /// Replace an existing entry by iteration position without changing array
+    /// structure. Used by the baseline by-reference foreach writeback path
+    /// after the owning Value has completed copy-on-write detachment.
+    pub(crate) fn set_value_at(&mut self, pos: usize, value: Value) -> bool {
+        let slot = match &mut self.storage {
+            ArrayStorage::Packed(values) => values.get_mut(pos),
+            ArrayStorage::SmallHash(small) => small
+                .entries
+                .get_mut(pos)
+                .and_then(Option::as_mut)
+                .map(|entry| &mut entry.1),
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get_mut(pos).map(|entry| &mut entry.1)
+            }
+            ArrayStorage::Hash { entries, .. } => entries.get_mut(pos).map(|entry| &mut entry.1),
+        };
+        let Some(slot) = slot else {
+            return false;
+        };
+        *slot = value;
+        true
+    }
+
     /// Iterate over (key, &value) pairs — works for both packed and hash modes.
     /// No transition, no allocation for packed arrays.
     /// This is the preferred read-only iteration method.
@@ -3041,16 +3064,36 @@ impl ExactSizeIterator for PhpArrayValues<'_> {}
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
         let cloned_storage = match &self.storage {
-            ArrayStorage::Packed(values) => ArrayStorage::Packed(values.clone()),
-            ArrayStorage::SmallHash(small) => ArrayStorage::SmallHash(small.clone()),
-            ArrayStorage::LinearHash(linear) => ArrayStorage::LinearHash(linear.clone()),
+            ArrayStorage::Packed(values) => {
+                ArrayStorage::Packed(values.iter().map(Value::clone_for_array_cow).collect())
+            }
+            ArrayStorage::SmallHash(small) => {
+                let mut cloned = SmallHashStorage::new();
+                for (key, value) in small.entries.iter().flatten() {
+                    let inserted = cloned.push(key.clone(), value.clone_for_array_cow());
+                    debug_assert!(inserted);
+                }
+                ArrayStorage::SmallHash(cloned)
+            }
+            ArrayStorage::LinearHash(linear) => {
+                ArrayStorage::LinearHash(LinearHashStorage::from_entries(
+                    linear
+                        .entries
+                        .iter()
+                        .map(|(key, value)| (key.clone(), value.clone_for_array_cow()))
+                        .collect(),
+                ))
+            }
             ArrayStorage::Hash {
                 entries,
                 str_index,
                 int_index,
                 verified_int_prefix,
             } => ArrayStorage::Hash {
-                entries: entries.clone(),
+                entries: entries
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone_for_array_cow()))
+                    .collect(),
                 str_index: str_index.clone(),
                 int_index: int_index.clone(),
                 verified_int_prefix: *verified_int_prefix,
@@ -3200,6 +3243,8 @@ pub enum ValueType {
 }
 
 impl Value {
+    const OWNED_REFERENCE_FLAG: u32 = 1 << 8;
+
     #[inline]
     pub fn undef() -> Self {
         Self {
@@ -3976,6 +4021,55 @@ impl Value {
         }
     }
 
+    /// Create a stable reference target shared by frame variables and array
+    /// elements. Unlike a borrowed frame-slot reference, this target remains
+    /// live while any owned reference handle can reach it.
+    #[inline]
+    pub(crate) fn owned_reference(value: Value) -> Self {
+        let target = Rc::new(UnsafeCell::new(value));
+        Self {
+            data: ValueData {
+                ptr: Rc::into_raw(target) as *mut u8,
+            },
+            type_info: ValueType::Reference as u32 | Self::OWNED_REFERENCE_FLAG,
+            _not_send: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn is_owned_reference(&self) -> bool {
+        self.value_type() == ValueType::Reference
+            && self.type_info & Self::OWNED_REFERENCE_FLAG != 0
+    }
+
+    /// Clone an owned reference as an alias instead of reading its target.
+    /// Array copy-on-write must preserve explicit PHP reference cells.
+    #[inline]
+    pub(crate) fn clone_owned_reference_alias(&self) -> Self {
+        debug_assert!(self.is_owned_reference());
+        // SAFETY: owned-reference construction stores an `Rc<UnsafeCell<Value>>`
+        // raw pointer and every alias balances this increment in `Drop`.
+        unsafe {
+            Rc::increment_strong_count(self.data.ptr as *const UnsafeCell<Value>);
+        }
+        Self {
+            data: ValueData {
+                ptr: unsafe { self.data.ptr },
+            },
+            type_info: self.type_info,
+            _not_send: PhantomData,
+        }
+    }
+
+    #[inline]
+    fn clone_for_array_cow(&self) -> Self {
+        if self.is_owned_reference() {
+            self.clone_owned_reference_alias()
+        } else {
+            self.clone()
+        }
+    }
+
     /// Check if this value is a reference.
     #[inline]
     pub fn is_reference(&self) -> bool {
@@ -3985,30 +4079,36 @@ impl Value {
     #[inline]
     #[cfg(not(feature = "resource-lifetime"))]
     pub fn needs_cleanup(&self) -> bool {
-        matches!(
-            self.value_type(),
-            ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure
-        )
+        self.is_owned_reference()
+            || matches!(
+                self.value_type(),
+                ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure
+            )
     }
 
     #[inline]
     #[cfg(feature = "resource-lifetime")]
     pub fn needs_cleanup(&self) -> bool {
-        matches!(
-            self.value_type(),
-            ValueType::String
-                | ValueType::Array
-                | ValueType::Object
-                | ValueType::Resource
-                | ValueType::Closure
-        )
+        self.is_owned_reference()
+            || matches!(
+                self.value_type(),
+                ValueType::String
+                    | ValueType::Array
+                    | ValueType::Object
+                    | ValueType::Resource
+                    | ValueType::Closure
+            )
     }
 
     /// Get the target pointer of a reference value.
     /// SAFETY: only valid when is_reference() is true.
     #[inline]
     pub unsafe fn as_ref_ptr(&self) -> *mut Value {
-        self.data.ptr as *mut Value
+        if self.is_owned_reference() {
+            (*(self.data.ptr as *const UnsafeCell<Value>)).get()
+        } else {
+            self.data.ptr as *mut Value
+        }
     }
 
     /// Create a shared handle for one request-owned resource-registry entry.
@@ -4119,7 +4219,9 @@ impl Clone for Value {
             }
             ValueType::Reference => {
                 // Clone a reference: clone the TARGET value (dereference + deep clone)
-                let target = unsafe { &*(self.data.ptr as *const Value) };
+                // SAFETY: both borrowed and owned reference constructors keep
+                // their target live for every Value that can reach this clone.
+                let target = unsafe { &*self.as_ref_ptr() };
                 target.clone()
             }
             _ => Self {
@@ -4157,7 +4259,14 @@ impl Drop for Value {
             ValueType::Closure => {
                 unsafe { drop(Box::from_raw(self.data.ptr as *mut PhpClosure)) };
             }
-            // Reference doesn't own the target — no-op
+            ValueType::Reference if self.is_owned_reference() => {
+                // SAFETY: owned references store the raw pointer produced by
+                // `Rc::into_raw`; each owned alias increments the same count.
+                unsafe {
+                    Rc::decrement_strong_count(self.data.ptr as *const UnsafeCell<Value>);
+                }
+            }
+            // Borrowed references do not own their frame-slot target.
             _ => {}
         }
     }

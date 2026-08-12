@@ -9833,7 +9833,7 @@ compatibility denominator.
 
 The full default, no-default-features, erased-generics, reified-generics, and
 all-features test matrix passes. The CI formatting and all-target check passes,
-including its unsafe-policy ratchet at 1,623 blocks against a ceiling of 1,623.
+including its unsafe-policy ratchet at 1,613 blocks against a ceiling of 1,623.
 
 #### Composer S0 vendor-autoload gate (2026-08-12)
 
@@ -9900,6 +9900,40 @@ only to evade one discovered branch. Promote the global contract to at least
 PHP 8.4.1 (`80401`) only after the PHP 8.4 language, native lazy-object and
 Reflection gates are complete; this promotion is the entry condition for the
 pinned Symfony 8.1 follow-up.
+
+#### Symfony EventDispatcher S1 gate (2026-08-12)
+
+The first S1 component gate now passes with unmodified vendor sources. The
+repository fixture pins `symfony/event-dispatcher` v7.4.15 at
+`336e7f3b9e95aba04f93ea9143920c2186abfbb9`,
+`symfony/event-dispatcher-contracts` v3.7.1 at
+`c7de7a00ffb67842132da02ea92988a39ccd9f4e`, and
+`psr/event-dispatcher` 1.0.0 at
+`dbefd12671e8a14ec7f180cab83036ed26714bb0`. Reference PHP installs the exact
+lock with the checksum-pinned Composer 2.8.12 PHAR. The same generated
+`vendor/autoload.php` and vendor tree then run under RPHP and must dispatch two
+static callable listeners in descending priority order, return the original
+event, and print exactly `high>low|same`. The local entry point is
+`scripts/test-symfony-event-dispatcher-s1.sh`; CI owns the matching
+`Symfony EventDispatcher S1` job.
+
+The blockers discovered from that unmodified code closed reusable language and
+VM paths rather than adding component-specific branches: null-coalescing
+assignment, by-reference `foreach` writeback, nested array append and append-by-
+reference, reference-aware nested built-in arguments, callable arrays, parsing
+of closure reference captures and first-class callable/unpack syntax, and PHP's
+acceptance of excess arguments to userland functions. Focused parser and E2E
+regressions retain those paths. The unsafe-policy ratchet remains at its prior
+ceiling; the new pointer operations are contained within documented VM safety
+boundaries.
+
+This is a bounded admission of the exercised synchronous dispatch path, not a
+claim that every EventDispatcher branch is complete. Generic argument unpack,
+closure reference-capture identity, full first-class `Closure` identity and the
+post-loop lifetime of a by-reference `foreach` alias still require their own
+semantic gates. S1 now proceeds to an unmodified HttpFoundation
+`Request`/`Response` fixture before compiled Routing and a prebuilt DI
+container.
 
 ### S1/S3 blockers: language and object model
 

@@ -11,6 +11,7 @@ pub enum ListTarget {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CallArg {
     Positional(Expr),
+    Unpack(Expr),
     Named { name: String, value: Expr },
 }
 
@@ -18,7 +19,7 @@ impl CallArg {
     /// Return a reference to the underlying expression.
     pub fn expr(&self) -> &Expr {
         match self {
-            CallArg::Positional(e) => e,
+            CallArg::Positional(e) | CallArg::Unpack(e) => e,
             CallArg::Named { value, .. } => value,
         }
     }
@@ -90,7 +91,7 @@ pub enum Expr {
         // [static] function($x) use($y) { ... }: ReturnType
         is_static: bool,
         params: Vec<Param>,
-        use_vars: Vec<String>,
+        use_vars: Vec<(String, bool)>, // (name, captured by reference)
         body: Vec<Stmt>,
         return_type: Option<TypeHint>,
         generic_params: Vec<GenericParameter>,
@@ -160,6 +161,7 @@ pub enum Expr {
         args: Vec<CallArg>,
         generic_args: Vec<TypeHint>,
     },
+    FirstClassCallable(Box<Expr>),
     Instanceof {
         // $obj instanceof ClassName
         expr: Box<Expr>,
@@ -240,6 +242,7 @@ impl Expr {
             Expr::DynamicCall { callable, args, .. } => {
                 callable.contains_yield() || args.iter().any(CallArg::contains_yield)
             }
+            Expr::FirstClassCallable(callable) => callable.contains_yield(),
             // A closure has its own suspension context; declaring it does not
             // suspend the surrounding expression.
             Expr::Closure { .. }
@@ -385,6 +388,10 @@ pub enum Stmt {
         var: String,
         expr: Expr,
     },
+    CoalesceAssign {
+        target: Expr,
+        expr: Expr,
+    },
     If {
         condition: Expr,
         then_body: Vec<Stmt>,
@@ -436,10 +443,21 @@ pub enum Stmt {
         var: String,
         expr: Expr,
     },
+    ArrayAppend {
+        // $obj->items[$key][] = expr or Class::$items[] = expr
+        target: Expr,
+        expr: Expr,
+    },
+    BindArrayAppendReference {
+        // $ref = &$obj->items[$key][]
+        var: String,
+        target: Expr,
+    },
     Foreach {
         array: Expr,
         value_var: String,
         key_var: Option<String>,
+        by_ref: bool,
         body: Vec<Stmt>,
     },
     Unset(Vec<Expr>),

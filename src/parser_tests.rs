@@ -25,6 +25,112 @@ fn test_parse_assign_echo() {
 }
 
 #[test]
+fn test_parse_null_coalescing_assignments() {
+    let tokens = Lexer::new("<?php $value ??= 42; $items[1] ??= 'fallback';")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert_eq!(
+        stmts,
+        vec![
+            Stmt::CoalesceAssign {
+                target: Expr::Variable("value".into()),
+                expr: Expr::Integer(42),
+            },
+            Stmt::CoalesceAssign {
+                target: Expr::ArrayAccess {
+                    array: Box::new(Expr::Variable("items".into())),
+                    index: Box::new(Expr::Integer(1)),
+                },
+                expr: Expr::StringLiteral("fallback".into()),
+            },
+        ]
+    );
+}
+
+#[test]
+fn test_parse_foreach_value_reference() {
+    let tokens = Lexer::new("<?php foreach ($items as $key => &$value) { $value += 1; }")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    let Stmt::Foreach {
+        value_var,
+        key_var,
+        by_ref,
+        ..
+    } = &stmts[0]
+    else {
+        panic!("expected foreach statement");
+    };
+    assert_eq!(value_var, "value");
+    assert_eq!(key_var.as_deref(), Some("key"));
+    assert!(*by_ref);
+}
+
+#[test]
+fn test_parse_nested_array_append() {
+    let tokens = Lexer::new("<?php $store->listeners['event'][10][] = 'listener';")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::ArrayAppend {
+            target: Expr::ArrayAccess { .. },
+            expr: Expr::StringLiteral(value),
+        } if value == "listener"
+    ));
+}
+
+#[test]
+fn test_parse_bind_appended_array_element_reference() {
+    let tokens = Lexer::new("<?php $slot = &$store->items['group'][];")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::BindArrayAppendReference {
+            var,
+            target: Expr::ArrayAccess { .. },
+        } if var == "slot"
+    ));
+}
+
+#[test]
+fn test_parse_closure_reference_captures() {
+    let tokens = Lexer::new("<?php $fn = static function() use (&$left, &$right) {};")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    let Stmt::Assign {
+        expr: Expr::Closure { use_vars, .. },
+        ..
+    } = &stmts[0]
+    else {
+        panic!("expected closure assignment");
+    };
+    assert_eq!(
+        use_vars,
+        &vec![("left".to_string(), true), ("right".to_string(), true)]
+    );
+}
+
+#[test]
+fn test_parse_first_class_callable_and_argument_unpack() {
+    let tokens = Lexer::new("<?php ($callable = $listener(...))(...$args);")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::ExprStmt(Expr::DynamicCall { args, .. })
+            if matches!(args.as_slice(), [CallArg::Unpack(Expr::Variable(name))] if name == "args")
+    ));
+}
+
+#[test]
 fn test_parse_add() {
     let tokens = Lexer::new("<?php echo 20 + 22;").tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();

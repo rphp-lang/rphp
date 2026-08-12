@@ -13,14 +13,370 @@ enum ArrayRootWriteback {
     },
 }
 
-struct MutableArrayPath {
+pub(super) struct MutableArrayPath {
     root: (u16, OpType),
     containers: Vec<(u16, OpType)>,
     keys: Vec<(u16, OpType)>,
     writeback: ArrayRootWriteback,
 }
 
+enum CoalesceWrite {
+    Variable(u16),
+    ObjectProperty {
+        object: u16,
+        object_type: OpType,
+        property: u16,
+    },
+    StaticProperty {
+        class: u16,
+        property: u16,
+        dynamic: bool,
+    },
+    Array(MutableArrayPath),
+}
+
+pub(super) enum ForeachArrayWriteback {
+    Variable(u16),
+    ObjectProperty {
+        object: u16,
+        object_type: OpType,
+        property: u16,
+    },
+    StaticProperty {
+        class: u16,
+        property: u16,
+        dynamic: bool,
+    },
+    Array(MutableArrayPath),
+}
+
 impl Compiler {
+    pub(super) fn compile_foreach_reference_source(
+        &mut self,
+        source: &Expr,
+    ) -> Result<(u16, OpType, ForeachArrayWriteback), String> {
+        match source {
+            Expr::Variable(var) => {
+                let cv = self.resolve_cv(var);
+                Ok((cv, OpType::Cv, ForeachArrayWriteback::Variable(cv)))
+            }
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                Ok((
+                    current,
+                    OpType::Tmp,
+                    ForeachArrayWriteback::ObjectProperty {
+                        object,
+                        object_type,
+                        property,
+                    },
+                ))
+            }
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => {
+                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
+                let class = self.add_literal(Value::string(resolved));
+                let property = self.add_literal(Value::string(property.clone()));
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(if dynamic {
+                    OpCode::FetchLateStaticProp
+                } else {
+                    OpCode::FetchStaticProp
+                });
+                fetch.op1 = class;
+                fetch.op1_type = OpType::Const;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                Ok((
+                    current,
+                    OpType::Tmp,
+                    ForeachArrayWriteback::StaticProperty {
+                        class,
+                        property,
+                        dynamic,
+                    },
+                ))
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = source;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                let path = self.compile_mutable_array_path(root, &reversed_indices)?;
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDimR);
+                fetch.op1 = container;
+                fetch.op1_type = container_type;
+                fetch.op2 = key;
+                fetch.op2_type = key_type;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                Ok((
+                    current,
+                    OpType::Tmp,
+                    ForeachArrayWriteback::Array(path),
+                ))
+            }
+            _ => Err("Foreach by-reference source must be a mutable array l-value".into()),
+        }
+    }
+
+    pub(super) fn emit_foreach_reference_source_writeback(
+        &mut self,
+        writeback: ForeachArrayWriteback,
+        array: u16,
+    ) {
+        match writeback {
+            ForeachArrayWriteback::Variable(cv) => {
+                let mut assign = Instruction::new(OpCode::AssignCv);
+                assign.op1 = cv;
+                assign.op1_type = OpType::Cv;
+                assign.op2 = array;
+                assign.op2_type = OpType::Tmp;
+                self.instructions.push(assign);
+            }
+            ForeachArrayWriteback::ObjectProperty {
+                object,
+                object_type,
+                property,
+            } => {
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = array;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+            }
+            ForeachArrayWriteback::StaticProperty {
+                class,
+                property,
+                dynamic,
+            } => {
+                let mut assign = Instruction::new(if dynamic {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                assign.op1 = class;
+                assign.op1_type = OpType::Const;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = array;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+            }
+            ForeachArrayWriteback::Array(path) => {
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let mut assign = Instruction::new(OpCode::AssignDim);
+                assign.op1 = container;
+                assign.op1_type = container_type;
+                assign.op2 = key;
+                assign.op2_type = key_type;
+                assign.result = array;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+            }
+        }
+    }
+
+    fn compile_coalesce_assign_statement(
+        &mut self,
+        target: &Expr,
+        expr: &Expr,
+    ) -> Result<(), String> {
+        let (current, current_type, write) = match target {
+            Expr::Variable(var) => {
+                let cv = self.resolve_cv(var);
+                (cv, OpType::Cv, CoalesceWrite::Variable(cv))
+            }
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    current,
+                    OpType::Tmp,
+                    CoalesceWrite::ObjectProperty {
+                        object,
+                        object_type,
+                        property,
+                    },
+                )
+            }
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => {
+                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
+                let class = self.add_literal(Value::string(resolved));
+                let property = self.add_literal(Value::string(property.clone()));
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(if dynamic {
+                    OpCode::FetchLateStaticProp
+                } else {
+                    OpCode::FetchStaticProp
+                });
+                fetch.op1 = class;
+                fetch.op1_type = OpType::Const;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (
+                    current,
+                    OpType::Tmp,
+                    CoalesceWrite::StaticProperty {
+                        class,
+                        property,
+                        dynamic,
+                    },
+                )
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = target;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                let path = self.compile_mutable_array_path(root, &reversed_indices)?;
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let current = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDimR);
+                fetch.op1 = container;
+                fetch.op1_type = container_type;
+                fetch.op2 = key;
+                fetch.op2_type = key_type;
+                fetch.result = current;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (current, OpType::Tmp, CoalesceWrite::Array(path))
+            }
+            _ => return Err("Invalid null-coalescing assignment target".into()),
+        };
+
+        let isset = self.alloc_tmp();
+        let mut check = Instruction::new(OpCode::Isset);
+        check.op1 = current;
+        check.op1_type = current_type;
+        check.result = isset;
+        check.result_type = OpType::Tmp;
+        self.instructions.push(check);
+
+        let skip_write = self.instructions.len();
+        let mut jump = Instruction::new(OpCode::JmpNZ);
+        jump.op1 = isset;
+        jump.op1_type = OpType::Tmp;
+        jump.op2 = 0;
+        self.instructions.push(jump);
+
+        let (value, value_type) = self.compile_expr(expr);
+        match write {
+            CoalesceWrite::Variable(cv) => {
+                let mut assign = Instruction::new(OpCode::AssignCv);
+                assign.op1 = cv;
+                assign.op1_type = OpType::Cv;
+                assign.op2 = value;
+                assign.op2_type = value_type;
+                self.instructions.push(assign);
+            }
+            CoalesceWrite::ObjectProperty {
+                object,
+                object_type,
+                property,
+            } => {
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = value;
+                assign.result_type = value_type;
+                self.instructions.push(assign);
+            }
+            CoalesceWrite::StaticProperty {
+                class,
+                property,
+                dynamic,
+            } => {
+                let mut assign = Instruction::new(if dynamic {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                assign.op1 = class;
+                assign.op1_type = OpType::Const;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = value;
+                assign.result_type = value_type;
+                self.instructions.push(assign);
+            }
+            CoalesceWrite::Array(path) => {
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let mut assign = Instruction::new(OpCode::AssignDim);
+                assign.op1 = container;
+                assign.op1_type = container_type;
+                assign.op2 = key;
+                assign.op2_type = key_type;
+                assign.result = value;
+                assign.result_type = value_type;
+                self.instructions.push(assign);
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+            }
+        }
+
+        self.instructions[skip_write].op2 = self.instructions.len() as u16;
+        Ok(())
+    }
+
     fn compile_mutable_array_path(
         &mut self,
         root: &Expr,
@@ -232,6 +588,9 @@ impl Compiler {
                     assign.op2 = operand;
                     self.instructions.push(assign);
                 }
+            }
+            Stmt::CoalesceAssign { target, expr } => {
+                self.compile_coalesce_assign_statement(target, expr)?;
             }
             Stmt::If {
                 condition,
@@ -735,14 +1094,46 @@ impl Compiler {
                 instr.op2 = val_op;
                 self.instructions.push(instr);
             }
+            Stmt::ArrayAppend { target, expr } => {
+                let (array, array_type, writeback) =
+                    self.compile_foreach_reference_source(target)?;
+                let (value, value_type) = self.compile_expr(expr);
+                let mut append = Instruction::new(OpCode::ArrayPushOp);
+                append.op1 = array;
+                append.op1_type = array_type;
+                append.op2 = value;
+                append.op2_type = value_type;
+                self.instructions.push(append);
+                self.emit_foreach_reference_source_writeback(writeback, array);
+            }
+            Stmt::BindArrayAppendReference { var, target } => {
+                let (array, array_type, writeback) =
+                    self.compile_foreach_reference_source(target)?;
+                let cv = self.resolve_cv(var);
+                let mut bind = Instruction::new(OpCode::BindArrayAppendRef);
+                bind.op1 = array;
+                bind.op1_type = array_type;
+                bind.result = cv;
+                bind.result_type = OpType::Cv;
+                self.instructions.push(bind);
+                self.emit_foreach_reference_source_writeback(writeback, array);
+            }
             Stmt::Foreach {
                 array,
                 value_var,
                 key_var,
+                by_ref,
                 body,
             } => {
                 // Compile array expression
-                let (arr_op, arr_type) = self.compile_expr(array);
+                let (arr_op, arr_type, reference_writeback) = if *by_ref {
+                    let (op, op_type, writeback) =
+                        self.compile_foreach_reference_source(array)?;
+                    (op, op_type, Some(writeback))
+                } else {
+                    let (op, op_type) = self.compile_expr(array);
+                    (op, op_type, None)
+                };
 
                 // ForeachInit: copy array to TMP, position counter TMP
                 let arr_copy_tmp = self.alloc_tmp();
@@ -763,7 +1154,11 @@ impl Compiler {
                 let key_cv = key_var.as_ref().map(|k| self.resolve_cv(k));
 
                 let done_tmp = self.alloc_tmp();
-                let mut next = Instruction::new(OpCode::ForeachNext);
+                let mut next = Instruction::new(if *by_ref {
+                    OpCode::ForeachNextRef
+                } else {
+                    OpCode::ForeachNext
+                });
                 next.op1_type = OpType::Tmp;
                 next.op1 = arr_copy_tmp; // array copy
                 next.op2_type = OpType::Tmp;
@@ -805,13 +1200,28 @@ impl Compiler {
                 jmp_back.op1 = loop_start as u16;
                 self.instructions.push(jmp_back);
 
+                // By-reference loops flush their current value on `break` and
+                // write the detached iteration array back to its source l-value.
+                let epilogue = self.instructions.len() as u16;
+                if let Some(writeback) = reference_writeback {
+                    let mut flush = Instruction::new(OpCode::ForeachWriteback);
+                    flush.op1 = arr_copy_tmp;
+                    flush.op1_type = OpType::Tmp;
+                    flush.op2 = pos_tmp;
+                    flush.op2_type = OpType::Tmp;
+                    flush.result = val_cv;
+                    flush.result_type = OpType::Cv;
+                    self.instructions.push(flush);
+                    self.emit_foreach_reference_source_writeback(writeback, arr_copy_tmp);
+                }
+
                 // Patch jumps
                 let after_loop = self.instructions.len() as u16;
                 self.instructions[foreach_init_idx].op2 = after_loop; // empty array jump
-                self.instructions[jmpz_idx].op2 = after_loop;
+                self.instructions[jmpz_idx].op2 = epilogue;
                 let ctx = self.loop_stack.pop().unwrap();
                 for patch_idx in ctx.break_patches {
-                    self.instructions[patch_idx].op1 = after_loop;
+                    self.instructions[patch_idx].op1 = epilogue;
                 }
                 // continue_patches already resolved (target was known)
             }

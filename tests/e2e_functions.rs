@@ -427,18 +427,10 @@ fn test_e2e_user_function_scope_isolation() {
 
 #[test]
 fn test_e2e_too_many_args() {
-    let err =
-        run_php_expect_error("<?php function add($a, $b) { return $a + $b; } echo add(1, 2, 3);");
-    match err {
-        execute::VmError::Fatal(msg) => {
-            assert!(
-                msg.contains("Too many arguments"),
-                "Expected 'Too many arguments', got: {}",
-                msg
-            );
-        }
-        _ => panic!("Expected Fatal error, got: {:?}", err),
-    }
+    assert_eq!(
+        run_php("<?php function add($a, $b) { return $a + $b; } echo add(1, 2, 3);"),
+        "3"
+    );
 }
 
 #[test]
@@ -482,14 +474,12 @@ fn test_e2e_redeclare_function() {
 
 #[test]
 fn test_e2e_too_many_args_no_corruption() {
-    let err =
-        run_php_expect_error("<?php function add($a, $b) { return $a + $b; } echo add(1, 2, 3);");
-    match err {
-        execute::VmError::Fatal(msg) => {
-            assert!(msg.contains("Too many arguments"));
-        }
-        _ => panic!("Expected Fatal error"),
-    }
+    assert_eq!(
+        run_php(
+            "<?php function add($a, $b) { $sum = $a + $b; return $sum; } echo add(1, 2, 999), '|', add(4, 5, 888);"
+        ),
+        "3|9"
+    );
 }
 
 #[test]

@@ -107,17 +107,39 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
         match opline.opcode {
             OpCode::AssignCv => {
                 // ASSIGN_CV op1=CV(dest), op2=value, result=optional copy
-                let val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let cloned = val.clone();
-                let dest = unsafe { (*frame).get_op_mut(opline.op1 as u32, opline.op1_type) };
-                if opline.result_type != OpType::Unused {
-                    // Need two copies: one for dest, one for result
-                    unsafe { slot_set(dest, cloned.clone()) };
-                    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-                    unsafe { slot_set(result_ptr, cloned) };
-                } else {
-                    // Common path: just move the single clone into dest
-                    unsafe { slot_set(dest, cloned) };
+                // SAFETY: `frame` is the active VM frame and every operand was
+                // allocated by this op-array. The slot helpers preserve the
+                // frame cleanup metadata for TMP/VAR destinations.
+                unsafe {
+                    let val = &*(*frame).get_op_ptr(
+                        opline.op2 as u32,
+                        opline.op2_type,
+                        op_array,
+                    );
+                    let cloned = val.clone();
+                    let dest = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    if opline.result_type != OpType::Unused {
+                        // Need two copies: one for dest, one for result
+                        if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, dest, cloned.clone());
+                        } else {
+                            slot_set(dest, cloned.clone());
+                        }
+                        let result_ptr =
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, result_ptr, cloned);
+                        } else {
+                            slot_set(result_ptr, cloned);
+                        }
+                    } else {
+                        // Common path: just move the single clone into dest
+                        if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                            frame_tmp_set(frame, dest, cloned);
+                        } else {
+                            slot_set(dest, cloned);
+                        }
+                    }
                 }
             }
 
@@ -1552,24 +1574,36 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::SendRef => {
                 // Send reference to caller's CV into callee frame
-                // op1 = CV index in caller, op1_type must be CV
+                // op1 = mutable CV/TMP/VAR slot in caller
                 // op2 = argument number in callee (0-based)
-                debug_assert!(opline.op1_type == OpType::Cv);
-                let caller_cv_ptr = unsafe {
-                    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-                    let raw_ptr = base.add(opline.op1 as usize);
-                    // If caller's CV is itself a reference, forward the target
-                    if (*raw_ptr).is_reference() {
-                        (*raw_ptr).as_ref_ptr()
+                // SAFETY: the compiler emits a mutable frame operand and a
+                // declared callee argument slot. References are forwarded
+                // without reinterpreting external targets as frame offsets.
+                unsafe {
+                    let caller_cv_ptr =
+                    if opline.op1_type == OpType::Cv {
+                        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                        let raw_ptr = base.add(opline.op1 as usize);
+                        // If caller's CV is itself a reference, forward the
+                        // external target without treating it as a frame slot.
+                        if (*raw_ptr).is_reference() {
+                            (*raw_ptr).as_ref_ptr()
+                        } else {
+                            materialize_borrowed_slot(frame, raw_ptr);
+                            raw_ptr
+                        }
                     } else {
-                        materialize_borrowed_slot(frame, raw_ptr);
-                        raw_ptr
-                    }
-                };
-                let call = unsafe { (*frame).call };
-                debug_assert!(!call.is_null());
-                let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
-                unsafe { frame_slot_init(call, arg_slot as *mut Value, Value::reference(caller_cv_ptr)) };
+                        (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
+                    };
+                    let call = (*frame).call;
+                    debug_assert!(!call.is_null());
+                    let arg_slot = (*call).cv_mut(opline.op2 as u32);
+                    frame_slot_init(
+                        call,
+                        arg_slot as *mut Value,
+                        Value::reference(caller_cv_ptr),
+                    );
+                }
             }
 
             OpCode::SendVarEx => {
@@ -2308,6 +2342,27 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
+            OpCode::BindArrayAppendRef => {
+                // SAFETY: both operands are compiler-allocated mutable slots
+                // in the active frame. The owned reference cell is Rc-backed,
+                // so array reallocations and frame teardown cannot invalidate
+                // either alias.
+                unsafe {
+                    let array_ptr =
+                        (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
+                    let array_value = &mut *array_ptr;
+                    if matches!(array_value.value_type(), ValueType::Null | ValueType::Undef) {
+                        slot_set(array_ptr, Value::array(PhpArray::new()));
+                    }
+                    let array = (&mut *array_ptr).as_array_mut().ok_or_else(|| {
+                        VmError::Fatal("Cannot append a reference to a non-array".into())
+                    })?;
+                    let target = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                    frame_slot_set(frame, target, Value::owned_reference(Value::null()));
+                    array.push((*target).clone_owned_reference_alias());
+                }
+            }
+
             OpCode::UnsetDim => {
                 // Remove key op2 from array op1
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
@@ -2338,13 +2393,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             }
 
-            OpCode::ForeachNext => {
+            OpCode::ForeachNext | OpCode::ForeachNextRef => {
                 match op_foreach_next(eg, frame, op_array, opline)? {
                     ColdResult::Continue => continue,
                     ColdResult::NewFrame(nf, no) => { frame = nf; op_array = no; continue; }
                     ColdResult::Unhandled(exc) => { eg.exception = Some(exc); return Ok(()); }
                     _ => {}
                 }
+            }
+
+            OpCode::ForeachWriteback => {
+                op_foreach_writeback(frame, op_array, opline)?;
             }
 
             OpCode::Throw => {

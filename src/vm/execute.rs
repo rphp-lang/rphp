@@ -1968,7 +1968,10 @@ fn execute_full_call<'a>(
             num_args, func_common.sig.required_num_args
         )));
     }
-    if !func_common.sig.is_variadic && num_args > public_max {
+    if func_common.fn_type != FunctionType::User
+        && !func_common.sig.is_variadic
+        && num_args > public_max
+    {
         return Err(VmError::Fatal(format!(
             "Too many arguments, {} passed and at most {} expected",
             num_args, public_max

@@ -69,41 +69,42 @@ pub enum Token {
     Identifier(String),                          // my_double, strlen
     MagicConstant { name: String, line: usize }, // __FILE__, __LINE__, ...
     // Operators
-    Assign,           // =
-    Plus,             // +
-    Minus,            // -
-    Star,             // *
-    Slash,            // /
-    Percent,          // %
-    Dot,              // . (concat)
-    PlusPlus,         // ++
-    MinusMinus,       // --
-    EqualEqual,       // ==
-    IdenticalEqual,   // ===
-    NotEqual,         // !=
-    NotIdentical,     // !==
-    Less,             // <
-    LessEqual,        // <=
-    Greater,          // >
-    GreaterEqual,     // >=
-    AmpAmp,           // &&
-    PipePipe,         // ||
-    Bang,             // !
-    PlusAssign,       // +=
-    MinusAssign,      // -=
-    StarAssign,       // *=
-    StarStarAssign,   // **=
-    SlashAssign,      // /=
-    PercentAssign,    // %=
-    DotAssign,        // .=
-    AmpAssign,        // &=
-    PipeAssign,       // |=
-    CaretAssign,      // ^=
-    ShiftLeftAssign,  // <<=
-    ShiftRightAssign, // >>=
-    Question,         // ?
-    QuestionQuestion, // ??
-    Colon,            // :
+    Assign,                 // =
+    Plus,                   // +
+    Minus,                  // -
+    Star,                   // *
+    Slash,                  // /
+    Percent,                // %
+    Dot,                    // . (concat)
+    PlusPlus,               // ++
+    MinusMinus,             // --
+    EqualEqual,             // ==
+    IdenticalEqual,         // ===
+    NotEqual,               // !=
+    NotIdentical,           // !==
+    Less,                   // <
+    LessEqual,              // <=
+    Greater,                // >
+    GreaterEqual,           // >=
+    AmpAmp,                 // &&
+    PipePipe,               // ||
+    Bang,                   // !
+    PlusAssign,             // +=
+    MinusAssign,            // -=
+    StarAssign,             // *=
+    StarStarAssign,         // **=
+    SlashAssign,            // /=
+    PercentAssign,          // %=
+    DotAssign,              // .=
+    AmpAssign,              // &=
+    PipeAssign,             // |=
+    CaretAssign,            // ^=
+    ShiftLeftAssign,        // <<=
+    ShiftRightAssign,       // >>=
+    Question,               // ?
+    QuestionQuestion,       // ??
+    QuestionQuestionAssign, // ??=
+    Colon,                  // :
     // Punctuation
     Semicolon,   // ;
     LParen,      // (
@@ -401,8 +402,13 @@ impl<'a> Lexer<'a> {
                         self.pos += 2;
                         self.finish_php_segment(&mut tokens)?;
                     } else if self.peek_next() == Some(b'?') {
-                        tokens.push(Token::QuestionQuestion);
-                        self.pos += 2;
+                        if self.src.get(self.pos + 2) == Some(&b'=') {
+                            tokens.push(Token::QuestionQuestionAssign);
+                            self.pos += 3;
+                        } else {
+                            tokens.push(Token::QuestionQuestion);
+                            self.pos += 2;
+                        }
                     } else if self.peek_next() == Some(b'-')
                         && self.src.get(self.pos + 2) == Some(&b'>')
                     {
@@ -824,6 +830,22 @@ mod tests {
                 Token::Semicolon,
                 Token::Echo,
                 Token::Variable("a".into()),
+                Token::Semicolon,
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn null_coalescing_assignment_is_one_token() {
+        let tokens = Lexer::new("<?php $value ??= 42;").tokenize().unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                Token::Variable("value".into()),
+                Token::QuestionQuestionAssign,
+                Token::Integer(42),
                 Token::Semicolon,
                 Token::Eof,
             ]

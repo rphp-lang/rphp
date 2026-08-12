@@ -75,6 +75,9 @@ pub enum OpCode {
     // Foreach
     ForeachInit = 80, // Copy array op1 to result TMP, set position to 0; jump op2 if empty
     ForeachNext = 81, // Fetch next from array op1 at position op2; result=value TMP; jump extended_value if done
+    ForeachNextRef = 82, // Fetch by-reference loop value, flushing the previous value first
+    ForeachWriteback = 83, // Flush the current by-reference loop value without advancing
+    BindArrayAppendRef = 84, // Append null and bind result(CV) to the new element
 
     // Exceptions
     Throw = 90, // Throw exception: op1 = value to throw

@@ -157,6 +157,66 @@ fn test_e2e_foreach_copy_semantics() {
     );
 }
 
+#[test]
+fn test_e2e_foreach_by_reference_writes_values_back() {
+    assert_eq!(
+        run_php(
+            "<?php $values = [1, 2, 3]; foreach ($values as &$value) { $value += 10; } echo $values[0], ',', $values[1], ',', $values[2];"
+        ),
+        "11,12,13"
+    );
+}
+
+#[test]
+fn test_e2e_foreach_by_reference_flushes_break_value() {
+    assert_eq!(
+        run_php(
+            "<?php $values = [1, 2, 3]; foreach ($values as &$value) { $value *= 2; if ($value == 4) { break; } } echo $values[0], ',', $values[1], ',', $values[2];"
+        ),
+        "2,4,3"
+    );
+}
+
+#[test]
+fn test_e2e_foreach_by_reference_nested_object_array() {
+    assert_eq!(
+        run_php(
+            "<?php class Store { public $groups = [[1, 2], [3]]; } $store = new Store(); foreach ($store->groups[0] as &$value) { $value += 5; } echo $store->groups[0][0], ',', $store->groups[0][1], ',', $store->groups[1][0];"
+        ),
+        "6,7,3"
+    );
+}
+
+#[test]
+fn test_e2e_nested_object_array_append() {
+    assert_eq!(
+        run_php(
+            "<?php class Store { public $listeners = []; } $store = new Store(); $store->listeners['event'][10][] = 'first'; $store->listeners['event'][10][] = 'second'; echo $store->listeners['event'][10][0], ',', $store->listeners['event'][10][1];"
+        ),
+        "first,second"
+    );
+}
+
+#[test]
+fn test_e2e_bind_appended_nested_array_element_reference() {
+    assert_eq!(
+        run_php(
+            "<?php class Store { public $items = []; } function build() { $store = new Store(); $slot = &$store->items['group'][]; $store->items['group'][] = 'next'; $slot = 'bound'; return $store->items; } $items = build(); echo $items['group'][0], ',', $items['group'][1];"
+        ),
+        "bound,next"
+    );
+}
+
+#[test]
+fn test_e2e_by_reference_builtin_writes_nested_lvalue_back() {
+    assert_eq!(
+        run_php(
+            "<?php class Store { public $groups = ['event' => [-10 => 'low', 10 => 'high']]; } $store = new Store(); krsort($store->groups['event']); foreach ($store->groups['event'] as $value) { echo $value, '>'; }"
+        ),
+        "high>low>"
+    );
+}
+
 // === foreach with sparse array ===
 
 #[test]

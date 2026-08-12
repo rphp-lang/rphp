@@ -58,6 +58,12 @@ impl Parser {
         loop {
             match self.peek() {
                 Token::LBracket => {
+                    // An empty dimension is only valid as a write target. Leave
+                    // it for the statement parser instead of trying to parse
+                    // `]` as an index expression.
+                    if self.peek_at(1) == Token::RBracket {
+                        break;
+                    }
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
@@ -68,12 +74,18 @@ impl Parser {
                 }
                 Token::LParen => {
                     self.advance();
-                    let args = self.parse_call_args()?;
-                    expr = Expr::DynamicCall {
-                        callable: Box::new(expr),
-                        args,
-                        generic_args: Vec::new(),
-                    };
+                    if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                        self.advance();
+                        self.advance();
+                        expr = Expr::FirstClassCallable(Box::new(expr));
+                    } else {
+                        let args = self.parse_call_args()?;
+                        expr = Expr::DynamicCall {
+                            callable: Box::new(expr),
+                            args,
+                            generic_args: Vec::new(),
+                        };
+                    }
                 }
                 Token::DoubleColon if self.peek_at(1) == Token::Less => {
                     let generic_args = self.parse_optional_turbofish()?;

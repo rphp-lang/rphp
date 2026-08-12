@@ -3423,7 +3423,27 @@ impl Compiler {
                 }
 
                 let resolved = self.resolve_function_name(name);
-                let ref_args = self.lookup_ref_args(&resolved);
+                let ref_args = {
+                    let resolved_refs = self.lookup_ref_args(&resolved);
+                    let has_exact_user_function = self
+                        .functions
+                        .iter()
+                        .any(|(function, _)| function.eq_ignore_ascii_case(&resolved))
+                        || self
+                            .known_ref_args
+                            .keys()
+                            .any(|function| function.eq_ignore_ascii_case(&resolved));
+                    if resolved_refs == 0
+                        && !has_exact_user_function
+                        && self.current_namespace.is_some()
+                        && !name.contains('\\')
+                        && !self.has_function_import(name)
+                    {
+                        builtin_ref_args(name)
+                    } else {
+                        resolved_refs
+                    }
+                };
                 let name_idx = self.add_literal(Value::string(resolved.clone()));
 
                 // For unqualified function calls in a namespace, PHP falls back to global.
@@ -3438,10 +3458,58 @@ impl Compiler {
                     0 // no fallback
                 };
 
-                let compiled_args = args
-                    .iter()
-                    .any(CallArg::contains_yield)
-                    .then(|| self.compile_call_args(args));
+                let has_reference_lvalue = args.iter().enumerate().any(|(index, arg)| {
+                    index < 64
+                        && ref_args & (1u64 << index) != 0
+                        && matches!(
+                            arg,
+                            CallArg::Positional(
+                                Expr::ArrayAccess { .. }
+                                    | Expr::PropertyAccess {
+                                        nullsafe: false,
+                                        ..
+                                    }
+                                    | Expr::StaticProperty { .. }
+                            )
+                        )
+                });
+                let mut reference_writebacks = Vec::new();
+                let compiled_args = if has_reference_lvalue {
+                    Some(
+                        args.iter()
+                            .enumerate()
+                            .map(|(index, arg)| match arg {
+                                CallArg::Positional(expr)
+                                    if index < 64 && ref_args & (1u64 << index) != 0 =>
+                                {
+                                    match self.compile_foreach_reference_source(expr) {
+                                        Ok((op, op_type, writeback)) => {
+                                            reference_writebacks.push((writeback, op));
+                                            (op, op_type, None)
+                                        }
+                                        Err(error) => {
+                                            self.deferred_error = Some(error);
+                                            (0, OpType::Unused, None)
+                                        }
+                                    }
+                                }
+                                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
+                                    let (op, op_type) = self.compile_expr(expr);
+                                    (op, op_type, None)
+                                }
+                                CallArg::Named { name, value } => {
+                                    let (op, op_type) = self.compile_expr(value);
+                                    let name = self.add_literal(Value::string(name.clone()));
+                                    (op, op_type, Some(name))
+                                }
+                            })
+                            .collect(),
+                    )
+                } else {
+                    args.iter()
+                        .any(CallArg::contains_yield)
+                        .then(|| self.compile_call_args(args))
+                };
 
                 let runtime_generic_check = self.emit_generic_check(
                     OpCode::CheckGenericArgs,
@@ -3494,6 +3562,9 @@ impl Compiler {
                 do_fcall.result_type = OpType::Tmp;
                 self.instructions.push(do_fcall);
                 self.emit_reified_return_check(runtime_generic_check, tmp, OpType::Tmp);
+                for (writeback, value) in reference_writebacks {
+                    self.emit_foreach_reference_source_writeback(writeback, value);
+                }
 
                 (tmp, OpType::Tmp)
             }
@@ -3897,7 +3968,7 @@ impl Compiler {
                     }
                 };
                 cp.return_type_hint = self.convert_type_hint(return_type);
-                for v in use_vars {
+                for (v, _) in use_vars {
                     func_compiler.resolve_cv(v);
                 }
                 for s in body {
@@ -3987,7 +4058,7 @@ impl Compiler {
                 self.instructions.push(create);
 
                 // Add captured use_var values
-                for v in use_vars {
+                for (v, _) in use_vars {
                     let cv = self.resolve_cv(v);
                     let mut use_var = Instruction::new(OpCode::ClosureUseVar);
                     use_var.op1 = tmp;
@@ -4010,7 +4081,7 @@ impl Compiler {
                 let compiled_args: Vec<(u16, OpType, Option<u16>)> = args
                     .iter()
                     .map(|arg| match arg {
-                        CallArg::Positional(expr) => {
+                        CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                             let (op, op_type) = self.compile_expr(expr);
                             (op, op_type, None)
                         }
@@ -4445,6 +4516,7 @@ impl Compiler {
                 self.instructions.push(assign);
                 (tmp, OpType::Tmp)
             }
+            Expr::FirstClassCallable(callable) => self.compile_expr(callable),
             Expr::Constant(name) => {
                 // Fetch a named constant at runtime
                 let runtime_name = name.strip_prefix('\\').unwrap_or(name);
@@ -4603,7 +4675,7 @@ impl Compiler {
         if ref_args != 0 && !use_var_ex {
             // RefAware mode (FunctionCall)
             let is_ref = index < 64 && (ref_args & (1u64 << index)) != 0;
-            if is_ref && op_type == OpType::Cv {
+            if is_ref && matches!(op_type, OpType::Cv | OpType::Tmp | OpType::Var) {
                 OpCode::SendRef
             } else {
                 OpCode::SendVal
@@ -4632,7 +4704,7 @@ impl Compiler {
     ) {
         for (i, arg) in args.iter().enumerate() {
             match arg {
-                CallArg::Positional(expr) => {
+                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
                     let opcode = Self::positional_opcode(ref_args, i, op_type, use_var_ex);
                     let mut send = Instruction::new(opcode);
@@ -4665,7 +4737,7 @@ impl Compiler {
     fn compile_call_args(&mut self, args: &[CallArg]) -> Vec<(u16, OpType, Option<u16>)> {
         args.iter()
             .map(|arg| match arg {
-                CallArg::Positional(expr) => {
+                CallArg::Positional(expr) | CallArg::Unpack(expr) => {
                     let (op, op_type) = self.compile_expr(expr);
                     (op, op_type, None)
                 }
@@ -4778,7 +4850,7 @@ impl Compiler {
         debug_assert_eq!(args.len(), compiled_args.len());
         for (index, (arg, (op, op_type, name_idx))) in args.iter().zip(compiled_args).enumerate() {
             match arg {
-                CallArg::Positional(_) => {
+                CallArg::Positional(_) | CallArg::Unpack(_) => {
                     let mut send = Instruction::new(Self::positional_opcode(
                         ref_args, index, *op_type, use_var_ex,
                     ));

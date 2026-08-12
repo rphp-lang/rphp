@@ -762,7 +762,7 @@ impl Parser {
         Ok(Expr::Closure {
             is_static,
             params,
-            use_vars: free_vars,
+            use_vars: free_vars.into_iter().map(|name| (name, false)).collect(),
             body,
             return_type,
             generic_params,
@@ -811,6 +811,9 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
+            Expr::FirstClassCallable(callable) => {
+                Self::collect_free_vars(callable, bound, out);
+            }
             Expr::Isset(exprs) => {
                 for e in exprs {
                     Self::collect_free_vars(e, bound, out);
@@ -857,7 +860,7 @@ impl Parser {
             }
             Expr::Closure { use_vars, .. } => {
                 // Nested closure — only capture its explicit use vars
-                for v in use_vars {
+                for (v, _) in use_vars {
                     if !bound.contains(v.as_str()) && !out.contains(v) {
                         out.push(v.clone());
                     }
@@ -934,18 +937,30 @@ impl Parser {
         if self.peek() == Token::Use {
             self.advance();
             self.expect(&Token::LParen)?;
+            let is_ref = if self.peek() == Token::Ampersand {
+                self.advance();
+                true
+            } else {
+                false
+            };
             let v = match self.advance() {
                 Token::Variable(n) => n,
                 other => return Err(format!("Expected variable in use, got {:?}", other)),
             };
-            use_vars.push(v);
+            use_vars.push((v, is_ref));
             while self.peek() == Token::Comma {
                 self.advance();
+                let is_ref = if self.peek() == Token::Ampersand {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
                 let v = match self.advance() {
                     Token::Variable(n) => n,
                     other => return Err(format!("Expected variable in use, got {:?}", other)),
                 };
-                use_vars.push(v);
+                use_vars.push((v, is_ref));
             }
             self.expect(&Token::RParen)?;
         }

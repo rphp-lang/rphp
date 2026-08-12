@@ -1502,6 +1502,17 @@ fn init_resolved_user_call(
     explicit_args: u32,
     resolved: crate::stdlib::ResolvedCallback,
 ) {
+    init_resolved_user_call_mode(eg, frame, explicit_args, resolved, false);
+}
+
+#[inline]
+fn init_resolved_user_call_mode(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    explicit_args: u32,
+    resolved: crate::stdlib::ResolvedCallback,
+    defer_method_receiver: bool,
+) {
     let called_scope_class_id = resolved.called_scope_class_id;
     let bound_this = resolved.bound_this;
     let signature = unsafe { &(*resolved.func_ptr).sig };
@@ -1527,13 +1538,26 @@ fn init_resolved_user_call(
     // uninitialized. Optional declared parameters between the supplied
     // arguments and closure captures must remain readable Undef slots.
     for index in public_end..signature.num_args {
-        let destination = unsafe { (*call).cv_mut(index) } as *mut Value;
-        unsafe { destination.write(Value::undef()) };
+        // SAFETY: `push_call_frame` allocated every declared CV, and this loop
+        // initializes only the unsupplied optional-parameter suffix once.
+        unsafe {
+            let destination = (*call).cv_mut(index) as *mut Value;
+            destination.write(Value::undef());
+        }
     }
 
-    for (index, value) in resolved.prepend_args.into_iter().enumerate() {
-        let destination = unsafe { (*call).cv_mut(index as u32) } as *mut Value;
-        unsafe { frame_slot_init(call, destination, value) };
+    if defer_method_receiver && !resolved.prepend_args.is_empty() {
+        debug_assert_eq!(resolved.prepend_args.len(), 1);
+        push_pending_invoke_this(eg, call as usize, resolved.prepend_args[0].clone());
+    } else {
+        for (index, value) in resolved.prepend_args.into_iter().enumerate() {
+            // SAFETY: callback resolution bounds the hidden receiver prefix to
+            // CVs reserved by the selected user function's signature.
+            unsafe {
+                let destination = (*call).cv_mut(index as u32) as *mut Value;
+                frame_slot_init(call, destination, value);
+            }
+        }
     }
 
     let capture_offset = signature.num_args;
@@ -1552,6 +1576,16 @@ fn op_init_dynamic_call(
     opline: &Instruction,
 ) -> Result<(), VmError> {
     let callable = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+
+    if callable.value_type() == ValueType::Array {
+        let resolved = resolve_user_call_at_opline(eg, frame, op_array, opline)
+            .ok_or_else(|| VmError::Fatal("Array is not callable".into()))?;
+        // Dynamic-call sends start at CV 0 because the compiler cannot know
+        // that this callable is a method. Defer the hidden receiver until
+        // DoFcall, which shifts the supplied positional prefix by one.
+        init_resolved_user_call_mode(eg, frame, opline.extended_value, resolved, true);
+        return Ok(());
+    }
 
     if let Some(closure) = callable.as_closure() {
         // Fast path: Closure value — direct function pointer, no string lookup.
@@ -1597,43 +1631,6 @@ fn op_init_dynamic_call(
             }
         }
         initialize_bound_this_frame(call, func_ptr, bound_this);
-    } else if let Some(arr) = callable.as_array() {
-        // Legacy array callable: [class_or_object, method_name]
-        let arr_len = arr.len();
-        if arr_len == 0 {
-            return Err(VmError::Fatal("Array is not callable".into()));
-        }
-        let func_name = arr.get_value_at(0)
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| {
-                VmError::Fatal("Closure descriptor must start with function name".into())
-            })?;
-
-        let func_ptr = eg.find_function(func_name).ok_or_else(|| {
-            VmError::Fatal(format!("Call to undefined function {}()", func_name))
-        })?;
-
-        let num_args = opline.extended_value;
-        let pending_call = unsafe { (*frame).call };
-        let call = eg.vm_stack.push_call_frame(
-            func_ptr,
-            num_args,
-            num_args,
-            frame,
-            pending_call,
-        );
-        unsafe {
-            (*frame).call = call;
-        }
-
-        // Copy captured use_vars into CV slots after params
-        let func = unsafe { &*func_ptr };
-        let use_var_offset = func.sig.num_args;
-        for i in 1..arr_len {
-            let captured_val = arr.get_value_at(i).unwrap().clone();
-            let cv_slot = unsafe { (*call).cv_mut(use_var_offset + (i as u32 - 1)) };
-            unsafe { frame_slot_set(call, cv_slot as *mut Value, captured_val) };
-        }
     } else if let Some(func_name) = callable.as_str() {
         // Simple string function call: $func = "my_func"; $func()
         let func_ptr = eg.find_function(func_name).ok_or_else(|| {

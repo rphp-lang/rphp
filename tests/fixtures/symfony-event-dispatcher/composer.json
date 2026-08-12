@@ -1,0 +1,16 @@
+{
+    "name": "rphp/symfony-event-dispatcher-fixture",
+    "version": "1.0.0",
+    "description": "Pinned Symfony 7.4 EventDispatcher compatibility gate",
+    "license": "MIT",
+    "require": {
+        "php": ">=8.2",
+        "symfony/event-dispatcher": "7.4.15"
+    },
+    "config": {
+        "platform": {
+            "php": "8.2.0"
+        },
+        "sort-packages": true
+    }
+}

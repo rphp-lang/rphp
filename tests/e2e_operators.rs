@@ -204,6 +204,36 @@ fn test_e2e_compound_assign_in_loop() {
     );
 }
 
+#[test]
+fn test_e2e_null_coalescing_assign_is_lazy() {
+    assert_eq!(
+        run_php(
+            "<?php function fallback() { echo 'rhs>'; return 9; } $set = 7; $set ??= fallback(); echo $set, '|'; $missing = null; $missing ??= fallback(); echo $missing;"
+        ),
+        "7|rhs>9"
+    );
+}
+
+#[test]
+fn test_e2e_null_coalescing_assign_array_dimension() {
+    assert_eq!(
+        run_php(
+            "<?php $listeners = []; $listeners[1] ??= 'first'; $listeners[1] ??= 'second'; echo $listeners[1];"
+        ),
+        "first"
+    );
+}
+
+#[test]
+fn test_e2e_null_coalescing_assign_properties() {
+    assert_eq!(
+        run_php(
+            "<?php class Box { public $value; public static $shared; } $box = new Box(); $box->value ??= 'object'; $box->value ??= 'changed'; Box::$shared ??= 'static'; Box::$shared ??= 'changed'; echo $box->value, '|', Box::$shared;"
+        ),
+        "object|static"
+    );
+}
+
 // === Comments ===
 
 #[test]
@@ -270,16 +300,14 @@ fn test_e2e_unterminated_block_comment() {
     assert!(result.unwrap_err().contains("Unterminated comment"));
 }
 
-// === CR5 regression: too many args frame integrity ===
+// === Extra userland args frame integrity ===
 
 #[test]
 fn test_e2e_too_many_args_frame_integrity() {
-    use common::run_php_expect_error;
-    let err = run_php_expect_error("<?php\nfunction add($a) { return $a; }\necho add(1, 2);");
-    match err {
-        rphp::vm::execute::VmError::Fatal(msg) => assert!(msg.contains("Too many arguments")),
-        other => panic!("Expected Fatal, got {:?}", other),
-    }
+    assert_eq!(
+        run_php("<?php\nfunction add($a) { $copy = $a; return $copy; }\necho add(1, 2);"),
+        "1"
+    );
 }
 
 // ========== Strict comparison (===, !==) ==========

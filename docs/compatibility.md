@@ -82,8 +82,19 @@ Composer-generated platform check requiring PHP 8.2.1 must fail under RPHP with
 a `RuntimeException` that reports 8.2.0. This exercises include-expression
 return values, direct static-call autoload, both forms of `strtr()`, and both
 sides of Composer's generated PHP-version gate; it does not claim that Composer
-itself or Symfony runs under RPHP. `extension_loaded()` remains conservatively
-false until individual extension contracts are admitted.
+itself runs under RPHP. Symfony support is admitted separately: the first
+bounded S1 gate now executes the unmodified EventDispatcher 7.4.15 component
+through Composer's generated autoloader. `extension_loaded()` remains
+conservatively false until individual extension contracts are admitted.
+
+The pinned Symfony EventDispatcher S1 fixture installs
+`symfony/event-dispatcher` 7.4.15 and its locked dependencies with reference
+PHP, then runs the unmodified vendor sources under both PHP and RPHP. Its
+priority-ordered static callable scenario must produce `high>low|same`. This
+admits the component's exercised dispatch path, including lazy `??=` writes,
+by-reference listener sorting, nested append/writeback and dynamic callable
+arrays; it is not a blanket compatibility claim for every EventDispatcher API
+branch or the rest of Symfony.
 
 `use function` imports have their own case-insensitive alias table, separate
 from class imports. Direct calls support default, explicit and comma-separated

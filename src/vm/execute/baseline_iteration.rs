@@ -1,5 +1,43 @@
 // Kept in the execute module through include! so this structural split does not change visibility or code generation.
 
+#[inline]
+fn flush_foreach_reference_value(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    array_operand: u16,
+    array_type: OpType,
+    position_operand: u16,
+    position_type: OpType,
+    value_cv: u32,
+) -> Result<(), VmError> {
+    // SAFETY: all operands are allocated by the active op-array. The value is
+    // written only into the detached iteration array at the preceding valid
+    // position, which `ForeachNextRef` advanced after reading an element.
+    unsafe {
+        let position = (&*(*frame).get_op_ptr(
+            position_operand as u32,
+            position_type,
+            op_array,
+        ))
+            .as_long()
+            .unwrap_or(0);
+        if position <= 0 {
+            return Ok(());
+        }
+
+        let value = (&*(*frame).get_op_ptr(value_cv, OpType::Cv, op_array)).clone();
+        let array_ptr = (*frame).get_op_mut(array_operand as u32, array_type);
+        let array = &mut *array_ptr;
+        let Some(array) = array.as_array_mut() else {
+            return Err(VmError::Fatal(
+                "Foreach by-reference source is no longer an array".into(),
+            ));
+        };
+        array.set_value_at((position - 1) as usize, value);
+        Ok(())
+    }
+}
+
 #[inline(never)]
 fn op_foreach_init<'a>(
     eg: &mut ExecutorGlobals,
@@ -88,6 +126,18 @@ fn op_foreach_next<'a>(
     let val_cv = (opline.extended_value & 0xFFFF) as u32;
     let key_encoded = (opline.extended_value >> 16) as u32;
 
+    if opline.opcode == OpCode::ForeachNextRef {
+        flush_foreach_reference_value(
+            frame,
+            op_array,
+            opline.op1,
+            opline.op1_type,
+            opline.op2,
+            opline.op2_type,
+            val_cv,
+        )?;
+    }
+
     let arr_val = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
 
     // Check for Generator object
@@ -171,6 +221,23 @@ fn op_foreach_next<'a>(
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
     unsafe { slot_set(result_ptr, Value::bool(has_more)) };
     Ok(ColdResult::Done)
+}
+
+#[inline(never)]
+fn op_foreach_writeback(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Result<(), VmError> {
+    flush_foreach_reference_value(
+        frame,
+        op_array,
+        opline.op1,
+        opline.op1_type,
+        opline.op2,
+        opline.op2_type,
+        opline.result as u32,
+    )
 }
 
 fn generator_resume_result<'a>(

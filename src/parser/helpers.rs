@@ -104,6 +104,16 @@ impl Parser {
                 if seen_named {
                     return Err("Cannot use positional argument after named argument".to_string());
                 }
+                if self.peek() == Token::DotDotDot {
+                    self.advance();
+                    let expr = self.parse_expr()?;
+                    args.push(CallArg::Unpack(expr));
+                    if self.peek() == Token::Comma {
+                        self.advance();
+                        continue;
+                    }
+                    break;
+                }
                 let expr = self.parse_expr()?;
                 args.push(CallArg::Positional(expr));
                 if self.peek() == Token::Comma {
