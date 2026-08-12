@@ -219,8 +219,10 @@ impl Parser {
                     if self.peek() == Token::QuestionQuestionAssign {
                         return self.finish_coalesce_assign_statement(expr);
                     }
-                    self.expect(&Token::Semicolon)?;
-                    Ok(Stmt::ExprStmt(expr))
+                    if Self::compound_assign_op(&self.peek()).is_some() {
+                        return self.finish_compound_assign_statement(expr);
+                    }
+                    self.finish_value_expression_statement(expr)
                 } else if next == Token::Assign {
                     let var_name = match self.advance() {
                         Token::Variable(name) => name,
@@ -287,6 +289,9 @@ impl Parser {
                     if self.peek() == Token::QuestionQuestionAssign {
                         return self.finish_coalesce_assign_statement(expr);
                     }
+                    if Self::compound_assign_op(&self.peek()).is_some() {
+                        return self.finish_compound_assign_statement(expr);
+                    }
                     // Check for property/array-dim assignment: $obj->prop = expr or $obj->prop[$key] = expr
                     if self.peek() == Token::Assign {
                         // Check structure without consuming
@@ -338,8 +343,7 @@ impl Parser {
                             return Err("Unsupported array assignment target".into());
                         }
                     }
-                    self.expect(&Token::Semicolon)?;
-                    Ok(Stmt::ExprStmt(expr))
+                    self.finish_value_expression_statement(expr)
                 }
             }
             Token::If => self.parse_if(),
@@ -619,6 +623,7 @@ impl Parser {
             | Token::False
             | Token::Bang
             | Token::Minus
+            | Token::At
             | Token::Tilde
             | Token::PlusPlus
             | Token::MinusMinus
@@ -728,6 +733,9 @@ impl Parser {
         if self.peek() == Token::QuestionQuestionAssign {
             return self.finish_coalesce_assign_statement(expr);
         }
+        if Self::compound_assign_op(&self.peek()).is_some() {
+            return self.finish_compound_assign_statement(expr);
+        }
         if self.peek() == Token::Assign && matches!(expr, Expr::ArrayAccess { .. }) {
             let (root, indices) = Self::split_array_access(expr);
             if !matches!(root, Expr::StaticProperty { .. }) {
@@ -775,8 +783,7 @@ impl Parser {
                 });
             }
         }
-        self.expect(&Token::Semicolon)?;
-        Ok(Stmt::ExprStmt(expr))
+        self.finish_value_expression_statement(expr)
     }
 
     fn is_array_append_suffix(&self) -> bool {
@@ -827,6 +834,26 @@ impl Parser {
         let expr = self.parse_expr()?;
         self.expect(&Token::Semicolon)?;
         Ok(Stmt::CoalesceAssign { target, expr })
+    }
+
+    fn finish_compound_assign_statement(&mut self, target: Expr) -> Result<Stmt, String> {
+        if !matches!(
+            &target,
+            Expr::Variable(_)
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+        ) {
+            return Err("Invalid compound assignment target".into());
+        }
+        let op = Self::compound_assign_op(&self.advance())
+            .ok_or_else(|| "Expected compound assignment operator".to_string())?;
+        let expr = self.parse_expr()?;
+        self.expect(&Token::Semicolon)?;
+        Ok(Stmt::CompoundAssign { target, op, expr })
     }
 
     /// Parse if / elseif / else chain.
@@ -916,7 +943,68 @@ impl Parser {
     /// `parse_primary`.
     fn parse_expression_statement(&mut self) -> Result<Stmt, String> {
         let expr = self.parse_expr()?;
+        if self.is_array_append_suffix() {
+            return self.finish_array_append_statement(expr);
+        }
+        if self.peek() == Token::QuestionQuestionAssign {
+            return self.finish_coalesce_assign_statement(expr);
+        }
+        if Self::compound_assign_op(&self.peek()).is_some() {
+            return self.finish_compound_assign_statement(expr);
+        }
+        self.finish_value_expression_statement(expr)
+    }
+
+    fn finish_value_expression_statement(&mut self, expr: Expr) -> Result<Stmt, String> {
         self.expect(&Token::Semicolon)?;
-        Ok(Stmt::ExprStmt(expr))
+        match expr {
+            Expr::CoalesceAssign { target, expr } => Ok(Stmt::CoalesceAssign {
+                target: *target,
+                expr: *expr,
+            }),
+            Expr::AssignTarget { target, expr } => match *target {
+                Expr::PropertyAccess {
+                    object,
+                    property,
+                    nullsafe: false,
+                } => Ok(Stmt::AssignProp {
+                    object: *object,
+                    property,
+                    expr: *expr,
+                }),
+                Expr::StaticProperty {
+                    class_name,
+                    property,
+                } => Ok(Stmt::AssignStaticProp {
+                    class_name,
+                    property,
+                    expr: *expr,
+                }),
+                target @ Expr::ArrayAccess { .. } => {
+                    let (root, mut indices) = Self::split_array_access(target);
+                    if indices.len() == 1
+                        && let Expr::PropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                        } = root
+                    {
+                        return Ok(Stmt::AssignObjArrayDim {
+                            object: *object,
+                            property,
+                            index: indices.pop().unwrap(),
+                            expr: *expr,
+                        });
+                    }
+                    Ok(Stmt::NestedArrayAssign {
+                        root,
+                        indices,
+                        expr: *expr,
+                    })
+                }
+                _ => Err("Invalid assignment target".into()),
+            },
+            expr => Ok(Stmt::ExprStmt(expr)),
+        }
     }
 }

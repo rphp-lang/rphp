@@ -107,6 +107,28 @@ pub(crate) fn execute_included_file(
         let _ = eg.register_function(&name, ptr);
     }
     for class_def in compile_result.class_defs {
+        let dependencies = class_def
+            .parent
+            .iter()
+            .chain(class_def.uses.iter())
+            .cloned()
+            .collect::<Vec<_>>();
+        for dependency in dependencies {
+            if eg.find_class(&dependency).is_none()
+                && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &dependency)?
+            {
+                if let Some(exception) = eg.exception.take() {
+                    if caller.is_some() {
+                        return Ok(IncludeFileOutcome::Thrown(exception));
+                    }
+                    eg.exception = Some(exception);
+                    return Ok(IncludeFileOutcome::Executed(Value::null()));
+                }
+                return Err(VmError::Fatal(format!(
+                    "Class dependency \"{dependency}\" not found"
+                )));
+            }
+        }
         eg.register_class(class_def).map_err(|e| VmError::Fatal(e))?;
     }
 

@@ -101,6 +101,25 @@ echo $right->instanceDispatch();
 }
 
 #[test]
+fn parent_instance_call_forwards_this_receiver() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ParentReceiver {
+    public function __construct(protected string $value) {}
+    public function read(string $suffix): string { return $this->value . $suffix; }
+}
+class ChildReceiver extends ParentReceiver {
+    public function readFromParent(): string { return parent::read('!'); }
+}
+echo (new ChildReceiver('forwarded'))->readFromParent();
+"#
+        ),
+        "forwarded!"
+    );
+}
+
+#[test]
 fn late_static_properties_follow_and_rekey_the_called_class() {
     assert_eq!(
         run_php(

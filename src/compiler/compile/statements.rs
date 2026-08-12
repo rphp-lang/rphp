@@ -209,11 +209,11 @@ impl Compiler {
         }
     }
 
-    fn compile_coalesce_assign_statement(
+    pub(super) fn compile_coalesce_assign_expression(
         &mut self,
         target: &Expr,
         expr: &Expr,
-    ) -> Result<(), String> {
+    ) -> Result<(u16, OpType), String> {
         let (current, current_type, write) = match target {
             Expr::Variable(var) => {
                 let cv = self.resolve_cv(var);
@@ -373,8 +373,135 @@ impl Compiler {
             }
         }
 
+        // Keep a value-producing copy for property and array targets. For a
+        // variable target this is a harmless self-assignment.
+        let mut set_result = Instruction::new(OpCode::AssignCv);
+        set_result.op1 = current;
+        set_result.op1_type = current_type;
+        set_result.op2 = value;
+        set_result.op2_type = value_type;
+        self.instructions.push(set_result);
+
         self.instructions[skip_write].op2 = self.instructions.len() as u16;
-        Ok(())
+        Ok((current, current_type))
+    }
+
+    pub(super) fn compile_assignment_target_expression(
+        &mut self,
+        target: &Expr,
+        expr: &Expr,
+    ) -> Result<(u16, OpType), String> {
+        enum WriteTarget {
+            Object {
+                object: u16,
+                object_type: OpType,
+                property: u16,
+            },
+            Static {
+                class: u16,
+                property: u16,
+                dynamic: bool,
+            },
+            Array(MutableArrayPath),
+        }
+
+        let write = match target {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+            } => {
+                let (object, object_type) = self.compile_expr(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                WriteTarget::Object {
+                    object,
+                    object_type,
+                    property,
+                }
+            }
+            Expr::StaticProperty {
+                class_name,
+                property,
+            } => {
+                let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
+                WriteTarget::Static {
+                    class: self.add_literal(Value::string(resolved)),
+                    property: self.add_literal(Value::string(property.clone())),
+                    dynamic,
+                }
+            }
+            Expr::ArrayAccess { .. } => {
+                let mut root = target;
+                let mut reversed_indices = Vec::new();
+                while let Expr::ArrayAccess { array, index } = root {
+                    reversed_indices.push(index.as_ref().clone());
+                    root = array.as_ref();
+                }
+                reversed_indices.reverse();
+                WriteTarget::Array(self.compile_mutable_array_path(root, &reversed_indices)?)
+            }
+            _ => return Err("Invalid assignment target".into()),
+        };
+
+        let (value, value_type) = self.compile_expr(expr);
+        let result = self.alloc_tmp();
+        let mut preserve = Instruction::new(OpCode::AssignCv);
+        preserve.op1 = result;
+        preserve.op1_type = OpType::Tmp;
+        preserve.op2 = value;
+        preserve.op2_type = value_type;
+        self.instructions.push(preserve);
+
+        match write {
+            WriteTarget::Object {
+                object,
+                object_type,
+                property,
+            } => {
+                let mut assign = Instruction::new(OpCode::AssignObjProp);
+                assign.op1 = object;
+                assign.op1_type = object_type;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = result;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+            }
+            WriteTarget::Static {
+                class,
+                property,
+                dynamic,
+            } => {
+                let mut assign = Instruction::new(if dynamic {
+                    OpCode::AssignLateStaticProp
+                } else {
+                    OpCode::AssignStaticProp
+                });
+                assign.op1 = class;
+                assign.op1_type = OpType::Const;
+                assign.op2 = property;
+                assign.op2_type = OpType::Const;
+                assign.result = result;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+            }
+            WriteTarget::Array(path) => {
+                let &(container, container_type) = path.containers.last().unwrap();
+                let &(key, key_type) = path.keys.last().unwrap();
+                let mut assign = Instruction::new(OpCode::AssignDim);
+                assign.op1 = container;
+                assign.op1_type = container_type;
+                assign.op2 = key;
+                assign.op2_type = key_type;
+                assign.result = result;
+                assign.result_type = OpType::Tmp;
+                self.instructions.push(assign);
+                self.rebuild_mutable_array_path(&path);
+                self.write_back_mutable_array_root(&path);
+            }
+        }
+
+        Ok((result, OpType::Tmp))
     }
 
     fn compile_mutable_array_path(
@@ -590,7 +717,39 @@ impl Compiler {
                 }
             }
             Stmt::CoalesceAssign { target, expr } => {
-                self.compile_coalesce_assign_statement(target, expr)?;
+                self.compile_coalesce_assign_expression(target, expr)?;
+            }
+            Stmt::CompoundAssign { target, op, expr } => {
+                // Resolve the mutable target once so object/index side effects
+                // match PHP compound-assignment evaluation order.
+                let (left, left_type, writeback) =
+                    self.compile_foreach_reference_source(target)?;
+                let (right, right_type) = self.compile_expr(expr);
+                let result = self.alloc_tmp();
+                let opcode = match op {
+                    BinOp::Add => OpCode::Add,
+                    BinOp::Sub => OpCode::Sub,
+                    BinOp::Mul => OpCode::Mul,
+                    BinOp::Div => OpCode::Div,
+                    BinOp::Mod => OpCode::Mod,
+                    BinOp::Concat => OpCode::Concat,
+                    BinOp::Pow => OpCode::Pow,
+                    BinOp::BitwiseAnd => OpCode::BitwiseAnd,
+                    BinOp::BitwiseOr => OpCode::BitwiseOr,
+                    BinOp::BitwiseXor => OpCode::BitwiseXor,
+                    BinOp::ShiftLeft => OpCode::ShiftLeft,
+                    BinOp::ShiftRight => OpCode::ShiftRight,
+                    _ => return Err("Invalid compound assignment operator".into()),
+                };
+                let mut operation = Instruction::new(opcode);
+                operation.op1 = left;
+                operation.op1_type = left_type;
+                operation.op2 = right;
+                operation.op2_type = right_type;
+                operation.result = result;
+                operation.result_type = OpType::Tmp;
+                self.instructions.push(operation);
+                self.emit_foreach_reference_source_writeback(writeback, result);
             }
             Stmt::If {
                 condition,
@@ -1292,7 +1451,7 @@ impl Compiler {
                 let mut catch_end_jumps = Vec::new();
                 for catch in catches {
                     let catch_start = self.instructions.len() as u32;
-                    let catch_cv = self.resolve_cv(&catch.var) as u32;
+                    let catch_cv = catch.var.as_ref().map(|var| self.resolve_cv(var) as u32);
 
                     let resolved_types: Vec<String> =
                         catch.types.iter().map(|t| self.resolve_name(t)).collect();

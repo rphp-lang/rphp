@@ -992,7 +992,7 @@ fn propagate_declared_scalar_types(
 pub struct CatchEntry {
     pub types: Vec<String>, // catch type names (e.g., ["Exception"], ["Foo", "Bar"] for multi-catch)
     pub catch_start: u32,   // instruction offset of catch body
-    pub catch_cv: u32,      // CV index for the exception variable
+    pub catch_cv: Option<u32>, // CV index when the catch declares an exception variable
 }
 
 /// Exception handler entry for try/catch
@@ -3086,6 +3086,16 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
+            Expr::CoalesceAssign { target, expr } => {
+                match self.compile_coalesce_assign_expression(target, expr) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        (null, OpType::Const)
+                    }
+                }
+            }
             Expr::PostInc(name) => {
                 let cv_idx = self.resolve_cv(name);
                 let tmp = self.alloc_tmp();
@@ -3698,6 +3708,11 @@ impl Compiler {
                 self.instructions.push(instr);
                 (tmp, OpType::Tmp)
             }
+            // Preserve the operator boundary in the AST so the future general
+            // warning subsystem can install a scoped reporting mask. RPHP's
+            // current warning surface has no central handler yet, so the
+            // expression retains ordinary evaluation and value semantics.
+            Expr::ErrorSuppress(inner) => self.compile_expr(inner),
             Expr::Cast { cast_type, expr } => {
                 let (inner_op, inner_type) = self.compile_expr(expr);
                 let tmp = self.alloc_tmp();
@@ -4516,6 +4531,16 @@ impl Compiler {
                 self.instructions.push(assign);
                 (tmp, OpType::Tmp)
             }
+            Expr::AssignTarget { target, expr } => {
+                match self.compile_assignment_target_expression(target, expr) {
+                    Ok(result) => result,
+                    Err(error) => {
+                        self.deferred_error = Some(error);
+                        let null = self.add_literal(Value::null());
+                        (null, OpType::Const)
+                    }
+                }
+            }
             Expr::FirstClassCallable(callable) => self.compile_expr(callable),
             Expr::Constant(name) => {
                 // Fetch a named constant at runtime
@@ -4912,6 +4937,81 @@ impl Compiler {
                     assign.op2_type = OpType::Tmp;
                     assign.op2 = fetch_tmp;
                     self.instructions.push(assign);
+                    idx += 1;
+                }
+                ListTarget::Target(target) => {
+                    let idx_literal = self.add_literal(Value::long(idx as i64));
+                    let fetch_tmp = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1_type = OpType::Tmp;
+                    fetch.op1 = array_tmp;
+                    fetch.op2_type = OpType::Const;
+                    fetch.op2 = idx_literal;
+                    fetch.result_type = OpType::Tmp;
+                    fetch.result = fetch_tmp;
+                    self.instructions.push(fetch);
+
+                    match target {
+                        Expr::PropertyAccess {
+                            object,
+                            property,
+                            nullsafe: false,
+                        } => {
+                            let (object, object_type) = self.compile_expr(object);
+                            let property = self.add_literal(Value::string(property.clone()));
+                            let mut assign = Instruction::new(OpCode::AssignObjProp);
+                            assign.op1 = object;
+                            assign.op1_type = object_type;
+                            assign.op2 = property;
+                            assign.op2_type = OpType::Const;
+                            assign.result = fetch_tmp;
+                            assign.result_type = OpType::Tmp;
+                            self.instructions.push(assign);
+                        }
+                        Expr::StaticProperty {
+                            class_name,
+                            property,
+                        } => {
+                            let (resolved, dynamic) = self.resolve_static_member_owner(class_name);
+                            let class = self.add_literal(Value::string(resolved));
+                            let property = self.add_literal(Value::string(property.clone()));
+                            let mut assign = Instruction::new(if dynamic {
+                                OpCode::AssignLateStaticProp
+                            } else {
+                                OpCode::AssignStaticProp
+                            });
+                            assign.op1 = class;
+                            assign.op1_type = OpType::Const;
+                            assign.op2 = property;
+                            assign.op2_type = OpType::Const;
+                            assign.result = fetch_tmp;
+                            assign.result_type = OpType::Tmp;
+                            self.instructions.push(assign);
+                        }
+                        Expr::ArrayAccess { .. } => {
+                            let mut root = target;
+                            let mut reversed_indices = Vec::new();
+                            while let Expr::ArrayAccess { array, index } = root {
+                                reversed_indices.push(index.as_ref().clone());
+                                root = array.as_ref();
+                            }
+                            reversed_indices.reverse();
+                            let path = self.compile_mutable_array_path(root, &reversed_indices)?;
+                            let &(container, container_type) = path.containers.last().unwrap();
+                            let &(key, key_type) = path.keys.last().unwrap();
+                            let mut assign = Instruction::new(OpCode::AssignDim);
+                            assign.op1 = container;
+                            assign.op1_type = container_type;
+                            assign.op2 = key;
+                            assign.op2_type = key_type;
+                            assign.result = fetch_tmp;
+                            assign.result_type = OpType::Tmp;
+                            self.instructions.push(assign);
+                            self.rebuild_mutable_array_path(&path);
+                            self.write_back_mutable_array_root(&path);
+                        }
+                        _ => return Err("Invalid destructuring assignment target".into()),
+                    }
                     idx += 1;
                 }
                 ListTarget::Skip => {

@@ -9935,6 +9935,43 @@ semantic gates. S1 now proceeds to an unmodified HttpFoundation
 `Request`/`Response` fixture before compiled Routing and a prebuilt DI
 container.
 
+#### Symfony HttpFoundation S1 gate (2026-08-12)
+
+The second S1 component gate now passes with unmodified vendor sources. The
+repository fixture pins `symfony/http-foundation` v7.4.16 at
+`b676451bb638e99a7d34d8a2be90406822e301eb`,
+`symfony/deprecation-contracts` v3.7.1 at
+`f3202fa1b5097b0af062dc978b32ecf63404e31d`, and
+`symfony/polyfill-mbstring` v1.38.2 at
+`d3d318bad5e7a1bfbd026009c8bfb8d8f99ae6b6`. Reference PHP installs that exact
+lock with the checksum-pinned Composer 2.8.12 PHAR. The generated autoloader
+and vendor tree then run unchanged under RPHP.
+
+The fixture creates a synthetic CLI `Request` carrying a POST method, path,
+query value, form value and HTTP header. It feeds those values into a
+`Response` with status 201 and a custom response header. PHP and RPHP must both
+print exactly `201|http-foundation|POST|/hello|RPHP|value|alpha`. The local
+entry point is `scripts/test-symfony-http-foundation-s1.sh`; CI owns the
+matching `Symfony HttpFoundation S1` job.
+
+The compatibility work closes shared PHP paths rather than adding
+HttpFoundation-specific behavior: variable-less catches; compound,
+coalescing and ordinary assignment expressions over mutable lvalues; chained
+Elvis expressions; instance first-class callables and runtime static calls;
+nested append and destructuring writeback; parent instance-call receiver
+forwarding; parent/trait dependency-first autoload and class-constant autoload;
+parser support for fully qualified compound types; `PREG_SET_ORDER`, extended
+regex delimiter whitespace and common PCRE/string/filter/date functions and
+constants. Focused parser, regex, stdlib, object-model and autoload regressions
+retain those contracts independently of the vendor fixture.
+
+This is a bounded admission of the exercised Request, Response, InputBag,
+HeaderBag and ResponseHeaderBag paths. It does not yet admit uploaded files,
+cookies, sessions, trusted proxy/host logic, request bodies, streamed or binary
+responses, output/header transport, or a real HTTP adapter. S1 now advances to
+compiled Routing and then a small prebuilt DependencyInjection container; the
+broader request/response and repeated-worker contract remains the S4 gate.
+
 ### S1/S3 blockers: language and object model
 
 Close these source-level gaps against focused PHPT cases before treating a

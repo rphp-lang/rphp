@@ -24,7 +24,7 @@ use crate::vm::execute::{
     ScalarLongSortOrder, VmError, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    prepare_scalar_long_callback, try_execute_scalar_long_callback,
+    prepare_scalar_long_callback, try_execute_scalar_long_callback, values_identical,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -356,9 +356,18 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "key",
         "array"
     );
-    reg!("in_array", fn_in_array, 2, 2, "needle", "haystack");
+    reg!(
+        "in_array",
+        fn_in_array,
+        3,
+        2,
+        "needle",
+        "haystack",
+        "strict"
+    );
     reg!("array_reverse", fn_array_reverse, 1, 1, "array");
     reg!("array_merge", fn_array_merge, 2, 2, "array1", "array2");
+    reg_var!("array_replace", fn_array_replace, 1, "array");
     reg!("array_keys", fn_array_keys, 1, 1, "array");
     reg!("array_values", fn_array_values, 1, 1, "array");
     reg!(
@@ -448,6 +457,26 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("join", fn_implode, 2, 2, "separator", "array");
     reg!("str_repeat", fn_str_repeat, 2, 2, "string", "times");
     reg!("substr_count", fn_substr_count, 2, 2, "haystack", "needle");
+    reg!(
+        "strspn",
+        fn_strspn,
+        4,
+        2,
+        "string",
+        "characters",
+        "offset",
+        "length"
+    );
+    reg!(
+        "strcspn",
+        fn_strcspn,
+        4,
+        2,
+        "string",
+        "characters",
+        "offset",
+        "length"
+    );
     reg!("str_contains", fn_str_contains, 2, 2, "haystack", "needle");
     reg!(
         "str_starts_with",
@@ -730,6 +759,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("hrtime", fn_hrtime, 1, 0, "as_nanoseconds");
     reg!("time", fn_time, 0, 0);
     reg!("date", fn_date, 2, 1, "format", "timestamp");
+    reg!("gmdate", fn_gmdate, 2, 1, "format", "timestamp");
     reg!(
         "mktime", fn_mktime, 6, 1, "hour", "minute", "second", "month", "day", "year"
     );
@@ -841,12 +871,14 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg_ref!(
         "preg_match_all",
         fn_preg_match_all,
-        3,
+        5,
         2,
         0b100,
         "pattern",
         "subject",
-        "matches"
+        "matches",
+        "flags",
+        "offset"
     );
     reg!(
         "preg_split",
@@ -866,23 +898,59 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "callback",
         "subject"
     );
+    reg!("preg_quote", fn_preg_quote, 2, 1, "string", "delimiter");
 
     // --- String encoding ---
-    reg!("htmlspecialchars", fn_htmlspecialchars, 1, 1, "string");
+    reg!(
+        "htmlspecialchars",
+        fn_htmlspecialchars,
+        3,
+        1,
+        "string",
+        "flags",
+        "encoding"
+    );
     reg!(
         "htmlspecialchars_decode",
         fn_htmlspecialchars_decode,
+        2,
         1,
-        1,
-        "string"
+        "string",
+        "flags"
     );
-    reg!("htmlentities", fn_htmlentities, 1, 1, "string");
+    reg!(
+        "htmlentities",
+        fn_htmlentities,
+        3,
+        1,
+        "string",
+        "flags",
+        "encoding"
+    );
+    reg!(
+        "html_entity_decode",
+        fn_html_entity_decode,
+        3,
+        1,
+        "string",
+        "flags",
+        "encoding"
+    );
     reg!("urlencode", fn_urlencode, 1, 1, "string");
     reg!("urldecode", fn_urldecode, 1, 1, "string");
     reg!("rawurlencode", fn_rawurlencode, 1, 1, "string");
     reg!("rawurldecode", fn_rawurldecode, 1, 1, "string");
     reg!("base64_encode", fn_base64_encode, 1, 1, "data");
     reg!("base64_decode", fn_base64_decode, 1, 1, "data");
+    reg!(
+        "filter_var",
+        fn_filter_var,
+        3,
+        2,
+        "value",
+        "filter",
+        "options"
+    );
 
     // --- Case-insensitive string functions ---
     reg!("stripos", fn_stripos, 2, 2, "haystack", "needle");
@@ -1632,9 +1700,18 @@ fn fn_in_array(
 ) -> Result<(), VmError> {
     let needle = arg!(ed, 0);
     let haystack = arg!(ed, 1);
+    let strict = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
     let found = haystack
         .as_array()
-        .map(|a| a.values().any(|v| values_equal(needle, v)))
+        .map(|a| {
+            a.values().any(|value| {
+                if strict {
+                    values_identical(needle, value)
+                } else {
+                    values_equal(needle, value)
+                }
+            })
+        })
         .unwrap_or(false);
     ret!(rv, Value::bool(found));
 }
@@ -1685,6 +1762,34 @@ fn fn_array_merge(
     } else {
         ret!(rv, Value::null());
     }
+}
+
+fn fn_array_replace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(first) = arg!(ed, 0).as_array() else {
+        ret!(rv, Value::null());
+    };
+    let mut result = first.clone();
+    let replacements = arg!(ed, 1);
+    if let Some(replacements) = replacements.as_array() {
+        for replacement in replacements.values() {
+            let Some(replacement) = replacement.as_array() else {
+                ret!(rv, Value::null());
+            };
+            for (key, value) in replacement.iter() {
+                match key {
+                    ArrayKey::Int(key) => result.set_int(key, value.clone()),
+                    ArrayKey::String(key) => result.set_str(&key, value.clone()),
+                }
+            }
+        }
+    } else if replacements.value_type() != ValueType::Undef {
+        ret!(rv, Value::null());
+    }
+    ret!(rv, Value::array(result));
 }
 
 fn fn_array_keys(
@@ -2396,6 +2501,58 @@ fn fn_strrpos(
             None => Value::bool(false),
         }
     );
+}
+
+fn string_span_bounds(ed: *mut ExecuteData, byte_len: usize) -> (usize, usize) {
+    let len = byte_len as i64;
+    let raw_offset = arg_opt!(ed, 2).map_or(0, Value::to_long_val);
+    let start = if raw_offset < 0 {
+        (len + raw_offset).max(0)
+    } else {
+        raw_offset.min(len)
+    };
+    let end = match arg_opt!(ed, 3) {
+        Some(length) => {
+            let length = length.to_long_val();
+            if length < 0 {
+                (len + length).max(start)
+            } else {
+                (start + length).min(len)
+            }
+        }
+        None => len,
+    };
+    (start as usize, end as usize)
+}
+
+fn string_span(ed: *mut ExecuteData, accept_matches: bool) -> i64 {
+    let string = arg_str!(ed, 0);
+    let characters = arg_str!(ed, 1);
+    let (start, end) = string_span_bounds(ed, string.len());
+    let mut accepted = [false; 256];
+    for byte in characters.bytes() {
+        accepted[byte as usize] = true;
+    }
+    string.as_bytes()[start..end]
+        .iter()
+        .take_while(|byte| accepted[**byte as usize] == accept_matches)
+        .count() as i64
+}
+
+fn fn_strspn(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(string_span(ed, true)));
+}
+
+fn fn_strcspn(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(rv, Value::long(string_span(ed, false)));
 }
 
 fn fn_strtr(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
@@ -5515,8 +5672,11 @@ fn fn_htmlspecialchars_decode(
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let s = arg_str!(ed, 0);
-    // Single-pass decode to avoid chaining issues (e.g. &amp;lt; → &lt; not <)
-    let src = s.as_ref();
+    ret!(rv, Value::string(decode_html_entities(s.as_ref(), false)));
+}
+
+fn decode_html_entities(src: &str, decode_numeric: bool) -> String {
+    // Single-pass decode to avoid chaining issues (e.g. &amp;lt; → &lt; not <).
     let mut out = String::with_capacity(src.len());
     let mut i = 0;
     let bytes = src.as_bytes();
@@ -5537,16 +5697,156 @@ fn fn_htmlspecialchars_decode(
             } else if src[i..].starts_with("&gt;") {
                 out.push('>');
                 i += 4;
+            } else if src[i..].starts_with("&apos;") {
+                out.push('\'');
+                i += 6;
+            } else if decode_numeric {
+                let decoded = src[i + 1..].find(';').and_then(|relative_end| {
+                    let entity = &src[i + 1..i + 1 + relative_end];
+                    let codepoint = entity
+                        .strip_prefix("#x")
+                        .or_else(|| entity.strip_prefix("#X"))
+                        .and_then(|digits| u32::from_str_radix(digits, 16).ok())
+                        .or_else(|| {
+                            entity
+                                .strip_prefix('#')
+                                .and_then(|digits| digits.parse::<u32>().ok())
+                        });
+                    codepoint
+                        .and_then(char::from_u32)
+                        .map(|character| (character, relative_end + 2))
+                });
+                if let Some((character, consumed)) = decoded {
+                    out.push(character);
+                    i += consumed;
+                } else {
+                    out.push('&');
+                    i += 1;
+                }
             } else {
                 out.push('&');
                 i += 1;
             }
         } else {
-            out.push(bytes[i] as char);
-            i += 1;
+            let character = src[i..].chars().next().unwrap();
+            out.push(character);
+            i += character.len_utf8();
         }
     }
-    ret!(rv, Value::string(out));
+    out
+}
+
+fn fn_html_entity_decode(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let s = arg_str!(ed, 0);
+    ret!(rv, Value::string(decode_html_entities(s.as_ref(), true)));
+}
+
+fn fn_filter_var(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    const FILTER_VALIDATE_INT: i64 = 257;
+    const FILTER_VALIDATE_BOOL: i64 = 258;
+    const FILTER_VALIDATE_IP: i64 = 275;
+    const FILTER_NULL_ON_FAILURE: i64 = 134_217_728;
+    const FILTER_FLAG_IPV4: i64 = 1_048_576;
+    const FILTER_FLAG_IPV6: i64 = 2_097_152;
+
+    let value = arg!(ed, 0);
+    let filter = arg_long!(ed, 1);
+    let options = arg_opt!(ed, 2);
+    let flags = options.map_or(0, |options| {
+        options
+            .as_array()
+            .and_then(|array| array.get_str("flags"))
+            .unwrap_or(options)
+            .to_long_val()
+    });
+    let invalid = || {
+        if flags & FILTER_NULL_ON_FAILURE != 0 {
+            Value::null()
+        } else {
+            Value::bool(false)
+        }
+    };
+
+    let result = match filter {
+        FILTER_VALIDATE_INT => match value.value_type() {
+            ValueType::Long => value.clone(),
+            ValueType::String => value
+                .as_str()
+                .and_then(|source| source.parse::<i64>().ok())
+                .map_or_else(invalid, Value::long),
+            _ => invalid(),
+        },
+        FILTER_VALIDATE_BOOL => {
+            let normalized = value.echo_to_string().to_ascii_lowercase();
+            match normalized.as_str() {
+                "1" | "true" | "on" | "yes" => Value::bool(true),
+                "" | "0" | "false" | "off" | "no" => Value::bool(false),
+                _ => invalid(),
+            }
+        }
+        FILTER_VALIDATE_IP => {
+            let parsed = value
+                .as_str()
+                .and_then(|source| source.parse::<std::net::IpAddr>().ok());
+            let valid = parsed.is_some_and(|address| {
+                (flags & FILTER_FLAG_IPV4 == 0 || address.is_ipv4())
+                    && (flags & FILTER_FLAG_IPV6 == 0 || address.is_ipv6())
+            });
+            if valid { value.clone() } else { invalid() }
+        }
+        _ => value.clone(),
+    };
+    ret!(rv, result);
+}
+
+fn fn_preg_quote(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let source = arg_str!(ed, 0);
+    let delimiter = arg_opt!(ed, 1)
+        .and_then(Value::as_str)
+        .and_then(|value| value.chars().next());
+    let mut quoted = String::with_capacity(source.len());
+    for character in source.chars() {
+        if matches!(
+            character,
+            '.' | '\\'
+                | '+'
+                | '*'
+                | '?'
+                | '['
+                | '^'
+                | ']'
+                | '$'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+                | '='
+                | '!'
+                | '<'
+                | '>'
+                | '|'
+                | ':'
+                | '-'
+                | '#'
+        ) || delimiter == Some(character)
+        {
+            quoted.push('\\');
+        }
+        quoted.push(character);
+    }
+    ret!(rv, Value::string(quoted));
 }
 
 /// htmlentities($string): string — same as htmlspecialchars for basic usage
@@ -6450,11 +6750,29 @@ fn fn_date(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> R
             .unwrap_or_default()
             .as_secs() as i64,
     };
-    ret!(rv, Value::string(format_php_date(&fmt, ts)));
+    ret!(rv, Value::string(format_php_date(&fmt, ts, "UTC")));
+}
+
+/// gmdate($format, $timestamp = time()): string
+fn fn_gmdate(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let fmt = arg_str!(ed, 0);
+    let ts = match arg_opt!(ed, 1) {
+        Some(v) if !v.is_undef() => v.to_long_val(),
+        _ => SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64,
+    };
+    ret!(rv, Value::string(format_php_date(&fmt, ts, "GMT")));
 }
 
 /// Format a Unix timestamp according to PHP date() format characters
-fn format_php_date(fmt: &str, ts: i64) -> String {
+fn format_php_date(fmt: &str, ts: i64, timezone_abbreviation: &str) -> String {
     // Break timestamp into components using manual calculation (no chrono dependency)
     let (year, month, day, hour, min, sec, wday, yday) = unix_to_parts(ts);
     let mut out = String::new();
@@ -6505,6 +6823,7 @@ fn format_php_date(fmt: &str, ts: i64) -> String {
             'w' => out.push_str(&format!("{}", wday)),
             'z' => out.push_str(&format!("{}", yday)),
             'U' => out.push_str(&format!("{}", ts)),
+            'T' => out.push_str(timezone_abbreviation),
             'D' => out.push_str(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wday as usize]),
             'l' => out.push_str(
                 [
@@ -7422,7 +7741,7 @@ fn fn_http_build_query(
     ret!(rv, Value::string(String::new()));
 }
 
-/// preg_match_all($pattern, $subject, &$matches = null): int
+/// preg_match_all($pattern, $subject, &$matches = null, $flags = 0, $offset = 0): int
 fn fn_preg_match_all(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -7430,6 +7749,7 @@ fn fn_preg_match_all(
 ) -> Result<(), VmError> {
     let pattern_str = arg_str!(ed, 0);
     let subject = arg_str!(ed, 1);
+    let flags = arg_opt!(ed, 3).map(|v| v.to_long_val()).unwrap_or(0);
 
     let has_matches = {
         let raw = unsafe { (*ed).cv(2) };
@@ -7445,6 +7765,47 @@ fn fn_preg_match_all(
 
     if !has_matches {
         ret!(rv, Value::long(re.count_matches(&subject) as i64));
+    }
+
+    if flags & 2 != 0 {
+        // PREG_SET_ORDER — each top-level element represents one match and
+        // contains the full match, capture groups, and named aliases.
+        let mut out = PhpArray::new();
+        let count: Result<usize, std::convert::Infallible> =
+            re.try_visit_captures(&subject, |caps| {
+                let mut row = PhpArray::new();
+                // PHP omits trailing unmatched groups in PREG_SET_ORDER rows,
+                // while retaining empty placeholders before a later match.
+                let last_capture = (1..caps.len())
+                    .rev()
+                    .find(|&index| caps.get(index).is_some())
+                    .unwrap_or(0);
+                for index in 0..=last_capture {
+                    match caps.get(index) {
+                        Some(capture) => row.push(Value::string(capture.as_str(&subject))),
+                        None => row.push(Value::string("")),
+                    }
+                }
+                for (name, &index) in caps.named_groups() {
+                    if index > last_capture {
+                        continue;
+                    }
+                    match caps.get(index) {
+                        Some(capture) => row.set_str(name, Value::string(capture.as_str(&subject))),
+                        None => row.set_str(name, Value::string("")),
+                    }
+                }
+                out.push(Value::array(row));
+                Ok(true)
+            });
+        let count = count.unwrap();
+
+        let matches_ptr = arg_mut!(ed, 2);
+        unsafe {
+            std::ptr::drop_in_place(matches_ptr);
+            matches_ptr.write(Value::array(out));
+        }
+        ret!(rv, Value::long(count as i64));
     }
 
     // PHP default: PREG_PATTERN_ORDER — matches[0] contains every full

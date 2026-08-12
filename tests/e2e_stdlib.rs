@@ -307,6 +307,24 @@ fn test_e2e_in_array_string() {
     );
 }
 
+#[test]
+fn test_e2e_in_array_strict_does_not_coerce() {
+    assert_eq!(
+        run_php("<?php echo in_array(1, ['1'], true) ? 'bad' : 'strict';"),
+        "strict"
+    );
+}
+
+#[test]
+fn test_filter_var_common_validators() {
+    assert_eq!(
+        run_php(
+            "<?php echo filter_var('42', FILTER_VALIDATE_INT), ':'; echo filter_var('yes', FILTER_VALIDATE_BOOL) ? 'true' : 'false'; echo ':'; echo filter_var('127.0.0.1', FILTER_VALIDATE_IP, FILTER_FLAG_IPV4); echo ':'; echo filter_var('bad', FILTER_VALIDATE_INT, FILTER_NULL_ON_FAILURE) === null ? 'null' : 'bad';"
+        ),
+        "42:true:127.0.0.1:null"
+    );
+}
+
 // === array_reverse ===
 
 #[test]
@@ -514,5 +532,13 @@ fn test_e2e_word_count() {
             "<?php $s = 'the quick brown fox jumps over the lazy dog'; $words = explode(' ', $s); echo count($words);"
         ),
         "9"
+    );
+}
+
+#[test]
+fn test_e2e_gmdate_formats_http_date_in_utc() {
+    assert_eq!(
+        run_php("<?php echo gmdate('D, d M Y H:i:s T', 0);"),
+        "Thu, 01 Jan 1970 00:00:00 GMT"
     );
 }

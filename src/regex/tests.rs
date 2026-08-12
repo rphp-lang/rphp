@@ -424,6 +424,13 @@ fn test_php_delimiter() {
     assert!(flags.case_insensitive);
 }
 
+#[test]
+fn test_php_delimiter_ignores_surrounding_whitespace() {
+    let (pattern, flags) = parse_php_regex("\n    / a+ /x   \n").unwrap();
+    assert_eq!(pattern, " a+ ");
+    assert!(flags.extended);
+}
+
 // ── Compiled regex cache ──────────────────────────────────────────────
 
 #[test]

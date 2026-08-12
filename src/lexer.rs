@@ -104,6 +104,7 @@ pub enum Token {
     Question,               // ?
     QuestionQuestion,       // ??
     QuestionQuestionAssign, // ??=
+    At,                     // @ (error-control operator)
     Colon,                  // :
     // Punctuation
     Semicolon,   // ;
@@ -319,6 +320,10 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::Ampersand);
                         self.pos += 1;
                     }
+                }
+                b'@' => {
+                    tokens.push(Token::At);
+                    self.pos += 1;
                 }
                 b'|' => {
                     if self.peek_next() == Some(b'|') {
@@ -850,6 +855,15 @@ mod tests {
                 Token::Eof,
             ]
         );
+    }
+
+    #[test]
+    fn error_control_operator_is_tokenized() {
+        let tokens = Lexer::new("<?php @trigger_error('hidden');")
+            .tokenize()
+            .unwrap();
+        assert_eq!(tokens[1], Token::At);
+        assert_eq!(tokens[2], Token::Identifier("trigger_error".into()));
     }
 
     #[test]

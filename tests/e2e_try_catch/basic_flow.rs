@@ -15,6 +15,22 @@ try {
 }
 
 #[test]
+fn test_try_catch_without_exception_variable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+try {
+    throw new Exception("error!");
+} catch (Exception) {
+    echo "caught";
+}
+"#
+        ),
+        "caught"
+    );
+}
+
+#[test]
 fn test_try_catch_no_throw() {
     assert_eq!(
         run_php(

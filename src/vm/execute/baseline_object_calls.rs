@@ -1177,20 +1177,22 @@ fn op_init_static_call<'a>(
 ) -> Result<ColdResult<'a>, VmError> {
     // Inline cache: static calls have constant class+method — cache resolved func_ptr.
     // Visibility is checked on first resolve only (same instruction = same caller context).
+    let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
+    let class_name = unsafe {
+        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    };
+    let method_name = unsafe {
+        &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+    };
+    let raw_class = class_name.as_str().unwrap_or("").to_string();
+    let method = method_name.as_str().unwrap_or("").to_string();
+    let class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope)
+        .unwrap_or_else(|| raw_class.clone());
     let ip = unsafe { (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize };
     let cached = op_array.cache[ip].func;
     let func_ptr = if !cached.is_null() {
         cached
     } else {
-        let dynamic_scope = opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0;
-        let class_name = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
-        let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-        let raw_class = class_name.as_str().unwrap_or("").to_string();
-        let method = method_name.as_str().unwrap_or("").to_string();
-
-        let class = resolve_static_call_class(eg, frame, &raw_class, dynamic_scope)
-            .unwrap_or_else(|| raw_class.clone());
-
         if eg.find_class(&class).is_none() {
             let loaded = crate::stdlib::autoload::ensure_symbol_loaded(eg, &class)?;
             if let Some(exception) = eg.exception.take() {
@@ -1296,6 +1298,19 @@ fn op_init_static_call<'a>(
     );
     unsafe {
         (*frame).call = call;
+        let target_is_instance = eg
+            .find_method_info(&class, &method)
+            .is_some_and(|(_, is_static, _)| !is_static);
+        if target_is_instance && (*frame).num_cvs != 0 {
+            let receiver = (*frame).cv(0);
+            if receiver.value_type() == ValueType::Object {
+                if common.plan.borrow_this() {
+                    frame_set_borrowed_this(call, receiver as *const Value);
+                } else {
+                    frame_set_this(call, receiver.clone());
+                }
+            }
+        }
     }
     Ok(ColdResult::Done)
 }

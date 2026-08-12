@@ -131,6 +131,29 @@ fn test_parse_first_class_callable_and_argument_unpack() {
 }
 
 #[test]
+fn test_parse_error_control_operator() {
+    let tokens = Lexer::new("<?php @trigger_error('hidden');")
+        .tokenize()
+        .unwrap();
+    let stmts = Parser::new(tokens).parse().unwrap();
+    assert!(matches!(
+        &stmts[0],
+        Stmt::ExprStmt(Expr::ErrorSuppress(inner))
+            if matches!(inner.as_ref(), Expr::FunctionCall { name, .. } if name == "trigger_error")
+    ));
+}
+
+#[test]
+fn test_parse_fully_qualified_compound_type_hints() {
+    let tokens = Lexer::new(
+        "<?php class Fixture { protected SessionInterface|\\Closure|null $session = null; protected static ?\\Closure $factory = null; public function run(\\DateTimeInterface $date): \\Stringable {} }",
+    )
+    .tokenize()
+    .unwrap();
+    Parser::new(tokens).parse().unwrap();
+}
+
+#[test]
 fn test_parse_add() {
     let tokens = Lexer::new("<?php echo 20 + 22;").tokenize().unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();

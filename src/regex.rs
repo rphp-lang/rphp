@@ -1864,6 +1864,9 @@ impl Parser {
 /// Parse a PHP-style regex like `/pattern/flags` into (pattern, flags).
 /// Supports paired delimiters: `{...}`, `(...)`, `[...]`, `<...>`.
 pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
+    // PHP ignores whitespace surrounding the delimited expression. This is
+    // commonly used for readable multi-line extended-mode patterns.
+    let input = input.trim();
     let bytes = input.as_bytes();
     if bytes.is_empty() {
         return Err("Empty regular expression".into());

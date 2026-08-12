@@ -2,6 +2,7 @@
 #[derive(Debug, Clone, PartialEq)]
 pub enum ListTarget {
     Variable(String),
+    Target(Expr),
     Skip,                                     // empty slot: list(,$b)
     Nested(Vec<ListTarget>),                  // nested destructuring
     KeyedVariable { key: Expr, var: String }, // explicit key: [0 => $a, 2 => $c]
@@ -53,6 +54,7 @@ pub enum Expr {
     PreDec(String),        // --$i
     Not(Box<Expr>),        // !expr
     UnaryMinus(Box<Expr>), // -$x
+    ErrorSuppress(Box<Expr>), // @expr
     Ternary {
         // cond ? then : else
         condition: Box<Expr>,
@@ -76,6 +78,11 @@ pub enum Expr {
         // $a ?? $b
         left: Box<Expr>,
         right: Box<Expr>,
+    },
+    CoalesceAssign {
+        // $a ??= $b (also valid as a value-producing expression)
+        target: Box<Expr>,
+        expr: Box<Expr>,
     },
     Elvis {
         // $a ?: $b (evaluates lhs once)
@@ -155,6 +162,11 @@ pub enum Expr {
         var: String,
         expr: Box<Expr>,
     },
+    AssignTarget {
+        // Mutable non-variable assignment used as a value-producing expression.
+        target: Box<Expr>,
+        expr: Box<Expr>,
+    },
     DynamicCall {
         // $var(args) — variable function call / closure call
         callable: Box<Expr>,
@@ -189,9 +201,14 @@ impl Expr {
             Expr::Yield { .. } | Expr::YieldFrom(_) => true,
             Expr::BinaryOp { left, right, .. }
             | Expr::NullCoalesce { left, right }
+            | Expr::CoalesceAssign {
+                target: left,
+                expr: right,
+            }
             | Expr::Elvis { left, right } => left.contains_yield() || right.contains_yield(),
             Expr::Not(inner)
             | Expr::UnaryMinus(inner)
+            | Expr::ErrorSuppress(inner)
             | Expr::Empty(inner)
             | Expr::Throw(inner)
             | Expr::Include { path: inner, .. }
@@ -221,6 +238,9 @@ impl Expr {
             | Expr::Instanceof { expr, .. }
             | Expr::Assign { expr, .. }
             | Expr::Print(expr) => expr.contains_yield(),
+            Expr::AssignTarget { target, expr } => {
+                target.contains_yield() || expr.contains_yield()
+            }
             Expr::Isset(expressions) => expressions.iter().any(Expr::contains_yield),
             Expr::Match { expr, arms } => {
                 expr.contains_yield()
@@ -392,6 +412,11 @@ pub enum Stmt {
         target: Expr,
         expr: Expr,
     },
+    CompoundAssign {
+        target: Expr,
+        op: BinOp,
+        expr: Expr,
+    },
     If {
         condition: Expr,
         then_body: Vec<Stmt>,
@@ -559,7 +584,7 @@ pub enum Stmt {
 #[derive(Debug, Clone, PartialEq)]
 pub struct CatchClause {
     pub types: Vec<String>, // Exception class names (multi-catch: ExA | ExB)
-    pub var: String,        // $e
+    pub var: Option<String>, // Optional exception variable (PHP 8 permits catch (Exception))
     pub body: Vec<Stmt>,
 }
 

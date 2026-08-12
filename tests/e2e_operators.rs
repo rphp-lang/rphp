@@ -197,6 +197,27 @@ fn test_e2e_dot_assign() {
 }
 
 #[test]
+fn test_e2e_compound_assign_mutable_targets_are_evaluated_once() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Box { public $value = 'a'; }
+$box = new Box();
+$objects = 0;
+$indices = 0;
+function objectTarget($box) { global $objects; $objects++; return $box; }
+function indexTarget() { global $indices; $indices++; return 'key'; }
+objectTarget($box)->value .= 'b';
+$values = ['key' => 'c'];
+$values[indexTarget()] .= 'd';
+echo $box->value, '|', $values['key'], '|', $objects, '|', $indices;
+"#
+        ),
+        "ab|cd|1|1"
+    );
+}
+
+#[test]
 fn test_e2e_compound_assign_in_loop() {
     assert_eq!(
         run_php("<?php $sum = 0; for ($i = 1; $i <= 5; $i++) { $sum += $i; } echo $sum;"),
@@ -231,6 +252,58 @@ fn test_e2e_null_coalescing_assign_properties() {
             "<?php class Box { public $value; public static $shared; } $box = new Box(); $box->value ??= 'object'; $box->value ??= 'changed'; Box::$shared ??= 'static'; Box::$shared ??= 'changed'; echo $box->value, '|', Box::$shared;"
         ),
         "object|static"
+    );
+}
+
+#[test]
+fn test_e2e_null_coalescing_assignment_is_value_producing() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class LazyBox { public $value; }
+$box = new LazyBox();
+function initialize($box) { return $box->value ??= 'ready'; }
+$fallback = null;
+echo initialize($box), '|';
+if (!$fallback ??= '') { echo 'empty'; }
+echo '|', $fallback, '|', $box->value;
+"#
+        ),
+        "ready|empty||ready"
+    );
+}
+
+#[test]
+fn test_e2e_property_and_array_assignment_expressions_produce_values() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class AssignmentBox { public $value; }
+$box = new AssignmentBox();
+$values = [];
+if ($box->value = 'property') { echo $box->value; }
+echo '|', ($values['key'] = 'array'), '|', $values['key'];
+"#
+        ),
+        "property|array|array"
+    );
+}
+
+#[test]
+fn test_e2e_chained_elvis_is_left_associative_and_lazy() {
+    assert_eq!(
+        run_php(
+            "<?php function mark($v) { echo $v; return $v === 'c' ? 'ok' : ''; } $result = mark('a') ?: mark('b') ?: mark('c') ?: mark('d'); echo ':'.$result;"
+        ),
+        "abc:ok"
+    );
+}
+
+#[test]
+fn test_e2e_error_control_operator_preserves_value_and_side_effects() {
+    assert_eq!(
+        run_php("<?php function value() { echo 'side>'; return 42; } echo @value();"),
+        "side>42"
     );
 }
 

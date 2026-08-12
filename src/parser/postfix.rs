@@ -106,19 +106,30 @@ impl Parser {
                         self.expect(&Token::RBrace)?;
                         constant
                     } else {
-                        match self.advance() {
-                            Token::Identifier(name) => Expr::StringLiteral(name),
-                            Token::Class => Expr::StringLiteral("class".to_string()),
-                            other => {
-                                return Err(format!(
-                                    "Expected constant name after dynamic ::, got {:?}",
-                                    other
-                                ));
-                            }
-                        }
+                        let token = self.advance();
+                        let name = Self::token_as_named_arg_label(&token).ok_or_else(|| {
+                            format!("Expected member name after dynamic ::, got {token:?}")
+                        })?;
+                        Expr::StringLiteral(name)
                     };
                     if self.peek() == Token::LParen {
-                        return Err("Dynamic static method calls are not supported yet".into());
+                        self.advance();
+                        let args = self.parse_call_args()?;
+                        expr = Expr::DynamicCall {
+                            callable: Box::new(Expr::ArrayLiteral(vec![
+                                ArrayElement {
+                                    key: None,
+                                    value: expr,
+                                },
+                                ArrayElement {
+                                    key: None,
+                                    value: constant,
+                                },
+                            ])),
+                            args,
+                            generic_args: Vec::new(),
+                        };
+                        continue;
                     }
                     expr = Expr::DynamicClassConstant {
                         class: Box::new(expr),
@@ -142,6 +153,33 @@ impl Parser {
                     let generic_args = self.parse_optional_turbofish()?;
                     if self.peek() == Token::LParen {
                         self.advance();
+                        if self.peek() == Token::DotDotDot && self.peek_at(1) == Token::RParen {
+                            if nullsafe {
+                                return Err(
+                                    "Cannot create a first-class callable from nullsafe method syntax"
+                                        .into(),
+                                );
+                            }
+                            if !generic_args.is_empty() {
+                                return Err(
+                                    "Generic first-class method callables are not supported yet"
+                                        .into(),
+                                );
+                            }
+                            self.advance();
+                            self.advance();
+                            expr = Expr::FirstClassCallable(Box::new(Expr::ArrayLiteral(vec![
+                                ArrayElement {
+                                    key: None,
+                                    value: expr,
+                                },
+                                ArrayElement {
+                                    key: None,
+                                    value: Expr::StringLiteral(member),
+                                },
+                            ])));
+                            continue;
+                        }
                         let args = self.parse_call_args()?;
                         expr = Expr::MethodCall {
                             object: Box::new(expr),

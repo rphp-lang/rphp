@@ -43,9 +43,18 @@ impl Parser {
                 let t = self.parse_qualified_name()?;
                 types.push(t);
             }
-            let var = match self.advance() {
-                Token::Variable(n) => n,
-                other => return Err(format!("Expected variable in catch, got {:?}", other)),
+            let var = match self.peek() {
+                Token::Variable(_) => match self.advance() {
+                    Token::Variable(n) => Some(n),
+                    _ => unreachable!(),
+                },
+                Token::RParen => None,
+                ref other => {
+                    return Err(format!(
+                        "Expected variable or ')' in catch, got {:?}",
+                        other
+                    ));
+                }
             };
             self.expect(&Token::RParen)?;
             self.expect(&Token::LBrace)?;
@@ -786,6 +795,7 @@ impl Parser {
                 Self::collect_free_vars(right, bound, out);
             }
             Expr::UnaryMinus(inner)
+            | Expr::ErrorSuppress(inner)
             | Expr::Not(inner)
             | Expr::Throw(inner)
             | Expr::Empty(inner)
@@ -799,6 +809,10 @@ impl Parser {
                     out.push(var.clone());
                 }
                 Self::collect_free_vars(inner, bound, out);
+            }
+            Expr::AssignTarget { target, expr } => {
+                Self::collect_free_vars(target, bound, out);
+                Self::collect_free_vars(expr, bound, out);
             }
             Expr::FunctionCall { args, .. } | Expr::StaticCall { args, .. } => {
                 for arg in args {
@@ -836,6 +850,10 @@ impl Parser {
             Expr::NullCoalesce { left, right } | Expr::Elvis { left, right } => {
                 Self::collect_free_vars(left, bound, out);
                 Self::collect_free_vars(right, bound, out);
+            }
+            Expr::CoalesceAssign { target, expr } => {
+                Self::collect_free_vars(target, bound, out);
+                Self::collect_free_vars(expr, bound, out);
             }
             Expr::ArrayLiteral(elements) => {
                 for elem in elements {

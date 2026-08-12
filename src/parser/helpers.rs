@@ -173,6 +173,7 @@ impl Parser {
                 | Token::DotDotDot
                 | Token::Ampersand
                 | Token::Question
+                | Token::Backslash
                 | Token::ArrayKw
                 | Token::Null
                 | Token::Static
@@ -270,6 +271,7 @@ impl Parser {
             && matches!(
                 self.tokens.get(self.pos + 1),
                 Some(Token::Identifier(_))
+                    | Some(Token::Backslash)
                     | Some(Token::ArrayKw)
                     | Some(Token::Null)
                     | Some(Token::Static)
@@ -292,6 +294,7 @@ impl Parser {
                 matches!(
                     self.tokens.get(self.pos + 1),
                     Some(Token::Identifier(_))
+                        | Some(Token::Backslash)
                         | Some(Token::ArrayKw)
                         | Some(Token::Null)
                         | Some(Token::Static)
@@ -306,6 +309,7 @@ impl Parser {
                     Some(Token::Variable(_)) | Some(Token::Pipe) | Some(Token::Ampersand)
                 )
             }
+            Token::Backslash => true,
             Token::ArrayKw | Token::Null => {
                 matches!(
                     self.tokens.get(self.pos + 1),
@@ -340,7 +344,10 @@ impl Parser {
             }
             let is_type = matches!(
                 next,
-                Some(Token::Identifier(_)) | Some(Token::ArrayKw) | Some(Token::Null)
+                Some(Token::Identifier(_))
+                    | Some(Token::Backslash)
+                    | Some(Token::ArrayKw)
+                    | Some(Token::Null)
             );
             if is_type {
                 self.advance(); // consume '?'
@@ -361,6 +368,7 @@ impl Parser {
                         | Some(Token::Ampersand)
                         | Some(Token::DotDotDot)
                         | Some(Token::Pipe)
+                        | Some(Token::Backslash)
                 );
                 let is_type_context = is_type_context || matches!(next, Some(Token::Less));
                 if is_type_context {
@@ -372,6 +380,11 @@ impl Parser {
                     return Ok(Some(hint));
                 }
                 Ok(None)
+            }
+            Token::Backslash => {
+                let hint = self.parse_base_type_hint()?;
+                let hint = self.maybe_parse_compound_type(hint)?;
+                Ok(Some(hint))
             }
             Token::ArrayKw => {
                 let next = self.tokens.get(self.pos + 1);
@@ -411,6 +424,7 @@ impl Parser {
                 "mixed" => Ok(TypeHint::Mixed),
                 "never" => Ok(TypeHint::Never),
                 _ => {
+                    let name = self.parse_type_name_tail(name, false)?;
                     if self.peek() == Token::Less {
                         if !cfg!(any(
                             feature = "php-generics-erased",
@@ -433,6 +447,36 @@ impl Parser {
                     Ok(TypeHint::ClassName(name))
                 }
             },
+            Token::Backslash => {
+                let first = match self.advance() {
+                    Token::Identifier(name) => name,
+                    other => {
+                        return Err(format!(
+                            "Expected identifier after leading '\\' in type hint, got {:?}",
+                            other
+                        ));
+                    }
+                };
+                let name = self.parse_type_name_tail(first, true)?;
+                if self.peek() == Token::Less {
+                    if !cfg!(any(
+                        feature = "php-generics-erased",
+                        feature = "php-generics-reified"
+                    )) {
+                        return Err(
+                            "Generic syntax requires php-generics-erased or php-generics-reified"
+                                .to_string(),
+                        );
+                    }
+                    let arguments = self.parse_generic_type_arguments()?;
+                    Ok(TypeHint::GenericApplication {
+                        base: name,
+                        arguments,
+                    })
+                } else {
+                    Ok(TypeHint::ClassName(name))
+                }
+            }
             Token::ArrayKw => Ok(TypeHint::Array),
             Token::Null => Ok(TypeHint::Null),
             Token::True => Ok(TypeHint::ClassName("true".to_string())),
@@ -459,6 +503,32 @@ impl Parser {
             }
             other => Err(format!("Expected type hint, got {:?}", other)),
         }
+    }
+
+    fn parse_type_name_tail(
+        &mut self,
+        first: String,
+        fully_qualified: bool,
+    ) -> Result<String, String> {
+        let mut parts = vec![first];
+        while self.peek() == Token::Backslash {
+            self.advance();
+            match self.advance() {
+                Token::Identifier(name) => parts.push(name),
+                other => {
+                    return Err(format!(
+                        "Expected identifier after '\\' in type hint, got {:?}",
+                        other
+                    ));
+                }
+            }
+        }
+        let name = parts.join("\\");
+        Ok(if fully_qualified {
+            format!("\\{name}")
+        } else {
+            name
+        })
     }
 
     fn type_hint_uses_static(hint: &TypeHint) -> bool {
@@ -557,6 +627,10 @@ impl Parser {
             saw_dimension = true;
             let mut depth = 1usize;
             i += 1;
+            // Leave an empty final dimension to the array-append parser.
+            if self.tokens.get(i) == Some(&Token::RBracket) {
+                return false;
+            }
             while i < self.tokens.len() && depth != 0 {
                 match &self.tokens[i] {
                     Token::LBracket | Token::LParen => depth += 1,
@@ -660,12 +734,16 @@ impl Parser {
                     ));
                 }
             } else if let Token::Variable(_) = self.peek() {
-                // Could be plain $var or key => $var
-                let var_name = match self.advance() {
-                    Token::Variable(n) => n,
-                    _ => unreachable!(),
-                };
-                targets.push(ListTarget::Variable(var_name));
+                let target = self.parse_expr()?;
+                match target {
+                    Expr::Variable(var) => targets.push(ListTarget::Variable(var)),
+                    Expr::ArrayAccess { .. }
+                    | Expr::PropertyAccess {
+                        nullsafe: false, ..
+                    }
+                    | Expr::StaticProperty { .. } => targets.push(ListTarget::Target(target)),
+                    _ => return Err("Invalid destructuring assignment target".into()),
+                }
             } else if matches!(self.peek(), Token::Integer(_) | Token::StringLiteral(_)) {
                 // Explicit key: 0 => $var, 'key' => $var
                 let key_expr = self.parse_expr()?;

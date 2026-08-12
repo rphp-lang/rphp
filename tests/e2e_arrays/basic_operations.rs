@@ -429,3 +429,33 @@ echo match (2) {
         "20:b:right"
     );
 }
+
+#[test]
+fn nested_array_dimension_append_is_a_mutation_target() {
+    assert_eq!(
+        run_php(
+            "<?php $values = []; $key = 'group'; $values[$key][] = 'first'; $values[$key][] = 'second'; echo implode(',', $values[$key]);"
+        ),
+        "first,second"
+    );
+}
+
+#[test]
+fn destructuring_assigns_into_array_dimensions() {
+    assert_eq!(
+        run_php(
+            "<?php $headers = []; [$headers['user'], $headers['password']] = ['alice', 'secret']; echo $headers['user'], ':', $headers['password'];"
+        ),
+        "alice:secret"
+    );
+}
+
+#[test]
+fn array_replace_overwrites_string_and_integer_keys_across_inputs() {
+    assert_eq!(
+        run_php(
+            "<?php $value = array_replace(['name' => 'base', 0 => 'zero'], ['name' => 'middle', 0 => 'one'], ['name' => 'final']); echo $value['name'], ':', $value[0];"
+        ),
+        "final:one"
+    );
+}

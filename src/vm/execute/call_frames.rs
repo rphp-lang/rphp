@@ -363,9 +363,11 @@ fn throw_in_frame<'a>(
                 }
                 unsafe { cleanup_pending_calls(eg, search_frame) };
                 let base_ptr = sf_op_array.instructions.as_ptr();
-                let catch_cv_ptr =
-                    unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
-                unsafe { slot_set(catch_cv_ptr, thrown.clone()) };
+                if let Some(catch_cv) = catch.catch_cv {
+                    let catch_cv_ptr =
+                        unsafe { (*search_frame).get_op_mut(catch_cv, OpType::Cv) };
+                    unsafe { slot_set(catch_cv_ptr, thrown.clone()) };
+                }
                 unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
                 return ThrowResult::Handled(frame, new_op_array);

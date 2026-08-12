@@ -1148,6 +1148,9 @@ pub fn execute_hot_frame(
 
             // ── AssignCv — scalar-only assignment ──
             OpCode::AssignCv => {
+                if opline.op1_type != OpType::Cv {
+                    return bailout(frame, opline_ptr, HotBailReason::UnsupportedAssignType);
+                }
                 let src = if opline.op2_type == OpType::Tmp || opline.op2_type == OpType::Var {
                     unsafe { &*(frame as *const Value).add(CALL_FRAME_SLOTS + opline.op2 as usize) }
                 } else if opline.op2_type == OpType::Cv {

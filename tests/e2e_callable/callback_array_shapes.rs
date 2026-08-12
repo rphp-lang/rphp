@@ -321,3 +321,31 @@ echo ":" . implode(",", $ordered);
         "1:1,2,3|1:1.5,2.5,3.5|1:-9223372036854775807,9223372036854775807|1:3,2,1|1:1,2,3|313212:1,2,3"
     );
 }
+
+#[test]
+fn test_first_class_method_callable_works_with_array_map() {
+    let out = run_php(
+        r#"<?php
+class Formatter {
+    public function format($value) { return strtoupper($value); }
+}
+$formatter = new Formatter();
+echo implode(',', array_map($formatter->format(...), ['a', 'b']));
+"#,
+    );
+    assert_eq!(out, "A,B");
+}
+
+#[test]
+fn test_dynamic_class_name_static_method_call() {
+    let out = run_php(
+        r#"<?php
+class DynamicFactory {
+    public static function create($value) { return strtoupper($value); }
+}
+$class = DynamicFactory::class;
+echo $class::create('dynamic');
+"#,
+    );
+    assert_eq!(out, "DYNAMIC");
+}

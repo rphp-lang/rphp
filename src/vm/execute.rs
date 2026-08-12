@@ -1916,6 +1916,13 @@ fn called_class_id_for_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData, dept
 /// internal handlers are intentionally kept out of `execute_ex`. These paths
 /// are important for PHP semantics but cold for ordinary fixed-signature user
 /// calls, so outlining them keeps the baseline dispatch working set smaller.
+fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> &str {
+    eg.function_table
+        .iter()
+        .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.as_str()))
+        .unwrap_or("internal function")
+}
+
 #[cold]
 #[inline(never)]
 fn execute_full_call<'a>(
@@ -1963,18 +1970,20 @@ fn execute_full_call<'a>(
     let num_args = unsafe { (*call).num_args };
     let public_max = func_common.sig.public_arity();
     if num_args < func_common.sig.required_num_args {
+        let function_name = registered_function_name(eg, unsafe { (*call).func });
         return Err(VmError::Fatal(format!(
-            "Too few arguments, {} passed and exactly {} expected",
-            num_args, func_common.sig.required_num_args
+            "Too few arguments to {}, {} passed and exactly {} expected",
+            function_name, num_args, func_common.sig.required_num_args
         )));
     }
     if func_common.fn_type != FunctionType::User
         && !func_common.sig.is_variadic
         && num_args > public_max
     {
+        let function_name = registered_function_name(eg, unsafe { (*call).func });
         return Err(VmError::Fatal(format!(
-            "Too many arguments, {} passed and at most {} expected",
-            num_args, public_max
+            "Too many arguments to {}, {} passed and at most {} expected",
+            function_name, num_args, public_max
         )));
     }
 
@@ -1983,9 +1992,13 @@ fn execute_full_call<'a>(
         let cv_idx = func_common.sig.param_cv_index(i);
         let val = unsafe { &*(*call).cv(cv_idx) };
         if val.is_undef() {
+            let function_name = registered_function_name(eg, unsafe { (*call).func });
             return Err(VmError::Fatal(format!(
-                "Too few arguments, {} passed and exactly {} expected",
-                num_args, func_common.sig.required_num_args
+                "Too few arguments to {}, argument #{} is missing ({} passed and exactly {} expected)",
+                function_name,
+                i + 1,
+                num_args,
+                func_common.sig.required_num_args
             )));
         }
     }
@@ -2293,7 +2306,7 @@ fn value_to_array_key(val: &Value) -> Result<ArrayKey, VmError> {
 }
 
 /// PHP === comparison: same type and same value (recursive for arrays).
-fn values_identical(a: &Value, b: &Value) -> bool {
+pub(crate) fn values_identical(a: &Value, b: &Value) -> bool {
     if a.value_type() != b.value_type() {
         return false;
     }

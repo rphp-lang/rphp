@@ -261,6 +261,35 @@ fn test_preg_match_all_preserves_utf8_and_named_captures() {
 }
 
 #[test]
+fn test_preg_match_all_set_order_with_named_captures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            $count = preg_match_all('/(?P<letter>ž|č)(?P<digit>\d)/', '🙂 ž1 x č2', $m, PREG_SET_ORDER);
+            echo $count . '|' . $m[0][0] . ':' . $m[0]['letter'] . ':' . $m[0][2]
+                . '|' . $m[1][0] . ':' . $m[1]['letter'] . ':' . $m[1][2];
+            "#,
+        ),
+        "2|ž1:ž:1|č2:č:2"
+    );
+}
+
+#[test]
+fn test_preg_match_all_set_order_omits_trailing_unmatched_groups() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+            preg_match_all('/(?<separator>,)|[^,]+/', 'a,b', $matches, PREG_SET_ORDER);
+            foreach ($matches as $row) {
+                echo count($row), ':', isset($row['separator']) ? 'yes' : 'no', ':', $row[0], '|';
+            }
+            "#,
+        ),
+        "1:no:a|3:yes:,|1:no:b|"
+    );
+}
+
+#[test]
 fn test_preg_match_all_no_match_keeps_pattern_order_shape() {
     assert_eq!(
         run_php(
@@ -390,5 +419,13 @@ fn test_preg_replace_callback_exception_does_not_publish_partial_output() {
             "#,
         ),
         "unchanged|stop"
+    );
+}
+
+#[test]
+fn test_preg_quote_escapes_regex_metacharacters_and_delimiter() {
+    assert_eq!(
+        run_php("<?php echo preg_quote('a.b/c+', '/');"),
+        "a\\.b\\/c\\+"
     );
 }

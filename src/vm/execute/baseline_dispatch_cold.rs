@@ -1035,7 +1035,7 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
             let value = clone_static_property_value(
                 eg.static_property_value_unchecked(cache.property_slot()),
             );
-            slot_set(result_ptr, value);
+            frame_tmp_set(frame, result_ptr, value);
         }
         return Ok(ColdResult::Done);
     }
@@ -1150,7 +1150,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     let set_result = |value| {
         // SAFETY: `result_ptr` is the initialized writable result slot proven
         // above, and every call transfers exactly one owned Value into it.
-        unsafe { slot_set(result_ptr, value) };
+        unsafe { frame_result_set(frame, result_ptr, opline.result_type, value) };
     };
     let dynamic_owner = opline._pad & CLASS_CONST_DYNAMIC_OWNER != 0;
     let dynamic_name = opline._pad & CLASS_CONST_DYNAMIC_NAME != 0;
@@ -1177,6 +1177,24 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             "TypeError",
             "Cannot use \"::class\" on string".to_string(),
         ));
+    }
+    let scoped_owner = raw_class.eq_ignore_ascii_case("self")
+        || raw_class.eq_ignore_ascii_case("static")
+        || raw_class.eq_ignore_ascii_case("parent");
+    if class_value.as_object().is_none()
+        && !raw_class.is_empty()
+        && !scoped_owner
+        && eg.find_class(raw_class).is_none()
+    {
+        let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, raw_class)?;
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception) {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
     }
     // SAFETY: `opline` belongs to this op-array, and cache has one stable entry
     // per instruction. Execution is single-threaded, so this opcode owns the
@@ -1648,7 +1666,7 @@ fn resolve_static_property_read_cache_miss<'a>(
     }
     let value = clone_static_property_value(stored);
     cache.set_property(class_id, resolved.storage_slot, 1);
-    unsafe { slot_set(result_ptr, value) };
+    unsafe { frame_tmp_set(frame, result_ptr, value) };
     Ok(ColdResult::Done)
 }
 
@@ -1726,7 +1744,7 @@ fn op_instanceof(
     let is_instance = obj_val
         .as_object()
         .is_some_and(|object| eg.class_is_a(&object.class_name, target));
-    unsafe { slot_set(result_ptr, Value::bool(is_instance)) };
+    unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(is_instance)) };
 }
 
 #[inline(never)]
@@ -1752,7 +1770,7 @@ fn op_fetch_const(
             .find_constant(name)
             .ok_or_else(|| VmError::Fatal(format!("Undefined constant \"{}\"", name)))?;
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-        unsafe { slot_set(result_ptr, value) };
+        unsafe { frame_result_set(frame, result_ptr, opline.result_type, value) };
     }
     Ok(())
 }

@@ -421,3 +421,21 @@ echo $x . '|' . $y;
         "deep|deep!"
     );
 }
+
+#[test]
+fn test_strspn_and_strcspn_with_ranges() {
+    assert_eq!(
+        run_php(
+            "<?php echo strcspn('scheme:/path', ':/?#'), ':', strspn('abc123!', 'abc123'), ':', strcspn('xxabc!', '!', 2, 4);"
+        ),
+        "6:6:3"
+    );
+}
+
+#[test]
+fn test_html_entity_decode_named_numeric_and_utf8() {
+    assert_eq!(
+        run_php("<?php echo html_entity_decode('a&amp;b&#x21;&#33; ž');"),
+        "a&b!! ž"
+    );
+}

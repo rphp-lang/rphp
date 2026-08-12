@@ -77,10 +77,10 @@ fn op_foreach_init<'a>(
         // Store generator object in result TMP
         let cloned = arr_val.clone();
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-        unsafe { slot_set(result_ptr, cloned) };
+        unsafe { frame_result_set(frame, result_ptr, opline.result_type, cloned) };
         // Set position TMP to 0 (0 = first iteration, don't call next)
         let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-        unsafe { slot_set(pos_ptr, Value::long(0)) };
+        unsafe { frame_tmp_set_long(frame, pos_ptr, 0) };
     } else {
         let is_empty = match arr_val.as_array() {
             Some(arr) => arr.is_empty(),
@@ -108,10 +108,10 @@ fn op_foreach_init<'a>(
         // Copy array to result TMP
         let cloned = arr_val.clone();
         let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-        unsafe { slot_set(result_ptr, cloned) };
+        unsafe { frame_result_set(frame, result_ptr, opline.result_type, cloned) };
         // Set position TMP to 0
         let pos_ptr = unsafe { (*frame).get_op_mut(opline.extended_value, OpType::Tmp) };
-        unsafe { slot_set(pos_ptr, Value::long(0)) };
+        unsafe { frame_tmp_set_long(frame, pos_ptr, 0) };
     }
     Ok(ColdResult::Done)
 }
@@ -168,17 +168,24 @@ fn op_foreach_next<'a>(
         if gen_data.state != crate::vm::generator::GeneratorState::Completed {
             // Write current value to value_cv
             let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-            unsafe { slot_set(val_ptr, gen_data.value.clone()) };
+            unsafe { frame_slot_set(frame, val_ptr, gen_data.value.clone()) };
             // Write key if requested
             if key_encoded > 0 {
                 let key_cv = key_encoded - 1;
                 let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                unsafe { slot_set(key_ptr, gen_data.key.clone()) };
+                unsafe { frame_slot_set(frame, key_ptr, gen_data.key.clone()) };
             }
             drop(gen_data);
             // Increment position
             let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
-            unsafe { slot_set(pos_ptr, Value::long(pos + 1)) };
+            unsafe {
+                frame_result_set(
+                    frame,
+                    pos_ptr,
+                    opline.op2_type,
+                    Value::long(pos + 1),
+                )
+            };
             true
         } else {
             false
@@ -193,22 +200,29 @@ fn op_foreach_next<'a>(
                     // Need both key and value — use get_at()
                     let (val, key) = arr.get_at(pos).unwrap();
                     let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                    unsafe { slot_set(val_ptr, val.clone()) };
+                    unsafe { frame_slot_set(frame, val_ptr, val.clone()) };
                     let key_cv = key_encoded - 1;
                     let key_val = match key {
                         ArrayKey::Int(k) => Value::long(k),
                         ArrayKey::String(k) => Value::string(k),
                     };
                     let key_ptr = unsafe { (*frame).get_op_mut(key_cv, OpType::Cv) };
-                    unsafe { slot_set(key_ptr, key_val) };
+                    unsafe { frame_slot_set(frame, key_ptr, key_val) };
                 } else {
                     // Only value needed — use get_value_at() (avoids key clone)
                     let val = arr.get_value_at(pos).unwrap();
                     let val_ptr = unsafe { (*frame).get_op_mut(val_cv, OpType::Cv) };
-                    unsafe { slot_set(val_ptr, val.clone()) };
+                    unsafe { frame_slot_set(frame, val_ptr, val.clone()) };
                 }
                 let pos_ptr = unsafe { (*frame).get_op_mut(opline.op2 as u32, opline.op2_type) };
-                unsafe { slot_set(pos_ptr, Value::long((pos + 1) as i64)) };
+                unsafe {
+                    frame_result_set(
+                        frame,
+                        pos_ptr,
+                        opline.op2_type,
+                        Value::long((pos + 1) as i64),
+                    )
+                };
                 true
             } else {
                 false
@@ -219,7 +233,7 @@ fn op_foreach_next<'a>(
     };
 
     let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-    unsafe { slot_set(result_ptr, Value::bool(has_more)) };
+    unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(has_more)) };
     Ok(ColdResult::Done)
 }
 

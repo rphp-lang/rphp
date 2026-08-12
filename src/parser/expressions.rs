@@ -8,19 +8,54 @@ impl Parser {
 
         let expr = self.parse_ternary()?;
 
+        if self.peek() == Token::QuestionQuestionAssign {
+            return self.finish_coalesce_assignment_expression(expr);
+        }
+
         // Handle assignment as expression: $var = expr
         if self.peek() == Token::Assign {
-            if let Expr::Variable(var) = expr {
-                self.advance(); // consume '='
-                let rhs = self.parse_expr()?;
-                return Ok(Expr::Assign {
-                    var,
-                    expr: Box::new(rhs),
-                });
-            }
+            return self.finish_assignment_expression(expr);
         }
 
         Ok(expr)
+    }
+
+    fn finish_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
+        self.expect(&Token::Assign)?;
+        let expr = Box::new(self.parse_expr()?);
+        match target {
+            Expr::Variable(var) => Ok(Expr::Assign { var, expr }),
+            Expr::ArrayAccess { .. }
+            | Expr::PropertyAccess {
+                nullsafe: false, ..
+            }
+            | Expr::StaticProperty { .. } => Ok(Expr::AssignTarget {
+                target: Box::new(target),
+                expr,
+            }),
+            other => Err(format!("Invalid assignment target: {other:?}")),
+        }
+    }
+
+    fn finish_coalesce_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
+        if !matches!(
+            &target,
+            Expr::Variable(_)
+                | Expr::ArrayAccess { .. }
+                | Expr::PropertyAccess {
+                    nullsafe: false,
+                    ..
+                }
+                | Expr::StaticProperty { .. }
+        ) {
+            return Err("Invalid null-coalescing assignment target".into());
+        }
+        self.expect(&Token::QuestionQuestionAssign)?;
+        let expr = self.parse_expr()?;
+        Ok(Expr::CoalesceAssign {
+            target: Box::new(target),
+            expr: Box::new(expr),
+        })
     }
 
     fn parse_yield_expr(&mut self) -> Result<Expr, String> {
@@ -76,10 +111,20 @@ impl Parser {
             if self.peek() == Token::Colon {
                 self.advance(); // consume :
                 let right = self.parse_null_coalesce()?;
-                return Ok(Expr::Elvis {
+                let mut result = Expr::Elvis {
                     left: Box::new(expr),
                     right: Box::new(right),
-                });
+                };
+                while self.peek() == Token::Question && self.peek_at(1) == Token::Colon {
+                    self.advance();
+                    self.advance();
+                    let right = self.parse_null_coalesce()?;
+                    result = Expr::Elvis {
+                        left: Box::new(result),
+                        right: Box::new(right),
+                    };
+                }
+                return Ok(result);
             }
 
             let then_expr = self.parse_ternary()?;
@@ -167,15 +212,7 @@ impl Parser {
         if self.peek() != Token::Assign {
             return Ok(operand);
         }
-        let Expr::Variable(var) = operand else {
-            return Ok(operand);
-        };
-        self.advance();
-        let expr = self.parse_expr()?;
-        Ok(Expr::Assign {
-            var,
-            expr: Box::new(expr),
-        })
+        self.finish_assignment_expression(operand)
     }
 
     /// Bitwise OR: | (left-associative)
@@ -285,15 +322,7 @@ impl Parser {
         if self.peek() != Token::Assign {
             return Ok(operand);
         }
-        let Expr::Variable(var) = operand else {
-            return Ok(operand);
-        };
-        self.advance();
-        let expr = self.parse_expr()?;
-        Ok(Expr::Assign {
-            var,
-            expr: Box::new(expr),
-        })
+        self.finish_assignment_expression(operand)
     }
 
     /// Concat: . (left-associative, lower than additive in PHP 8)
@@ -385,13 +414,25 @@ impl Parser {
         match self.peek() {
             Token::Bang => {
                 self.advance();
-                let expr = self.parse_unary()?;
+                let mut expr = self.parse_unary()?;
+                // PHP permits `!$value ??= $fallback` and applies `!` to the
+                // value produced by the coalescing assignment.
+                if self.peek() == Token::QuestionQuestionAssign {
+                    expr = self.finish_coalesce_assignment_expression(expr)?;
+                } else if self.peek() == Token::Assign {
+                    expr = self.finish_assignment_expression(expr)?;
+                }
                 Ok(Expr::Not(Box::new(expr)))
             }
             Token::Minus => {
                 self.advance();
                 let expr = self.parse_unary()?;
                 Ok(Expr::UnaryMinus(Box::new(expr)))
+            }
+            Token::At => {
+                self.advance();
+                let expr = self.parse_unary()?;
+                Ok(Expr::ErrorSuppress(Box::new(expr)))
             }
             Token::Tilde => {
                 self.advance();

@@ -85,6 +85,15 @@ jobs:
       - name: Run pinned Symfony EventDispatcher gate
         run: scripts/test-symfony-event-dispatcher-s1.sh
 
+  symfony-http-foundation-s1:
+    name: Symfony HttpFoundation S1
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Run pinned Symfony HttpFoundation gate
+        run: scripts/test-symfony-http-foundation-s1.sh
+
   native-jit:
     name: Native JIT (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}

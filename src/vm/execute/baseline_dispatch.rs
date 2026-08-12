@@ -77,8 +77,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     exception_matches_catch(&pending, &c.types, eg)
                                 });
                                 if let Some(catch) = matched_catch {
-                                    let catch_cv_ptr = unsafe { (*search_frame).get_op_mut(catch.catch_cv, OpType::Cv) };
-                                    unsafe { slot_set(catch_cv_ptr, pending.clone()) };
+                                    if let Some(catch_cv) = catch.catch_cv {
+                                        let catch_cv_ptr = unsafe {
+                                            (*search_frame).get_op_mut(catch_cv, OpType::Cv)
+                                        };
+                                        unsafe { slot_set(catch_cv_ptr, pending.clone()) };
+                                    }
                                     unsafe { (*frame).opline = base_ptr.add(catch.catch_start as usize) };
                                 } else if entry.finally_start != 0xFFFFFFFF {
                                     eg.exception = Some(pending.clone());

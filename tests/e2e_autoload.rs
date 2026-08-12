@@ -184,6 +184,27 @@ echo StaticLoadedByComposerStyle::value();
 }
 
 #[test]
+fn class_constant_fetch_invokes_registered_autoloaders_before_resolution() {
+    let dir = TempPhpDir::new();
+    let class_file = dir.write(
+        "ConstantOwner.php",
+        "<?php class ConstantOwner { public const VALUE = 'loaded'; }",
+    );
+    let source = format!(
+        r#"<?php
+function load_for_class_constant($class) {{
+    echo "load:$class|";
+    if ($class === 'ConstantOwner') {{ require '{class_file}'; }}
+}}
+spl_autoload_register('load_for_class_constant');
+echo ConstantOwner::VALUE;
+"#,
+    );
+
+    assert_eq!(run_php(&source), "load:ConstantOwner|loaded");
+}
+
+#[test]
 fn missing_static_call_class_throws_class_not_found_after_autoload() {
     let output = run_php(
         r#"<?php
@@ -712,4 +733,29 @@ var_dump(class_exists('StillMissing'));
         output,
         concat!("int(2)\n", "int(1)\n", "second:StillMissing|bool(false)\n")
     );
+}
+
+#[test]
+fn autoloaded_child_loads_parent_before_inheriting_constructor() {
+    let dir = TempPhpDir::new();
+    let parent = dir.write(
+        "ParentDependency.php",
+        "<?php class ParentDependency { public function __construct(protected string $value) {} public function value(): string { return $this->value; } }",
+    );
+    let child = dir.write(
+        "ChildDependency.php",
+        "<?php class ChildDependency extends ParentDependency {}",
+    );
+    let source = format!(
+        r#"<?php
+$parentFile = '{parent}';
+$childFile = '{child}';
+$loader = function ($name) use ($parentFile, $childFile) {{
+    require $name === 'ParentDependency' ? $parentFile : $childFile;
+}};
+spl_autoload_register($loader);
+echo (new ChildDependency('inherited'))->value();
+"#
+    );
+    assert_eq!(run_php(&source), "inherited");
 }
