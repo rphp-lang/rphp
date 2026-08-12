@@ -22,6 +22,27 @@ write_baseline() {
         >"${fixture}/scripts/unsafe-baseline.env"
 }
 
+write_baseline 1 1 1 1
+printf '%s\n' \
+    '/// # Safety' \
+    '/// The caller upholds the fixture invariant.' \
+    'pub unsafe fn scanned_function() {' \
+    '    // SAFETY: the fixture only verifies the inventory scanner.' \
+    '    unsafe { core::hint::unreachable_unchecked() }' \
+    '}' >"${fixture}/src/scanner.rs"
+inventory="$("${fixture}/scripts/check-unsafe-policy.sh")"
+for expected_inventory_line in \
+    'production unsafe blocks:     1 (ceiling 1)' \
+    'production unsafe functions:  1 (ceiling 1)' \
+    'production SAFETY annotations: 1 (floor 1)' \
+    'production # Safety sections: 1 (floor 1)'; do
+    if [[ "${inventory}" != *"${expected_inventory_line}"* ]]; then
+        echo "error: inventory scanner omitted: ${expected_inventory_line}" >&2
+        exit 1
+    fi
+done
+rm "${fixture}/src/scanner.rs"
+
 write_baseline 2 1 0 0
 printf '%s\n' 'pub fn baseline() {}' >"${fixture}/src/lib.rs"
 git -C "${fixture}" init -q

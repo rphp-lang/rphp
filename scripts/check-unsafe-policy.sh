@@ -93,20 +93,28 @@ cd "${repository_root}"
 count_matches() {
     local search_root="$1"
     local pattern="$2"
-    local matches
+    local count=0
+    local source_file
+    local file_count
 
-    matches="$(rg -n --glob '*.rs' "${pattern}" "${search_root}" 2>/dev/null || true)"
-    if [[ -z "${matches}" ]]; then
-        printf '0\n'
-    else
-        printf '%s\n' "${matches}" | awk 'END { print NR }'
-    fi
+    while IFS= read -r -d '' source_file; do
+        if ! file_count="$(awk -v pattern="${pattern}" '
+            $0 ~ pattern { count++ }
+            END { print count + 0 }
+        ' "${source_file}")"; then
+            echo "error: failed to scan unsafe inventory: ${source_file}" >&2
+            return 2
+        fi
+        count=$((count + file_count))
+    done < <(find "${search_root}" -type f -name '*.rs' -print0)
+
+    printf '%s\n' "${count}"
 }
 
-unsafe_block_pattern='\bunsafe\s*\{'
-unsafe_function_pattern='\bunsafe(?:\s+extern(?:\s+"[^"]+")?)?\s+fn\s+[A-Za-z_][A-Za-z0-9_]*\s*(?:<|\()'
-safety_comment_pattern='^\s*//+\s*SAFETY:'
-safety_section_pattern='^\s*///\s*#\s+Safety\b'
+unsafe_block_pattern='(^|[^[:alnum:]_])unsafe[[:space:]]*[{]'
+unsafe_function_pattern='(^|[^[:alnum:]_])unsafe([[:space:]]+extern([[:space:]]+"[^"]+")?)?[[:space:]]+fn[[:space:]]+[A-Za-z_][A-Za-z0-9_]*[[:space:]]*(<|[(])'
+safety_comment_pattern='^[[:space:]]*//+[[:space:]]*SAFETY:'
+safety_section_pattern='^[[:space:]]*///[[:space:]]*#[[:space:]]+Safety([^[:alnum:]_]|$)'
 
 production_blocks="$(count_matches src "${unsafe_block_pattern}")"
 production_functions="$(count_matches src "${unsafe_function_pattern}")"
